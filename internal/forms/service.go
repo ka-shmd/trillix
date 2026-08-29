@@ -78,6 +78,7 @@ type Store interface {
 	UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
 	UpdateProgress(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
 	UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error)
+	SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
@@ -784,6 +785,36 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 		return Form{}, err
 	}
 	return published, nil
+}
+
+// Reopen открывает закрытую форму: status='published', БЕЗ новой версии.
+// Респонденты видят ту же версию, что до закрытия (published_version_id закрытие
+// сохраняло).
+//
+// Публикацией это делать нельзя, хотя она дала бы тот же статус: публикация поднимет
+// номер версии, не изменив ни строчки документа, — а номер версии в продукте значит
+// «что именно видели респонденты», и накрутить его тумблером значит соврать. По той
+// же причине черновик открыть нечем: публиковать его — отдельное осознанное действие
+// автора, а не побочный эффект переключателя.
+func (s *Service) Reopen(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if form.Status != domain.FormStatusClosed {
+		return Form{}, fmt.Errorf("%w: открыть можно только закрытую форму", domain.ErrValidation)
+	}
+	if form.PublishedVersionID == nil {
+		return Form{}, fmt.Errorf("%w: у формы нет опубликованной версии", domain.ErrValidation)
+	}
+	reopened, err := s.repo.SetFormReopened(ctx, s.db, form.ID, form.WorkspaceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return reopened, nil
 }
 
 // Unpublish снимает форму с публикации: status='closed'. published_version_id и его

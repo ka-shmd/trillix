@@ -55,7 +55,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
+    f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email,
     f.created_at, f.updated_at
 FROM forms f
@@ -83,7 +83,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
+    f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email,
     f.created_at, f.updated_at
 FROM forms f
@@ -167,7 +167,7 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- схема снапшотится при публикации (ADR §10). В пределах воркспейса; 0 строк
 -- (чужая/нет формы) → service трактует как 404. updated_at двигаем вручную.
 UPDATE forms
-SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
+SET close_at = $3, response_limit = $4, closed_message = $5, closed_title = $6, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
@@ -290,7 +290,7 @@ WHERE id = $1 AND workspace_id = $2;
 -- workspace_id — тоже приёму (фаза 17): квота тарифа считается по воркспейсу, и
 -- брать его отсюда дешевле, чем отдельным запросом на горячем пути.
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
-    f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
     -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
     -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
     -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
@@ -355,6 +355,17 @@ RETURNING id, version;
 UPDATE forms
 SET status = 'published', published_version_id = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: SetFormReopened :one
+-- Повторное открытие закрытой формы: status='published' БЕЗ новой версии.
+-- published_version_id закрытие сохраняло, поэтому отдавать снова нечего — форма
+-- возвращается к той же версии, которую респонденты видели до закрытия. Публикация
+-- здесь была бы враньём: она подняла бы номер версии, ничего в документе не изменив.
+-- Условие status='closed' — защита от гонки: черновик открывать нечего.
+UPDATE forms
+SET status = 'published', updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'closed' AND published_version_id IS NOT NULL
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
 -- name: SetFormClosed :one

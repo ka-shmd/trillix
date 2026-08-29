@@ -449,6 +449,97 @@ func TestForms_Progress_AppliesWithoutRepublish(t *testing.T) {
 // Живые настройки закрытия (PATCH {closeSettings}): фасет доходит до сервиса,
 // GET-деталь их возвращает, набор заменяется целиком (пустое = снято), невалидный
 // лимит → 422, два фасета за раз → 422, чужая форма → 404.
+// Экран «приём закрыт»: свой заголовок автора (0043) доезжает до публичного тела
+// 410 уже разрешённым, а без него заголовком остаётся название формы. Разрешает
+// сервер — у рендерера нет второго источника заголовка.
+func TestForms_ClosedTitle_ResolvedByServer(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-closedtitle@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, alice, srv, "Анкета кандидата")
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+	unpublishForm(t, alice, srv, form.ID, http.StatusOK)
+
+	// Своего заголовка нет — берётся название формы (поведение до 0043).
+	if got := closedTitleOf(t, anon, srv, form.Slug); got != "Анкета кандидата" {
+		t.Fatalf("заголовок = %q, ожидалось название формы", got)
+	}
+
+	patchCloseSettings(t, alice, srv, form.ID,
+		`{"closeAt":null,"responseLimit":null,"closedMessage":"","closedTitle":"Набор окончен"}`,
+		http.StatusOK)
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.ClosedTitle == nil || *d.ClosedTitle != "Набор окончен" {
+		t.Fatalf("closedTitle в детали = %v", d.ClosedTitle)
+	}
+	if got := closedTitleOf(t, anon, srv, form.Slug); got != "Набор окончен" {
+		t.Fatalf("заголовок = %q, ожидался заголовок автора", got)
+	}
+}
+
+// closedTitleOf читает заголовок с публичного экрана «приём закрыт» (410 Gone).
+func closedTitleOf(t *testing.T, c *http.Client, srv *httptest.Server, slug string) string {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/public/v1/forms/"+slug, "", "")
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusGone {
+		t.Fatalf("статус %d, ожидалось 410", r.StatusCode)
+	}
+	var body struct {
+		Title string `json:"title"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Fatalf("тело 410 не парсится: %v", err)
+	}
+	return body.Title
+}
+
+// Открытие закрытой формы НЕ публикует новой версии: респонденты возвращаются к той
+// же, которую видели до закрытия. Черновик этой ручкой не открывается — публикация
+// остаётся отдельным действием автора.
+func TestForms_Reopen_KeepsVersion(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-reopen@example.com")
+	bob := registerUser(t, srv, "bob-reopen@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, alice, srv, "Анкета")
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+	before, _ := getPublicOK(t, anon, srv, form.Slug)
+
+	unpublishForm(t, alice, srv, form.ID, http.StatusOK)
+	reopenForm(t, alice, srv, form.ID, http.StatusOK)
+
+	d := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	if d.Status != "published" {
+		t.Fatalf("статус = %q, ожидался published", d.Status)
+	}
+	after, _ := getPublicOK(t, anon, srv, form.Slug)
+	if after.Version != before.Version {
+		t.Fatalf("версия изменилась (%d → %d) — открытие не имеет права публиковать", before.Version, after.Version)
+	}
+
+	// Уже открытую открыть нечем; чужую — 404 (существование не раскрывается).
+	reopenForm(t, alice, srv, form.ID, http.StatusUnprocessableEntity)
+	unpublishForm(t, alice, srv, form.ID, http.StatusOK)
+	reopenForm(t, bob, srv, form.ID, http.StatusNotFound)
+
+	// Черновик открыть нельзя: публиковать его — отдельное действие.
+	draft := createForm(t, alice, srv, "Черновик")
+	reopenForm(t, alice, srv, draft.ID, http.StatusUnprocessableEntity)
+}
+
+func reopenForm(t *testing.T, c *http.Client, srv *httptest.Server, id string, wantStatus int) {
+	t.Helper()
+	r := do(t, c, http.MethodPost, srv.URL+"/api/v1/forms/"+id+"/reopen", "", csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("POST reopen: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
 func TestForms_CloseSettings(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
@@ -1204,6 +1295,7 @@ type formDetailDTO struct {
 	CloseAt       *string         `json:"closeAt"`
 	ResponseLimit *int            `json:"responseLimit"`
 	ClosedMessage *string         `json:"closedMessage"`
+	ClosedTitle   *string         `json:"closedTitle"`
 	Branding      bool            `json:"branding"`
 	Progress      bool            `json:"progress"`
 	LinkPreview   *struct {

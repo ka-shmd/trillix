@@ -132,6 +132,11 @@ func (f *fakeStore) UpdateBranding(_ context.Context, _ postgres.DBTX, id, works
 	return Form{ID: id, WorkspaceID: workspaceID, Branding: show}, nil
 }
 
+func (f *fakeStore) SetFormReopened(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID) (Form, error) {
+	f.updated = true
+	return Form{ID: id, WorkspaceID: workspaceID, Status: domain.FormStatusPublished}, nil
+}
+
 func (f *fakeStore) UpdateFormNotifyEmail(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error) {
 	f.updated = true
 	f.lastNotifyEmail = n
@@ -759,6 +764,34 @@ func TestUpdateProgress_NeedsNoPlan(t *testing.T) {
 	}
 	if len(plans.gotKeys) != 0 {
 		t.Fatalf("тариф спрошен на смене тумблера: %v", plans.gotKeys)
+	}
+}
+
+// Повторное открытие НЕ публикует новой версии: номер версии значит «что видели
+// респонденты», и накручивать его тумблером нельзя. Черновик и уже открытую форму
+// открывать нечем — 422, а не молчаливый успех.
+func TestReopen_OnlyClosedForm(t *testing.T) {
+	closed := &fakeStore{form: Form{
+		WorkspaceID:        domain.NewID(),
+		Status:             domain.FormStatusClosed,
+		PublishedVersionID: &[]uuid.UUID{uuid.New()}[0],
+	}}
+	svc := NewService(nil, fakeTx{}, closed, &fakeAccess{}, &fakePlans{allowed: true})
+	form, err := svc.Reopen(context.Background(), uuid.New(), closed.form.ID)
+	if err != nil {
+		t.Fatalf("открыть закрытую форму: %v", err)
+	}
+	if form.Status != domain.FormStatusPublished {
+		t.Fatalf("статус = %q, ожидался published", form.Status)
+	}
+
+	draft := &fakeStore{form: Form{WorkspaceID: domain.NewID(), Status: domain.FormStatusDraft}}
+	svc = NewService(nil, fakeTx{}, draft, &fakeAccess{}, &fakePlans{allowed: true})
+	if _, err := svc.Reopen(context.Background(), uuid.New(), draft.form.ID); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("черновик: err = %v, want ErrValidation", err)
+	}
+	if draft.updated {
+		t.Fatal("черновик открыт тумблером — публикация обязана оставаться отдельным действием")
 	}
 }
 

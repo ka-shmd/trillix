@@ -130,7 +130,10 @@ type publicFormResponse struct {
 // 410 Gone). Схемы и токена нет — принимать ответ нельзя; рендерер по 410 рисует
 // экран «приём закрыт» из этих полей. closedMessage уже разрезолвлен (свой/дефолт).
 type closedFormResponse struct {
-	Closed        bool   `json:"closed"`
+	Closed bool `json:"closed"`
+	// Title — что написать заголовком: свой заголовок автора (0043), а если его нет
+	// — название формы. Разрешает СЕРВЕР, чтобы у рендерера не было двух источников
+	// одного заголовка и ветки «какой из них сейчас».
 	Title         string `json:"title"`
 	ClosedMessage string `json:"closedMessage"`
 	// Бейдж стоит и на этом экране: иначе он снимается разглядыванием второго
@@ -183,7 +186,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 			// Экран «приём закрыт» — единственное место рендерера, где заголовок
 			// показывается БЕЗ схемы (её в 410 нет вовсе), поэтому пустоту здесь
 			// замещаем так же, как в <title> вкладки.
-			Title:         titleOrFallback(pf.Title),
+			Title:         closedTitle(pf),
 			ClosedMessage: closedMessageOrDefault(pf.ClosedMessage),
 		})
 		return
@@ -247,6 +250,16 @@ func (h *PublicHandler) collectPartial(r *http.Request, workspaceID uuid.UUID, i
 		return false
 	}
 	return on
+}
+
+// closedTitle — заголовок экрана «приём закрыт»: свой заголовок автора, иначе
+// название формы (иначе — общий фолбэк, как в <title> вкладки: у формы без названия
+// заголовка нет вовсе).
+func closedTitle(pf PublicForm) string {
+	if pf.ClosedTitle != nil && *pf.ClosedTitle != "" {
+		return *pf.ClosedTitle
+	}
+	return titleOrFallback(pf.Title)
 }
 
 // showBadge — решение «рисовать ли бейдж» для этой выдачи. Сбой опроса тарифа не

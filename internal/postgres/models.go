@@ -46,6 +46,7 @@ type Form struct {
 	Branding           bool
 	Progress           bool
 	NotifyEmail        []byte
+	ClosedTitle        pgtype.Text
 }
 
 type FormIntegration struct {

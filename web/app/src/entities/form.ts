@@ -148,6 +148,9 @@ export const formDetailSchema = formSchema.extend({
   closeAt: z.string().nullable(),
   responseLimit: z.number().int().nullable(),
   closedMessage: z.string().nullable(),
+  // closedTitle — свой заголовок экрана «приём закрыт» (0043); null = заголовком
+  // остаётся название формы.
+  closedTitle: z.string().nullable(),
   // Слать ли владельцу письмо о новом ответе (слайс D). Новые формы — true.
   notifyOnSubmission: z.boolean(),
   // Собирать ли незавершённые ответы. Новые формы — false: сбор того, что человек
@@ -183,6 +186,11 @@ export type FormDetail = z.infer<typeof formDetailSchema>
 // Потолок текста экрана «приём закрыт» (рун) — зеркалит domain.MaxClosedMessageLen.
 export const MAX_CLOSED_MESSAGE_LEN = 2000
 
+// Потолок заголовка экрана «приём закрыт» (рун) — тот же, что у заголовка формы:
+// это его замена на экране, и разные границы означали бы, что название формы туда не
+// помещается целиком (зеркалит domain.MaxFormTitleLen).
+export const MAX_CLOSED_TITLE_LEN = 200
+
 // Потолки настройки письма о новом ответе (рун) — зеркалят domain.MaxNotify*Len.
 export const MAX_NOTIFY_FROM_NAME_LEN = 100
 export const MAX_NOTIFY_SUBJECT_LEN = 200
@@ -195,6 +203,7 @@ export type CloseSettingsInput = {
   closeAt: string | null
   responseLimit: number | null
   closedMessage: string
+  closedTitle: string
 }
 
 // GET /forms: страница + непрозрачный курсор на следующую (null — последняя).

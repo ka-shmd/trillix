@@ -1476,7 +1476,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
+    f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email,
     f.created_at, f.updated_at
 FROM forms f
@@ -1501,6 +1501,7 @@ type GetFormRow struct {
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
+	ClosedTitle           pgtype.Text
 	NotifyOnSubmission    bool
 	CollectPartial        bool
 	LinkPreview           []byte
@@ -1534,6 +1535,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.ClosedTitle,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
@@ -1562,7 +1564,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
+    f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email,
     f.created_at, f.updated_at
 FROM forms f
@@ -1587,6 +1589,7 @@ type GetFormBySlugRow struct {
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
+	ClosedTitle           pgtype.Text
 	NotifyOnSubmission    bool
 	CollectPartial        bool
 	LinkPreview           []byte
@@ -1622,6 +1625,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.ClosedTitle,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
@@ -1846,7 +1850,7 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtyp
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
-    f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
     -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
     -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
     -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
@@ -1887,6 +1891,7 @@ type GetPublicFormBySlugRow struct {
 	CloseAt            pgtype.Timestamptz
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
+	ClosedTitle        pgtype.Text
 	NotifyOnSubmission bool
 	CollectPartial     bool
 	LinkPreview        []byte
@@ -1925,6 +1930,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.ClosedTitle,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
@@ -4136,6 +4142,52 @@ func (q *Queries) SetFormPublished(ctx context.Context, arg SetFormPublishedPara
 	return i, err
 }
 
+const setFormReopened = `-- name: SetFormReopened :one
+UPDATE forms
+SET status = 'published', updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'closed' AND published_version_id IS NOT NULL
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type SetFormReopenedParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+type SetFormReopenedRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Повторное открытие закрытой формы: status='published' БЕЗ новой версии.
+// published_version_id закрытие сохраняло, поэтому отдавать снова нечего — форма
+// возвращается к той же версии, которую респонденты видели до закрытия. Публикация
+// здесь была бы враньём: она подняла бы номер версии, ничего в документе не изменив.
+// Условие status='closed' — защита от гонки: черновик открывать нечего.
+func (q *Queries) SetFormReopened(ctx context.Context, arg SetFormReopenedParams) (SetFormReopenedRow, error) {
+	row := q.db.QueryRow(ctx, setFormReopened, arg.ID, arg.WorkspaceID)
+	var i SetFormReopenedRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const setIdentityEmail = `-- name: SetIdentityEmail :exec
 UPDATE user_identities SET provider_email = $3
 WHERE provider = $1 AND provider_user_id = $2
@@ -4270,7 +4322,7 @@ func (q *Queries) UpdateFormBranding(ctx context.Context, arg UpdateFormBranding
 
 const updateFormCloseSettings = `-- name: UpdateFormCloseSettings :one
 UPDATE forms
-SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
+SET close_at = $3, response_limit = $4, closed_message = $5, closed_title = $6, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
 `
@@ -4281,6 +4333,7 @@ type UpdateFormCloseSettingsParams struct {
 	CloseAt       pgtype.Timestamptz
 	ResponseLimit pgtype.Int4
 	ClosedMessage pgtype.Text
+	ClosedTitle   pgtype.Text
 }
 
 type UpdateFormCloseSettingsRow struct {
@@ -4307,6 +4360,7 @@ func (q *Queries) UpdateFormCloseSettings(ctx context.Context, arg UpdateFormClo
 		arg.CloseAt,
 		arg.ResponseLimit,
 		arg.ClosedMessage,
+		arg.ClosedTitle,
 	)
 	var i UpdateFormCloseSettingsRow
 	err := row.Scan(

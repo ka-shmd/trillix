@@ -60,6 +60,9 @@ type Form struct {
 	CloseAt       *time.Time
 	ResponseLimit *int32
 	ClosedMessage *string
+	// ClosedTitle — заголовок экрана «приём закрыт» (0043); nil = заголовком
+	// остаётся название формы.
+	ClosedTitle *string
 	// CollectPartial — собирать ли незавершённые ответы (спека §10.0): тумблер
 	// формы, живая колонка. Кабинету нужен, чтобы нарисовать состояние тумблера.
 	CollectPartial bool
@@ -120,10 +123,12 @@ type PublicForm struct {
 	// отдать форму или показать «приём закрыт». SubmissionCount заполнен только при
 	// заданном ResponseLimit (иначе 0 — ветка лимита не считается). ClosedMessage
 	// nil/пусто → рендерер покажет дефолт.
-	Status          string
-	CloseAt         *time.Time
-	ResponseLimit   *int32
-	ClosedMessage   *string
+	Status        string
+	CloseAt       *time.Time
+	ResponseLimit *int32
+	ClosedMessage *string
+	// ClosedTitle — заголовок экрана «приём закрыт» (0043); nil = название формы.
+	ClosedTitle     *string
 	SubmissionCount int64
 	// NotifyOnSubmission — гейт письма владельцу о новом ответе (слайс D): приём
 	// ответа читает его отсюда (уже загруженной формы), чтобы не делать лишний запрос
@@ -354,6 +359,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		CloseAt:               ptrTime(row.CloseAt),
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
+		ClosedTitle:           ptrStr(row.ClosedTitle),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
 		Branding:              row.Branding,
@@ -391,6 +397,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		CloseAt:               ptrTime(row.CloseAt),
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
+		ClosedTitle:           ptrStr(row.ClosedTitle),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
 		Branding:              row.Branding,
@@ -481,12 +488,18 @@ func (Repo) UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, w
 	if msg != "" {
 		msgPtr = &msg
 	}
+	title := strings.TrimSpace(s.ClosedTitle)
+	var titlePtr *string
+	if title != "" {
+		titlePtr = &title
+	}
 	row, err := postgres.New(db).UpdateFormCloseSettings(ctx, postgres.UpdateFormCloseSettingsParams{
 		ID:            id,
 		WorkspaceID:   workspaceID,
 		CloseAt:       pgTime(s.CloseAt),
 		ResponseLimit: pgInt4(s.ResponseLimit),
 		ClosedMessage: pgText(msgPtr),
+		ClosedTitle:   pgText(titlePtr),
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form close settings: %w", err)
@@ -635,6 +648,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		CloseAt:            ptrTime(row.CloseAt),
 		ResponseLimit:      ptrInt32(row.ResponseLimit),
 		ClosedMessage:      ptrStr(row.ClosedMessage),
+		ClosedTitle:        ptrStr(row.ClosedTitle),
 		SubmissionCount:    row.SubmissionCount,
 		NotifyOnSubmission: row.NotifyOnSubmission,
 		CollectPartial:     row.CollectPartial,
@@ -749,6 +763,30 @@ func (Repo) UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, wor
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form link_preview: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// SetFormReopened открывает закрытую форму: status='published' БЕЗ новой версии.
+// 0 строк — это либо чужая форма, либо не закрытая (черновик, уже открытая); service
+// различает их по прочитанной ранее форме.
+func (Repo) SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error) {
+	row, err := postgres.New(db).SetFormReopened(ctx, postgres.SetFormReopenedParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("reopen form: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,

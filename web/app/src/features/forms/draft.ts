@@ -49,6 +49,7 @@ export function newFormDetail(): FormDetail {
     closeAt: null,
     responseLimit: null,
     closedMessage: null,
+    closedTitle: null,
     // Письма о новых ответах у новой формы ВЫКЛЮЧЕНЫ — дефолт колонки (0042):
     // продукт не начинает слать почту, ни о чём не спросив.
     notifyOnSubmission: false,

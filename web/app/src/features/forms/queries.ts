@@ -15,6 +15,7 @@ import {
   unpublishForm,
   updateBranding,
   updateProgress,
+  reopenForm,
   updateNotifyEmail,
   updateCloseSettings,
   updateCollectPartial,
@@ -300,6 +301,21 @@ export function usePublishForm() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => publishForm(id),
+    onSuccess: (form) => {
+      qc.invalidateQueries({ queryKey: formKeys.list() })
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, ...form } : old,
+      )
+    },
+  })
+}
+
+// Повторное открытие закрытой формы. Ответ — карточка формы: раскладываем её в
+// деталь целиком (как unpublish), меняется статус, а не отдельное поле.
+export function useReopenForm() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => reopenForm(id),
     onSuccess: (form) => {
       qc.invalidateQueries({ queryKey: formKeys.list() })
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>

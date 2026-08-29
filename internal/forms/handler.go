@@ -47,6 +47,7 @@ type formsService interface {
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
+	Reopen(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 }
 
 // Handler — HTTP-транспорт модуля forms. Все роуты приватные (за RequireAuth);
@@ -77,6 +78,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/forms/{id}/duplicate", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.duplicate))))
 	mux.Handle("POST /api/v1/forms/{id}/publish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.publish))))
 	mux.Handle("POST /api/v1/forms/{id}/unpublish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.unpublish))))
+	mux.Handle("POST /api/v1/forms/{id}/reopen", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.reopen))))
 }
 
 // --- DTO ---
@@ -119,6 +121,9 @@ type formDetailResponse struct {
 	CloseAt       *time.Time `json:"closeAt"`
 	ResponseLimit *int32     `json:"responseLimit"`
 	ClosedMessage *string    `json:"closedMessage"`
+	// ClosedTitle — заголовок экрана «приём закрыт» (0043); null = заголовком
+	// остаётся название формы.
+	ClosedTitle *string `json:"closedTitle"`
 	// Тумблер уведомления владельцу о новом ответе (слайс D). Только в детали формы.
 	NotifyOnSubmission bool `json:"notifyOnSubmission"`
 	// CollectPartial — тумблер сбора незавершённых ответов. Кабинет рисует по нему
@@ -157,11 +162,12 @@ type linkPreviewBody struct {
 }
 
 // closeSettingsBody — фасет closeSettings в PATCH: полный набор настроек закрытия
-// (отсутствующее поле = снято). Замена всех трёх колонок разом, не частичный патч.
+// (отсутствующее поле = снято). Замена всех четырёх колонок разом, не частичный патч.
 type closeSettingsBody struct {
 	CloseAt       *time.Time `json:"closeAt"`
 	ResponseLimit *int32     `json:"responseLimit"`
 	ClosedMessage string     `json:"closedMessage"`
+	ClosedTitle   string     `json:"closedTitle"`
 }
 
 type listResponse struct {
@@ -272,6 +278,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		CloseAt:            f.CloseAt,
 		ResponseLimit:      f.ResponseLimit,
 		ClosedMessage:      f.ClosedMessage,
+		ClosedTitle:        f.ClosedTitle,
 		NotifyOnSubmission: f.NotifyOnSubmission,
 		CollectPartial:     f.CollectPartial,
 		Branding:           f.Branding,
@@ -459,6 +466,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 			CloseAt:       cs.CloseAt,
 			ResponseLimit: cs.ResponseLimit,
 			ClosedMessage: cs.ClosedMessage,
+			ClosedTitle:   cs.ClosedTitle,
 		})
 	case req.NotifyOnSubmission != nil:
 		form, err = h.svc.UpdateNotifyOnSubmission(r.Context(), userID, formID, *req.NotifyOnSubmission)
@@ -555,6 +563,26 @@ func (h *Handler) unpublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form, err := h.svc.Unpublish(r.Context(), userID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toFormResponse(form))
+}
+
+// reopen открывает закрытую форму (status='published'), НЕ публикуя новой версии.
+// Тела нет. Не закрытая форма и форма без опубликованной версии → 422: открывать
+// нечего, а публикация черновика — отдельное действие автора.
+func (h *Handler) reopen(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	form, err := h.svc.Reopen(r.Context(), userID, formID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

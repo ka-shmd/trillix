@@ -109,6 +109,12 @@ export function updateNotifyEmail(id: string, value: NotifyEmail): Promise<Form>
 
 // Тумблер шкалы прогресса (фасет progress): true = показывать индикатор шагов.
 // Гейта нет ни здесь, ни на отдаче — шкала открыта всем тарифам.
+// Повторное открытие закрытой формы: status='published' БЕЗ новой версии. Отдельная
+// ручка, а не публикация: та подняла бы номер версии, ничего не изменив в документе.
+export function reopenForm(id: string): Promise<Form> {
+  return apiRequest(`/forms/${id}/reopen`, { method: 'POST', schema: formSchema })
+}
+
 export function updateProgress(id: string, show: boolean): Promise<Form> {
   return apiRequest(`/forms/${id}`, {
     method: 'PATCH',

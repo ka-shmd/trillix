@@ -6,6 +6,7 @@ import { toast } from 'sonner'
 import { MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
 import {
   MAX_CLOSED_MESSAGE_LEN,
+  MAX_CLOSED_TITLE_LEN,
   MAX_NOTIFY_BODY_LEN,
   MAX_NOTIFY_FROM_NAME_LEN,
   MAX_NOTIFY_SUBJECT_LEN,
@@ -18,6 +19,8 @@ import { ProTag } from '../../../shared/ProTag'
 import { PlanUpsell } from '../../plan/PlanUpsell'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import {
+  useReopenForm,
+  useUnpublishForm,
   useUpdateAfterSubmit,
   useUpdateBranding,
   useUpdateCloseSettings,
@@ -28,8 +31,8 @@ import {
 } from '../queries'
 
 import {
+  closeSettingsValue,
   isDirty,
-  localInputToIso,
   notifyEmailValue,
   mergeServer,
   pendingChanges,
@@ -95,6 +98,8 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
 
   const updateAfterSubmit = useUpdateAfterSubmit()
   const updateClose = useUpdateCloseSettings()
+  const unpublish = useUnpublishForm()
+  const reopen = useReopenForm()
   const updateNotify = useUpdateNotifyOnSubmission()
   const updatePartial = useUpdateCollectPartial()
   const updateProgress = useUpdateProgress()
@@ -118,7 +123,8 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   const [failed, setFailed] = useState(false)
 
   const invalid = validateSettings(draft)
-  const anyInvalid = invalid.url || invalid.urlMissing || invalid.limit || invalid.replyTo
+  const anyInvalid =
+    invalid.url || invalid.urlMissing || invalid.limit || invalid.replyTo || invalid.closeAt
   const dirty = isDirty(saved, draft)
 
   // Уход с несохранёнными правками — осознанный. Блокируется НАВИГАЦИЯ роутера
@@ -159,14 +165,18 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
 
     if (jobs.close) {
       try {
-        await updateClose.mutateAsync({
-          id: form.id,
-          settings: {
-            closeAt: localInputToIso(draft.closeLocal),
-            responseLimit: draft.limit.trim() === '' ? null : Number(draft.limit.trim()),
-            closedMessage: draft.closedMessage,
-          },
-        })
+        await updateClose.mutateAsync({ id: form.id, settings: closeSettingsValue(draft) })
+      } catch {
+        broke = true
+      }
+    }
+
+    // Статус — не колонка настроек, а две отдельные ручки. Открытие НЕ публикует
+    // новой версии: респонденты возвращаются к той же, что видели до закрытия.
+    if (jobs.closedNow) {
+      try {
+        if (draft.closedNow) await unpublish.mutateAsync(form.id)
+        else await reopen.mutateAsync(form.id)
       } catch {
         broke = true
       }
@@ -374,72 +384,118 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         </div>
       </Section>
 
-      <Section
-        title="Закрытие формы"
-        description="Когда прекратить приём ответов. Закрытая форма показывает текст ниже вместо вопросов."
-      >
-        <div className="flex flex-col gap-4">
-          <div>
-            <Label htmlFor="close-at">
-              Дата закрытия{' '}
-              <span className="font-normal text-muted-foreground">(необязательно)</span>
-            </Label>
+      <Section title="Доступность">
+        <div className="flex flex-col divide-y border-t">
+          {/* ЗАГЛУШКА (решение владельца 2026-08-29): пароля на форму нет нигде —
+              это сквозная работа (колонка, проверка на публичном пути, экран ввода в
+              рендерере, свой rate limit), и она идёт отдельным заходом. Строка стоит
+              здесь с красной меткой, чтобы дыра была видна на самом экране. Что
+              делать — `BACKLOG.md`, пункт «Пароль на форму». */}
+          <SettingRow
+            id="form-password"
+            label="Пароль на форму"
+            description="Респондент увидит вопросы, только когда введёт пароль."
+            checked={false}
+            onChange={() => undefined}
+            disabled
+            stub="Заглушка: пароля пока нет. Задача — в BACKLOG.md, «Пароль на форму»."
+          />
+
+          {/* Закрытие — это СТАТУС формы, а не колонка настроек: тумблер уезжает
+              отдельными ручками (unpublish/reopen), а не фасетом closeSettings.
+              Черновик закрывать нечего — приём у него ещё не начинался. */}
+          <SettingRow
+            id="form-closed"
+            label="Закрыть форму"
+            description={
+              form.status === 'draft'
+                ? 'Форма ещё не опубликована — принимать ответы она пока и не начинала.'
+                : 'Отвечать на форму больше нельзя. Открыть обратно можно тем же тумблером: та же версия, без повторной публикации.'
+            }
+            checked={draft.closedNow}
+            disabled={form.status === 'draft'}
+            onChange={(v) => set('closedNow', v)}
+          />
+
+          <SettingRow
+            id="close-at"
+            label="Закрыть в назначенное время"
+            description="Форма перестанет принимать ответы после этого момента."
+            checked={draft.closeOn}
+            onChange={(v) => set('closeOn', v)}
+          >
             <Input
-              id="close-at"
+              id="close-at-value"
               type="datetime-local"
+              aria-label="Дата и время закрытия"
+              aria-invalid={invalid.closeAt}
               value={draft.closeLocal}
               onChange={(e) => set('closeLocal', e.target.value)}
-              className="mt-1.5"
             />
+            {/* Пояс НЕ выбирается (решение владельца): дата и время читаются в поясе
+                браузера — том же, в котором автор их набирает. Подпись обязательна:
+                без неё «в 23:59» у формы, которую закрывают из другой страны,
+                двусмысленно. */}
             <p className="mt-1.5 text-sm text-muted-foreground">
-              После этого момента форма перестанет принимать ответы. Пусто — без ограничения по
-              дате.
+              Время вашего часового пояса — того, в котором работает этот браузер.
             </p>
-          </div>
+          </SettingRow>
 
-          <div>
-            <Label htmlFor="response-limit">
-              Лимит ответов{' '}
-              <span className="font-normal text-muted-foreground">(необязательно)</span>
-            </Label>
+          <SettingRow
+            id="response-limit"
+            label="Ограничить число ответов"
+            description="Форма закроется сама, набрав столько ответов."
+            checked={draft.limitOn}
+            onChange={(v) => set('limitOn', v)}
+          >
             <Input
-              id="response-limit"
+              id="response-limit-value"
               type="number"
               inputMode="numeric"
               min={1}
               step={1}
+              aria-label="Сколько ответов принять"
+              aria-invalid={invalid.limit}
               value={draft.limit}
               placeholder="Например, 100"
-              aria-invalid={invalid.limit}
-              aria-describedby="response-limit-hint"
               onChange={(e) => set('limit', e.target.value)}
-              className="mt-1.5"
             />
-            <p
-              id="response-limit-hint"
-              className={`mt-1.5 text-sm ${invalid.limit ? 'text-destructive' : 'text-muted-foreground'}`}
-              role={invalid.limit ? 'alert' : undefined}
-            >
-              {invalid.limit
-                ? 'Лимит — целое число больше нуля.'
-                : 'Форма закроется, набрав столько ответов. Пусто — без лимита.'}
-            </p>
-          </div>
+            {invalid.limit && (
+              <p className="mt-1.5 text-sm text-destructive" role="alert">
+                Лимит — целое число больше нуля.
+              </p>
+            )}
+          </SettingRow>
 
-          <div>
-            <Label htmlFor="closed-message">
-              Текст «приём закрыт»{' '}
-              <span className="font-normal text-muted-foreground">(необязательно)</span>
-            </Label>
+          <SettingRow
+            id="closed-message"
+            label="Сообщение о закрытии"
+            description="Что увидит человек, открывший форму, которая больше не принимает ответы."
+            checked={draft.closedMessageOn}
+            onChange={(v) => set('closedMessageOn', v)}
+          >
+            <Input
+              id="closed-title"
+              aria-label="Заголовок сообщения"
+              value={draft.closedTitle}
+              placeholder="Приём ответов закрыт"
+              maxLength={MAX_CLOSED_TITLE_LEN}
+              onChange={(e) => set('closedTitle', e.target.value)}
+            />
             <Textarea
-              id="closed-message"
+              id="closed-message-text"
+              aria-label="Текст сообщения"
               value={draft.closedMessage}
-              placeholder="Приём ответов на эту форму закрыт."
+              placeholder="Спасибо всем, кто успел ответить."
               maxLength={MAX_CLOSED_MESSAGE_LEN}
               onChange={(e) => set('closedMessage', e.target.value)}
-              className="mt-1.5"
+              className="mt-2"
             />
-          </div>
+            <p className="mt-1.5 text-sm text-muted-foreground">
+              Пусто — заголовком останется название формы, а текстом — наш обычный «приём ответов
+              закрыт».
+            </p>
+          </SettingRow>
         </div>
       </Section>
 

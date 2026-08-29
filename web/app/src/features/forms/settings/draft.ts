@@ -1,7 +1,7 @@
 import { z } from 'zod'
 
 import { isHttpUrl } from '@entities/formSchema'
-import type { FormDetail, NotifyEmail } from '../../../entities/form'
+import type { CloseSettingsInput, FormDetail, NotifyEmail } from '../../../entities/form'
 
 // Черновик страницы настроек: ВСЯ страница разом, а не раздел за разделом.
 //
@@ -21,8 +21,17 @@ export interface SettingsDraft {
   redirectUrl: string
   // Дата закрытия — в виде <input type="datetime-local">, то есть в ЛОКАЛЬНОМ
   // времени; на сервер уезжает ISO в UTC (localInputToIso).
+  // Закрытие формы разложено на ТУМБЛЕР ПЛЮС ЗНАЧЕНИЕ, как переадресация: у каждой
+  // строки блока «Доступность» свой выключатель, а поля под ним появляются
+  // включёнными. Выключенный тумблер уезжает на сервер снятым ограничением
+  // (null/пусто), но набранное остаётся в черновике до сохранения.
+  closedNow: boolean
+  closeOn: boolean
   closeLocal: string
+  limitOn: boolean
   limit: string
+  closedMessageOn: boolean
+  closedTitle: string
   closedMessage: string
   notify: boolean
   // Письмо о новом ответе: что автор в нём переписал. Пустые значения = «слать
@@ -45,8 +54,13 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     thankYouText: form.draftSchema.thankYouText ?? '',
     redirectOn: redirectUrl !== '',
     redirectUrl,
+    closedNow: form.status === 'closed',
+    closeOn: form.closeAt !== null,
     closeLocal: isoToLocalInput(form.closeAt),
+    limitOn: form.responseLimit !== null,
     limit: form.responseLimit === null ? '' : String(form.responseLimit),
+    closedMessageOn: (form.closedTitle ?? '') !== '' || (form.closedMessage ?? '') !== '',
+    closedTitle: form.closedTitle ?? '',
     closedMessage: form.closedMessage ?? '',
     notify: form.notifyOnSubmission,
     notifyFromName: form.notifyEmail?.fromName ?? '',
@@ -81,6 +95,18 @@ export function notifyEmailValue(draft: SettingsDraft): NotifyEmail {
 // что рядом отвергается.
 const emailCheck = z.email()
 
+// Настройки закрытия в виде, в котором их принимает API: выключенный тумблер = снятое
+// ограничение (null/пусто), а не «сохранить набранное на будущее».
+export function closeSettingsValue(draft: SettingsDraft): CloseSettingsInput {
+  const limit = draft.limit.trim()
+  return {
+    closeAt: draft.closeOn ? localInputToIso(draft.closeLocal) : null,
+    responseLimit: draft.limitOn && limit !== '' ? Number(limit) : null,
+    closedTitle: draft.closedMessageOn ? draft.closedTitle.trim() : '',
+    closedMessage: draft.closedMessageOn ? draft.closedMessage : '',
+  }
+}
+
 export interface SettingsInvalid {
   // ПУСТОЕ ПОЛЕ И БИТЫЙ АДРЕС — РАЗНЫЕ СОСТОЯНИЯ, и путать их нельзя: включённый
   // тумблер сразу подсвечивал поле красным и требовал «начните с http://» у поля, в
@@ -92,6 +118,9 @@ export interface SettingsInvalid {
   // Reply-To проверяется строго: битый адрес — это письмо, которое отвергнет
   // почтовый провайдер, то есть молча пропавшее уведомление.
   replyTo: boolean
+  // Включённое закрытие по дате без даты — незаконченная настройка, как включённая
+  // переадресация без адреса.
+  closeAt: boolean
 }
 
 export function validateSettings(draft: SettingsDraft): SettingsInvalid {
@@ -99,12 +128,14 @@ export function validateSettings(draft: SettingsDraft): SettingsInvalid {
   const replyTo = draft.notifyReplyTo.trim()
   const limit = draft.limit.trim()
   const limitNum = Number(limit)
+  const limitOn = draft.limitOn
   return {
     // Включённый тумблер требует адрес: пустое поле под ним — незаконченная
     // настройка, и сохранить её молча значило бы выключить переадресацию за автора.
     urlMissing: draft.redirectOn && url === '',
     url: draft.redirectOn && url !== '' && !isHttpUrl(url),
-    limit: limit !== '' && (!Number.isInteger(limitNum) || limitNum < 1),
+    limit: limitOn && (limit === '' || !Number.isInteger(limitNum) || limitNum < 1),
+    closeAt: draft.closeOn && localInputToIso(draft.closeLocal) === null,
     replyTo: replyTo !== '' && !emailCheck.safeParse(replyTo).success,
   }
 }
@@ -115,6 +146,9 @@ export function validateSettings(draft: SettingsDraft): SettingsInvalid {
 export interface PendingChanges {
   afterSubmit: boolean
   close: boolean
+  // Статус формы: закрыта или принимает ответы. Не колонка настроек, а отдельные
+  // ручки (unpublish/reopen), поэтому и грань своя.
+  closedNow: boolean
   notify: boolean
   notifyEmail: boolean
   partial: boolean
@@ -128,10 +162,8 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
   return {
     afterSubmit:
       draft.thankYouText !== saved.thankYouText || redirectValue(draft) !== saved.redirectUrl,
-    close:
-      draft.closeLocal !== saved.closeLocal ||
-      draft.limit.trim() !== saved.limit ||
-      draft.closedMessage !== saved.closedMessage,
+    close: !sameCloseSettings(closeSettingsValue(saved), closeSettingsValue(draft)),
+    closedNow: draft.closedNow !== saved.closedNow,
     notify: draft.notify !== saved.notify,
     notifyEmail:
       draft.notifyFromName.trim() !== saved.notifyFromName ||
@@ -142,6 +174,18 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
     progress: draft.progress !== saved.progress,
     branding: draft.branding !== saved.branding,
   }
+}
+
+// Сравнение настроек закрытия по ЗНАЧЕНИЮ, а не по полям черновика: выключенный
+// тумблер и пустое поле под ним дают один и тот же запрос, и считать это правкой
+// значит держать страницу вечно «несохранённой».
+function sameCloseSettings(a: CloseSettingsInput, b: CloseSettingsInput): boolean {
+  return (
+    a.closeAt === b.closeAt &&
+    a.responseLimit === b.responseLimit &&
+    a.closedTitle === b.closedTitle &&
+    a.closedMessage === b.closedMessage
+  )
 }
 
 export function isDirty(saved: SettingsDraft, draft: SettingsDraft): boolean {

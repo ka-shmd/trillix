@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import {
+  closeSettingsValue,
   isDirty,
   notifyEmailValue,
   redirectValue,
@@ -16,8 +17,13 @@ const saved: SettingsDraft = {
   thankYouText: 'Спасибо',
   redirectOn: false,
   redirectUrl: '',
+  closedNow: false,
+  closeOn: false,
   closeLocal: '',
+  limitOn: false,
   limit: '',
+  closedMessageOn: false,
+  closedTitle: '',
   closedMessage: '',
   notify: false,
   notifyFromName: '',
@@ -34,6 +40,7 @@ describe('черновик страницы настроек', () => {
     expect(pendingChanges(saved, { ...saved })).toEqual({
       afterSubmit: false,
       close: false,
+      closedNow: false,
       notify: false,
       notifyEmail: false,
       partial: false,
@@ -46,7 +53,8 @@ describe('черновик страницы настроек', () => {
   it('каждый раздел едет своим запросом и только он', () => {
     expect(pendingChanges(saved, { ...saved, thankYouText: 'Готово' }).afterSubmit).toBe(true)
     expect(pendingChanges(saved, { ...saved, thankYouText: 'Готово' }).close).toBe(false)
-    expect(pendingChanges(saved, { ...saved, limit: '10' }).close).toBe(true)
+    expect(pendingChanges(saved, { ...saved, limitOn: true, limit: '10' }).close).toBe(true)
+    expect(pendingChanges(saved, { ...saved, closedNow: true }).closedNow).toBe(true)
     expect(pendingChanges(saved, { ...saved, notify: true }).notify).toBe(true)
     expect(pendingChanges(saved, { ...saved, partial: true }).partial).toBe(true)
     expect(pendingChanges(saved, { ...saved, progress: true }).progress).toBe(true)
@@ -117,10 +125,42 @@ describe('черновик страницы настроек', () => {
     })
   })
 
-  it('лимит — целое больше нуля', () => {
-    expect(validateSettings({ ...saved, limit: '0' }).limit).toBe(true)
-    expect(validateSettings({ ...saved, limit: '1.5' }).limit).toBe(true)
-    expect(validateSettings({ ...saved, limit: '100' }).limit).toBe(false)
+  it('включённый лимит требует целое больше нуля, выключенный — ничего', () => {
+    expect(validateSettings({ ...saved, limitOn: true, limit: '0' }).limit).toBe(true)
+    expect(validateSettings({ ...saved, limitOn: true, limit: '1.5' }).limit).toBe(true)
+    expect(validateSettings({ ...saved, limitOn: true, limit: '' }).limit).toBe(true)
+    expect(validateSettings({ ...saved, limitOn: true, limit: '100' }).limit).toBe(false)
+    expect(validateSettings({ ...saved, limitOn: false, limit: 'ерунда' }).limit).toBe(false)
+  })
+
+  it('выключенные тумблеры доступности снимают ограничения, а не хранят набранное', () => {
+    // Набранное остаётся в черновике (передумавший автор не перепечатывает), но на
+    // сервер уезжает снятое ограничение — иначе выключенный тумблер лгал бы.
+    const draft = {
+      ...saved,
+      closeOn: false,
+      closeLocal: '2026-09-01T12:00',
+      limitOn: false,
+      limit: '10',
+      closedMessageOn: false,
+      closedTitle: 'Всё',
+      closedMessage: 'Спасибо',
+    }
+    expect(closeSettingsValue(draft)).toEqual({
+      closeAt: null,
+      responseLimit: null,
+      closedTitle: '',
+      closedMessage: '',
+    })
+    expect(pendingChanges(saved, draft).close).toBe(false)
+  })
+
+  it('включённое закрытие по дате требует саму дату', () => {
+    expect(validateSettings({ ...saved, closeOn: true, closeLocal: '' }).closeAt).toBe(true)
+    expect(
+      validateSettings({ ...saved, closeOn: true, closeLocal: '2026-09-01T12:00' }).closeAt,
+    ).toBe(false)
+    expect(validateSettings({ ...saved, closeOn: false, closeLocal: '' }).closeAt).toBe(false)
   })
 
   it('чужая правка догоняется по одному полю, своя несохранённая — остаётся', () => {
