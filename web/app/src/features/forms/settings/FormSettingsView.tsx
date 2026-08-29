@@ -1,9 +1,9 @@
 import { useState } from 'react'
-import { TriangleAlert } from 'lucide-react'
+import { CalendarIcon, TriangleAlert } from 'lucide-react'
 import { useBlocker } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
-import { MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
+import { MAX_REDIRECT_URL_LEN } from '@entities/formSchema'
 import {
   MAX_CLOSED_MESSAGE_LEN,
   MAX_CLOSED_TITLE_LEN,
@@ -30,6 +30,7 @@ import {
   useUpdateProgress,
 } from '../queries'
 
+import { LazyCalendar } from './lazyCalendar'
 import {
   closeSettingsValue,
   isDirty,
@@ -56,6 +57,7 @@ import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
 
@@ -367,23 +369,6 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         </div>
       </Section>
 
-      <Section
-        title="После отправки"
-        description="Что респондент увидит, когда отправит ответ. Нужен экран посложнее — соберите страницу «Спасибо» на полотне: включите тумблер на последнем разрыве страницы, и она заменит этот текст."
-      >
-        <div>
-          <Label htmlFor="thank-you-text">Текст благодарности</Label>
-          <Textarea
-            id="thank-you-text"
-            value={draft.thankYouText}
-            placeholder="Спасибо! Ваш ответ отправлен."
-            maxLength={MAX_THANK_YOU_TEXT_LEN}
-            onChange={(e) => set('thankYouText', e.target.value)}
-            className="mt-1.5"
-          />
-        </div>
-      </Section>
-
       <Section title="Доступность">
         <div className="flex flex-col divide-y border-t">
           {/* ЗАГЛУШКА (решение владельца 2026-08-29): пароля на форму нет нигде —
@@ -410,7 +395,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
             description={
               form.status === 'draft'
                 ? 'Форма ещё не опубликована — принимать ответы она пока и не начинала.'
-                : 'Отвечать на форму больше нельзя. Открыть обратно можно тем же тумблером: та же версия, без повторной публикации.'
+                : 'Отвечать на форму больше нельзя.'
             }
             checked={draft.closedNow}
             disabled={form.status === 'draft'}
@@ -424,27 +409,16 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
             checked={draft.closeOn}
             onChange={(v) => set('closeOn', v)}
           >
-            <Input
-              id="close-at-value"
-              type="datetime-local"
-              aria-label="Дата и время закрытия"
-              aria-invalid={invalid.closeAt}
+            <CloseAtFields
               value={draft.closeLocal}
-              onChange={(e) => set('closeLocal', e.target.value)}
+              invalid={invalid.closeAt}
+              onChange={(v) => set('closeLocal', v)}
             />
-            {/* Пояс НЕ выбирается (решение владельца): дата и время читаются в поясе
-                браузера — том же, в котором автор их набирает. Подпись обязательна:
-                без неё «в 23:59» у формы, которую закрывают из другой страны,
-                двусмысленно. */}
-            <p className="mt-1.5 text-sm text-muted-foreground">
-              Время вашего часового пояса — того, в котором работает этот браузер.
-            </p>
           </SettingRow>
 
           <SettingRow
             id="response-limit"
             label="Ограничить число ответов"
-            description="Форма закроется сама, набрав столько ответов."
             checked={draft.limitOn}
             onChange={(v) => set('limitOn', v)}
           >
@@ -548,6 +522,87 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  )
+}
+
+// Дата и время закрытия — КАЛЕНДАРЬ ПЛЮС ВРЕМЯ (решение владельца 2026-08-29,
+// отменяет одно поле `datetime-local`). Разные контролы, потому что вопросы разные:
+// день автор выбирает глазами по сетке месяца, а время печатает.
+//
+// Хранится по-прежнему ОДНА строка вида `ГГГГ-ММ-ДДTЧЧ:ММ` (значение
+// `datetime-local`, из него же собирается ISO для сервера) — два поля в черновике
+// означали бы два состояния «наполовину задано» и правило склейки в каждом читателе.
+//
+// Пояс НЕ выбирается: дата и время читаются в поясе браузера — том же, в котором
+// автор их набирает. Подпись об этом обязательна: без неё «в 23:59» у формы, которую
+// закрывают из другой страны, двусмысленно.
+function CloseAtFields({
+  value,
+  invalid,
+  onChange,
+}: {
+  value: string
+  invalid: boolean
+  onChange: (value: string) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const day = value.slice(0, 10)
+  const time = value.slice(11, 16)
+  const selected = day === '' ? undefined : new Date(`${day}T00:00`)
+
+  // Дата без времени значит КОНЕЦ дня: «закрыть 1 сентября» — это весь первый
+  // день, а не его первая минута. Поэтому первый выбор дня подставляет 23:59, а
+  // не полночь, с которой форма закрылась бы на сутки раньше, чем думал автор.
+  const setDay = (date: Date | undefined) => {
+    setOpen(false)
+    if (!date) {
+      onChange('')
+      return
+    }
+    const pad = (n: number) => String(n).padStart(2, '0')
+    const ymd = `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}`
+    onChange(`${ymd}T${time === '' ? '23:59' : time}`)
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex flex-wrap items-center gap-2">
+        <Popover open={open} onOpenChange={setOpen}>
+          <PopoverTrigger asChild>
+            <Button
+              variant="outline"
+              aria-invalid={invalid}
+              className="w-56 justify-start gap-2 font-normal"
+            >
+              <CalendarIcon className="size-4 text-muted-foreground" />
+              {day === '' ? (
+                <span className="text-muted-foreground">Выберите дату</span>
+              ) : (
+                new Date(`${day}T00:00`).toLocaleDateString('ru-RU', {
+                  day: 'numeric',
+                  month: 'long',
+                  year: 'numeric',
+                })
+              )}
+            </Button>
+          </PopoverTrigger>
+          <PopoverContent className="w-auto p-0" align="start">
+            <LazyCalendar mode="single" selected={selected} onSelect={setDay} autoFocus />
+          </PopoverContent>
+        </Popover>
+        <Input
+          type="time"
+          aria-label="Время закрытия"
+          className="w-32"
+          value={time}
+          disabled={day === ''}
+          onChange={(e) => onChange(e.target.value === '' ? day : `${day}T${e.target.value}`)}
+        />
+      </div>
+      <p className="text-sm text-muted-foreground">
+        Время вашего часового пояса — того, в котором работает этот браузер.
+      </p>
     </div>
   )
 }
@@ -705,7 +760,9 @@ function SettingRow({
 }: {
   id: string
   label: string
-  description: string
+  // Пояснение необязательно: строке, у которой подпись говорит всё («Ограничить
+  // число ответов» и поле под ней), вторая фраза добавила бы только шум.
+  description?: string
   checked: boolean
   onChange: (checked: boolean) => void
   pro?: boolean
@@ -734,7 +791,7 @@ function SettingRow({
               </Label>
               {pro && <ProTag />}
             </div>
-            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+            {description && <p className="mt-1 text-sm text-muted-foreground">{description}</p>}
             {stub && (
               <p className="mt-1 text-sm font-medium text-destructive" role="status">
                 {stub}
