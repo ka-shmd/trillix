@@ -49,7 +49,9 @@ export function newFormDetail(): FormDetail {
     closeAt: null,
     responseLimit: null,
     closedMessage: null,
-    notifyOnSubmission: true,
+    // Письма о новых ответах у новой формы ВЫКЛЮЧЕНЫ — дефолт колонки (0042):
+    // продукт не начинает слать почту, ни о чём не спросив.
+    notifyOnSubmission: false,
     // Сбор незавершённых у новой формы выключен: собирать то, что человек не
     // отправлял, по умолчанию нельзя.
     collectPartial: false,
@@ -57,6 +59,8 @@ export function newFormDetail(): FormDetail {
     branding: true,
     // Шкала прогресса у новой формы выключена — дефолт колонки `forms.progress`.
     progress: false,
+    // Письмо о новом ответе не настраивали — уйдёт дефолтным шаблоном.
+    notifyEmail: null,
     // Карточку ссылки не настраивали — публичная страница возьмёт дефолты.
     linkPreview: null,
   }

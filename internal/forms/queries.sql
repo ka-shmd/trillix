@@ -56,7 +56,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress,
+    f.link_preview, f.branding, f.progress, f.notify_email,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -84,7 +84,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress,
+    f.link_preview, f.branding, f.progress, f.notify_email,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -210,6 +210,17 @@ SET progress = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormNotifyEmail :one
+-- Настройка письма о новом ответе: имя отправителя, Reply-To, тема, текст (0042).
+-- Живая колонка, как link_preview: правка действует со следующего же ответа, без
+-- перепубликации. Кабинет шлёт настройку ЦЕЛИКОМ, поэтому здесь замена значения, а
+-- не слияние JSONB; пустая нормализуется в NULL на стороне repo. Право тарифа
+-- (form_notify_email) спрашивает service ДО этого запроса — здесь только запись.
+UPDATE forms
+SET notify_email = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
 -- name: UpdateFormLinkPreview :one
 -- Своя карточка ссылки формы (og:site_name/title/description/image + иконка).
 -- Живая колонка, как настройки закрытия: применяется без перепубликации. Окно
@@ -229,7 +240,7 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- внутреннее (name ?? title): письмо видит владелец, ему привычнее имя из кабинета.
 -- Вызывается приёмом ответа по form_id (форма уже резолвнута), членство тут не
 -- проверяется — это не доступ пользователя, а адресат уведомления.
-SELECT u.email, coalesce(f.name, f.title) AS title
+SELECT u.email, coalesce(f.name, f.title) AS title, f.workspace_id, f.notify_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id

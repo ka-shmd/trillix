@@ -45,6 +45,7 @@ type Form struct {
 	LinkPreview        []byte
 	Branding           bool
 	Progress           bool
+	NotifyEmail        []byte
 }
 
 type FormIntegration struct {

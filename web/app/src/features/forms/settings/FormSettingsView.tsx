@@ -4,7 +4,13 @@ import { useBlocker } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
 import { MAX_REDIRECT_URL_LEN, MAX_THANK_YOU_TEXT_LEN } from '@entities/formSchema'
-import { MAX_CLOSED_MESSAGE_LEN, type FormDetail } from '../../../entities/form'
+import {
+  MAX_CLOSED_MESSAGE_LEN,
+  MAX_NOTIFY_BODY_LEN,
+  MAX_NOTIFY_FROM_NAME_LEN,
+  MAX_NOTIFY_SUBJECT_LEN,
+  type FormDetail,
+} from '../../../entities/form'
 import { ApiError } from '../../../shared/api/errors'
 import { PageFooter } from '../../../shared/page/PageFooter'
 import { Section } from '../../../shared/page/Section'
@@ -16,6 +22,7 @@ import {
   useUpdateBranding,
   useUpdateCloseSettings,
   useUpdateCollectPartial,
+  useUpdateNotifyEmail,
   useUpdateNotifyOnSubmission,
   useUpdateProgress,
 } from '../queries'
@@ -23,6 +30,7 @@ import {
 import {
   isDirty,
   localInputToIso,
+  notifyEmailValue,
   mergeServer,
   pendingChanges,
   redirectValue,
@@ -42,6 +50,7 @@ import {
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
+import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Switch } from '@/components/ui/switch'
@@ -89,6 +98,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   const updateNotify = useUpdateNotifyOnSubmission()
   const updatePartial = useUpdateCollectPartial()
   const updateProgress = useUpdateProgress()
+  const updateNotifyEmail = useUpdateNotifyEmail()
   const updateBranding = useUpdateBranding()
 
   // Гейты тарифа. Оба спрашиваются у снимка плана пространства, и оба ДЕРЖАТ САМ
@@ -98,13 +108,17 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   // гейтится на ВКЛЮЧЕНИИ, бейдж на СНЯТИИ.
   const canCollectPartial = useFeatureAllowed('submissions_partial')
   const canRemoveBadge = useFeatureAllowed('form_branding')
+  // Настройка письма — платная целиком (решение владельца 2026-08-29): на бесплатном
+  // плане поля видны, но не редактируются, а попытка печатать открывает разговор о
+  // тарифе. Бэк отвергает такую правку сам (402) — снимок плана мог устареть.
+  const canCustomizeEmail = useFeatureAllowed('form_notify_email')
   const [upsell, setUpsell] = useState(false)
 
   const [saving, setSaving] = useState(false)
   const [failed, setFailed] = useState(false)
 
   const invalid = validateSettings(draft)
-  const anyInvalid = invalid.url || invalid.urlMissing || invalid.limit
+  const anyInvalid = invalid.url || invalid.urlMissing || invalid.limit || invalid.replyTo
   const dirty = isDirty(saved, draft)
 
   // Уход с несохранёнными правками — осознанный. Блокируется НАВИГАЦИЯ роутера
@@ -163,6 +177,20 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         await updateNotify.mutateAsync({ id: form.id, slug: form.slug, enabled: draft.notify })
       } catch {
         broke = true
+      }
+    }
+
+    if (jobs.notifyEmail) {
+      try {
+        await updateNotifyEmail.mutateAsync({ id: form.id, value: notifyEmailValue(draft) })
+      } catch (e: unknown) {
+        broke = true
+        // 402 — тариф закрылся, пока страница была открыта (даунгрейд в соседней
+        // вкладке). Правки остаются в черновике: сбросить их за автора нельзя, он их
+        // печатал, — но кнопка теперь честно говорит, что не сохранилось.
+        if (e instanceof ApiError && e.code === 'plan_required') {
+          toast.error('Настройка письма доступна на платном тарифе')
+        }
       }
     }
 
@@ -293,6 +321,42 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         </div>
       </Section>
 
+      <Section title="Email-уведомления">
+        <div className="flex flex-col divide-y border-t">
+          {/* Частые ответы склеиваются в одно письмо — троттлинг на бэкенде. */}
+          <SettingRow
+            id="notify-on-submission"
+            label="Уведомления мне"
+            description="Письмо на вашу почту о каждом новом ответе на форму."
+            checked={draft.notify}
+            onChange={(v) => set('notify', v)}
+          >
+            <NotifyEmailFields
+              draft={draft}
+              set={set}
+              replyToInvalid={invalid.replyTo}
+              editable={canCustomizeEmail}
+              onLocked={() => setUpsell(true)}
+            />
+          </SettingRow>
+
+          {/* ЗАГЛУШКА (решение владельца 2026-08-29): строка нарисована, за ней
+              ничего нет. Стоит здесь намеренно и с красной меткой — чтобы дыра была
+              видна на самом экране, а не только в очереди задач. Что делать —
+              `BACKLOG.md`, пункт «Почта формы» — там же подстановки и PDF. Метка и
+              `disabled` снимаются вместе с реализацией. */}
+          <SettingRow
+            id="notify-respondent"
+            label="Уведомления респонденту"
+            description="Письмо респонденту после отправки формы: свой текст и, если нужно, PDF с его ответами вложением."
+            checked={false}
+            onChange={() => undefined}
+            disabled
+            stub="Заглушка: строка нарисована, отправки нет. Задача — в BACKLOG.md, «Почта формы»."
+          />
+        </div>
+      </Section>
+
       <Section
         title="После отправки"
         description="Что респондент увидит, когда отправит ответ. Нужен экран посложнее — соберите страницу «Спасибо» на полотне: включите тумблер на последнем разрыве страницы, и она заменит этот текст."
@@ -379,35 +443,6 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         </div>
       </Section>
 
-      <Section title="Email-уведомления">
-        <div className="flex flex-col divide-y border-t">
-          {/* Частые ответы склеиваются в одно письмо — троттлинг на бэкенде. */}
-          <SettingRow
-            id="notify-on-submission"
-            label="Уведомления мне"
-            description="Письмо на вашу почту о каждом новом ответе на форму."
-            checked={draft.notify}
-            onChange={(v) => set('notify', v)}
-          />
-
-          {/* ЗАГЛУШКА (решение владельца 2026-08-29): строка нарисована, за ней
-              ничего нет. Стоит здесь намеренно и с красной меткой — чтобы дыра была
-              видна на самом экране, а не только в очереди задач. Что делать —
-              `BACKLOG.md`, пункт про письмо респонденту: свой текст, подстановка
-              ответов, PDF вложением, отдельный адресат, гейт тарифа. Метка и
-              `disabled` снимаются вместе с реализацией. */}
-          <SettingRow
-            id="notify-respondent"
-            label="Уведомления респонденту"
-            description="Письмо респонденту после отправки формы: свой текст и, если нужно, PDF с его ответами вложением."
-            checked={false}
-            onChange={() => undefined}
-            disabled
-            stub="Заглушка: строка нарисована, отправки нет. Задача — в BACKLOG.md."
-          />
-        </div>
-      </Section>
-
       {/* Колонка та же, что у страницы (`default` в оболочке _manage): кнопка
           стоит под правым краем полей, из которых сохраняет. */}
       <PageFooter width="default">
@@ -416,20 +451,22 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
               относится к полю, в которое человек ещё не печатал, и краснеть ему не за
               что — кнопка и так не даётся. */}
           <span
-            className={`text-sm ${failed || invalid.url || invalid.limit ? 'text-destructive' : 'text-muted-foreground'}`}
+            className={`text-sm ${failed || invalid.url || invalid.limit || invalid.replyTo ? 'text-destructive' : 'text-muted-foreground'}`}
             role="status"
           >
             {invalid.url
               ? 'Проверьте ссылку перехода'
               : invalid.urlMissing
                 ? 'Укажите ссылку перехода'
-                : invalid.limit
-                  ? 'Проверьте лимит'
-                  : failed
-                    ? 'Не удалось сохранить'
-                    : dirty
-                      ? 'Есть несохранённые изменения'
-                      : 'Всё сохранено'}
+                : invalid.replyTo
+                  ? 'Проверьте адрес для ответов'
+                  : invalid.limit
+                    ? 'Проверьте лимит'
+                    : failed
+                      ? 'Не удалось сохранить'
+                      : dirty
+                        ? 'Есть несохранённые изменения'
+                        : 'Всё сохранено'}
           </span>
           <Button onClick={() => void save()} disabled={!dirty || anyInvalid || saving}>
             {saving ? 'Сохраняем…' : 'Сохранить'}
@@ -455,6 +492,137 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+    </div>
+  )
+}
+
+// Меню письма о новом ответе — то, что раскрывается под включённым тумблером.
+// Собрано коробкой из строк, как бланк письма: слева подпись поля, справа значение.
+//
+// ДВЕ СТРОКИ ЗАМОРОЖЕНЫ, и это не «пока не сделали». Адрес отправителя один на
+// сервис: письма уходят с нашего домена, и подменённый адрес стоил бы репутации
+// всей почты сервиса — автор меняет только ИМЯ рядом с ним. Получатель — владелец
+// пространства: письма шлём мы, и произвольный адрес в этом поле превратил бы форму
+// в рассыльщик.
+//
+// Подстановок (@Форма, @Все ответы) ЕЩЁ НЕТ — текст уходит как есть; задача в
+// BACKLOG.md, там же PDF-вложение. Поэтому чекбокс PDF нарисован выключенным и с
+// красной меткой: строка есть, вложения нет.
+function NotifyEmailFields({
+  draft,
+  set,
+  replyToInvalid,
+  editable,
+  onLocked,
+}: {
+  draft: SettingsDraft
+  set: <K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) => void
+  replyToInvalid: boolean
+  editable: boolean
+  onLocked: () => void
+}) {
+  // На бесплатном плане поля видны и НЕ редактируются: `readOnly`, а не `disabled`,
+  // — выключенное поле не ловит ни клика, ни фокуса, и объяснить, почему оно не
+  // печатается, было бы негде. Клик по такому полю открывает разговор о тарифе.
+  const lock = editable ? {} : { readOnly: true, onFocus: onLocked, onClick: onLocked }
+  const cell = 'w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
+
+  return (
+    <div className="rounded-lg border">
+      <Row label="Имя отправителя">
+        <Input
+          {...lock}
+          aria-label="Имя отправителя"
+          value={draft.notifyFromName}
+          placeholder="Trillix"
+          maxLength={MAX_NOTIFY_FROM_NAME_LEN}
+          onChange={(e) => set('notifyFromName', e.target.value)}
+          className={cell}
+        />
+      </Row>
+      <Row label="От кого">
+        <span className="text-sm text-muted-foreground">
+          служебный адрес Trillix — его менять нельзя
+        </span>
+      </Row>
+      <Row label="Кому">
+        <span className="text-sm text-muted-foreground">
+          владельцу пространства, на адрес его аккаунта
+        </span>
+      </Row>
+      <Row label="Адрес для ответов">
+        <div className="w-full">
+          <Input
+            {...lock}
+            type="email"
+            inputMode="email"
+            aria-label="Адрес для ответов"
+            aria-invalid={replyToInvalid}
+            value={draft.notifyReplyTo}
+            placeholder="Куда ответит ваш почтовый клиент"
+            onChange={(e) => set('notifyReplyTo', e.target.value)}
+            className={cell}
+          />
+          {replyToInvalid && (
+            <p className="pb-1 text-sm text-destructive" role="alert">
+              Нужен адрес вида name@example.com
+            </p>
+          )}
+        </div>
+      </Row>
+      <Row label="Тема">
+        <Input
+          {...lock}
+          aria-label="Тема письма"
+          value={draft.notifySubject}
+          placeholder="Новые ответы в Trillix"
+          maxLength={MAX_NOTIFY_SUBJECT_LEN}
+          onChange={(e) => set('notifySubject', e.target.value)}
+          className={cell}
+        />
+      </Row>
+      <div className="border-t px-3 py-2">
+        <Textarea
+          {...lock}
+          aria-label="Текст письма"
+          value={draft.notifyBody}
+          placeholder="Оставьте пустым, чтобы письмо ушло обычным текстом со ссылкой на ответы."
+          maxLength={MAX_NOTIFY_BODY_LEN}
+          rows={5}
+          onChange={(e) => set('notifyBody', e.target.value)}
+          className="min-h-24 w-full resize-y border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+        />
+      </div>
+      {/* ЗАГЛУШКА: вложения нет, задача в BACKLOG.md вместе с подстановками. */}
+      <div className="flex items-center gap-2 border-t px-3 py-2">
+        <TriangleAlert className="size-4 shrink-0 text-destructive" aria-hidden />
+        <Checkbox id="notify-pdf" checked={false} disabled />
+        <Label htmlFor="notify-pdf" className="font-normal text-muted-foreground">
+          Прикрепить PDF с ответами
+        </Label>
+        <span className="text-sm font-medium text-destructive">— заглушка, PDF пока не делаем</span>
+      </div>
+      {!editable && (
+        <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2 text-sm text-muted-foreground">
+          <ProTag />
+          <span>Менять письмо можно на платном тарифе.</span>
+          <button type="button" className="underline underline-offset-2" onClick={onLocked}>
+            Посмотреть тарифы
+          </button>
+        </div>
+      )}
+    </div>
+  )
+}
+
+// Строка бланка: подпись слева, значение справа. Подпись фиксированной ширины —
+// иначе поля начинались бы в пяти разных местах и бланк перестал бы читаться
+// колонкой.
+function Row({ label, children }: { label: string; children: React.ReactNode }) {
+  return (
+    <div className="flex items-center gap-2 border-b px-3 py-1 last:border-b-0">
+      <span className="w-40 shrink-0 text-sm text-muted-foreground">{label}</span>
+      {children}
     </div>
   )
 }

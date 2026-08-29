@@ -77,6 +77,7 @@ type Store interface {
 	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
 	UpdateProgress(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
+	UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
@@ -472,6 +473,65 @@ func (s *Service) UpdateCollectPartial(ctx context.Context, userID, formID uuid.
 		return Form{}, err
 	}
 	return updated, nil
+}
+
+// UpdateNotifyEmail заменяет настройку письма о новом ответе (имя отправителя,
+// Reply-To, тема, текст; миграция 0042). Порядок как у остальных живых настроек:
+// валидация ввода, доступ (чужая/нет формы → 404), тариф, UPDATE.
+//
+// ТАРИФ СПРАШИВАЕТСЯ ЗДЕСЬ, в отличие от карточки ссылки: контрол держит кабинет
+// (решение владельца 2026-08-29 — «менять может только платный»), и сохранение
+// правки, которую интерфейс не даёт сделать, означало бы 402 в единственном месте,
+// куда он всё-таки доедет, — в чужом клиенте. Второй раз право спрашивается при
+// ОТПРАВКЕ письма (NotifyEmailFor): даунгрейд возвращает дефолтный шаблон сам.
+//
+// Снятие настройки (пустые поля) тариф НЕ спрашивает: вернуться к дефолтному письму
+// вправе любой план — иначе даунгрейд запирал бы автора в чужой настройке.
+func (s *Service) UpdateNotifyEmail(ctx context.Context, userID, formID uuid.UUID, n *domain.NotifyEmail) (Form, error) {
+	if err := domain.ValidateNotifyEmail(n); err != nil {
+		return Form{}, err
+	}
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if !n.Empty() {
+		d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormNotifyEmail)
+		if err != nil {
+			return Form{}, err
+		}
+		if !d.Allowed {
+			return Form{}, domain.ErrPlanRequired
+		}
+	}
+	updated, err := s.repo.UpdateFormNotifyEmail(ctx, s.db, form.ID, form.WorkspaceID, n)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// NotifyEmailFor — настройка письма, действующая для этого воркспейса ПРЯМО СЕЙЧАС:
+// nil значит «слать дефолтным шаблоном». Спрашивается на отправке, а не берётся из
+// колонки напрямую, ровно затем, чтобы даунгрейд возвращал дефолтное письмо сам.
+//
+// Сбой опроса тарифа даёт дефолтный шаблон, а не отказ: письмо обязано уйти, а
+// «не тем текстом» дешевле, чем «никаким».
+func (s *Service) NotifyEmailFor(ctx context.Context, workspaceID uuid.UUID, n *domain.NotifyEmail) (*domain.NotifyEmail, error) {
+	if n.Empty() {
+		return nil, nil
+	}
+	d, err := s.plans.CheckWorkspace(ctx, workspaceID, entitlements.FormNotifyEmail)
+	if err != nil {
+		return nil, err
+	}
+	if !d.Allowed {
+		return nil, nil
+	}
+	return n, nil
 }
 
 // UpdateLinkPreview заменяет карточку ссылки формы (имя площадки, заголовок,

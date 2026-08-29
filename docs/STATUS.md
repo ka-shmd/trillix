@@ -52,7 +52,7 @@
   (`answerfiles`, `auth`, `blob`, `config`, `domain`, `entitlements`, `forms`, `geo`, `httpserver`,
   `integrations`, `mail`, `media`, `oauth`, `periodic`, `pgtest`, `postgres`, `ratelimit`,
   `submissions`, `token`, `visits`, `workspaces`).
-- **PostgreSQL 16** — 41 миграция (`0001`…`0041_paid_partial_submissions`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
+- **PostgreSQL 16** — 42 миграции (`0001`…`0042_notify_email`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui; графики аналитики — recharts за ленивой загрузкой (`features/insights/lazyCharts.tsx`), в общий чанк не входит.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 45 КиБ gzip** (сейчас
   38.54). Рядом — загрузчик встроенной формы `embed/v1.js`, свой бюджет 4 КиБ (сейчас 2.59),

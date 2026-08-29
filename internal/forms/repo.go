@@ -80,6 +80,10 @@ type Form struct {
 	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
 	// у результатов мутаций false, как и прочие read-only поля выше.
 	NotifyOnSubmission bool
+	// NotifyEmail — настройка письма о новом ответе (nil = не настраивали → письмо
+	// уходит дефолтным шаблоном). Живая колонка (0042); заполняют только
+	// Get/GetBySlug — та же мина, что у Branding.
+	NotifyEmail *domain.NotifyEmail
 	// LinkPreview — своя карточка ссылки (nil = не настраивали → дефолты публичной
 	// страницы). Живая колонка, как настройки закрытия; заполняют только
 	// Get/GetBySlug — её читает окно кастомизации на экране «Поделиться».
@@ -206,6 +210,25 @@ func ptrTime(v pgtype.Timestamptz) *time.Time {
 // испорченная строка обязана стоить дефолтного превью, а не пятисотки на форме,
 // которая исправно принимает ответы. Записываем сюда только мы и только через
 // ValidateLinkPreview, поэтому ветка недостижима в здоровой базе.
+// notifyEmailFromJSON разбирает колонку forms.notify_email: NULL, пустой JSON или
+// настройка из пустых строк → nil («не настраивали», письмо уходит дефолтным
+// шаблоном). Битый JSON тоже даёт nil, и по тому же доводу, что у карточки ссылки:
+// испорченная строка обязана стоить дефолтного письма, а не потерянного
+// уведомления.
+func notifyEmailFromJSON(raw []byte) *domain.NotifyEmail {
+	if len(raw) == 0 {
+		return nil
+	}
+	var n domain.NotifyEmail
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return nil
+	}
+	if n.Empty() {
+		return nil
+	}
+	return &n
+}
+
 func linkPreviewFromJSON(raw []byte) *domain.LinkPreview {
 	if len(raw) == 0 {
 		return nil
@@ -336,6 +359,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		Branding:              row.Branding,
 		Progress:              row.Progress,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
+		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -372,6 +396,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		Branding:              row.Branding,
 		Progress:              row.Progress,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
+		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -508,6 +533,12 @@ func (Repo) UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, 
 type Owner struct {
 	Email string
 	Title string
+	// WorkspaceID — чей тариф спрашивать перед тем, как взять СВОЙ текст письма:
+	// настройка платная, и даунгрейд обязан возвращать дефолтный шаблон сам, как
+	// возвращает бейдж (BILLING.md).
+	WorkspaceID uuid.UUID
+	// NotifyEmail — свой текст письма (nil = дефолтный шаблон).
+	NotifyEmail *domain.NotifyEmail
 }
 
 // GetSubmissionOwner отдаёт владельца формы и её имя для письма-уведомления (слайс
@@ -518,7 +549,12 @@ func (Repo) GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uui
 	if err != nil {
 		return Owner{}, fmt.Errorf("get submission owner: %w", err)
 	}
-	return Owner{Email: row.Email, Title: row.Title}, nil
+	return Owner{
+		Email:       row.Email,
+		Title:       row.Title,
+		WorkspaceID: row.WorkspaceID,
+		NotifyEmail: notifyEmailFromJSON(row.NotifyEmail),
+	}, nil
 }
 
 // ListFormNames возвращает пары (имя, заголовок) всех форм воркспейса — сервису для
@@ -713,6 +749,40 @@ func (Repo) UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, wor
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form link_preview: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateFormNotifyEmail заменяет настройку письма о новом ответе в пределах
+// воркспейса. Пустая настройка нормализуется в NULL — «не настраивали» обязано
+// иметь ровно одно представление в колонке (domain.Empty). Право тарифа проверяет
+// service до вызова; pgx.ErrNoRows (чужая/нет формы) пробрасывается — 404.
+func (Repo) UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error) {
+	var raw []byte
+	if !n.Empty() {
+		var err error
+		raw, err = json.Marshal(n)
+		if err != nil {
+			return Form{}, fmt.Errorf("marshal notify email: %w", err)
+		}
+	}
+	row, err := postgres.New(db).UpdateFormNotifyEmail(ctx, postgres.UpdateFormNotifyEmailParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		NotifyEmail: raw,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form notify_email: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,

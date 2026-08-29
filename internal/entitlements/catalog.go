@@ -88,6 +88,15 @@ const (
 	// карточка действует, только пока тариф её разрешает; даунгрейд возвращает
 	// дефолты, апгрейд оживляет уже сохранённое, ничего не стирая.
 	FormLinkPreview Key = "form_link_preview"
+	// FormNotifyEmail — право настроить письмо о новом ответе: имя отправителя,
+	// Reply-To, тема, текст (миграция 0042).
+	//
+	// ГЕЙТ ПРИРОДЫ БЕЙДЖА: спрашивается и при сохранении, и при ОТПРАВКЕ письма.
+	// При сохранении — потому что кабинет держит сам контрол (поля не редактируются
+	// на бесплатном плане, EMBED §10 описывает тот же приём у бейджа); при отправке
+	// — потому что месяц оплаты не покупает свой текст навсегда: даунгрейд обязан
+	// вернуть дефолтный шаблон, ничего не стирая, и апгрейд оживит сохранённое.
+	FormNotifyEmail Key = "form_notify_email"
 )
 
 // Kind — как читать значение ключа в plans.limits.
@@ -163,6 +172,7 @@ var CatalogOrder = []Key{
 	FormCustomCSS,
 	FormBranding,
 	FormLinkPreview,
+	FormNotifyEmail,
 	StoragePerWorkspace,
 	Workspaces,
 }
@@ -179,4 +189,5 @@ var Catalog = map[Key]Feature{
 	FormBranding:        {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Без бейджа Trillix"},
 	SubmissionsPartial:  {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Незавершённые ответы"},
 	FormLinkPreview:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своя карточка ссылки"},
+	FormNotifyEmail:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё письмо о новом ответе"},
 }

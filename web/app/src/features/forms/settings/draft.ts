@@ -1,5 +1,7 @@
+import { z } from 'zod'
+
 import { isHttpUrl } from '@entities/formSchema'
-import type { FormDetail } from '../../../entities/form'
+import type { FormDetail, NotifyEmail } from '../../../entities/form'
 
 // Черновик страницы настроек: ВСЯ страница разом, а не раздел за разделом.
 //
@@ -23,6 +25,13 @@ export interface SettingsDraft {
   limit: string
   closedMessage: string
   notify: boolean
+  // Письмо о новом ответе: что автор в нём переписал. Пустые значения = «слать
+  // дефолтным шаблоном», и на сервер они уезжают именно пустыми — там настройка
+  // нормализуется в NULL.
+  notifyFromName: string
+  notifyReplyTo: string
+  notifySubject: string
+  notifyBody: string
   partial: boolean
   // Живые колонки формы: шкала прогресса (0040) и бейдж «Сделано в Trillix» (0038).
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
@@ -40,6 +49,10 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     limit: form.responseLimit === null ? '' : String(form.responseLimit),
     closedMessage: form.closedMessage ?? '',
     notify: form.notifyOnSubmission,
+    notifyFromName: form.notifyEmail?.fromName ?? '',
+    notifyReplyTo: form.notifyEmail?.replyTo ?? '',
+    notifySubject: form.notifyEmail?.subject ?? '',
+    notifyBody: form.notifyEmail?.body ?? '',
     partial: form.collectPartial,
     progress: form.progress,
     branding: form.branding,
@@ -52,6 +65,22 @@ export function redirectValue(draft: SettingsDraft): string {
   return draft.redirectOn ? draft.redirectUrl.trim() : ''
 }
 
+// Настройка письма в виде, в котором её принимает API: обрезанные поля, кроме
+// текста (в нём пробелы по краям — часть письма).
+export function notifyEmailValue(draft: SettingsDraft): NotifyEmail {
+  return {
+    fromName: draft.notifyFromName.trim(),
+    replyTo: draft.notifyReplyTo.trim(),
+    subject: draft.notifySubject.trim(),
+    body: draft.notifyBody,
+  }
+}
+
+// Тот же строгий разбор адреса, каким рендерер проверяет ответ на вопрос-email:
+// адрес есть адрес, и две разные строгости означали бы, что где-то принимается то,
+// что рядом отвергается.
+const emailCheck = z.email()
+
 export interface SettingsInvalid {
   // ПУСТОЕ ПОЛЕ И БИТЫЙ АДРЕС — РАЗНЫЕ СОСТОЯНИЯ, и путать их нельзя: включённый
   // тумблер сразу подсвечивал поле красным и требовал «начните с http://» у поля, в
@@ -60,10 +89,14 @@ export interface SettingsInvalid {
   urlMissing: boolean
   url: boolean
   limit: boolean
+  // Reply-To проверяется строго: битый адрес — это письмо, которое отвергнет
+  // почтовый провайдер, то есть молча пропавшее уведомление.
+  replyTo: boolean
 }
 
 export function validateSettings(draft: SettingsDraft): SettingsInvalid {
   const url = draft.redirectUrl.trim()
+  const replyTo = draft.notifyReplyTo.trim()
   const limit = draft.limit.trim()
   const limitNum = Number(limit)
   return {
@@ -72,6 +105,7 @@ export function validateSettings(draft: SettingsDraft): SettingsInvalid {
     urlMissing: draft.redirectOn && url === '',
     url: draft.redirectOn && url !== '' && !isHttpUrl(url),
     limit: limit !== '' && (!Number.isInteger(limitNum) || limitNum < 1),
+    replyTo: replyTo !== '' && !emailCheck.safeParse(replyTo).success,
   }
 }
 
@@ -82,6 +116,7 @@ export interface PendingChanges {
   afterSubmit: boolean
   close: boolean
   notify: boolean
+  notifyEmail: boolean
   partial: boolean
   // Живые колонки формы: шкала прогресса (0040) и бейдж «Сделано в Trillix» (0038).
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
@@ -98,6 +133,11 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
       draft.limit.trim() !== saved.limit ||
       draft.closedMessage !== saved.closedMessage,
     notify: draft.notify !== saved.notify,
+    notifyEmail:
+      draft.notifyFromName.trim() !== saved.notifyFromName ||
+      draft.notifyReplyTo.trim() !== saved.notifyReplyTo ||
+      draft.notifySubject.trim() !== saved.notifySubject ||
+      draft.notifyBody !== saved.notifyBody,
     partial: draft.partial !== saved.partial,
     progress: draft.progress !== saved.progress,
     branding: draft.branding !== saved.branding,

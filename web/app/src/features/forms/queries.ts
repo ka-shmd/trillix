@@ -15,6 +15,7 @@ import {
   unpublishForm,
   updateBranding,
   updateProgress,
+  updateNotifyEmail,
   updateCloseSettings,
   updateCollectPartial,
   updateLinkPreview,
@@ -27,6 +28,7 @@ import {
   type FormDetail,
   type FormsSort,
   type LinkPreview,
+  type NotifyEmail,
 } from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
@@ -253,6 +255,22 @@ export function useUpdateProgress() {
     onSuccess: (form, { show }) => {
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, updatedAt: form.updatedAt, progress: show } : old,
+      )
+    },
+  })
+}
+
+// Настройка письма о новом ответе (0042). Живое свойство формы: PATCH формы,
+// применяется со следующего же ответа. Пустая настройка приходит с сервера как null
+// — кладём в кэш именно её, а не объект из пустых строк.
+export function useUpdateNotifyEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, value }: { id: string; value: NotifyEmail }) => updateNotifyEmail(id, value),
+    onSuccess: (form, { value }) => {
+      const stored = Object.values(value).some((v) => v !== '') ? value : null
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, notifyEmail: stored } : old,
       )
     },
   })

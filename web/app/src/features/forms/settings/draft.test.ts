@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   isDirty,
+  notifyEmailValue,
   redirectValue,
   isoToLocalInput,
   localInputToIso,
@@ -19,6 +20,10 @@ const saved: SettingsDraft = {
   limit: '',
   closedMessage: '',
   notify: false,
+  notifyFromName: '',
+  notifyReplyTo: '',
+  notifySubject: '',
+  notifyBody: '',
   partial: false,
   progress: false,
   branding: true,
@@ -30,6 +35,7 @@ describe('черновик страницы настроек', () => {
       afterSubmit: false,
       close: false,
       notify: false,
+      notifyEmail: false,
       partial: false,
       progress: false,
       branding: false,
@@ -45,6 +51,7 @@ describe('черновик страницы настроек', () => {
     expect(pendingChanges(saved, { ...saved, partial: true }).partial).toBe(true)
     expect(pendingChanges(saved, { ...saved, progress: true }).progress).toBe(true)
     expect(pendingChanges(saved, { ...saved, branding: false }).branding).toBe(true)
+    expect(pendingChanges(saved, { ...saved, notifySubject: 'Заявка' }).notifyEmail).toBe(true)
   })
 
   it('тумблер входит в «есть несохранённое» наравне с полями', () => {
@@ -84,6 +91,30 @@ describe('черновик страницы настроек', () => {
     const off = validateSettings({ ...saved, redirectOn: false, redirectUrl: 'ерунда' })
     expect(off.url).toBe(false)
     expect(off.urlMissing).toBe(false)
+  })
+
+  it('Reply-To проверяется как адрес, пустой — законное «не настраивал»', () => {
+    expect(validateSettings({ ...saved, notifyReplyTo: 'hr@example.com' }).replyTo).toBe(false)
+    expect(validateSettings({ ...saved, notifyReplyTo: 'hr@' }).replyTo).toBe(true)
+    expect(validateSettings({ ...saved, notifyReplyTo: '' }).replyTo).toBe(false)
+  })
+
+  it('в письмо уезжают обрезанные поля, но текст — как набран', () => {
+    // Пробелы по краям текста письма — часть письма: абзац, начатый с отступа,
+    // автор написал намеренно. У имени, адреса и темы они всегда опечатка.
+    const value = notifyEmailValue({
+      ...saved,
+      notifyFromName: '  Отдел кадров ',
+      notifyReplyTo: ' hr@example.com ',
+      notifySubject: ' Заявка ',
+      notifyBody: '  Здравствуйте!  ',
+    })
+    expect(value).toEqual({
+      fromName: 'Отдел кадров',
+      replyTo: 'hr@example.com',
+      subject: 'Заявка',
+      body: '  Здравствуйте!  ',
+    })
   })
 
   it('лимит — целое больше нуля', () => {

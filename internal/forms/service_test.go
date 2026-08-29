@@ -66,6 +66,7 @@ type fakeStore struct {
 	lastCollectPartial bool
 	lastBranding       bool
 	lastProgress       bool
+	lastNotifyEmail    *domain.NotifyEmail
 	owner              Owner
 	ownerErr           error
 
@@ -129,6 +130,12 @@ func (f *fakeStore) UpdateBranding(_ context.Context, _ postgres.DBTX, id, works
 	f.updated = true
 	f.lastBranding = show
 	return Form{ID: id, WorkspaceID: workspaceID, Branding: show}, nil
+}
+
+func (f *fakeStore) UpdateFormNotifyEmail(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error) {
+	f.updated = true
+	f.lastNotifyEmail = n
+	return Form{ID: id, WorkspaceID: workspaceID, NotifyEmail: n}, nil
 }
 
 func (f *fakeStore) UpdateProgress(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error) {
@@ -752,6 +759,70 @@ func TestUpdateProgress_NeedsNoPlan(t *testing.T) {
 	}
 	if len(plans.gotKeys) != 0 {
 		t.Fatalf("тариф спрошен на смене тумблера: %v", plans.gotKeys)
+	}
+}
+
+// Свой текст письма — платная настройка (0042): её сохранение спрашивает тариф, в
+// отличие от карточки ссылки, где право стоит только на отдаче. Контрол держит сам
+// кабинет, и правка, которую интерфейс не даёт сделать, обязана быть отвергнута и
+// на бэке — иначе 402 не увидит никто, кроме чужого клиента.
+func TestUpdateNotifyEmail_NeedsPlan(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	_, err := svc.UpdateNotifyEmail(context.Background(), uuid.New(), store.form.ID,
+		&domain.NotifyEmail{Subject: "Новая заявка"})
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("err = %v, want ErrPlanRequired", err)
+	}
+	if store.updated {
+		t.Fatal("настройка ушла в стор мимо гейта")
+	}
+}
+
+// СНЯТИЕ настройки тариф не спрашивает: вернуться к дефолтному письму вправе любой
+// план — иначе даунгрейд запирал бы автора в настройке, которую он уже не может
+// менять.
+func TestUpdateNotifyEmail_ResetNeedsNoPlan(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	if _, err := svc.UpdateNotifyEmail(context.Background(), uuid.New(), store.form.ID,
+		&domain.NotifyEmail{}); err != nil {
+		t.Fatalf("сброс настройки: %v", err)
+	}
+	if !store.updated {
+		t.Fatal("сброс не доехал до стора")
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен на сбросе: %v", plans.gotKeys)
+	}
+}
+
+// Даунгрейд возвращает дефолтное письмо, ничего не стирая: сохранённая настройка
+// остаётся в колонке и оживает после апгрейда — тот же приём, что у бейджа.
+func TestNotifyEmailFor_GateAtSend(t *testing.T) {
+	saved := &domain.NotifyEmail{Subject: "Новая заявка"}
+	ws := domain.NewID()
+
+	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, &fakePlans{allowed: false})
+	got, err := svc.NotifyEmailFor(context.Background(), ws, saved)
+	if err != nil {
+		t.Fatalf("NotifyEmailFor: %v", err)
+	}
+	if got != nil {
+		t.Fatal("на закрытом тарифе письмо обязано уйти дефолтным шаблоном")
+	}
+
+	svc = NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, &fakePlans{allowed: true})
+	got, err = svc.NotifyEmailFor(context.Background(), ws, saved)
+	if err != nil {
+		t.Fatalf("NotifyEmailFor: %v", err)
+	}
+	if got == nil || got.Subject != "Новая заявка" {
+		t.Fatalf("на платном тарифе обязана вернуться настройка автора: %+v", got)
 	}
 }
 

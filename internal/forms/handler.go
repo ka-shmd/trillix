@@ -41,6 +41,7 @@ type formsService interface {
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
 	UpdateProgress(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
+	UpdateNotifyEmail(ctx context.Context, userID, formID uuid.UUID, n *domain.NotifyEmail) (Form, error)
 	UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
@@ -132,6 +133,11 @@ type formDetailResponse struct {
 	// формы, миграция 0040). Та же мина, что у Branding: только в детали формы, а
 	// false у списка и мутаций значит «шкала снята».
 	Progress bool `json:"progress"`
+	// NotifyEmail — настройка письма о новом ответе; null = не настраивали, письмо
+	// уходит дефолтным шаблоном. Отдаётся НЕЗАВИСИМО от тарифа, как и карточка
+	// ссылки: кабинет показывает сохранённое всем, а применяет настройку отправка
+	// письма (гейт стоит там же и при сохранении).
+	NotifyEmail *notifyEmailBody `json:"notifyEmail"`
 	// LinkPreview — своя карточка ссылки; null = не настраивали, публичная страница
 	// берёт дефолты. Отдаётся НЕЗАВИСИМО от тарифа: окно кастомизации показывает
 	// сохранённое всем, а применяет карточку к самой ссылке публичный слой (гейт
@@ -190,7 +196,32 @@ type patchRequest struct {
 	CollectPartial     *bool              `json:"collectPartial"`
 	Branding           *bool              `json:"branding"`
 	Progress           *bool              `json:"progress"`
+	NotifyEmail        *notifyEmailBody   `json:"notifyEmail"`
 	LinkPreview        *linkPreviewBody   `json:"linkPreview"`
+}
+
+// notifyEmailBody — настройка письма о новом ответе в контракте API. Адреса
+// отправителя и получателя здесь НЕТ: первый один на сервис, второй — владелец
+// аккаунта, и оба автору не принадлежат (domain.NotifyEmail).
+type notifyEmailBody struct {
+	FromName string `json:"fromName"`
+	ReplyTo  string `json:"replyTo"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body"`
+}
+
+// toNotifyEmailBody — настройка в тело ответа; nil (не настраивали) остаётся null,
+// а не превращается в объект из пустых строк: у «не настраивали» одно представление.
+func toNotifyEmailBody(n *domain.NotifyEmail) *notifyEmailBody {
+	if n.Empty() {
+		return nil
+	}
+	return &notifyEmailBody{
+		FromName: n.FromName,
+		ReplyTo:  n.ReplyTo,
+		Subject:  n.Subject,
+		Body:     n.Body,
+	}
 }
 
 func toFormResponse(f Form) formResponse {
@@ -245,6 +276,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		CollectPartial:     f.CollectPartial,
 		Branding:           f.Branding,
 		Progress:           f.Progress,
+		NotifyEmail:        toNotifyEmailBody(f.NotifyEmail),
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
 	}
 }
@@ -395,6 +427,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.CollectPartial != nil,
 		req.Branding != nil,
 		req.Progress != nil,
+		req.NotifyEmail != nil,
 		req.LinkPreview != nil,
 	}
 	for _, present := range facets {
@@ -403,7 +436,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/linkPreview", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/notifyEmail/linkPreview", domain.ErrValidation))
 		return
 	}
 
@@ -435,6 +468,14 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateBranding(r.Context(), userID, formID, *req.Branding)
 	case req.Progress != nil:
 		form, err = h.svc.UpdateProgress(r.Context(), userID, formID, *req.Progress)
+	case req.NotifyEmail != nil:
+		ne := *req.NotifyEmail
+		form, err = h.svc.UpdateNotifyEmail(r.Context(), userID, formID, &domain.NotifyEmail{
+			FromName: strings.TrimSpace(ne.FromName),
+			ReplyTo:  strings.TrimSpace(ne.ReplyTo),
+			Subject:  strings.TrimSpace(ne.Subject),
+			Body:     ne.Body,
+		})
 	case req.LinkPreview != nil:
 		lp := *req.LinkPreview
 		form, err = h.svc.UpdateLinkPreview(r.Context(), userID, formID, &domain.LinkPreview{

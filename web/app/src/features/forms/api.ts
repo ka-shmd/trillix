@@ -9,6 +9,7 @@ import {
   type FormsPage,
   type FormsSort,
   type LinkPreview,
+  type NotifyEmail,
 } from '../../entities/form'
 
 // Транспорт forms: каждый ответ парсится Zod-схемой на границе; delete — 204 без тела.
@@ -90,6 +91,18 @@ export function updateCollectPartial(id: string, enabled: boolean): Promise<Form
   return apiRequest(`/forms/${id}`, {
     method: 'PATCH',
     body: { collectPartial: enabled },
+    schema: formSchema,
+  })
+}
+
+// Настройка письма о новом ответе (фасет notifyEmail): имя отправителя, Reply-To,
+// тема, текст. 402 здесь БЫВАЕТ — настройка платная, и бэк отвергает правку, которую
+// кабинет на бесплатном плане и так не даёт сделать. Сброс (все поля пустые) проходит
+// на любом тарифе: вернуться к дефолтному письму вправе каждый.
+export function updateNotifyEmail(id: string, value: NotifyEmail): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { notifyEmail: value },
     schema: formSchema,
   })
 }

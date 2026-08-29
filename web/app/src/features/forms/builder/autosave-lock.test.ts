@@ -44,6 +44,7 @@ function seedDetail(qc: QueryClient) {
     collectPartial: false,
     branding: true,
     progress: true,
+    notifyEmail: null,
     linkPreview: null,
   })
 }

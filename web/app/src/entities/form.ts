@@ -68,6 +68,26 @@ export const linkPreviewSchema = z.object({
 
 export type LinkPreview = z.infer<typeof linkPreviewSchema>
 
+// Письмо о новом ответе — что из него настраивает автор. Адресов отправителя и
+// получателя здесь НЕТ: первый один на сервис, второй — владелец пространства, и
+// оба автору не принадлежат (зеркалит domain.NotifyEmail).
+export const notifyEmailSchema = z.object({
+  fromName: z.string(),
+  replyTo: z.string(),
+  subject: z.string(),
+  body: z.string(),
+})
+export type NotifyEmail = z.infer<typeof notifyEmailSchema>
+
+// Пустая настройка = «слать дефолтным шаблоном». Уходит на сервер при сбросе; там
+// нормализуется в NULL — у «не настраивали» одно представление.
+export const EMPTY_NOTIFY_EMAIL: NotifyEmail = {
+  fromName: '',
+  replyTo: '',
+  subject: '',
+  body: '',
+}
+
 // Потолки полей карточки (рун) — зеркалят domain.MaxLinkPreview*Len.
 export const MAX_LINK_PREVIEW_SITE_NAME_LEN = 100
 export const MAX_LINK_PREVIEW_TITLE_LEN = 200
@@ -143,6 +163,10 @@ export const formDetailSchema = formSchema.extend({
   // сервер отдаёт false независимо от настройки, и Zod его срезает. Читать бейдж
   // из карточки значило бы читать неправду.
   branding: z.boolean(),
+  // Настройка письма о новом ответе; null = не настраивали, письмо уходит
+  // дефолтным шаблоном. Отдаётся независимо от тарифа (как карточка ссылки), а
+  // применяется отправкой письма.
+  notifyEmail: notifyEmailSchema.nullable(),
   // Шкала прогресса — индикатор шагов многостраничной формы; true = показывать.
   // Живая колонка (миграция 0040), как бейдж, и по тому же доводу: тумблер обязан
   // доезжать до респондента без перепубликации. Тарифа у неё нет вовсе. Только в
@@ -158,6 +182,11 @@ export type FormDetail = z.infer<typeof formDetailSchema>
 
 // Потолок текста экрана «приём закрыт» (рун) — зеркалит domain.MaxClosedMessageLen.
 export const MAX_CLOSED_MESSAGE_LEN = 2000
+
+// Потолки настройки письма о новом ответе (рун) — зеркалят domain.MaxNotify*Len.
+export const MAX_NOTIFY_FROM_NAME_LEN = 100
+export const MAX_NOTIFY_SUBJECT_LEN = 200
+export const MAX_NOTIFY_BODY_LEN = 2000
 
 // Настройки закрытия для отправки в PATCH (фасет closeSettings). Полный набор:
 // отсутствующее/пустое поле = ограничение снято. closedMessage — всегда строка

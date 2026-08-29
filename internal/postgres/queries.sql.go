@@ -1477,7 +1477,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress,
+    f.link_preview, f.branding, f.progress, f.notify_email,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1506,6 +1506,7 @@ type GetFormRow struct {
 	LinkPreview           []byte
 	Branding              bool
 	Progress              bool
+	NotifyEmail           []byte
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1538,6 +1539,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.LinkPreview,
 		&i.Branding,
 		&i.Progress,
+		&i.NotifyEmail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1561,7 +1563,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress,
+    f.link_preview, f.branding, f.progress, f.notify_email,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1590,6 +1592,7 @@ type GetFormBySlugRow struct {
 	LinkPreview           []byte
 	Branding              bool
 	Progress              bool
+	NotifyEmail           []byte
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1624,6 +1627,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.LinkPreview,
 		&i.Branding,
 		&i.Progress,
+		&i.NotifyEmail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -2071,7 +2075,7 @@ func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissio
 }
 
 const getSubmissionOwner = `-- name: GetSubmissionOwner :one
-SELECT u.email, coalesce(f.name, f.title) AS title
+SELECT u.email, coalesce(f.name, f.title) AS title, f.workspace_id, f.notify_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id
@@ -2079,8 +2083,10 @@ WHERE f.id = $1
 `
 
 type GetSubmissionOwnerRow struct {
-	Email string
-	Title string
+	Email       string
+	Title       string
+	WorkspaceID uuid.UUID
+	NotifyEmail []byte
 }
 
 // Владелец формы и её отображаемое имя — для письма-уведомления о новом ответе
@@ -2091,7 +2097,12 @@ type GetSubmissionOwnerRow struct {
 func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubmissionOwnerRow, error) {
 	row := q.db.QueryRow(ctx, getSubmissionOwner, id)
 	var i GetSubmissionOwnerRow
-	err := row.Scan(&i.Email, &i.Title)
+	err := row.Scan(
+		&i.Email,
+		&i.Title,
+		&i.WorkspaceID,
+		&i.NotifyEmail,
+	)
 	return i, err
 }
 
@@ -4591,6 +4602,53 @@ type UpdateFormNameRow struct {
 func (q *Queries) UpdateFormName(ctx context.Context, arg UpdateFormNameParams) (UpdateFormNameRow, error) {
 	row := q.db.QueryRow(ctx, updateFormName, arg.ID, arg.WorkspaceID, arg.Name)
 	var i UpdateFormNameRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateFormNotifyEmail = `-- name: UpdateFormNotifyEmail :one
+UPDATE forms
+SET notify_email = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormNotifyEmailParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	NotifyEmail []byte
+}
+
+type UpdateFormNotifyEmailRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Настройка письма о новом ответе: имя отправителя, Reply-To, тема, текст (0042).
+// Живая колонка, как link_preview: правка действует со следующего же ответа, без
+// перепубликации. Кабинет шлёт настройку ЦЕЛИКОМ, поэтому здесь замена значения, а
+// не слияние JSONB; пустая нормализуется в NULL на стороне repo. Право тарифа
+// (form_notify_email) спрашивает service ДО этого запроса — здесь только запись.
+func (q *Queries) UpdateFormNotifyEmail(ctx context.Context, arg UpdateFormNotifyEmailParams) (UpdateFormNotifyEmailRow, error) {
+	row := q.db.QueryRow(ctx, updateFormNotifyEmail, arg.ID, arg.WorkspaceID, arg.NotifyEmail)
+	var i UpdateFormNotifyEmailRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

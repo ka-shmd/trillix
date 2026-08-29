@@ -182,13 +182,25 @@ func TestSubmit_Idempotent_NoDuplicate(t *testing.T) {
 	}
 }
 
+// enableNotify включает письма о новых ответах. С 0042 тумблер выключен по
+// умолчанию (продукт не начинает слать почту, ни о чём не спросив), поэтому тесты
+// про письма обязаны просить их явно.
+func enableNotify(t *testing.T, slug string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET notify_on_submission = true WHERE slug = $1`, slug); err != nil {
+		t.Fatalf("enable notify: %v", err)
+	}
+}
+
 // Троттлинг (DoD слайса D): шквал ответов не даёт шквала писем. M ответов на форму
 // с включённым уведомлением (по умолчанию) → в outbox ОДНА неотправленная строка с
 // count = M, а не M писем. Коалесинг по ключу формы при enqueue.
 func TestSubmit_NotifyThrottling_CoalescesIntoOneDigest(t *testing.T) {
 	resetDB(t)
 	srv := newServer(t)
-	slug, _ := publishedForm(t, requiredNameSchema) // notify_on_submission = true (DEFAULT)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	enableNotify(t, slug)
 
 	const M = 5
 	for i := 0; i < M; i++ {
@@ -219,6 +231,7 @@ func TestSubmit_OverLimit_NoExtraNotification(t *testing.T) {
 	resetDB(t)
 	srv := newServer(t)
 	slug, _ := publishedForm(t, requiredNameSchema)
+	enableNotify(t, slug)
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE forms SET response_limit = 1 WHERE slug = $1`, slug); err != nil {
 		t.Fatalf("set limit: %v", err)
@@ -242,6 +255,95 @@ func TestSubmit_OverLimit_NoExtraNotification(t *testing.T) {
 	}
 	if rows != 1 || count != 1 {
 		t.Fatalf("дайджестов=%d count=%d, ожидалось 1 и 1 (отклонённый ответ не уведомляет)", rows, count)
+	}
+}
+
+// setNotifyEmailGate открывает/закрывает право на СВОЁ письмо (0042) у всех планов.
+// Тесты письма обязаны называть тариф явно: ключ закрыт на бесплатных планах, а
+// аккаунт теста заводится на бесплатном.
+func setNotifyEmailGate(t *testing.T, allowed bool) {
+	t.Helper()
+	value := "false"
+	if allowed {
+		value = "true"
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{form_notify_email}', $1::jsonb)`, value); err != nil {
+		t.Fatalf("set notify email gate: %v", err)
+	}
+}
+
+// setNotifyEmail кладёт форме свой текст письма — то, что пишет страница настроек.
+func setNotifyEmail(t *testing.T, slug, doc string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET notify_email = $1::jsonb WHERE slug = $2`, doc, slug); err != nil {
+		t.Fatalf("set notify email: %v", err)
+	}
+}
+
+const ownNotifyEmail = `{"fromName":"Отдел кадров","replyTo":"hr@example.com",` +
+	`"subject":"Новая заявка","body":"Пришла заявка, смотрите в кабинете."}`
+
+// Своё письмо доезжает до outbox целиком: перебивки едут в payload, потому что
+// отправка происходит ПОЗЖЕ постановки и за настройкой формы диспетчер уже не пойдёт.
+func TestSubmit_NotifyEmail_CustomTemplateInPayload(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	enableNotify(t, slug)
+	setNotifyEmail(t, slug, ownNotifyEmail)
+	setNotifyEmailGate(t, true)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Имя"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var fromName, replyTo, subject string
+	err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(payload->>'fromName',''), coalesce(payload->>'replyTo',''),
+		        coalesce(payload->>'subject','')
+		   FROM outbox WHERE coalesce_key IS NOT NULL`).Scan(&fromName, &replyTo, &subject)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	if fromName != "Отдел кадров" || replyTo != "hr@example.com" || subject != "Новая заявка" {
+		t.Fatalf("перебивки не доехали: from=%q replyTo=%q subject=%q", fromName, replyTo, subject)
+	}
+}
+
+// Даунгрейд возвращает дефолтное письмо САМ и ничего не стирает: настройка остаётся
+// в колонке (апгрейд её оживит), а в outbox уезжает письмо без перебивок.
+func TestSubmit_NotifyEmail_DowngradeFallsBackToTemplate(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	enableNotify(t, slug)
+	setNotifyEmail(t, slug, ownNotifyEmail)
+	setNotifyEmailGate(t, false)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Имя"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var subject, saved string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(payload->>'subject','') FROM outbox WHERE coalesce_key IS NOT NULL`).
+		Scan(&subject); err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	if subject != "" {
+		t.Fatalf("на закрытом тарифе письмо ушло с темой автора: %q", subject)
+	}
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(notify_email->>'subject','') FROM forms WHERE slug = $1`, slug).
+		Scan(&saved); err != nil {
+		t.Fatalf("read form: %v", err)
+	}
+	if saved != "Новая заявка" {
+		t.Fatalf("даунгрейд стёр настройку автора: %q", saved)
 	}
 }
 
