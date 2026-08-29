@@ -353,6 +353,39 @@ func TestPublicGet_BadgeState_ChangesETag(t *testing.T) {
 	}
 }
 
+// --- Шкала прогресса (миграция 0040) ---
+//
+// В отличие от бейджа, решения сервера здесь нет: тарифа у шкалы не бывает, и
+// рендерер получает намерение автора как есть. Проверяются две вещи — что намерение
+// доезжает и что его смена меняет ETag.
+
+func TestPublicGet_Progress_CarriesIntent(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		svc := brandingForm(t, false, true)
+		svc.pf.Progress = on
+		_, body := getPublicJSON(t, svc)
+		if body.Progress != on {
+			t.Fatalf("progress = %v, ожидалось %v", body.Progress, on)
+		}
+	}
+}
+
+// Тумблер шкалы не меняет опубликованную версию — значит обязан менять ETag. Иначе
+// автор снял шкалу, а все, кто форму уже открывал, получают 304 с прежним телом и
+// видят её до самой перепубликации.
+func TestPublicGet_ProgressState_ChangesETag(t *testing.T) {
+	svc := brandingForm(t, false, true)
+	svc.pf.Progress = true
+	withBar, _ := getPublicJSON(t, svc)
+
+	svc.pf.Progress = false
+	withoutBar, _ := getPublicJSON(t, svc)
+
+	if withBar.Header().Get("ETag") == withoutBar.Header().Get("ETag") {
+		t.Fatalf("ETag не изменился со снятием шкалы: %q", withBar.Header().Get("ETag"))
+	}
+}
+
 // Бейдж стоит и на экране «приём закрыт»: иначе он снимается разглядыванием
 // второго экрана.
 func TestPublicGet_Closed_CarriesBadgeDecision(t *testing.T) {

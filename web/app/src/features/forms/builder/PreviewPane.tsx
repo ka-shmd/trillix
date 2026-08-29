@@ -28,7 +28,18 @@ import { useBuilderStore } from './storeContext'
 // Превью — форма как её увидит респондент: заголовок, поля стора и кнопка отправки.
 // Тот же вид (rf-*), что и у рендерера и у редактора — WYSIWYG. Заголовок приходит
 // пропом (forms.title сохраняется отдельно от схемы), кнопка/блоки — из стора.
-export function PreviewPane({ title, badge }: { title: string; badge: boolean }) {
+export function PreviewPane({
+  title,
+  badge,
+  // Шкала прогресса — живое свойство формы (`progress`, миграция 0040), не документ,
+  // поэтому приходит пропом, как и бейдж. Необязательный с дефолтом «не показывать» —
+  // тем же, что у колонки и у рендерера: шкала есть только там, где автор её включил.
+  progress = false,
+}: {
+  title: string
+  badge: boolean
+  progress?: boolean
+}) {
   const allBlocks = useBuilderStore((s) => s.blocks)
   const submitLabel = useBuilderStore((s) => s.submitLabel)
   const cover = useBuilderStore((s) => s.cover)
@@ -247,7 +258,7 @@ export function PreviewPane({ title, badge }: { title: string; badge: boolean })
             и здесь (ход назад снят целиком, 2026-08-22) — вид обязан совпадать. Автор
             листает превью только вперёд, ровно как респондент. На экране после отправки
             шагов нет: он не шаг формы. */}
-          {!done && <StepBar pages={pages.length} page={page} />}
+          {!done && progress && <StepBar pages={pages.length} page={page} />}
           {badge && done && <Badge />}
         </div>
       </div>

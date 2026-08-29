@@ -394,6 +394,58 @@ func TestForms_Branding_AppliesWithoutRepublish(t *testing.T) {
 	patchBranding(t, bob, srv, form.ID, false, http.StatusNotFound)
 }
 
+// Шкала прогресса — живая колонка (миграция 0040) и та же проверка, что у бейджа:
+// тумблер обязан доезжать до респондента без перепубликации. Отличие одно, и оно
+// здесь главное: ТАРИФА У ШКАЛЫ НЕТ — план в тесте не трогается вовсе, и снять её
+// вправе бесплатный автор.
+func TestForms_Progress_AppliesWithoutRepublish(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-progress@example.com")
+	bob := registerUser(t, srv, "bob-progress@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, alice, srv, "Анкета")
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+
+	// У новой формы шкалы НЕТ — дефолт колонки выключен (решение владельца
+	// 2026-08-29): шкала это решение автора, а не свойство формы по умолчанию.
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.Progress {
+		t.Fatal("у новой формы шкала обязана быть выключена")
+	}
+	pub, etag := getPublicOK(t, anon, srv, form.Slug)
+	if pub.Progress {
+		t.Fatal("публичная форма отдана со шкалой до всякой настройки")
+	}
+
+	// Включаем шкалу и НЕ публикуем заново.
+	patchProgress(t, alice, srv, form.ID, true, http.StatusOK)
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); !d.Progress {
+		t.Fatal("тумблер не сохранился")
+	}
+
+	after, etagAfter := getPublicOK(t, anon, srv, form.Slug)
+	if !after.Progress {
+		t.Fatal("шкала не доехала до публичной формы — намерение снова ждёт публикации")
+	}
+	if after.Version != pub.Version {
+		t.Fatalf("версия формы изменилась (%d → %d) — тумблер не имеет права публиковать", pub.Version, after.Version)
+	}
+	if etag == etagAfter {
+		t.Fatalf("ETag не изменился вместе со шкалой: %s", etag)
+	}
+
+	// Два фасета за один PATCH → 422; чужая форма → 404, как у остальных живых
+	// настроек.
+	r := do(t, alice, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID,
+		`{"progress":true,"branding":false}`, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("два фасета: статус %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+	patchProgress(t, bob, srv, form.ID, true, http.StatusNotFound)
+}
+
 // Живые настройки закрытия (PATCH {closeSettings}): фасет доходит до сервиса,
 // GET-деталь их возвращает, набор заменяется целиком (пустое = снято), невалидный
 // лимит → 422, два фасета за раз → 422, чужая форма → 404.
@@ -1153,6 +1205,7 @@ type formDetailDTO struct {
 	ResponseLimit *int            `json:"responseLimit"`
 	ClosedMessage *string         `json:"closedMessage"`
 	Branding      bool            `json:"branding"`
+	Progress      bool            `json:"progress"`
 	LinkPreview   *struct {
 		SiteName    string `json:"siteName"`
 		Title       string `json:"title"`
@@ -1272,6 +1325,19 @@ func setBrandingGate(t *testing.T, slug string, allowed bool) {
 }
 
 // patchBranding шлёт PATCH {branding: <show>} — живой тумблер бейджа.
+func patchProgress(t *testing.T, c *http.Client, srv *httptest.Server, id string, show bool, wantStatus int) {
+	t.Helper()
+	body := `{"progress":false}`
+	if show {
+		body = `{"progress":true}`
+	}
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, body, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH progress: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
 func patchBranding(t *testing.T, c *http.Client, srv *httptest.Server, id string, show bool, wantStatus int) {
 	t.Helper()
 	body := `{"branding":false}`
@@ -1318,6 +1384,7 @@ type publicFormDTO struct {
 	// кэшируемом теле: токен выдаёт отдельная некэшируемая ручка (ADR §10).
 	Token     string `json:"token"`
 	ShowBadge bool   `json:"showBadge"`
+	Progress  bool   `json:"progress"`
 }
 
 // getFormToken — токен времени отдельной ручкой; возвращает его и Cache-Control.

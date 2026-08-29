@@ -56,7 +56,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding,
+    f.link_preview, f.branding, f.progress,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -84,7 +84,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding,
+    f.link_preview, f.branding, f.progress,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -200,6 +200,16 @@ SET branding = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormProgress :one
+-- Тумблер шкалы прогресса — индикатора шагов многостраничной формы (миграция 0040).
+-- Живая колонка, а не поле схемы, по тому же доводу, что у бейджа: намерение обязано
+-- доезжать до респондента без перепубликации. Тариф здесь ни при чём — шкала открыта
+-- всем планам.
+UPDATE forms
+SET progress = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
 -- name: UpdateFormLinkPreview :one
 -- Своя карточка ссылки формы (og:site_name/title/description/image + иконка).
 -- Живая колонка, как настройки закрытия: применяется без перепубликации. Окно
@@ -285,6 +295,10 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- перепубликации — бейдж не часть документа, а свойство выдачи. Право тарифа
     -- поверх намерения спрашивает сервис (даунгрейд возвращает бейдж сам).
     f.branding,
+    -- progress: намерение автора о шкале прогресса (0040). Живая колонка по тем же
+    -- доводам, что branding, но БЕЗ тарифа: индикатор шагов открыт всем планам, и
+    -- сервис поверх этого значения ничего не спрашивает.
+    f.progress,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count

@@ -40,6 +40,7 @@ type formsService interface {
 	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
+	UpdateProgress(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
 	UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
@@ -127,6 +128,10 @@ type formDetailResponse struct {
 	// описана у Form.Branding). Карточка формы этого поля не читает — её Zod-тип на
 	// фронте его не объявляет и срезает.
 	Branding bool `json:"branding"`
+	// Progress — показывать ли шкалу прогресса (индикатор шагов многостраничной
+	// формы, миграция 0040). Та же мина, что у Branding: только в детали формы, а
+	// false у списка и мутаций значит «шкала снята».
+	Progress bool `json:"progress"`
 	// LinkPreview — своя карточка ссылки; null = не настраивали, публичная страница
 	// берёт дефолты. Отдаётся НЕЗАВИСИМО от тарифа: окно кастомизации показывает
 	// сохранённое всем, а применяет карточку к самой ссылке публичный слой (гейт
@@ -184,6 +189,7 @@ type patchRequest struct {
 	NotifyOnSubmission *bool              `json:"notifyOnSubmission"`
 	CollectPartial     *bool              `json:"collectPartial"`
 	Branding           *bool              `json:"branding"`
+	Progress           *bool              `json:"progress"`
 	LinkPreview        *linkPreviewBody   `json:"linkPreview"`
 }
 
@@ -238,6 +244,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		NotifyOnSubmission: f.NotifyOnSubmission,
 		CollectPartial:     f.CollectPartial,
 		Branding:           f.Branding,
+		Progress:           f.Progress,
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
 	}
 }
@@ -387,6 +394,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.NotifyOnSubmission != nil,
 		req.CollectPartial != nil,
 		req.Branding != nil,
+		req.Progress != nil,
 		req.LinkPreview != nil,
 	}
 	for _, present := range facets {
@@ -395,7 +403,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/linkPreview", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/linkPreview", domain.ErrValidation))
 		return
 	}
 
@@ -425,6 +433,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateCollectPartial(r.Context(), userID, formID, *req.CollectPartial)
 	case req.Branding != nil:
 		form, err = h.svc.UpdateBranding(r.Context(), userID, formID, *req.Branding)
+	case req.Progress != nil:
+		form, err = h.svc.UpdateProgress(r.Context(), userID, formID, *req.Progress)
 	case req.LinkPreview != nil:
 		lp := *req.LinkPreview
 		form, err = h.svc.UpdateLinkPreview(r.Context(), userID, formID, &domain.LinkPreview{

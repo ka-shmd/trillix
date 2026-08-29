@@ -55,6 +55,8 @@ export function newFormDetail(): FormDetail {
     collectPartial: false,
     // Бейдж у новой формы стоит — дефолт колонки `forms.branding`.
     branding: true,
+    // Шкала прогресса у новой формы выключена — дефолт колонки `forms.progress`.
+    progress: false,
     // Карточку ссылки не настраивали — публичная страница возьмёт дефолты.
     linkPreview: null,
   }

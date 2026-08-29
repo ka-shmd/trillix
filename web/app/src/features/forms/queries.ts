@@ -14,6 +14,7 @@ import {
   publishForm,
   unpublishForm,
   updateBranding,
+  updateProgress,
   updateCloseSettings,
   updateCollectPartial,
   updateLinkPreview,
@@ -236,6 +237,22 @@ export function useUpdateBranding() {
     onSuccess: (form, { show }) => {
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, updatedAt: form.updatedAt, branding: show } : old,
+      )
+    },
+  })
+}
+
+// Шкала прогресса — тумблер со страницы настроек (миграция 0040). Живое свойство
+// формы, как бейдж: PATCH формы, срабатывает без перепубликации, свежее значение в
+// detail кладём из отправленного ввода. Гейта тарифа у шкалы нет ни здесь, ни на
+// отдаче.
+export function useUpdateProgress() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, show }: { id: string; show: boolean }) => updateProgress(id, show),
+    onSuccess: (form, { show }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, progress: show } : old,
       )
     },
   })

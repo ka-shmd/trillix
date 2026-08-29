@@ -44,6 +44,7 @@ type Form struct {
 	CollectPartial     bool
 	LinkPreview        []byte
 	Branding           bool
+	Progress           bool
 }
 
 type FormIntegration struct {

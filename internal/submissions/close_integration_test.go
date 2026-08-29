@@ -319,6 +319,9 @@ func TestPartial_CollectedAndDroppedOnSubmit(t *testing.T) {
 	slug, _ := publishedForm(t, requiredNameSchema)
 	formID := formIDBySlug(t, slug)
 	setCollectPartial(t, formID, true)
+	// План с правом собирать черновики: с 0041 у free его нет, и без этой строки
+	// тест доказывал бы гейт, а не механику сбора.
+	setPartialGate(t, slug, true)
 
 	visitID := domain.NewID().String()
 	if code := savePartial(t, srv, slug, visitID, "черновик"); code != http.StatusNoContent {

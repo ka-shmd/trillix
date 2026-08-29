@@ -72,6 +72,10 @@ type Form struct {
 	// из ответа Get/GetBySlug; кабинет так и делает (в карточке формы поля нет
 	// вовсе — formSchema его не объявляет, и Zod его срежет).
 	Branding bool
+	// Progress — показывать ли шкалу прогресса, индикатор шагов многостраничной
+	// формы (миграция 0040): намерение автора, живая колонка. Та же мина, что у
+	// Branding: заполняют только Get/GetBySlug, а false здесь значит «шкала снята».
+	Progress bool
 	// NotifyOnSubmission — слать ли владельцу письмо о новом ответе (слайс D; живая
 	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
 	// у результатов мутаций false, как и прочие read-only поля выше.
@@ -131,6 +135,11 @@ type PublicForm struct {
 	// тумблер доезжал до респондента без перепубликации. Факт (намерение плюс право
 	// тарифа) считает service.ShowBadge при отдаче.
 	Branding bool
+	// Progress — намерение автора о шкале прогресса (миграция 0040): true =
+	// показывать индикатор шагов. Живая колонка по тем же доводам, что Branding, но
+	// БЕЗ тарифа: шкала открыта всем планам, и поверх намерения service ничего не
+	// спрашивает — рендерер получает его как есть.
+	Progress bool
 	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
@@ -325,6 +334,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
 		Branding:              row.Branding,
+		Progress:              row.Progress,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
@@ -360,6 +370,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
 		Branding:              row.Branding,
+		Progress:              row.Progress,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
@@ -592,6 +603,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		NotifyOnSubmission: row.NotifyOnSubmission,
 		CollectPartial:     row.CollectPartial,
 		Branding:           row.Branding,
+		Progress:           row.Progress,
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }
@@ -725,6 +737,30 @@ func (Repo) UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceI
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form branding: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateProgress переключает шкалу прогресса (индикатор шагов). Тариф здесь ни при
+// чём вовсе: шкала открыта всем планам, гейта у неё нет ни в кабинете, ни на отдаче.
+func (Repo) UpdateProgress(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error) {
+	row, err := postgres.New(db).UpdateFormProgress(ctx, postgres.UpdateFormProgressParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		Progress:    show,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form progress: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,

@@ -11,7 +11,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { HeaderSidebarTrigger } from '../features/app-shell/HeaderSidebarTrigger'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
-import { AppHeaderContext } from '../shared/appHeader'
+import { AppChromeContext } from '../shared/appChrome'
 
 // Layout-группа приложения за сессией. Гард префетчит /auth/me; нет живой
 // сессии → редирект на /login (защищённый маршрут не показывает контент).
@@ -31,15 +31,17 @@ function AppLayout() {
   const { data: user } = useQuery(meQueryOptions)
   const logout = useLogout()
   const qc = useQueryClient()
-  // DOM-узлы двух половин верхнего бара: слева путь, справа действия. Страницы
-  // порталят в них через PageCrumbs/PageActions (shared/page/headerPortals.tsx).
+  // DOM-узлы хрома: две половины верхнего бара (слева путь, справа действия) и
+  // подвал у нижнего края. Страницы порталят в них через PageCrumbs/PageActions
+  // (shared/page/headerPortals.tsx) и PageFooter (shared/page/PageFooter.tsx).
   const [headerLeft, setHeaderLeft] = useState<HTMLElement | null>(null)
   const [headerRight, setHeaderRight] = useState<HTMLElement | null>(null)
+  const [footerSlot, setFooterSlot] = useState<HTMLElement | null>(null)
   // Новый объект на каждый рендер оболочки перерисовывал бы каждую страницу с
   // крошками — контекст сравнивается по ссылке.
-  const headerSlots = useMemo(
-    () => ({ left: headerLeft, right: headerRight }),
-    [headerLeft, headerRight],
+  const chromeSlots = useMemo(
+    () => ({ left: headerLeft, right: headerRight, footer: footerSlot }),
+    [headerLeft, headerRight, footerSlot],
   )
 
   // Гард гарантирует наличие user; на всякий случай не рендерим оболочку без него.
@@ -100,10 +102,23 @@ function AppLayout() {
             ответам — обычные поля. */}
         <main className="flex-1 overflow-auto">
           {!user.emailVerified && <VerifyEmailBanner />}
-          <AppHeaderContext.Provider value={headerSlots}>
+          <AppChromeContext.Provider value={chromeSlots}>
             <Outlet />
-          </AppHeaderContext.Provider>
+          </AppChromeContext.Provider>
         </main>
+        {/* Подвал страницы: полоса у нижнего края под одно действие — «Сохранить»
+            настроек формы. Приклеен `sticky bottom-0`, а не `fixed`: скроллится
+            вся страница (см. комментарий о шапке), а сама полоса живёт ВНУТРИ
+            оболочки — поэтому она съезжает вместе с ней при открытой шторке и не
+            накрывает боковую панель, как накрыл бы элемент, привязанный к окну.
+
+            Пустая полоса скрыта: страниц с подвалом одна, и лишняя линия у
+            нижнего края на всех остальных — не «почти незаметно», а второй
+            горизонт в интерфейсе. */}
+        <footer
+          ref={setFooterSlot}
+          className="sticky bottom-0 z-20 border-t bg-background empty:hidden"
+        />
       </SidebarInset>
     </SidebarProvider>
   )

@@ -118,6 +118,12 @@ type publicFormResponse struct {
 	// и с бейджем). Рендерер по этому полю делает ровно две вещи — автосохраняет и
 	// предупреждает респондента; разъехаться они не могут, потому что факт один.
 	CollectPartial bool `json:"collectPartial"`
+	// Progress — рисовать ли шкалу прогресса (индикатор шагов). В отличие от
+	// ShowBadge и CollectPartial, это ЧИСТОЕ намерение автора, а не решение сервера:
+	// тарифа у шкалы нет, спрашивать поверх намерения нечего. Полем, а не выводом
+	// клиента из схемы, — потому что живёт оно в колонке формы, которой в снапшоте
+	// версии нет.
+	Progress bool `json:"progress"`
 }
 
 // closedFormResponse — тело GET /public/v1/forms/{slug} для ЗАКРЫТОЙ формы (HTTP
@@ -192,7 +198,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// прежним телом — то есть бейдж оставался бы у всех, кто уже открывал форму,
 	// пока не сменится версия.
 	showBadge := h.showBadge(r, pf.WorkspaceID, pf.Branding)
-	etag := `"` + pf.VersionID.String() + badgeETagSuffix(showBadge) + `"`
+	etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress) + `"`
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	w.Header().Set("ETag", etag)
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -226,6 +232,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		Schema:         schema,
 		ShowBadge:      showBadge,
 		CollectPartial: h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
+		Progress:       pf.Progress,
 	})
 }
 
@@ -254,14 +261,22 @@ func (h *PublicHandler) showBadge(r *http.Request, workspaceID uuid.UUID, intent
 	return show
 }
 
-// badgeETagSuffix — метка состояния бейджа в ETag. Отдельной функцией, а не
-// тернарником по месту: суффикс участвует в сравнении с If-None-Match, и обе
-// стороны обязаны считать его одинаково.
-func badgeETagSuffix(showBadge bool) string {
+// viewETagSuffix — метка ПРЕДСТАВЛЕНИЯ в ETag: всё, что меняет тело ответа, не меняя
+// опубликованной версии. Сегодня это бейдж (тумблер автора плюс тариф) и шкала
+// прогресса (тумблер автора). Отдельной функцией, а не тернарником по месту: суффикс
+// участвует в сравнении с If-None-Match, и обе стороны обязаны считать его одинаково.
+//
+// МИНА: забытый здесь признак означает 304 с прежним телом до самой перепубликации —
+// автор переключил тумблер, а все, кто форму уже открывал, видят старое.
+func viewETagSuffix(showBadge, progress bool) string {
+	suffix := ""
 	if showBadge {
-		return "+b"
+		suffix += "+b"
 	}
-	return ""
+	if progress {
+		suffix += "+p"
+	}
+	return suffix
 }
 
 // closedMessageOrDefault — свой текст владельца, если задан, иначе дефолт.

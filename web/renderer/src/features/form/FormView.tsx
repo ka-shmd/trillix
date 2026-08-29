@@ -654,7 +654,11 @@ export function FormView({
                     return innerRow.length > 1 ? (
                       <div key={innerRow[0]![0]!.id} className="rf-row">
                         {innerRow.map((cell, i) => (
-                          <div key={cell[0]!.id} className="rf-cell" style={cellVars(innerWidths, i)}>
+                          <div
+                            key={cell[0]!.id}
+                            className="rf-cell"
+                            style={cellVars(innerWidths, i)}
+                          >
                             {cell.map(render)}
                           </div>
                         ))}
@@ -726,8 +730,12 @@ export function FormView({
           </div>
           {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
             2026-08-05). Не кнопки: ход назад снят целиком (2026-08-22), линии остались
-            счётчиком «где я и сколько всего». Разметка общая с превью (@fields). */}
-          <StepBar pages={pages.length} page={page} />
+            счётчиком «где я и сколько всего». Разметка общая с превью (@fields).
+
+            Тумблер автора (`progress`, живая колонка) убирает их совсем — на
+            одностраничной форме их и так нет, счётчик из одной линии сам себя
+            прячет. */}
+          {form.progress && <StepBar pages={pages.length} page={page} />}
           {attempted && hasFieldErrors && (
             <p className="form-note form-note-error" role="alert">
               Проверьте выделенные поля.

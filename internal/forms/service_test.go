@@ -65,6 +65,7 @@ type fakeStore struct {
 	lastNotifyEnabled  bool
 	lastCollectPartial bool
 	lastBranding       bool
+	lastProgress       bool
 	owner              Owner
 	ownerErr           error
 
@@ -128,6 +129,12 @@ func (f *fakeStore) UpdateBranding(_ context.Context, _ postgres.DBTX, id, works
 	f.updated = true
 	f.lastBranding = show
 	return Form{ID: id, WorkspaceID: workspaceID, Branding: show}, nil
+}
+
+func (f *fakeStore) UpdateProgress(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error) {
+	f.updated = true
+	f.lastProgress = show
+	return Form{ID: id, WorkspaceID: workspaceID, Progress: show}, nil
 }
 
 func (f *fakeStore) UpdateCollectPartial(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error) {
@@ -718,6 +725,29 @@ func TestUpdateBranding_NeedsNoPlan(t *testing.T) {
 		t.Fatal("намерение не доехало до колонки")
 	}
 	if store.lastBranding {
+		t.Fatal("в стор ушло не то значение")
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен на смене тумблера: %v", plans.gotKeys)
+	}
+}
+
+// Шкала прогресса тарифа не знает вовсе: гейта у неё нет ни в кабинете, ни при
+// отдаче формы. Тест сторожит именно это — что настройка не обросла правом «заодно»
+// с соседями по странице, у которых оно есть.
+func TestUpdateProgress_NeedsNoPlan(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	form, err := svc.UpdateProgress(context.Background(), uuid.New(), store.form.ID, false)
+	if err != nil {
+		t.Fatalf("снять шкалу вправе любой тариф: %v", err)
+	}
+	if form.Progress {
+		t.Fatal("намерение не доехало до колонки")
+	}
+	if store.lastProgress {
 		t.Fatal("в стор ушло не то значение")
 	}
 	if len(plans.gotKeys) != 0 {

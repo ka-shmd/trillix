@@ -76,6 +76,7 @@ type Store interface {
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
+	UpdateProgress(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
@@ -411,6 +412,27 @@ func (s *Service) UpdateBranding(ctx context.Context, userID, formID uuid.UUID, 
 		return Form{}, err
 	}
 	updated, err := s.repo.UpdateBranding(ctx, s.db, form.ID, form.WorkspaceID, show)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// UpdateProgress переключает шкалу прогресса — индикатор шагов многостраничной
+// формы (миграция 0040).
+//
+// Живая колонка, как бейдж: намерение доезжает до респондента без перепубликации.
+// Тарифа у шкалы нет НИ ЗДЕСЬ, НИ НА ОТДАЧЕ — она открыта всем планам, поэтому
+// публичный путь берёт намерение как есть, без «факта» поверх него.
+func (s *Service) UpdateProgress(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateProgress(ctx, s.db, form.ID, form.WorkspaceID, show)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return Form{}, domain.ErrNotFound

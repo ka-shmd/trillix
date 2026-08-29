@@ -42,8 +42,7 @@ export type Form = z.infer<typeof formSchema>
 // показываем его как «Без названия» (плейсхолдер), а не как введённый текст.
 export const DEFAULT_FORM_TITLE = 'Untitled form'
 
-const isUntitled = (title: string): boolean =>
-  title.trim() === '' || title === DEFAULT_FORM_TITLE
+const isUntitled = (title: string): boolean => title.trim() === '' || title === DEFAULT_FORM_TITLE
 
 // Заголовок формы для показа: плейсхолдер для безымянной, иначе сам title.
 export const displayFormTitle = (title: string): string =>
@@ -144,6 +143,11 @@ export const formDetailSchema = formSchema.extend({
   // сервер отдаёт false независимо от настройки, и Zod его срезает. Читать бейдж
   // из карточки значило бы читать неправду.
   branding: z.boolean(),
+  // Шкала прогресса — индикатор шагов многостраничной формы; true = показывать.
+  // Живая колонка (миграция 0040), как бейдж, и по тому же доводу: тумблер обязан
+  // доезжать до респондента без перепубликации. Тарифа у неё нет вовсе. Только в
+  // ДЕТАЛИ — та же мина, что у branding.
+  progress: z.boolean(),
   // Своя карточка ссылки; null = не настраивали. Отдаётся независимо от тарифа —
   // окно кастомизации показывает сохранённое всем, а к самой ссылке карточку
   // применяет публичный слой (гейт стоит там, как у бейджа).

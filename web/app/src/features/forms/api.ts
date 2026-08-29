@@ -94,6 +94,16 @@ export function updateCollectPartial(id: string, enabled: boolean): Promise<Form
   })
 }
 
+// Тумблер шкалы прогресса (фасет progress): true = показывать индикатор шагов.
+// Гейта нет ни здесь, ни на отдаче — шкала открыта всем тарифам.
+export function updateProgress(id: string, show: boolean): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { progress: show },
+    schema: formSchema,
+  })
+}
+
 // Тумблер бейджа «Сделано в Trillix» (фасет branding): true = показывать. 402 здесь
 // НЕ бывает — намерение сохраняется на любом тарифе, а сработает ли оно, решает
 // отдача публичной формы. Контрол на бесплатном плане держит сам кабинет.
