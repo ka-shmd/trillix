@@ -48,7 +48,7 @@ var (
 	// расхождении, а на переносе, и чинили бы его форматированием.
 	reTSConstArr = regexp.MustCompile(`(?s)export const (DESIGN_[A-Z_]+) = \[(.*?)\] as const`)
 	reTSQuoted   = regexp.MustCompile(`'([a-zA-Z_]+)'`)
-	reTSNumConst = regexp.MustCompile(`export const (MIN_FONT_SIZE|MAX_FONT_SIZE|MIN_RADIUS|MAX_RADIUS|MIN_COLUMN|MAX_COLUMN) = (\d+)`)
+	reTSNumConst = regexp.MustCompile(`export const (MIN_FONT_SIZE|MAX_FONT_SIZE|MIN_RADIUS|MAX_RADIUS|MIN_COLUMN|MAX_COLUMN|MIN_FIELD_WIDTH|MAX_FIELD_WIDTH|MIN_FIELD_HEIGHT|MAX_FIELD_HEIGHT|MIN_BORDER_WIDTH|MAX_BORDER_WIDTH|MIN_PADDING_X|MAX_PADDING_X|MIN_MARGIN_BOTTOM|MAX_MARGIN_BOTTOM|MIN_BUTTON_WIDTH|MAX_BUTTON_WIDTH|MIN_BUTTON_HEIGHT|MAX_BUTTON_HEIGHT|MIN_BUTTON_FONT|MAX_BUTTON_FONT|MIN_BUTTON_RADIUS|MAX_BUTTON_RADIUS|MIN_BUTTON_MARGIN_TOP|MAX_BUTTON_MARGIN_TOP|MIN_BUTTON_PADDING_X|MAX_BUTTON_PADDING_X|BUTTON_WIDTH_DEFAULT) = (\d+)`)
 	reTSClass    = regexp.MustCompile(`push\('(rf-[a-z-]+)'\)`)
 	reGoClass    = regexp.MustCompile(`append\(out, "(rf-[a-z-]+)"\)`)
 	reLineCmt    = regexp.MustCompile(`(?m)//.*$`)
@@ -181,6 +181,7 @@ func TestDesignEnumsParity(t *testing.T) {
 		"DESIGN_OUTLINES":        designOutlines,
 		"DESIGN_BUTTON_VARIANTS": designButtonVariant,
 		"DESIGN_BUTTON_WIDTHS":   designButtonWidth,
+		"DESIGN_BUTTON_ALIGNS":   designButtonAligns,
 		"DESIGN_BUTTON_SIZES":    designButtonSize,
 		"DESIGN_FONTS":           designFonts,
 	}
@@ -205,12 +206,35 @@ func TestDesignLimitsParity(t *testing.T) {
 	body := readSharedTS(t, entitiesTSRel)
 
 	goLimits := map[string]int{
-		"MIN_FONT_SIZE": MinFontSize,
-		"MAX_FONT_SIZE": MaxFontSize,
-		"MIN_RADIUS":    MinRadius,
-		"MAX_RADIUS":    MaxRadius,
-		"MIN_COLUMN":    MinColumn,
-		"MAX_COLUMN":    MaxColumn,
+		"MIN_FONT_SIZE":         MinFontSize,
+		"MAX_FONT_SIZE":         MaxFontSize,
+		"MIN_RADIUS":            MinRadius,
+		"MAX_RADIUS":            MaxRadius,
+		"MIN_COLUMN":            MinColumn,
+		"MAX_COLUMN":            MaxColumn,
+		"MIN_FIELD_WIDTH":       MinFieldWidth,
+		"MAX_FIELD_WIDTH":       MaxFieldWidth,
+		"MIN_FIELD_HEIGHT":      MinFieldHeight,
+		"MAX_FIELD_HEIGHT":      MaxFieldHeight,
+		"MIN_BORDER_WIDTH":      MinBorderWidth,
+		"MAX_BORDER_WIDTH":      MaxBorderWidth,
+		"MIN_PADDING_X":         MinPaddingX,
+		"MAX_PADDING_X":         MaxPaddingX,
+		"MIN_MARGIN_BOTTOM":     MinMarginBottom,
+		"MAX_MARGIN_BOTTOM":     MaxMarginBottom,
+		"MIN_BUTTON_WIDTH":      MinButtonWidth,
+		"MAX_BUTTON_WIDTH":      MaxButtonWidth,
+		"BUTTON_WIDTH_DEFAULT":  ButtonWidthDefault,
+		"MIN_BUTTON_HEIGHT":     MinButtonHeight,
+		"MAX_BUTTON_HEIGHT":     MaxButtonHeight,
+		"MIN_BUTTON_FONT":       MinButtonFont,
+		"MAX_BUTTON_FONT":       MaxButtonFont,
+		"MIN_BUTTON_RADIUS":     MinButtonRadius,
+		"MAX_BUTTON_RADIUS":     MaxButtonRadius,
+		"MIN_BUTTON_MARGIN_TOP": MinButtonMarginTop,
+		"MAX_BUTTON_MARGIN_TOP": MaxButtonMarginTop,
+		"MIN_BUTTON_PADDING_X":  MinButtonPaddingX,
+		"MAX_BUTTON_PADDING_X":  MaxButtonPaddingX,
 	}
 
 	found := map[string]bool{}

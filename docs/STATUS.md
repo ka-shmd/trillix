@@ -21,7 +21,7 @@
 ([#142](https://github.com/ka-shmd/trillix/pull/142),
 [#144](https://github.com/ka-shmd/trillix/pull/144)), влиты и не выкачены ·
 **Прод:** тег `v0.26.2` — этих изменений на нём ещё нет, миграции `0035`, `0036`, `0037` и
-`0038` применятся следующим тегом · **Предыдущий тег:** `v0.26.1` (длительность визитов)
+`0038` и `0039` применятся следующим тегом · **Предыдущий тег:** `v0.26.1` (длительность визитов)
 
 > Этот документ **переписывается**, а не дописывается, и отвечает на один вопрос: «что верно
 > прямо сейчас». Он впрыскивается в контекст каждой сессии — поэтому **всё, что перестало
@@ -52,7 +52,7 @@
   (`answerfiles`, `auth`, `blob`, `config`, `domain`, `entitlements`, `forms`, `geo`, `httpserver`,
   `integrations`, `mail`, `media`, `oauth`, `periodic`, `pgtest`, `postgres`, `ratelimit`,
   `submissions`, `token`, `visits`, `workspaces`).
-- **PostgreSQL 16** — 38 миграций (`0001`…`0038_form_branding`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
+- **PostgreSQL 16** — 39 миграций (`0001`…`0039_paid_form_design`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui; графики аналитики — recharts за ленивой загрузкой (`features/insights/lazyCharts.tsx`), в общий чанк не входит.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 45 КиБ gzip** (сейчас
   38.54). Рядом — загрузчик встроенной формы `embed/v1.js`, свой бюджет 4 КиБ (сейчас 2.59),

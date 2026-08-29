@@ -65,6 +65,9 @@ var designVarSpecs = []designVarSpec{
 	{"--rf-field-bg", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Field }) }},
 	{"--rf-text", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Text }) }},
 	{"--rf-muted", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Muted }) }},
+	{"--rf-placeholder", func(d *FormDesign) string {
+		return palette(d, func(p *DesignPalette) string { return p.Placeholder })
+	}},
 	{"--rf-accent", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Accent }) }},
 	// Буквенный бейдж выбранного варианта — свой токен, хотя дефолты у него и у акцента
 	// с 2026-08-22 совпали (оба #0070D7): прежде он был замерен у Tally чуть темнее
@@ -111,6 +114,45 @@ var designVarSpecs = []designVarSpec{
 		}
 		return "center"
 	}},
+	// Потолок ширины поля. Полная ширина — ЗНАЧЕНИЕ «100%», а не класс: переменная
+	// подставляется прямо в max-width и в min(…, 100%), где проценты законны (у
+	// колонки страницы иначе — там число стоит внутри calc()). Флаг сильнее числа:
+	// пока выбрана полная ширина, подобранные px просто ждут.
+	{"--rf-input-max", func(d *FormDesign) string {
+		if d.Controls == nil {
+			return ""
+		}
+		if d.Controls.FullWidth != nil && *d.Controls.FullWidth {
+			return "100%"
+		}
+		if d.Controls.Width == nil {
+			return ""
+		}
+		return fmt.Sprintf("%dpx", *d.Controls.Width)
+	}},
+	// Высота контрола. Кнопка едет за ней сама: --rf-submit-h объявлен как
+	// var(--rf-control-h) и пересчитается на том же контейнере.
+	{"--rf-control-h", func(d *FormDesign) string {
+		if d.Controls == nil || d.Controls.Height == nil {
+			return ""
+		}
+		return fmt.Sprintf("%dpx", *d.Controls.Height)
+	}},
+	{"--rf-ring", func(d *FormDesign) string { return palette(d, func(p *DesignPalette) string { return p.Border }) }},
+	// Ноль — законное значение (кольцо исчезает), поэтому проверяется nil, а не ноль.
+	{"--rf-ring-w", func(d *FormDesign) string {
+		if d.Controls == nil || d.Controls.BorderWidth == nil {
+			return ""
+		}
+		return fmt.Sprintf("%dpx", *d.Controls.BorderWidth)
+	}},
+	// Ноль законен у обоих, поэтому проверяется nil, а не ноль.
+	{"--rf-input-px", func(d *FormDesign) string {
+		return pxOrEmpty(controls(d, func(c *DesignControls) *int { return c.PaddingX }))
+	}},
+	{"--rf-space-q", func(d *FormDesign) string {
+		return pxOrEmpty(controls(d, func(c *DesignControls) *int { return c.MarginBottom }))
+	}},
 	{"--rf-radius", func(d *FormDesign) string {
 		if d.Controls == nil || d.Controls.Radius == nil {
 			return ""
@@ -122,20 +164,68 @@ var designVarSpecs = []designVarSpec{
 	// нечего. При кнопке во всю ширину настройка инертна — свободного места не
 	// остаётся; отдельной ветки для этого нет намеренно, инертное правило равно
 	// отсутствующему.
+	{"--rf-submit-size", func(d *FormDesign) string {
+		if d.Button == nil || d.Button.FontSize == nil {
+			return ""
+		}
+		return fmt.Sprintf("%dpx", *d.Button.FontSize)
+	}},
+	{"--rf-submit-radius", func(d *FormDesign) string {
+		if d.Button == nil || d.Button.Radius == nil {
+			return ""
+		}
+		return fmt.Sprintf("%dpx", *d.Button.Radius)
+	}},
 	{"--rf-submit-justify", func(d *FormDesign) string {
-		if d.Button == nil || d.Button.Align != "center" {
+		if d.Button == nil {
 			return ""
 		}
-		return "center"
+		switch d.Button.Align {
+		case "center":
+			return "center"
+		case "right":
+			return "flex-end"
+		}
+		return ""
 	}},
+	// «Во всю» — проценты, «фиксированная» — число автора (или дефолт, если он его не
+	// трогал), «по тексту» — пусто: кнопка растёт по содержимому.
 	{"--rf-submit-width", func(d *FormDesign) string {
-		if d.Button == nil || d.Button.Width != "full" {
+		if d.Button == nil {
 			return ""
 		}
-		return "100%"
+		switch d.Button.Width {
+		case "full":
+			return "100%"
+		case "fixed":
+			if d.Button.WidthPx == nil {
+				return fmt.Sprintf("%dpx", ButtonWidthDefault)
+			}
+			return fmt.Sprintf("%dpx", *d.Button.WidthPx)
+		}
+		return ""
 	}},
-	{"--rf-submit-h", func(d *FormDesign) string { return buttonSize(d).h }},
-	{"--rf-submit-px", func(d *FormDesign) string { return buttonSize(d).px }},
+	// Число автора сильнее готового размера — и только по высоте: поля и кегль
+	// остаются от набора.
+	{"--rf-submit-h", func(d *FormDesign) string {
+		if d.Button != nil && d.Button.Height != nil {
+			return fmt.Sprintf("%dpx", *d.Button.Height)
+		}
+		return buttonSize(d).h
+	}},
+	{"--rf-submit-mt", func(d *FormDesign) string {
+		if d.Button == nil || d.Button.MarginTop == nil {
+			return ""
+		}
+		return fmt.Sprintf("%dpx", *d.Button.MarginTop)
+	}},
+	// Число автора сильнее готового размера — как и у высоты.
+	{"--rf-submit-px", func(d *FormDesign) string {
+		if d.Button != nil && d.Button.PaddingX != nil {
+			return fmt.Sprintf("%dpx", *d.Button.PaddingX)
+		}
+		return buttonSize(d).px
+	}},
 	{"--rf-submit-ratio", func(d *FormDesign) string { return buttonSize(d).ratio }},
 }
 
@@ -153,6 +243,22 @@ func buttonSize(d *FormDesign) buttonMetrics {
 		return buttonMetrics{}
 	}
 	return buttonSizes[d.Button.Size]
+}
+
+// controls / pxOrEmpty — то же, что palette выше, но для числовых полей контролов:
+// достать указатель и напечатать «Npx» либо пусто. Ноль печатается, отсутствие — нет.
+func controls(d *FormDesign, pick func(*DesignControls) *int) *int {
+	if d.Controls == nil {
+		return nil
+	}
+	return pick(d.Controls)
+}
+
+func pxOrEmpty(n *int) string {
+	if n == nil {
+		return ""
+	}
+	return fmt.Sprintf("%dpx", *n)
 }
 
 func palette(d *FormDesign, pick func(*DesignPalette) string) string {
@@ -315,6 +421,9 @@ func DesignClasses(d *FormDesign) string {
 		case "none":
 			out = append(out, "rf-outline-none")
 		}
+	}
+	if d.Controls != nil && d.Controls.Shadow != nil && !*d.Controls.Shadow {
+		out = append(out, "rf-shadow-off")
 	}
 	if d.Button != nil && d.Button.Variant == "outline" {
 		out = append(out, "rf-btn-outline")

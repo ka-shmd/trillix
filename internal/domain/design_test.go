@@ -9,6 +9,10 @@ import (
 
 func intp(v int) *int { return &v }
 
+// boolp — тот же хелпер для флага: у controls.fullWidth законно только true, и
+// указатель нужен, чтобы отличить «не задан» от записанного false (тот отвергается).
+func boolp(v bool) *bool { return &v }
+
 // Валидатор оформления. Таблица того же состава, что designSchema.test.ts на фронте:
 // расхождение видно диффом, потому что названия кейсов совпадают.
 func TestValidateDesign(t *testing.T) {
@@ -75,6 +79,213 @@ func TestValidateDesign(t *testing.T) {
 
 // Оформление приезжает через ValidateSchema, а не мимо неё: у валидатора один вход,
 // и проверка, вызываемая только в тесте, не защищает ничего.
+// ШИРИНА ПОЛЯ — ПОТОЛОК И ФЛАГ. `false` отвергается не из придирчивости: дефолт во
+// всей фазе хранится отсутствием ключа, и записанный `false` дал бы документ,
+// отличающийся от исходного при одинаковом виде. Зеркало на фронте —
+// `z.literal(true).optional()`.
+func TestValidateDesign_FieldWidth(t *testing.T) {
+	ok := []*FormDesign{
+		{Controls: &DesignControls{FullWidth: boolp(true)}},
+		{Controls: &DesignControls{Width: intp(MinFieldWidth)}},
+		{Controls: &DesignControls{Width: intp(MaxFieldWidth)}},
+		// Флаг и число вместе законны: число ждёт возврата к фиксированной ширине.
+		{Controls: &DesignControls{FullWidth: boolp(true), Width: intp(480)}},
+		{Controls: &DesignControls{}},
+	}
+	for i, d := range ok {
+		if err := validateDesign(d); err != nil {
+			t.Fatalf("случай %d обязан приниматься: %v", i, err)
+		}
+	}
+	bad := []*FormDesign{
+		{Controls: &DesignControls{FullWidth: boolp(false)}},
+		{Controls: &DesignControls{Width: intp(MinFieldWidth - 1)}},
+		{Controls: &DesignControls{Width: intp(MaxFieldWidth + 1)}},
+	}
+	for i, d := range bad {
+		if err := validateDesign(d); err == nil {
+			t.Fatalf("случай %d обязан отвергаться", i)
+		}
+	}
+}
+
+// Та же настройка на выходе: потолок печатается числом, флаг — процентами и сильнее
+// числа. Значения сверяются с таблицей на фронте (design.test.ts, тот же состав).
+func TestDesignVars_FieldWidth(t *testing.T) {
+	cases := map[string]struct {
+		design *FormDesign
+		want   string
+	}{
+		"число":                      {&FormDesign{Controls: &DesignControls{Width: intp(480)}}, "480px"},
+		"полная ширина":              {&FormDesign{Controls: &DesignControls{FullWidth: boolp(true)}}, "100%"},
+		"флаг сильнее числа":         {&FormDesign{Controls: &DesignControls{FullWidth: boolp(true), Width: intp(480)}}, "100%"},
+		"не задано — переменной нет": {&FormDesign{Controls: &DesignControls{}}, ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			got := DesignVars(tc.design)["--rf-input-max"]
+			if got != tc.want {
+				t.Fatalf("%q, ожидалось %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// Высота контрола. Диапазон отдельный от ширины: у высоты низ упирается в строку
+// 16/1.5, а не в читаемость поля. Кнопка едет за этой же переменной — она объявлена
+// как var(--rf-control-h), поэтому своей ветки в таблице не имеет.
+func TestValidateDesign_FieldHeight(t *testing.T) {
+	for _, d := range []*FormDesign{
+		{Controls: &DesignControls{Height: intp(MinFieldHeight)}},
+		{Controls: &DesignControls{Height: intp(MaxFieldHeight)}},
+	} {
+		if err := validateDesign(d); err != nil {
+			t.Fatalf("границы обязаны приниматься: %v", err)
+		}
+	}
+	for _, d := range []*FormDesign{
+		{Controls: &DesignControls{Height: intp(MinFieldHeight - 1)}},
+		{Controls: &DesignControls{Height: intp(MaxFieldHeight + 1)}},
+	} {
+		if err := validateDesign(d); err == nil {
+			t.Fatal("значение вне диапазона обязано отвергаться")
+		}
+	}
+	if got := DesignVars(&FormDesign{Controls: &DesignControls{Height: intp(44)}})["--rf-control-h"]; got != "44px" {
+		t.Fatalf("--rf-control-h = %q, ожидалось 44px", got)
+	}
+}
+
+// Толщина края. Ноль законен — кольцо исчезает, слои тени остаются; проверяется он
+// отдельно, потому что именно его съедает проверка «на истинность» вместо nil.
+func TestValidateDesign_BorderWidth(t *testing.T) {
+	for _, d := range []*FormDesign{
+		{Controls: &DesignControls{BorderWidth: intp(MinBorderWidth)}},
+		{Controls: &DesignControls{BorderWidth: intp(MaxBorderWidth)}},
+	} {
+		if err := validateDesign(d); err != nil {
+			t.Fatalf("границы обязаны приниматься: %v", err)
+		}
+	}
+	if err := validateDesign(&FormDesign{Controls: &DesignControls{BorderWidth: intp(MaxBorderWidth + 1)}}); err == nil {
+		t.Fatal("значение вне диапазона обязано отвергаться")
+	}
+	if got := DesignVars(&FormDesign{Controls: &DesignControls{BorderWidth: intp(0)}})["--rf-ring-w"]; got != "0px" {
+		t.Fatalf("--rf-ring-w при нуле = %q, ожидалось 0px", got)
+	}
+	if got := DesignVars(&FormDesign{Palette: &DesignPalette{Border: "#d0d0d0"}})["--rf-ring"]; got != "#d0d0d0" {
+		t.Fatalf("--rf-ring = %q", got)
+	}
+}
+
+// Тень: в документ попадает только СНЯТИЕ. `true` отвергается — тень это дефолт, а
+// дефолт хранится отсутствием ключа (то же правило, что у controls.fullWidth).
+func TestValidateDesign_Shadow(t *testing.T) {
+	if err := validateDesign(&FormDesign{Controls: &DesignControls{Shadow: boolp(false)}}); err != nil {
+		t.Fatalf("false обязан проходить: %v", err)
+	}
+	if err := validateDesign(&FormDesign{Controls: &DesignControls{Shadow: boolp(true)}}); err == nil {
+		t.Fatal("true обязан отвергаться — тень по умолчанию хранится отсутствием ключа")
+	}
+}
+
+// Воздух вокруг поля. Ноль законен у обоих — поле без боковых полей и вопросы
+// вплотную; он же и проверяется, потому что его съедает проверка «на истинность».
+func TestValidateDesign_Spacing(t *testing.T) {
+	ok := &FormDesign{Controls: &DesignControls{PaddingX: intp(0), MarginBottom: intp(0)}}
+	if err := validateDesign(ok); err != nil {
+		t.Fatalf("ноль обязан проходить: %v", err)
+	}
+	vars := DesignVars(ok)
+	if vars["--rf-input-px"] != "0px" || vars["--rf-space-q"] != "0px" {
+		t.Fatalf("ноль обязан печататься: %v", vars)
+	}
+	for _, d := range []*FormDesign{
+		{Controls: &DesignControls{PaddingX: intp(MaxPaddingX + 1)}},
+		{Controls: &DesignControls{MarginBottom: intp(MaxMarginBottom + 1)}},
+	} {
+		if err := validateDesign(d); err == nil {
+			t.Fatal("значение вне диапазона обязано отвергаться")
+		}
+	}
+}
+
+// Три режима ширины кнопки. Число читается только в fixed; заданный режим без числа
+// печатает дефолт, иначе кнопка молча осталась бы «по тексту».
+func TestDesignVars_ButtonWidth(t *testing.T) {
+	cases := map[string]struct {
+		button *DesignButton
+		want   string
+	}{
+		"по тексту":               {&DesignButton{Width: "auto"}, ""},
+		"во всю ширину":           {&DesignButton{Width: "full"}, "100%"},
+		"фиксированная числом":    {&DesignButton{Width: "fixed", WidthPx: intp(260)}, "260px"},
+		"фиксированная без числа": {&DesignButton{Width: "fixed"}, "200px"},
+		"число вне режима молчит": {&DesignButton{Width: "auto", WidthPx: intp(260)}, ""},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			if got := DesignVars(&FormDesign{Button: tc.button})["--rf-submit-width"]; got != tc.want {
+				t.Fatalf("%q, ожидалось %q", got, tc.want)
+			}
+		})
+	}
+	if err := validateDesign(&FormDesign{Button: &DesignButton{WidthPx: intp(MaxButtonWidth + 1)}}); err == nil {
+		t.Fatal("ширина вне диапазона обязана отвергаться")
+	}
+}
+
+// Высота кнопки: число сильнее готового размера и только по высоте.
+func TestDesignVars_ButtonHeight(t *testing.T) {
+	vars := DesignVars(&FormDesign{Button: &DesignButton{Size: "lg", Height: intp(52)}})
+	if vars["--rf-submit-h"] != "52px" {
+		t.Fatalf("--rf-submit-h = %q, ожидалось 52px", vars["--rf-submit-h"])
+	}
+	if vars["--rf-submit-px"] != "2rem" || vars["--rf-submit-ratio"] != "1" {
+		t.Fatalf("поля и кегль обязаны остаться от размера lg: %v", vars)
+	}
+	if err := validateDesign(&FormDesign{Button: &DesignButton{Height: intp(MaxButtonHeight + 1)}}); err == nil {
+		t.Fatal("высота вне диапазона обязана отвергаться")
+	}
+}
+
+// Положение кнопки — ТРИ значения (у выравнивания текста формы их два). Слева дефолт
+// и не печатается; справа — flex-end, потому что настройка задаёт justify-content РЯДА.
+func TestDesignVars_ButtonAlign(t *testing.T) {
+	cases := map[string]string{"left": "", "center": "center", "right": "flex-end"}
+	for align, want := range cases {
+		t.Run(align, func(t *testing.T) {
+			got := DesignVars(&FormDesign{Button: &DesignButton{Align: align}})["--rf-submit-justify"]
+			if got != want {
+				t.Fatalf("%q, ожидалось %q", got, want)
+			}
+		})
+	}
+	if err := validateDesign(&FormDesign{Button: &DesignButton{Align: "justify"}}); err == nil {
+		t.Fatal("значение вне списка обязано отвергаться")
+	}
+	// Кегль и скругление — свои токены поверх общих.
+	vars := DesignVars(&FormDesign{Button: &DesignButton{FontSize: intp(18), Radius: intp(8)}})
+	if vars["--rf-submit-size"] != "18px" || vars["--rf-submit-radius"] != "8px" {
+		t.Fatalf("свои токены кнопки не напечатаны: %v", vars)
+	}
+}
+
+// Воздух кнопки: верхний свой и добавочный (ноль печатается — это выбор «без
+// добавки»), боковые поля сильнее готового размера.
+func TestDesignVars_ButtonSpacing(t *testing.T) {
+	if got := DesignVars(&FormDesign{Button: &DesignButton{MarginTop: intp(0)}})["--rf-submit-mt"]; got != "0px" {
+		t.Fatalf("--rf-submit-my при нуле = %q, ожидалось 0px", got)
+	}
+	vars := DesignVars(&FormDesign{Button: &DesignButton{Size: "lg", PaddingX: intp(28)}})
+	if vars["--rf-submit-px"] != "28px" || vars["--rf-submit-h"] != "2.75rem" {
+		t.Fatalf("число обязано перебить только поля: %v", vars)
+	}
+	if err := validateDesign(&FormDesign{Button: &DesignButton{MarginTop: intp(MaxButtonMarginTop + 1)}}); err == nil {
+		t.Fatal("значение вне диапазона обязано отвергаться")
+	}
+}
+
 func TestValidateSchema_Design(t *testing.T) {
 	t.Run("принимается в составе схемы", func(t *testing.T) {
 		raw := json.RawMessage(`{"schemaVersion":1,"blocks":[],
@@ -230,15 +441,16 @@ func TestDesignClasses(t *testing.T) {
 		"контур рамкой":                {&FormDesign{Controls: &DesignControls{Outline: "border"}}, "rf-outline-border"},
 		"без контура":                  {&FormDesign{Controls: &DesignControls{Outline: "none"}}, "rf-outline-none"},
 		"тень — дефолт, класса нет":    {&FormDesign{Controls: &DesignControls{Outline: "shadow"}}, ""},
+		"снятая тень":                  {&FormDesign{Controls: &DesignControls{Shadow: boolp(false)}}, "rf-shadow-off"},
 		"контурная кнопка":             {&FormDesign{Button: &DesignButton{Variant: "outline"}}, "rf-btn-outline"},
 		"заливка — дефолт, класса нет": {&FormDesign{Button: &DesignButton{Variant: "solid"}}, ""},
 		"всё сразу — порядок стабилен": {
 			&FormDesign{
 				Theme:    "dark",
-				Controls: &DesignControls{Outline: "border"},
+				Controls: &DesignControls{Outline: "border", Shadow: boolp(false)},
 				Button:   &DesignButton{Variant: "outline"},
 			},
-			"rf-theme-dark rf-outline-border rf-btn-outline",
+			"rf-theme-dark rf-outline-border rf-shadow-off rf-btn-outline",
 		},
 	}
 	for name, tc := range cases {

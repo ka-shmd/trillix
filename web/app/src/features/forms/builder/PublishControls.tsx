@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
-import { Link2 } from 'lucide-react'
+import { Link2, X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { type FormDesign } from '@entities/formSchema'
@@ -10,7 +10,7 @@ import { useFeatureAllowed } from '../../plan/useFeature'
 import { planRequiredMessage } from '../../plan/planError'
 import { usePublishForm } from '../queries'
 import { type FormRef } from './useAutosave'
-import { hasCustomFields } from './designTheme'
+import { dropPaid, hasCustomFields } from './designTheme'
 import { useBuilderStore } from './storeContext'
 import {
   AlertDialog,
@@ -88,11 +88,10 @@ export function PublishControls({
   const publish = usePublishForm()
   const navigate = useNavigate()
   const design = useBuilderStore((s) => s.design)
-  const blocked = paidInUse(
-    design,
-    useFeatureAllowed('form_design_custom'),
-    useFeatureAllowed('form_custom_css'),
-  )
+  const setDesign = useBuilderStore((s) => s.setDesign)
+  const allowCustom = useFeatureAllowed('form_design_custom')
+  const allowCSS = useFeatureAllowed('form_custom_css')
+  const blocked = paidInUse(design, allowCustom, allowCSS)
   const planMessage = planRequiredMessage(publish.error)
   // Диалог «нужна подписка» — локальный UI-стейт: перезагрузку не переживает и никому
   // за пределами этой кнопки не нужен (web/CLAUDE.md).
@@ -161,6 +160,20 @@ export function PublishControls({
           снять платное или оплатить, — а решение спрашивают диалогом. */}
       <AlertDialog open={refused} onOpenChange={setRefused}>
         <AlertDialogContent>
+          {/* КРЕСТИК ВМЕСТО КНОПКИ «ЗАКРЫТЬ» (решение владельца 2026-08-28): в подвале
+              теперь два настоящих выхода — снять платное или оплатить, — и третья
+              кнопка рядом с ними читалась бы таким же выходом, хотя она про «я пока
+              ничего не решил». Отказ от решения живёт в углу, как у всех окон.
+              Cancel, а не свой обработчик: на нём же висят Escape и возврат фокуса. */}
+          <AlertDialogCancel asChild variant="ghost" size="icon-sm">
+            <button
+              type="button"
+              aria-label="Закрыть"
+              className="text-muted-foreground absolute top-4 right-4"
+            >
+              <X className="size-4" />
+            </button>
+          </AlertDialogCancel>
           <AlertDialogHeader>
             <AlertDialogTitle>В форме есть элементы платной подписки</AlertDialogTitle>
             <AlertDialogDescription>
@@ -169,7 +182,29 @@ export function PublishControls({
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel>Закрыть</AlertDialogCancel>
+            {/* ВТОРОЙ ВЫХОД — СНЯТЬ ПЛАТНОЕ И ОПУБЛИКОВАТЬ КАК ЕСТЬ. Диалог до этого
+                называл стену, но выводил из неё одной дорогой: автор, которому нужна
+                форма сейчас, а не подписка, оставался с ней один на один и вычищал
+                настройки руками, гадая, какие именно мешают.
+
+                Снимается РОВНО ЗАКРЫТОЕ (dropPaid), а не всё своё: право на цвета и
+                право на CSS раздельные. Правка идёт через стор, поэтому это обычный
+                шаг истории — Ctrl+Z возвращает, и тост об этом говорит: действие
+                стирает работу, а сообщение о возврате должно стоять там же, где потеря.
+
+                Кнопка не публикует сама. Публикация — снапшот СЕРВЕРНОГО черновика, а
+                снятое ещё не доехало автосейвом; нажатая тут же, она отправила бы на
+                сервер прежний документ и получила тот же 402. */}
+            <Button
+              variant="outline"
+              onClick={() => {
+                setDesign(dropPaid(design, allowCustom, allowCSS))
+                setRefused(false)
+                toast.success('Платное оформление снято. Вернуть — Ctrl+Z')
+              }}
+            >
+              Убрать платное оформление
+            </Button>
             <AlertDialogAction onClick={() => navigate({ to: '/settings/plan' })}>
               Оформить подписку
             </AlertDialogAction>

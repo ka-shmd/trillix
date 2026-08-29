@@ -31,7 +31,18 @@ describe('designSchema — валидатор', () => {
       font: 'inter',
       layout: { width: 860, fontSize: 18, density: 'roomy', align: 'center' },
       controls: { radius: 0, outline: 'border' },
-      button: { variant: 'outline', width: 'full', align: 'center', size: 'lg' },
+      button: {
+        variant: 'outline',
+        width: 'fixed',
+        widthPx: 260,
+        height: 52,
+        align: 'center',
+        fontSize: 18,
+        radius: 8,
+        marginTop: 16,
+        paddingX: 28,
+        size: 'lg',
+      },
     },
     'кегль на нижней границе': { layout: { fontSize: MIN_FONT_SIZE } },
     'кегль на верхней границе': { layout: { fontSize: MAX_FONT_SIZE } },
@@ -139,6 +150,39 @@ describe('designToVars', () => {
     // автора, и он обязан доехать до CSS.
     expect(designToVars({ controls: { radius: 0 } })).toEqual({ '--rf-radius': '0px' })
   })
+
+  // ПОТОЛОК ШИРИНЫ ПОЛЯ. Полная ширина — значение «100%», а не класс: переменная
+  // подставляется прямо в max-width и в min(…, 100%). Флаг сильнее числа, и число при
+  // нём НЕ стирается — оно ждёт возврата к фиксированной ширине.
+  it('ширина поля: число, «100%» и приоритет флага', () => {
+    expect(designToVars({ controls: { width: 480 } })).toEqual({ '--rf-input-max': '480px' })
+    expect(designToVars({ controls: { fullWidth: true } })).toEqual({ '--rf-input-max': '100%' })
+    expect(designToVars({ controls: { fullWidth: true, width: 480 } })).toEqual({
+      '--rf-input-max': '100%',
+    })
+    expect(designToVars({ controls: {} })).toEqual({})
+  })
+
+  it('высота поля — числом в px', () => {
+    expect(designToVars({ controls: { height: 44 } })).toEqual({ '--rf-control-h': '44px' })
+  })
+
+  // НОЛЬ У ТОЛЩИНЫ КРАЯ — ЗАКОННОЕ ЗНАЧЕНИЕ (края нет), а не «не задано». Проверка на
+  // истинность вместо сравнения с undefined съела бы ровно этот случай.
+  it('воздух вокруг поля: ноль печатается, отсутствие — нет', () => {
+    expect(designToVars({ controls: { paddingX: 0 } })).toEqual({ '--rf-input-px': '0px' })
+    expect(designToVars({ controls: { marginBottom: 0 } })).toEqual({ '--rf-space-q': '0px' })
+    expect(designToVars({ controls: { paddingX: 12, marginBottom: 32 } })).toEqual({
+      '--rf-input-px': '12px',
+      '--rf-space-q': '32px',
+    })
+  })
+
+  it('толщина края: ноль печатается, отсутствие — нет', () => {
+    expect(designToVars({ controls: { borderWidth: 0 } })).toEqual({ '--rf-ring-w': '0px' })
+    expect(designToVars({ controls: { borderWidth: 3 } })).toEqual({ '--rf-ring-w': '3px' })
+    expect(designToVars({ controls: {} })).toEqual({})
+  })
 })
 
 describe('designClasses', () => {
@@ -150,12 +194,17 @@ describe('designClasses', () => {
     ['контур рамкой', { controls: { outline: 'border' } } as const, 'rf-outline-border'],
     ['без контура', { controls: { outline: 'none' } } as const, 'rf-outline-none'],
     ['тень — дефолт, класса нет', { controls: { outline: 'shadow' } } as const, ''],
+    ['снятая тень', { controls: { shadow: false } } as const, 'rf-shadow-off'],
     ['контурная кнопка', { button: { variant: 'outline' } } as const, 'rf-btn-outline'],
     ['заливка — дефолт, класса нет', { button: { variant: 'solid' } } as const, ''],
     [
       'всё сразу — порядок стабилен',
-      { theme: 'dark', controls: { outline: 'border' }, button: { variant: 'outline' } } as const,
-      'rf-theme-dark rf-outline-border rf-btn-outline',
+      {
+        theme: 'dark',
+        controls: { outline: 'border', shadow: false },
+        button: { variant: 'outline' },
+      } as const,
+      'rf-theme-dark rf-outline-border rf-shadow-off rf-btn-outline',
     ],
   ])('%s', (_name, design, want) => {
     expect(designClasses(design)).toBe(want)
@@ -163,6 +212,64 @@ describe('designClasses', () => {
 })
 
 describe('designToVars — кнопка', () => {
+  // ТРИ РЕЖИМА ШИРИНЫ. Число читается только в fixed: в остальных оно лежит в
+  // документе и ждёт возврата, поэтому его присутствие ничего не печатает.
+  // ЧИСЛО СИЛЬНЕЕ ГОТОВОГО РАЗМЕРА, И ТОЛЬКО ПО ВЫСОТЕ: поля и кегль остаются от
+  // набора, иначе одна правка высоты молча пересобирала бы кнопку целиком.
+  // ТРИ ПОЛОЖЕНИЯ. `left` — дефолт fields.css, поэтому не печатается вовсе.
+  it('положение: слева молчит, по центру и справа — свои значения justify', () => {
+    expect(designToVars({ button: { align: 'left' } })['--rf-submit-justify']).toBeUndefined()
+    expect(designToVars({ button: { align: 'center' } })['--rf-submit-justify']).toBe('center')
+    expect(designToVars({ button: { align: 'right' } })['--rf-submit-justify']).toBe('flex-end')
+  })
+
+  // ВОЗДУХ КНОПКИ. Верхний — свой и добавочный, поэтому ноль печатается: это
+  // выбор «без добавки», а не «не задано». Боковые поля сильнее готового размера.
+  it('воздух кнопки: свой верхний и боковые поля поверх размера', () => {
+    expect(designToVars({ button: { marginTop: 0 } })).toEqual({ '--rf-submit-mt': '0px' })
+    expect(designToVars({ button: { marginTop: 16 } })).toEqual({ '--rf-submit-mt': '16px' })
+    expect(designToVars({ button: { size: 'lg', paddingX: 28 } })).toEqual({
+      '--rf-submit-h': '2.75rem',
+      '--rf-submit-px': '28px',
+      '--rf-submit-ratio': '1',
+    })
+  })
+
+  it('кегль и скругление кнопки — своими токенами поверх общих', () => {
+    expect(designToVars({ button: { fontSize: 18, radius: 8 } })).toEqual({
+      '--rf-submit-size': '18px',
+      '--rf-submit-radius': '8px',
+    })
+  })
+
+  it('высота: число перебивает размер, не трогая поля и кегль', () => {
+    expect(designToVars({ button: { size: 'lg' } })).toEqual({
+      '--rf-submit-h': '2.75rem',
+      '--rf-submit-px': '2rem',
+      '--rf-submit-ratio': '1',
+    })
+    expect(designToVars({ button: { size: 'lg', height: 52 } })).toEqual({
+      '--rf-submit-h': '52px',
+      '--rf-submit-px': '2rem',
+      '--rf-submit-ratio': '1',
+    })
+    expect(designToVars({ button: { height: 52 } })).toEqual({ '--rf-submit-h': '52px' })
+  })
+
+  it('ширина: по тексту, во всю и фиксированная', () => {
+    expect(designToVars({ button: { width: 'auto' } })['--rf-submit-width']).toBeUndefined()
+    expect(designToVars({ button: { width: 'full' } })['--rf-submit-width']).toBe('100%')
+    expect(designToVars({ button: { width: 'fixed', widthPx: 260 } })['--rf-submit-width']).toBe(
+      '260px',
+    )
+    // Режим есть, числа нет — печатается дефолт, а не пустота: иначе кнопка молча
+    // осталась бы «по тексту», хотя автор выбрал фиксированную.
+    expect(designToVars({ button: { width: 'fixed' } })['--rf-submit-width']).toBe('200px')
+    expect(designToVars({ button: { width: 'auto', widthPx: 260 } })['--rf-submit-width']).toBe(
+      undefined,
+    )
+  })
+
   it('положение — justify ряда, а не align-self кнопки', () => {
     // Кнопка лежит в .rf-nav — это flex-СТРОКА, и align-self двигал бы её по
     // вертикали, где двигать нечего. Первая редакция слайса ошиблась именно осью:
@@ -208,14 +315,37 @@ describe('DESIGN_VAR_NAMES', () => {
         field: '#1a1a20',
         text: '#f0f0f0',
         muted: '#9a9a9a',
+        placeholder: '#8a8a8a',
+        border: '#d0d0d0',
         accent: '#12ab34',
         button: '#12ab34',
         buttonText: '#ffffff',
       },
       font: 'inter',
       layout: { width: 800, fontSize: 18, density: 'roomy', align: 'center' },
-      controls: { radius: 12, outline: 'border' },
-      button: { variant: 'outline', width: 'full', align: 'center', size: 'lg' },
+      // width, а не fullWidth: флаг сильнее числа и печатает ту же переменную, а
+      // здесь нужен документ, из которого выходит КАЖДАЯ переменная.
+      controls: {
+        width: 480,
+        height: 44,
+        borderWidth: 2,
+        paddingX: 12,
+        marginBottom: 32,
+        radius: 12,
+        outline: 'border',
+      },
+      button: {
+        variant: 'outline',
+        width: 'fixed',
+        widthPx: 260,
+        height: 52,
+        align: 'center',
+        fontSize: 18,
+        radius: 8,
+        marginTop: 16,
+        paddingX: 28,
+        size: 'lg',
+      },
     })
     expect(Object.keys(everything).sort()).toEqual([...DESIGN_VAR_NAMES].sort())
   })

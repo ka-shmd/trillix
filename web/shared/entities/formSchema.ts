@@ -446,9 +446,16 @@ export const coverY = (cover: FormCover | undefined): number => cover?.y ?? DEFA
 export const DESIGN_THEMES = ['light', 'dark'] as const
 export const DESIGN_DENSITIES = ['compact', 'normal', 'roomy'] as const
 export const DESIGN_ALIGNS = ['left', 'center'] as const
+// У КНОПКИ ТРИ ПОЛОЖЕНИЯ, а не два: она стоит в своём ряду, где есть и правый край.
+// Отдельный список, а не третье значение общего: у выравнивания ТЕКСТА формы правого
+// варианта нет и не планируется — правый текст на форме читается как брак вёрстки.
+export const DESIGN_BUTTON_ALIGNS = ['left', 'center', 'right'] as const
 export const DESIGN_OUTLINES = ['shadow', 'border', 'none'] as const
 export const DESIGN_BUTTON_VARIANTS = ['solid', 'outline'] as const
-export const DESIGN_BUTTON_WIDTHS = ['auto', 'full'] as const
+// Порядок = порядок вкладок в панели: от самой узкой кнопки к самой управляемой.
+// `fixed` без `button.widthPx` означает дефолтные 200px — ровно так же, как любая
+// незаданная настройка означает сегодняшний вид, а не «пусто».
+export const DESIGN_BUTTON_WIDTHS = ['auto', 'full', 'fixed'] as const
 export const DESIGN_BUTTON_SIZES = ['sm', 'md', 'lg'] as const
 // Курируемый список self-hosted семейств с кириллицей. Внешний CDN не подключить
 // физически (прод-CSP `font-src 'self' data:`), и ослаблять её не будем: подключённый
@@ -487,6 +494,64 @@ export const MAX_RADIUS = 24
 // вариантов или под мобильную рассылку требует своего числа. Низ — 400: уже колонка
 // перестаёт вмещать поле ввода с подписью; верх — 1200: дальше строка становится
 // длиннее комфортной для чтения, и это уже не форма, а таблица.
+// Ширина кнопки в режиме `fixed` (--rf-submit-width). Низ — 80: уже кнопка не вмещает
+// «Отправить»; верх равен потолку колонки, шире неё кнопке всё равно не стать.
+export const MIN_BUTTON_WIDTH = 80
+export const MAX_BUTTON_WIDTH = 1200
+// Что печатается в режиме `fixed`, если автор числа не задавал: токен
+// --rf-submit-width в этом режиме печатается ВСЕГДА, поэтому «незаданное» превращается
+// в число здесь. Панель показывает его же серым (NumberRow fallback). В контракте, а не
+// рядом с переводом в CSS, — тут его сторожит паритет-тест Go.
+export const BUTTON_WIDTH_DEFAULT = 200
+// Высота кнопки (--rf-submit-h). Диапазон тот же, что у высоты поля: кнопка и поле
+// стоят в одном ряду глазами респондента, и разные потолки у них были бы произволом.
+// Числами, а не ссылкой на границы поля: диапазоны СОВПАДАЮТ по решению, а не по
+// природе, и связанные ссылкой они молча поехали бы вслед за чужой правкой. Паритет-тест
+// Go читает здесь литерал.
+// Кегль и скругление кнопки. Кегль от 10 (ниже надпись нечитаема) до 32 (выше кнопка
+// перестаёт быть кнопкой); скругление — тот же потолок, что у поля.
+export const MIN_BUTTON_FONT = 10
+export const MAX_BUTTON_FONT = 32
+export const MIN_BUTTON_RADIUS = 0
+export const MAX_BUTTON_RADIUS = 24
+
+// Воздух кнопки: свой ВЕРХНИЙ (добавляется к расстоянию, которое уже держит колонка;
+// воздух под кнопкой — поле страницы, а не свойство кнопки) и боковые поля внутри неё.
+// Ноль законен у обоих.
+export const MIN_BUTTON_MARGIN_TOP = 0
+export const MAX_BUTTON_MARGIN_TOP = 96
+export const MIN_BUTTON_PADDING_X = 0
+export const MAX_BUTTON_PADDING_X = 96
+
+export const MIN_BUTTON_HEIGHT = 28
+export const MAX_BUTTON_HEIGHT = 96
+
+// Боковые поля внутри контрола (--rf-input-px, по умолчанию 10px) и воздух между
+// вопросами (--rf-space-q, по умолчанию 24px). Ноль законен у обоих: поле без боковых
+// полей и вопросы вплотную — крайние, но осмысленные виды формы.
+export const MIN_PADDING_X = 0
+export const MAX_PADDING_X = 48
+export const MIN_MARGIN_BOTTOM = 0
+export const MAX_MARGIN_BOTTOM = 96
+
+// Толщина края контрола (--rf-ring-w, по умолчанию 1px). Ноль законен — кольцо
+// исчезает, слои тени остаются; потолок 8 — дальше край съедает поле изнутри.
+export const MIN_BORDER_WIDTH = 0
+export const MAX_BORDER_WIDTH = 8
+
+// Высота контрола (--rf-control-h, по умолчанию 36px — замер Tally). Низ — 28: ниже
+// строка 16/1.5 упирается в края поля; верх — 96: дальше поле перестаёт читаться как
+// строка ввода. Числом ходят и кнопки: --rf-submit-h выводится из этой же переменной,
+// пока автор не задал размер кнопки явно.
+export const MIN_FIELD_HEIGHT = 28
+export const MAX_FIELD_HEIGHT = 96
+
+// Потолок ширины поля (--rf-input-max). Низ — поле, в котором ещё виден вводимый
+// текст; верх равен потолку колонки: шире неё поле всё равно не станет, его режет
+// `width: 100%` родителя.
+export const MIN_FIELD_WIDTH = 120
+export const MAX_FIELD_WIDTH = 1200
+
 export const MIN_COLUMN = 400
 export const MAX_COLUMN = 1200
 
@@ -502,6 +567,15 @@ export const designSchema = z.strictObject({
       field: hexColor.optional(),
       text: hexColor.optional(),
       muted: hexColor.optional(),
+      // ПЛЕЙСХОЛДЕР — СВОЙ КЛЮЧ, А НЕ `muted` (решение владельца 2026-08-29). Тем же
+      // приглушённым цветом крашены описание вопроса, пустое состояние и половина
+      // декора полотна, поэтому контрол с подписью «Плейсхолдер», меняющий заодно их,
+      // врал бы о своей области. По умолчанию не задан, и тогда --rf-placeholder
+      // выводится из --rf-muted — форма без этого ключа выглядит как прежде.
+      placeholder: hexColor.optional(),
+      // Край контрола (--rf-ring). Кольцо это же красит на фокусе и у выбранной
+      // карточки — то есть настройка про край КОНТРОЛА, а не про одну рамку поля.
+      border: hexColor.optional(),
       accent: hexColor.optional(),
       button: hexColor.optional(),
       buttonText: hexColor.optional(),
@@ -521,6 +595,27 @@ export const designSchema = z.strictObject({
     .optional(),
   controls: z
     .strictObject({
+      // ШИРИНА ПОЛЯ — ПОТОЛОК `--rf-input-max`, а не ширина как таковая: поле всегда
+      // занимает 100% доступного, потолок лишь не даёт ему разъехаться на всю колонку
+      // (по умолчанию 320px, довод — в fields.css).
+      //
+      // Полная ширина здесь ЗНАЧЕНИЕ, а не класс, в отличие от геометрии страницы:
+      // переменная подставляется прямо в `max-width` и в `min(…, 100%)`, где «100%»
+      // законно. Отдельный ключ от числа нужен затем, чтобы подобранные px пережили
+      // переключение туда-обратно; `true` или ничего — дефолт хранится отсутствием.
+      fullWidth: z.literal(true).optional(),
+      width: z.number().int().min(MIN_FIELD_WIDTH).max(MAX_FIELD_WIDTH).optional(),
+      height: z.number().int().min(MIN_FIELD_HEIGHT).max(MAX_FIELD_HEIGHT).optional(),
+      borderWidth: z.number().int().min(MIN_BORDER_WIDTH).max(MAX_BORDER_WIDTH).optional(),
+      // Мягкая тень под полем. Только `false`: тень — сегодняшний дефолт, а дефолт
+      // хранится отсутствием ключа, поэтому в схему попадает лишь СНЯТИЕ тени.
+      // Кольцо края этим не трогается — оно живёт своими borderWidth и palette.border.
+      shadow: z.literal(false).optional(),
+      paddingX: z.number().int().min(MIN_PADDING_X).max(MAX_PADDING_X).optional(),
+      // Воздух ПЕРЕД следующим вопросом — для автора это «отступ снизу» текущего.
+      // Ступени заголовков за ним не едут: правится расстояние между вопросами, а не
+      // вся вертикальная шкала формы.
+      marginBottom: z.number().int().min(MIN_MARGIN_BOTTOM).max(MAX_MARGIN_BOTTOM).optional(),
       radius: z.number().int().min(MIN_RADIUS).max(MAX_RADIUS).optional(),
       outline: z.enum(DESIGN_OUTLINES).optional(),
     })
@@ -531,7 +626,18 @@ export const designSchema = z.strictObject({
     .strictObject({
       variant: z.enum(DESIGN_BUTTON_VARIANTS).optional(),
       width: z.enum(DESIGN_BUTTON_WIDTHS).optional(),
-      align: z.enum(DESIGN_ALIGNS).optional(),
+      // Читается ТОЛЬКО при width: 'fixed' — как и число ширины поля, оно переживает
+      // переключение режимов, чтобы подобранное значение дождалось возврата.
+      widthPx: z.number().int().min(MIN_BUTTON_WIDTH).max(MAX_BUTTON_WIDTH).optional(),
+      // Сильнее размера: `size` это три готовых набора (высота, поля, кегль), а число
+      // — прямое указание. Заданная высота перебивает у набора только высоту, поля и
+      // кегль остаются от него.
+      height: z.number().int().min(MIN_BUTTON_HEIGHT).max(MAX_BUTTON_HEIGHT).optional(),
+      align: z.enum(DESIGN_BUTTON_ALIGNS).optional(),
+      fontSize: z.number().int().min(MIN_BUTTON_FONT).max(MAX_BUTTON_FONT).optional(),
+      radius: z.number().int().min(MIN_BUTTON_RADIUS).max(MAX_BUTTON_RADIUS).optional(),
+      marginTop: z.number().int().min(MIN_BUTTON_MARGIN_TOP).max(MAX_BUTTON_MARGIN_TOP).optional(),
+      paddingX: z.number().int().min(MIN_BUTTON_PADDING_X).max(MAX_BUTTON_PADDING_X).optional(),
       size: z.enum(DESIGN_BUTTON_SIZES).optional(),
     })
     .optional(),

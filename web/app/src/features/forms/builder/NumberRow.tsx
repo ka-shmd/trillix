@@ -1,6 +1,7 @@
 import { useState } from 'react'
 
 import { Input } from '@/components/ui/input'
+import { cn } from '@/lib/utils'
 
 // NumberRow — число с диапазоном для панели «Оформление». Пустое поле означает «по
 // умолчанию», а не ноль: стереть значение автор вправе, и это не то же самое, что
@@ -20,6 +21,7 @@ export function NumberRow({
   min,
   max,
   disabled,
+  className,
   onChange,
 }: {
   id: string
@@ -28,6 +30,9 @@ export function NumberRow({
   min: number
   max: number
   disabled?: boolean
+  // Вид задаётся на месте вызова: шторка «Оформление» ужимает свои контролы, и
+  // размер — её решение, а не свойство числового поля.
+  className?: string
   onChange: (value: number | undefined) => void
 }) {
   const [draft, setDraft] = useState<string | null>(null)
@@ -50,7 +55,7 @@ export function NumberRow({
       disabled={disabled}
       value={draft ?? (value === undefined ? '' : String(value))}
       placeholder={String(fallback)}
-      className="h-8"
+      className={cn('h-8', className)}
       onChange={(e) => {
         const raw = e.currentTarget.value
         setDraft(raw)

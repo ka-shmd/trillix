@@ -1,4 +1,4 @@
-import type { FormDesign } from '@entities/formSchema'
+import { BUTTON_WIDTH_DEFAULT, type FormDesign } from '@entities/formSchema'
 
 // ПЕРЕВОД ОФОРМЛЕНИЯ В CSS-ПЕРЕМЕННЫЕ — одна функция на три поверхности фронта:
 // полотно редактора, превью билдера и публичный рендерер надевают результат на свой
@@ -34,11 +34,50 @@ const FONT_STACK: Record<string, string> = {
 // Состав переменных — контракт с Go-близнецом, поэтому он читается СПИСКОМ, а не
 // собирается из двадцати ветвей. Паритет состава сторожит тест на стороне Go
 // (design_vars_parity_test.go читает этот файл).
+// Потолок ширины поля (--rf-input-max). Полная ширина — ЗНАЧЕНИЕ «100%», а не класс:
+// переменная подставляется прямо в `max-width` и в `min(…, 100%)`, где проценты
+// законны (у колонки страницы иначе — там число стоит внутри calc(), см.
+// designClasses). Флаг сильнее числа: пока выбрана полная ширина, подобранные px
+// просто ждут возврата к фиксированной.
+//
+// ОТДЕЛЬНОЙ ФУНКЦИЕЙ, А НЕ ВЫРАЖЕНИЕМ В ТАБЛИЦЕ: строка таблицы обязана оставаться
+// ОДНОЙ строкой — её читает паритет-тест Go регуляркой `\['(--rf-[a-z-]+)'`, и
+// перенос после открывающей скобки прячет переменную от сверки целиком.
+const inputMax = (d: FormDesign): string | undefined =>
+  d.controls?.fullWidth
+    ? '100%'
+    : d.controls?.width === undefined
+      ? undefined
+      : `${d.controls.width}px`
+
+// Число в px или ничего. Ноль — законное значение у нескольких настроек, поэтому
+// проверяется undefined, а не истинность: `?` съел бы ровно те случаи, ради которых
+// ноль и открыт.
+const px = (n: number | undefined): string | undefined => (n === undefined ? undefined : `${n}px`)
+
+// Ширина кнопки: «во всю» — проценты, «фиксированная» — число автора (или дефолтные
+// 200px, если он его не трогал), «по тексту» — ничего, кнопка растёт по содержимому.
+//
+// Число читается ТОЛЬКО в режиме fixed: в остальных оно лежит в документе и ждёт
+// возврата — тот же приём, что у ширины поля.
+const submitWidth = (d: FormDesign): string | undefined => {
+  if (d.button?.width === 'full') return '100%'
+  if (d.button?.width !== 'fixed') return undefined
+  return `${d.button.widthPx ?? BUTTON_WIDTH_DEFAULT}px`
+}
+
+// Положение кнопки в ряду. `left` в таблице нет намеренно: это дефолт fields.css.
+const SUBMIT_JUSTIFY: Record<string, string | undefined> = {
+  center: 'center',
+  right: 'flex-end',
+}
+
 const SPECS: ReadonlyArray<readonly [string, (d: FormDesign) => string | undefined]> = [
   ['--rf-canvas', (d) => d.palette?.canvas],
   ['--rf-field-bg', (d) => d.palette?.field],
   ['--rf-text', (d) => d.palette?.text],
   ['--rf-muted', (d) => d.palette?.muted],
+  ['--rf-placeholder', (d) => d.palette?.placeholder],
   ['--rf-accent', (d) => d.palette?.accent],
   // Буквенный бейдж выбранного варианта — свой токен, хотя дефолты у него и у акцента
   // с 2026-08-22 совпали (оба #0070D7): прежде он был замерен у Tally чуть темнее
@@ -58,15 +97,37 @@ const SPECS: ReadonlyArray<readonly [string, (d: FormDesign) => string | undefin
   // не понимает вовсе. Один токен на оба свойства дал бы центрированный текст в
   // карточках, прижатых влево.
   ['--rf-align-items', (d) => (d.layout?.align === 'center' ? 'center' : undefined)],
+  ['--rf-input-max', inputMax],
+  // Высота контрола. Кнопка едет за ней сама: --rf-submit-h объявлен как
+  // var(--rf-control-h) и пересчитается на том же контейнере (пока автор не задал
+  // размер кнопки явно — тогда его значение сильнее).
+  ['--rf-control-h', (d) => (d.controls?.height ? `${d.controls.height}px` : undefined)],
+  // Край контрола: цвет и толщина рядом, хотя цвет и живёт в палитре, — порядок в
+  // таблице сверяется с Go построчно, а читать их врозь незачем.
+  ['--rf-ring', (d) => d.palette?.border],
+  // Ноль — законное значение (кольцо исчезает), поэтому сравнение с undefined, а не
+  // проверка на истинность: `?` съел бы ровно тот случай, ради которого ноль и открыт.
+  ['--rf-ring-w', (d) => (d.controls?.borderWidth === undefined ? undefined : `${d.controls.borderWidth}px`)],
+  // Ноль законен у обоих, поэтому сравнение с undefined, а не проверка на истинность.
+  ['--rf-input-px', (d) => px(d.controls?.paddingX)],
+  ['--rf-space-q', (d) => px(d.controls?.marginBottom)],
   ['--rf-radius', (d) => (d.controls?.radius === undefined ? undefined : `${d.controls.radius}px`)],
   // Кнопка. Положение — justify-content РЯДА (.rf-nav), а не align-self самой кнопки:
   // ряд горизонтальный, и align-self двигал бы её по вертикали, где двигать нечего.
   // При кнопке во всю ширину настройка инертна — свободного места не остаётся;
   // отдельной ветки для этого нет намеренно, инертное правило равно отсутствующему.
-  ['--rf-submit-justify', (d) => (d.button?.align === 'center' ? 'center' : undefined)],
-  ['--rf-submit-width', (d) => (d.button?.width === 'full' ? '100%' : undefined)],
-  ['--rf-submit-h', (d) => BUTTON_SIZE[d.button?.size ?? '']?.h],
-  ['--rf-submit-px', (d) => BUTTON_SIZE[d.button?.size ?? '']?.px],
+  // Три положения: слева — дефолт (ничего не печатаем), по центру и справа — свои
+  // значения justify-content ряда.
+  ['--rf-submit-size', (d) => px(d.button?.fontSize)],
+  ['--rf-submit-radius', (d) => px(d.button?.radius)],
+  ['--rf-submit-justify', (d) => SUBMIT_JUSTIFY[d.button?.align ?? '']],
+  ['--rf-submit-width', submitWidth],
+  // Число автора сильнее готового размера — и только по высоте: поля и кегль остаются
+  // от набора, иначе одна правка высоты молча пересобирала бы кнопку целиком.
+  ['--rf-submit-h', (d) => px(d.button?.height) ?? BUTTON_SIZE[d.button?.size ?? '']?.h],
+  ['--rf-submit-mt', (d) => px(d.button?.marginTop)],
+  // Число автора сильнее готового размера — как и у высоты.
+  ['--rf-submit-px', (d) => px(d.button?.paddingX) ?? BUTTON_SIZE[d.button?.size ?? '']?.px],
   ['--rf-submit-ratio', (d) => BUTTON_SIZE[d.button?.size ?? '']?.ratio],
 ]
 
@@ -115,7 +176,9 @@ export function designToVars(design: FormDesign | undefined): Record<string, str
 //     тень не видна вовсе, поэтому кольцо с тенями переопределяются вместе с палитрой;
 //   • контур — «рамка» и «без контура» зависят от темы (светлому холсту нужно тёмное
 //     кольцо, тёмному светлое), и значением, не зная темы, это не выразить;
-//   • контурная кнопка — тот же довод.
+//   • контурная кнопка — тот же довод;
+//   • снятая тень — гасит ПАРУ токенов (near и far) одним решением автора, и держать
+//     их порознь значило бы позволить снять половину тени.
 // Всё остальное (цвета, числа, ширины) — переменные: их можно назвать значением.
 export function designClasses(design: FormDesign | undefined): string {
   if (!design) return ''
@@ -123,6 +186,7 @@ export function designClasses(design: FormDesign | undefined): string {
   if (design.theme === 'dark') out.push('rf-theme-dark')
   if (design.controls?.outline === 'border') out.push('rf-outline-border')
   if (design.controls?.outline === 'none') out.push('rf-outline-none')
+  if (design.controls?.shadow === false) out.push('rf-shadow-off')
   if (design.button?.variant === 'outline') out.push('rf-btn-outline')
   return out.join(' ')
 }

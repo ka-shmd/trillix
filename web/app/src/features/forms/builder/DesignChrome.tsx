@@ -28,6 +28,7 @@ import {
   patchLogo,
 } from './designEdit'
 import { uploadImage, type FormIdSource, type UploadPurpose } from './mediaUpload'
+import { CONTROL, CONTROL_BOX, CONTROL_SHELL, LABEL } from './designControl'
 import { NumberRow } from './NumberRow'
 import { useBuilderStore } from './storeContext'
 
@@ -110,7 +111,7 @@ function Cell({
 }) {
   return (
     <div className={`grid gap-1 ${className}`}>
-      <Label htmlFor={id}>
+      <Label htmlFor={id} className={LABEL}>
         {label}
       </Label>
       {children}
@@ -118,8 +119,8 @@ function Cell({
   )
 }
 
-// Кнопка-превью: картинка, цвет или значок «добавить». Высота — та же, что у полей
-// рядом (h-8), иначе строка выглядит собранной из двух разных.
+// Кнопка-превью: картинка, цвет или значок «добавить». Рост и край — те же, что у
+// полей рядом (designControl), иначе строка выглядит собранной из двух разных.
 //
 // ПРОПСЫ ПРОБРАСЫВАЮТСЯ ЦЕЛИКОМ, и это не вкус: кнопка стоит под PopoverTrigger
 // asChild, а тот отдаёт свои обработчики и ref пропсами клонированного элемента.
@@ -139,7 +140,7 @@ function ChromeButton({
       aria-label={title}
       {...rest}
       className={cn(
-        'border-input hover:bg-accent flex h-8 items-center justify-center overflow-hidden rounded-md border',
+        `hover:bg-accent flex items-center justify-center overflow-hidden rounded-md border ${CONTROL} ${CONTROL_SHELL}`,
         className,
       )}
     >
@@ -220,6 +221,7 @@ export function LogoRow({ formId }: { formId: FormIdSource }) {
           нет, нечему, а схема хранит их только внутри объекта логотипа. */}
       <Cell id="chrome-logo-w" label="Ширина">
         <NumberRow
+          className={CONTROL_BOX}
           id="chrome-logo-w"
           value={logo?.width}
           fallback={DEFAULT_LOGO_WIDTH}
@@ -231,6 +233,7 @@ export function LogoRow({ formId }: { formId: FormIdSource }) {
       </Cell>
       <Cell id="chrome-logo-h" label="Высота">
         <NumberRow
+          className={CONTROL_BOX}
           id="chrome-logo-h"
           value={logo?.height}
           fallback={DEFAULT_LOGO_HEIGHT}
@@ -242,6 +245,7 @@ export function LogoRow({ formId }: { formId: FormIdSource }) {
       </Cell>
       <Cell id="chrome-logo-r" label="Радиус">
         <NumberRow
+          className={CONTROL_BOX}
           id="chrome-logo-r"
           value={logo?.radius}
           fallback={DEFAULT_LOGO_RADIUS}
@@ -316,6 +320,7 @@ export function CoverRow({ formId }: { formId: FormIdSource }) {
       </Cell>
       <Cell id="chrome-cover-h" label="Высота, % экрана">
         <NumberRow
+          className={CONTROL_BOX}
           id="chrome-cover-h"
           value={cover?.height}
           fallback={DEFAULT_COVER_HEIGHT}
