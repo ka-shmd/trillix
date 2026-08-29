@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { TriangleAlert } from 'lucide-react'
 import { useBlocker } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
@@ -378,20 +379,32 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         </div>
       </Section>
 
-      <Section
-        title="Уведомления"
-        description="Письмо на вашу почту, когда на форму приходит новый ответ."
-      >
-        {/* Частые ответы склеиваются в одно письмо — троттлинг на бэкенде. */}
-        <div className="flex items-center gap-3">
-          <Switch
+      <Section title="Email-уведомления">
+        <div className="flex flex-col divide-y border-t">
+          {/* Частые ответы склеиваются в одно письмо — троттлинг на бэкенде. */}
+          <SettingRow
             id="notify-on-submission"
+            label="Уведомления мне"
+            description="Письмо на вашу почту о каждом новом ответе на форму."
             checked={draft.notify}
-            onCheckedChange={(v) => set('notify', v)}
+            onChange={(v) => set('notify', v)}
           />
-          <Label htmlFor="notify-on-submission" className="text-sm font-normal">
-            Присылать письмо о новом ответе
-          </Label>
+
+          {/* ЗАГЛУШКА (решение владельца 2026-08-29): строка нарисована, за ней
+              ничего нет. Стоит здесь намеренно и с красной меткой — чтобы дыра была
+              видна на самом экране, а не только в очереди задач. Что делать —
+              `BACKLOG.md`, пункт про письмо респонденту: свой текст, подстановка
+              ответов, PDF вложением, отдельный адресат, гейт тарифа. Метка и
+              `disabled` снимаются вместе с реализацией. */}
+          <SettingRow
+            id="notify-respondent"
+            label="Уведомления респонденту"
+            description="Письмо респонденту после отправки формы: свой текст и, если нужно, PDF с его ответами вложением."
+            checked={false}
+            onChange={() => undefined}
+            disabled
+            stub="Заглушка: строка нарисована, отправки нет. Задача — в BACKLOG.md."
+          />
         </div>
       </Section>
 
@@ -462,6 +475,8 @@ function SettingRow({
   checked,
   onChange,
   pro,
+  disabled,
+  stub,
   children,
 }: {
   id: string
@@ -470,25 +485,49 @@ function SettingRow({
   checked: boolean
   onChange: (checked: boolean) => void
   pro?: boolean
+  disabled?: boolean
+  // stub — текст красной метки «за строкой ничего нет». Настройка, нарисованная и
+  // неработающая, обязана говорить об этом на самом экране: иначе про неё узнают
+  // от человека, который её включил и ждал письма.
+  stub?: string
   children?: React.ReactNode
 }) {
   const switchId = `${id}-switch`
   return (
     <div id={id} className="py-4">
       <div className="flex items-start justify-between gap-6">
-        <div className="min-w-0">
-          <div className="flex items-center gap-1.5">
-            <Label htmlFor={switchId} className="text-base font-semibold">
-              {label}
-            </Label>
-            {pro && <ProTag />}
+        {/* Значок метки стоит СЛЕВА ОТ ВСЕЙ СТРОКИ, а не у подписи: он относится к
+            настройке целиком, и в ряду одинаковых строк красное пятно у левого края
+            видно с одного взгляда. */}
+        <div className="flex min-w-0 gap-2">
+          {stub && (
+            <TriangleAlert className="mt-0.5 size-5 shrink-0 text-destructive" aria-hidden />
+          )}
+          <div className="min-w-0">
+            <div className="flex items-center gap-1.5">
+              <Label htmlFor={switchId} className="text-base font-semibold">
+                {label}
+              </Label>
+              {pro && <ProTag />}
+            </div>
+            <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+            {stub && (
+              <p className="mt-1 text-sm font-medium text-destructive" role="status">
+                {stub}
+              </p>
+            )}
           </div>
-          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
         </div>
         {/* Тумблер прижат к правому краю и выровнен по первой строке подписи, а не по
             центру блока: у настроек с длинным пояснением центр уезжает вниз, и ряд
             тумблеров переставал читаться колонкой. */}
-        <Switch id={switchId} checked={checked} onCheckedChange={onChange} className="mt-1" />
+        <Switch
+          id={switchId}
+          checked={checked}
+          disabled={disabled}
+          onCheckedChange={onChange}
+          className="mt-1"
+        />
       </div>
       {checked && children && <div className="mt-4">{children}</div>}
     </div>
