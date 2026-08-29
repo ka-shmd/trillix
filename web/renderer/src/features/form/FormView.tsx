@@ -26,6 +26,7 @@ import { customStyleSheet } from '@fields/customCss'
 import { UploaderProvider } from '@fields/fileUpload'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
+import { AUTO_JUMP_DELAY, shouldAutoJump } from './autoJump'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { groupClass } from '@fields/space'
@@ -152,7 +153,7 @@ export function FormView({
   // опубликованная схема, по которой респондент сейчас отвечает.
   const [answers, dispatch] = useReducer(answersReducer, null, () =>
     applyPrefill(
-      loadAnswers(slug, form.version),
+      loadAnswers(slug, form.version, form.saveLocally),
       readPrefill(window.location.search),
       (blockId) => {
         const block = form.schema.blocks.find((b) => b.id === blockId)
@@ -186,7 +187,9 @@ export function FormView({
   // только при загрузке: страница может исчезнуть под ногами — человек вернулся назад,
   // сменил ответ, и весь следующий шаг оказался скрыт условием. Зажим производной, как в
   // превью билдера: состояние остаётся сырым, экран всегда в существующем диапазоне.
-  const [rawPage, setPage] = useState(() => loadPage(slug, form.version, pages.length))
+  const [rawPage, setPage] = useState(() =>
+    loadPage(slug, form.version, pages.length, form.saveLocally),
+  )
   const page = Math.min(rawPage, Math.max(lastPage, 0))
   const [errors, setErrors] = useState<Errors>({})
   const [attempted, setAttempted] = useState(false)
@@ -247,13 +250,16 @@ export function FormView({
     }
   }, [form.schema.design])
 
+  // Куда сохранять черновик, решает автор формы (`saveLocally`): sessionStorage —
+  // до закрытия вкладки, localStorage — «вернуться завтра». Ответы не покидают
+  // браузер респондента ни в том, ни в другом случае.
   useEffect(() => {
-    saveAnswers(slug, form.version, answers)
-  }, [slug, form.version, answers])
+    saveAnswers(slug, form.version, answers, form.saveLocally)
+  }, [slug, form.version, answers, form.saveLocally])
 
   useEffect(() => {
-    savePage(slug, form.version, page)
-  }, [slug, form.version, page])
+    savePage(slug, form.version, page, form.saveLocally)
+  }, [slug, form.version, page, form.saveLocally])
 
   // Смена шага: наверх и фокус на контейнер страницы. Контейнер, а НЕ первое поле, —
   // осознанно: фокус в input на телефоне поднимает клавиатуру и уводит экран вниз, мимо
@@ -288,6 +294,20 @@ export function FormView({
   // вслух: на телефоне «Назад» уводит с заполненной формы одним нажатием (черновик её
   // переживёт, но человек этого не знает). Заводя историю обратно, заводи и все три пути.
   //
+  // Автопереход назначается СОСТОЯНИЕМ, а таймер живёт в эффекте: так уборка
+  // достаётся даром — новый ответ (человек передумал, пока форма ждала) и уход с
+  // экрана снимают предыдущий таймер сами, без ручного clearTimeout в трёх местах.
+  const [jumpTo, setJumpTo] = useState<number | null>(null)
+  useEffect(() => {
+    if (jumpTo === null) return
+    const timer = setTimeout(() => {
+      navigated.current = true
+      setPage(jumpTo)
+      setJumpTo(null)
+    }, AUTO_JUMP_DELAY)
+    return () => clearTimeout(timer)
+  }, [jumpTo])
+
   // goToPage — единственная точка смены шага: и «Далее», и переброс к странице с ошибкой
   // при отправке. Последний остался единственным движением назад по документу, и он не
   // ход человека, а показ места, которое надо починить.
@@ -435,6 +455,13 @@ export function FormView({
 
   const onChange = (blockId: string, value: Answer) => {
     dispatch({ type: 'set', blockId, value })
+    // Автопереход (0044): условия и довод — в autoJump.ts. ЧЕРЕЗ ПАУЗУ, а не сразу:
+    // страница, исчезающая в тот же миг, читается как сбой — человек не успевает
+    // увидеть, что его выбор принят. Пауза короткая, ждать её никто не будет.
+    const changed = blocks.find((b) => b.id === blockId)
+    if (form.autoJump && page < lastPage && changed && shouldAutoJump(pageBlocks, changed, value)) {
+      setJumpTo(page + 1)
+    }
     // Уже показанную ошибку пересчитываем на лету, чтобы она гасла по мере
     // исправления; чистое поле ошибкой не «пугаем» до blur/отправки.
     if (blockId in errors) {
@@ -654,7 +681,11 @@ export function FormView({
                     return innerRow.length > 1 ? (
                       <div key={innerRow[0]![0]!.id} className="rf-row">
                         {innerRow.map((cell, i) => (
-                          <div key={cell[0]!.id} className="rf-cell" style={cellVars(innerWidths, i)}>
+                          <div
+                            key={cell[0]!.id}
+                            className="rf-cell"
+                            style={cellVars(innerWidths, i)}
+                          >
                             {cell.map(render)}
                           </div>
                         ))}
@@ -726,8 +757,12 @@ export function FormView({
           </div>
           {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
             2026-08-05). Не кнопки: ход назад снят целиком (2026-08-22), линии остались
-            счётчиком «где я и сколько всего». Разметка общая с превью (@fields). */}
-          <StepBar pages={pages.length} page={page} />
+            счётчиком «где я и сколько всего». Разметка общая с превью (@fields).
+
+            Тумблер автора (`progress`, живая колонка) убирает их совсем — на
+            одностраничной форме их и так нет, счётчик из одной линии сам себя
+            прячет. */}
+          {form.progress && <StepBar pages={pages.length} page={page} />}
           {attempted && hasFieldErrors && (
             <p className="form-note form-note-error" role="alert">
               Проверьте выделенные поля.

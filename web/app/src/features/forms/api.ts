@@ -8,7 +8,9 @@ import {
   type FormDetail,
   type FormsPage,
   type FormsSort,
+  type BehaviorInput,
   type LinkPreview,
+  type NotifyEmail,
 } from '../../entities/form'
 
 // Транспорт forms: каждый ответ парсится Zod-схемой на границе; delete — 204 без тела.
@@ -90,6 +92,44 @@ export function updateCollectPartial(id: string, enabled: boolean): Promise<Form
   return apiRequest(`/forms/${id}`, {
     method: 'PATCH',
     body: { collectPartial: enabled },
+    schema: formSchema,
+  })
+}
+
+// Настройка письма о новом ответе (фасет notifyEmail): имя отправителя, Reply-To,
+// тема, текст. 402 здесь БЫВАЕТ — настройка платная, и бэк отвергает правку, которую
+// кабинет на бесплатном плане и так не даёт сделать. Сброс (все поля пустые) проходит
+// на любом тарифе: вернуться к дефолтному письму вправе каждый.
+export function updateNotifyEmail(id: string, value: NotifyEmail): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { notifyEmail: value },
+    schema: formSchema,
+  })
+}
+
+// Раздел «Поведение» (фасет behavior): автопереход и хранение ответов в браузере
+// респондента. Набором, а не по тумблеру: это один раздел экрана. Гейта нет.
+export function updateBehavior(id: string, behavior: BehaviorInput): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { behavior },
+    schema: formSchema,
+  })
+}
+
+// Тумблер шкалы прогресса (фасет progress): true = показывать индикатор шагов.
+// Гейта нет ни здесь, ни на отдаче — шкала открыта всем тарифам.
+// Повторное открытие закрытой формы: status='published' БЕЗ новой версии. Отдельная
+// ручка, а не публикация: та подняла бы номер версии, ничего не изменив в документе.
+export function reopenForm(id: string): Promise<Form> {
+  return apiRequest(`/forms/${id}/reopen`, { method: 'POST', schema: formSchema })
+}
+
+export function updateProgress(id: string, show: boolean): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { progress: show },
     schema: formSchema,
   })
 }

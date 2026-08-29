@@ -27,6 +27,9 @@ const (
 type CloseSettings struct {
 	CloseAt       *time.Time
 	ResponseLimit *int32
+	// ClosedTitle — заголовок экрана «приём закрыт» (0043). Пусто → заголовком
+	// остаётся название формы, как было до 0043.
+	ClosedTitle   string
 	ClosedMessage string
 }
 
@@ -41,6 +44,12 @@ func ValidateCloseSettings(s CloseSettings) error {
 	}
 	if n := utf8.RuneCountInString(s.ClosedMessage); n > MaxClosedMessageLen {
 		return schemaErr("closedMessage длиннее %d символов", MaxClosedMessageLen)
+	}
+	// Потолок заголовка — тот же, что у заголовка формы: это его замена на экране
+	// «приём закрыт», и разные границы означали бы, что название формы туда не
+	// помещается целиком.
+	if n := utf8.RuneCountInString(s.ClosedTitle); n > MaxFormTitleLen {
+		return schemaErr("closedTitle длиннее %d символов", MaxFormTitleLen)
 	}
 	return nil
 }

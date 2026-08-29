@@ -22,6 +22,18 @@ type EmailMessage struct {
 	To       string         `json:"to"`
 	Template Template       `json:"template"`
 	Data     map[string]any `json:"data,omitempty"`
+	// Перебивки АВТОРА ФОРМЫ (письмо о новом ответе, миграция 0042). Пусто —
+	// письмо идёт шаблоном целиком; заполнено — заменяет соответствующую часть.
+	// Адрес отправителя не перебивается никогда: домен, с которого мы шлём, автору
+	// не принадлежит, и подменённый From стоил бы репутации всего сервиса.
+	//
+	// Живут в payload строки outbox наравне с Data: письмо отправляется ПОЗЖЕ
+	// постановки, и лезть за настройкой формы в момент доставки диспетчер не может
+	// — формы к тому времени может уже не быть.
+	FromName string `json:"fromName,omitempty"`
+	ReplyTo  string `json:"replyTo,omitempty"`
+	Subject  string `json:"subject,omitempty"`
+	Body     string `json:"body,omitempty"`
 }
 
 // Mailer доставляет одно письмо во внешний мир. Реализации: LogMailer (dev — в лог,

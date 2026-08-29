@@ -55,8 +55,8 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding,
+    f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -83,8 +83,8 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding,
+    f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -167,7 +167,7 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- схема снапшотится при публикации (ADR §10). В пределах воркспейса; 0 строк
 -- (чужая/нет формы) → service трактует как 404. updated_at двигаем вручную.
 UPDATE forms
-SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
+SET close_at = $3, response_limit = $4, closed_message = $5, closed_title = $6, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
@@ -200,6 +200,36 @@ SET branding = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormProgress :one
+-- Тумблер шкалы прогресса — индикатора шагов многостраничной формы (миграция 0040).
+-- Живая колонка, а не поле схемы, по тому же доводу, что у бейджа: намерение обязано
+-- доезжать до респондента без перепубликации. Тариф здесь ни при чём — шкала открыта
+-- всем планам.
+UPDATE forms
+SET progress = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: UpdateFormNotifyEmail :one
+-- Настройка письма о новом ответе: имя отправителя, Reply-To, тема, текст (0042).
+-- Живая колонка, как link_preview: правка действует со следующего же ответа, без
+-- перепубликации. Кабинет шлёт настройку ЦЕЛИКОМ, поэтому здесь замена значения, а
+-- не слияние JSONB; пустая нормализуется в NULL на стороне repo. Право тарифа
+-- (form_notify_email) спрашивает service ДО этого запроса — здесь только запись.
+UPDATE forms
+SET notify_email = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: UpdateFormBehavior :one
+-- Раздел «Поведение» (0044): автопереход и хранение ответов в браузере респондента.
+-- Две колонки одним запросом — это ОДИН экранный раздел, и кабинет шлёт его набором;
+-- по отдельности они не спрашиваются нигде. Тарифа у обеих нет.
+UPDATE forms
+SET auto_jump = $3, save_locally = $4, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
 -- name: UpdateFormLinkPreview :one
 -- Своя карточка ссылки формы (og:site_name/title/description/image + иконка).
 -- Живая колонка, как настройки закрытия: применяется без перепубликации. Окно
@@ -219,7 +249,7 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- внутреннее (name ?? title): письмо видит владелец, ему привычнее имя из кабинета.
 -- Вызывается приёмом ответа по form_id (форма уже резолвнута), членство тут не
 -- проверяется — это не доступ пользователя, а адресат уведомления.
-SELECT u.email, coalesce(f.name, f.title) AS title
+SELECT u.email, coalesce(f.name, f.title) AS title, f.workspace_id, f.notify_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id
@@ -269,7 +299,7 @@ WHERE id = $1 AND workspace_id = $2;
 -- workspace_id — тоже приёму (фаза 17): квота тарифа считается по воркспейсу, и
 -- брать его отсюда дешевле, чем отдельным запросом на горячем пути.
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
-    f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
     -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
     -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
     -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
@@ -285,6 +315,14 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- перепубликации — бейдж не часть документа, а свойство выдачи. Право тарифа
     -- поверх намерения спрашивает сервис (даунгрейд возвращает бейдж сам).
     f.branding,
+    -- progress: намерение автора о шкале прогресса (0040). Живая колонка по тем же
+    -- доводам, что branding, но БЕЗ тарифа: индикатор шагов открыт всем планам, и
+    -- сервис поверх этого значения ничего не спрашивает.
+    f.progress,
+    -- auto_jump/save_locally: как форма ведёт себя у респондента (0044). Живые
+    -- колонки без тарифа, как progress: рендерер получает намерение автора как есть.
+    f.auto_jump,
+    f.save_locally,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -330,6 +368,17 @@ RETURNING id, version;
 UPDATE forms
 SET status = 'published', published_version_id = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: SetFormReopened :one
+-- Повторное открытие закрытой формы: status='published' БЕЗ новой версии.
+-- published_version_id закрытие сохраняло, поэтому отдавать снова нечего — форма
+-- возвращается к той же версии, которую респонденты видели до закрытия. Публикация
+-- здесь была бы враньём: она подняла бы номер версии, ничего в документе не изменив.
+-- Условие status='closed' — защита от гонки: черновик открывать нечего.
+UPDATE forms
+SET status = 'published', updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'closed' AND published_version_id IS NOT NULL
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
 -- name: SetFormClosed :one

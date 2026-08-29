@@ -49,12 +49,23 @@ export function newFormDetail(): FormDetail {
     closeAt: null,
     responseLimit: null,
     closedMessage: null,
-    notifyOnSubmission: true,
+    closedTitle: null,
+    // Письма о новых ответах у новой формы ВЫКЛЮЧЕНЫ — дефолт колонки (0042):
+    // продукт не начинает слать почту, ни о чём не спросив.
+    notifyOnSubmission: false,
     // Сбор незавершённых у новой формы выключен: собирать то, что человек не
     // отправлял, по умолчанию нельзя.
     collectPartial: false,
     // Бейдж у новой формы стоит — дефолт колонки `forms.branding`.
     branding: true,
+    // Шкала прогресса у новой формы выключена — дефолт колонки `forms.progress`.
+    progress: false,
+    // Поведение у новой формы — дефолты колонок (0044): страницы листает человек,
+    // ответы живут до закрытия вкладки.
+    autoJump: false,
+    saveLocally: false,
+    // Письмо о новом ответе не настраивали — уйдёт дефолтным шаблоном.
+    notifyEmail: null,
     // Карточку ссылки не настраивали — публичная страница возьмёт дефолты.
     linkPreview: null,
   }

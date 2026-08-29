@@ -14,6 +14,10 @@ import {
   publishForm,
   unpublishForm,
   updateBranding,
+  updateProgress,
+  updateBehavior,
+  reopenForm,
+  updateNotifyEmail,
   updateCloseSettings,
   updateCollectPartial,
   updateLinkPreview,
@@ -25,7 +29,9 @@ import {
   type CloseSettingsInput,
   type FormDetail,
   type FormsSort,
+  type BehaviorInput,
   type LinkPreview,
+  type NotifyEmail,
 } from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
@@ -241,6 +247,53 @@ export function useUpdateBranding() {
   })
 }
 
+// Шкала прогресса — тумблер со страницы настроек (миграция 0040). Живое свойство
+// формы, как бейдж: PATCH формы, срабатывает без перепубликации, свежее значение в
+// detail кладём из отправленного ввода. Гейта тарифа у шкалы нет ни здесь, ни на
+// отдаче.
+export function useUpdateProgress() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, show }: { id: string; show: boolean }) => updateProgress(id, show),
+    onSuccess: (form, { show }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, progress: show } : old,
+      )
+    },
+  })
+}
+
+// Настройка письма о новом ответе (0042). Живое свойство формы: PATCH формы,
+// применяется со следующего же ответа. Пустая настройка приходит с сервера как null
+// — кладём в кэш именно её, а не объект из пустых строк.
+export function useUpdateNotifyEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, value }: { id: string; value: NotifyEmail }) => updateNotifyEmail(id, value),
+    onSuccess: (form, { value }) => {
+      const stored = Object.values(value).some((v) => v !== '') ? value : null
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, notifyEmail: stored } : old,
+      )
+    },
+  })
+}
+
+// Раздел «Поведение» (0044). Живые колонки: применяется со следующего же открытия
+// формы, без перепубликации.
+export function useUpdateBehavior() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, behavior }: { id: string; behavior: BehaviorInput }) =>
+      updateBehavior(id, behavior),
+    onSuccess: (form, { behavior }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, ...behavior } : old,
+      )
+    },
+  })
+}
+
 export function useDuplicateForm() {
   const qc = useQueryClient()
   return useMutation({
@@ -265,6 +318,21 @@ export function usePublishForm() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (id: string) => publishForm(id),
+    onSuccess: (form) => {
+      qc.invalidateQueries({ queryKey: formKeys.list() })
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, ...form } : old,
+      )
+    },
+  })
+}
+
+// Повторное открытие закрытой формы. Ответ — карточка формы: раскладываем её в
+// деталь целиком (как unpublish), меняется статус, а не отдельное поле.
+export function useReopenForm() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => reopenForm(id),
     onSuccess: (form) => {
       qc.invalidateQueries({ queryKey: formKeys.list() })
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>

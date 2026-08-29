@@ -24,7 +24,10 @@ function renderPreview(blocks: Block[], title = 'Анкета') {
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks })
   return render(
     <BuilderStoreContext.Provider value={store}>
-      <PreviewPane title={title} badge={false} />
+      {/* progress={true} явно: шкала прогресса — тумблер формы, по умолчанию
+          выключенный (миграция 0040), а тесты ниже проверяют именно её разметку и
+          место. Без этого пропа проверять было бы нечего. */}
+      <PreviewPane title={title} badge={false} progress />
     </BuilderStoreContext.Provider>,
   )
 }

@@ -1476,8 +1476,8 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding,
+    f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1501,10 +1501,15 @@ type GetFormRow struct {
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
+	ClosedTitle           pgtype.Text
 	NotifyOnSubmission    bool
 	CollectPartial        bool
 	LinkPreview           []byte
 	Branding              bool
+	Progress              bool
+	NotifyEmail           []byte
+	AutoJump              bool
+	SaveLocally           bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1532,10 +1537,15 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.ClosedTitle,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
 		&i.Branding,
+		&i.Progress,
+		&i.NotifyEmail,
+		&i.AutoJump,
+		&i.SaveLocally,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1558,8 +1568,8 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- визита), и их частное — не конверсия (ADR §10).
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
-    f.close_at, f.response_limit, f.closed_message, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding,
+    f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1583,10 +1593,15 @@ type GetFormBySlugRow struct {
 	CloseAt               pgtype.Timestamptz
 	ResponseLimit         pgtype.Int4
 	ClosedMessage         pgtype.Text
+	ClosedTitle           pgtype.Text
 	NotifyOnSubmission    bool
 	CollectPartial        bool
 	LinkPreview           []byte
 	Branding              bool
+	Progress              bool
+	NotifyEmail           []byte
+	AutoJump              bool
+	SaveLocally           bool
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1616,10 +1631,15 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.ClosedTitle,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
 		&i.Branding,
+		&i.Progress,
+		&i.NotifyEmail,
+		&i.AutoJump,
+		&i.SaveLocally,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1838,7 +1858,7 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtyp
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
-    f.status, f.close_at, f.response_limit, f.closed_message, f.notify_on_submission,
+    f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
     -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
     -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
     -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
@@ -1854,6 +1874,14 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- перепубликации — бейдж не часть документа, а свойство выдачи. Право тарифа
     -- поверх намерения спрашивает сервис (даунгрейд возвращает бейдж сам).
     f.branding,
+    -- progress: намерение автора о шкале прогресса (0040). Живая колонка по тем же
+    -- доводам, что branding, но БЕЗ тарифа: индикатор шагов открыт всем планам, и
+    -- сервис поверх этого значения ничего не спрашивает.
+    f.progress,
+    -- auto_jump/save_locally: как форма ведёт себя у респондента (0044). Живые
+    -- колонки без тарифа, как progress: рендерер получает намерение автора как есть.
+    f.auto_jump,
+    f.save_locally,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -1875,10 +1903,14 @@ type GetPublicFormBySlugRow struct {
 	CloseAt            pgtype.Timestamptz
 	ResponseLimit      pgtype.Int4
 	ClosedMessage      pgtype.Text
+	ClosedTitle        pgtype.Text
 	NotifyOnSubmission bool
 	CollectPartial     bool
 	LinkPreview        []byte
 	Branding           bool
+	Progress           bool
+	AutoJump           bool
+	SaveLocally        bool
 	SubmissionCount    int64
 }
 
@@ -1912,10 +1944,14 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.CloseAt,
 		&i.ResponseLimit,
 		&i.ClosedMessage,
+		&i.ClosedTitle,
 		&i.NotifyOnSubmission,
 		&i.CollectPartial,
 		&i.LinkPreview,
 		&i.Branding,
+		&i.Progress,
+		&i.AutoJump,
+		&i.SaveLocally,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -2061,7 +2097,7 @@ func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissio
 }
 
 const getSubmissionOwner = `-- name: GetSubmissionOwner :one
-SELECT u.email, coalesce(f.name, f.title) AS title
+SELECT u.email, coalesce(f.name, f.title) AS title, f.workspace_id, f.notify_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id
@@ -2069,8 +2105,10 @@ WHERE f.id = $1
 `
 
 type GetSubmissionOwnerRow struct {
-	Email string
-	Title string
+	Email       string
+	Title       string
+	WorkspaceID uuid.UUID
+	NotifyEmail []byte
 }
 
 // Владелец формы и её отображаемое имя — для письма-уведомления о новом ответе
@@ -2081,7 +2119,12 @@ type GetSubmissionOwnerRow struct {
 func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubmissionOwnerRow, error) {
 	row := q.db.QueryRow(ctx, getSubmissionOwner, id)
 	var i GetSubmissionOwnerRow
-	err := row.Scan(&i.Email, &i.Title)
+	err := row.Scan(
+		&i.Email,
+		&i.Title,
+		&i.WorkspaceID,
+		&i.NotifyEmail,
+	)
 	return i, err
 }
 
@@ -4115,6 +4158,52 @@ func (q *Queries) SetFormPublished(ctx context.Context, arg SetFormPublishedPara
 	return i, err
 }
 
+const setFormReopened = `-- name: SetFormReopened :one
+UPDATE forms
+SET status = 'published', updated_at = now()
+WHERE id = $1 AND workspace_id = $2 AND status = 'closed' AND published_version_id IS NOT NULL
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type SetFormReopenedParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+type SetFormReopenedRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Повторное открытие закрытой формы: status='published' БЕЗ новой версии.
+// published_version_id закрытие сохраняло, поэтому отдавать снова нечего — форма
+// возвращается к той же версии, которую респонденты видели до закрытия. Публикация
+// здесь была бы враньём: она подняла бы номер версии, ничего в документе не изменив.
+// Условие status='closed' — защита от гонки: черновик открывать нечего.
+func (q *Queries) SetFormReopened(ctx context.Context, arg SetFormReopenedParams) (SetFormReopenedRow, error) {
+	row := q.db.QueryRow(ctx, setFormReopened, arg.ID, arg.WorkspaceID)
+	var i SetFormReopenedRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const setIdentityEmail = `-- name: SetIdentityEmail :exec
 UPDATE user_identities SET provider_email = $3
 WHERE provider = $1 AND provider_user_id = $2
@@ -4201,6 +4290,57 @@ func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFor
 	return err
 }
 
+const updateFormBehavior = `-- name: UpdateFormBehavior :one
+UPDATE forms
+SET auto_jump = $3, save_locally = $4, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormBehaviorParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	AutoJump    bool
+	SaveLocally bool
+}
+
+type UpdateFormBehaviorRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Раздел «Поведение» (0044): автопереход и хранение ответов в браузере респондента.
+// Две колонки одним запросом — это ОДИН экранный раздел, и кабинет шлёт его набором;
+// по отдельности они не спрашиваются нигде. Тарифа у обеих нет.
+func (q *Queries) UpdateFormBehavior(ctx context.Context, arg UpdateFormBehaviorParams) (UpdateFormBehaviorRow, error) {
+	row := q.db.QueryRow(ctx, updateFormBehavior,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.AutoJump,
+		arg.SaveLocally,
+	)
+	var i UpdateFormBehaviorRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateFormBranding = `-- name: UpdateFormBranding :one
 UPDATE forms
 SET branding = $3, updated_at = now()
@@ -4249,7 +4389,7 @@ func (q *Queries) UpdateFormBranding(ctx context.Context, arg UpdateFormBranding
 
 const updateFormCloseSettings = `-- name: UpdateFormCloseSettings :one
 UPDATE forms
-SET close_at = $3, response_limit = $4, closed_message = $5, updated_at = now()
+SET close_at = $3, response_limit = $4, closed_message = $5, closed_title = $6, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
 `
@@ -4260,6 +4400,7 @@ type UpdateFormCloseSettingsParams struct {
 	CloseAt       pgtype.Timestamptz
 	ResponseLimit pgtype.Int4
 	ClosedMessage pgtype.Text
+	ClosedTitle   pgtype.Text
 }
 
 type UpdateFormCloseSettingsRow struct {
@@ -4286,6 +4427,7 @@ func (q *Queries) UpdateFormCloseSettings(ctx context.Context, arg UpdateFormClo
 		arg.CloseAt,
 		arg.ResponseLimit,
 		arg.ClosedMessage,
+		arg.ClosedTitle,
 	)
 	var i UpdateFormCloseSettingsRow
 	err := row.Scan(
@@ -4595,6 +4737,53 @@ func (q *Queries) UpdateFormName(ctx context.Context, arg UpdateFormNameParams) 
 	return i, err
 }
 
+const updateFormNotifyEmail = `-- name: UpdateFormNotifyEmail :one
+UPDATE forms
+SET notify_email = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormNotifyEmailParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	NotifyEmail []byte
+}
+
+type UpdateFormNotifyEmailRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Настройка письма о новом ответе: имя отправителя, Reply-To, тема, текст (0042).
+// Живая колонка, как link_preview: правка действует со следующего же ответа, без
+// перепубликации. Кабинет шлёт настройку ЦЕЛИКОМ, поэтому здесь замена значения, а
+// не слияние JSONB; пустая нормализуется в NULL на стороне repo. Право тарифа
+// (form_notify_email) спрашивает service ДО этого запроса — здесь только запись.
+func (q *Queries) UpdateFormNotifyEmail(ctx context.Context, arg UpdateFormNotifyEmailParams) (UpdateFormNotifyEmailRow, error) {
+	row := q.db.QueryRow(ctx, updateFormNotifyEmail, arg.ID, arg.WorkspaceID, arg.NotifyEmail)
+	var i UpdateFormNotifyEmailRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateFormNotifyOnSubmission = `-- name: UpdateFormNotifyOnSubmission :one
 UPDATE forms
 SET notify_on_submission = $3, updated_at = now()
@@ -4627,6 +4816,52 @@ type UpdateFormNotifyOnSubmissionRow struct {
 func (q *Queries) UpdateFormNotifyOnSubmission(ctx context.Context, arg UpdateFormNotifyOnSubmissionParams) (UpdateFormNotifyOnSubmissionRow, error) {
 	row := q.db.QueryRow(ctx, updateFormNotifyOnSubmission, arg.ID, arg.WorkspaceID, arg.NotifyOnSubmission)
 	var i UpdateFormNotifyOnSubmissionRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateFormProgress = `-- name: UpdateFormProgress :one
+UPDATE forms
+SET progress = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormProgressParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Progress    bool
+}
+
+type UpdateFormProgressRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Тумблер шкалы прогресса — индикатора шагов многостраничной формы (миграция 0040).
+// Живая колонка, а не поле схемы, по тому же доводу, что у бейджа: намерение обязано
+// доезжать до респондента без перепубликации. Тариф здесь ни при чём — шкала открыта
+// всем планам.
+func (q *Queries) UpdateFormProgress(ctx context.Context, arg UpdateFormProgressParams) (UpdateFormProgressRow, error) {
+	row := q.db.QueryRow(ctx, updateFormProgress, arg.ID, arg.WorkspaceID, arg.Progress)
+	var i UpdateFormProgressRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

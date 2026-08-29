@@ -42,8 +42,7 @@ export type Form = z.infer<typeof formSchema>
 // показываем его как «Без названия» (плейсхолдер), а не как введённый текст.
 export const DEFAULT_FORM_TITLE = 'Untitled form'
 
-const isUntitled = (title: string): boolean =>
-  title.trim() === '' || title === DEFAULT_FORM_TITLE
+const isUntitled = (title: string): boolean => title.trim() === '' || title === DEFAULT_FORM_TITLE
 
 // Заголовок формы для показа: плейсхолдер для безымянной, иначе сам title.
 export const displayFormTitle = (title: string): string =>
@@ -68,6 +67,26 @@ export const linkPreviewSchema = z.object({
 })
 
 export type LinkPreview = z.infer<typeof linkPreviewSchema>
+
+// Письмо о новом ответе — что из него настраивает автор. Адресов отправителя и
+// получателя здесь НЕТ: первый один на сервис, второй — владелец пространства, и
+// оба автору не принадлежат (зеркалит domain.NotifyEmail).
+export const notifyEmailSchema = z.object({
+  fromName: z.string(),
+  replyTo: z.string(),
+  subject: z.string(),
+  body: z.string(),
+})
+export type NotifyEmail = z.infer<typeof notifyEmailSchema>
+
+// Пустая настройка = «слать дефолтным шаблоном». Уходит на сервер при сбросе; там
+// нормализуется в NULL — у «не настраивали» одно представление.
+export const EMPTY_NOTIFY_EMAIL: NotifyEmail = {
+  fromName: '',
+  replyTo: '',
+  subject: '',
+  body: '',
+}
 
 // Потолки полей карточки (рун) — зеркалят domain.MaxLinkPreview*Len.
 export const MAX_LINK_PREVIEW_SITE_NAME_LEN = 100
@@ -129,6 +148,9 @@ export const formDetailSchema = formSchema.extend({
   closeAt: z.string().nullable(),
   responseLimit: z.number().int().nullable(),
   closedMessage: z.string().nullable(),
+  // closedTitle — свой заголовок экрана «приём закрыт» (0043); null = заголовком
+  // остаётся название формы.
+  closedTitle: z.string().nullable(),
   // Слать ли владельцу письмо о новом ответе (слайс D). Новые формы — true.
   notifyOnSubmission: z.boolean(),
   // Собирать ли незавершённые ответы. Новые формы — false: сбор того, что человек
@@ -144,6 +166,20 @@ export const formDetailSchema = formSchema.extend({
   // сервер отдаёт false независимо от настройки, и Zod его срезает. Читать бейдж
   // из карточки значило бы читать неправду.
   branding: z.boolean(),
+  // Настройка письма о новом ответе; null = не настраивали, письмо уходит
+  // дефолтным шаблоном. Отдаётся независимо от тарифа (как карточка ссылки), а
+  // применяется отправкой письма.
+  notifyEmail: notifyEmailSchema.nullable(),
+  // Поведение формы у респондента (0044): листать страницу сразу после ответа и
+  // хранить незавершённые ответы в его браузере дольше вкладки. Живые колонки без
+  // тарифа; только в детали формы.
+  autoJump: z.boolean(),
+  saveLocally: z.boolean(),
+  // Шкала прогресса — индикатор шагов многостраничной формы; true = показывать.
+  // Живая колонка (миграция 0040), как бейдж, и по тому же доводу: тумблер обязан
+  // доезжать до респондента без перепубликации. Тарифа у неё нет вовсе. Только в
+  // ДЕТАЛИ — та же мина, что у branding.
+  progress: z.boolean(),
   // Своя карточка ссылки; null = не настраивали. Отдаётся независимо от тарифа —
   // окно кастомизации показывает сохранённое всем, а к самой ссылке карточку
   // применяет публичный слой (гейт стоит там, как у бейджа).
@@ -155,13 +191,31 @@ export type FormDetail = z.infer<typeof formDetailSchema>
 // Потолок текста экрана «приём закрыт» (рун) — зеркалит domain.MaxClosedMessageLen.
 export const MAX_CLOSED_MESSAGE_LEN = 2000
 
+// Потолок заголовка экрана «приём закрыт» (рун) — тот же, что у заголовка формы:
+// это его замена на экране, и разные границы означали бы, что название формы туда не
+// помещается целиком (зеркалит domain.MaxFormTitleLen).
+export const MAX_CLOSED_TITLE_LEN = 200
+
+// Потолки настройки письма о новом ответе (рун) — зеркалят domain.MaxNotify*Len.
+export const MAX_NOTIFY_FROM_NAME_LEN = 100
+export const MAX_NOTIFY_SUBJECT_LEN = 200
+export const MAX_NOTIFY_BODY_LEN = 2000
+
 // Настройки закрытия для отправки в PATCH (фасет closeSettings). Полный набор:
 // отсутствующее/пустое поле = ограничение снято. closedMessage — всегда строка
 // (пустая = дефолт), closeAt/responseLimit — null снимает ограничение.
+// Раздел «Поведение» для отправки в PATCH (фасет behavior): набором, а не по
+// тумблеру — это один экранный раздел.
+export type BehaviorInput = {
+  autoJump: boolean
+  saveLocally: boolean
+}
+
 export type CloseSettingsInput = {
   closeAt: string | null
   responseLimit: number | null
   closedMessage: string
+  closedTitle: string
 }
 
 // GET /forms: страница + непрозрачный курсор на следующую (null — последняя).

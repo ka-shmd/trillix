@@ -40,9 +40,14 @@ function seedDetail(qc: QueryClient) {
     closeAt: null,
     responseLimit: null,
     closedMessage: null,
+    closedTitle: null,
     notifyOnSubmission: true,
     collectPartial: false,
     branding: true,
+    progress: true,
+    autoJump: false,
+    saveLocally: false,
+    notifyEmail: null,
     linkPreview: null,
   })
 }

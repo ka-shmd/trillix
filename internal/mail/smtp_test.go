@@ -12,10 +12,48 @@ import (
 	"testing"
 )
 
+// Reply-To и своё имя отправителя — перебивки автора формы (0042). Проверяется
+// главное: адрес отправителя ими НЕ подменяется. Подменённый From стоил бы
+// репутации домена, с которого мы шлём все письма сервиса.
+func TestBuildMessage_AuthorOverrides(t *testing.T) {
+	raw, err := buildMessage(
+		"Отдел кадров <no-reply@trillix.ru>", "owner@example.com",
+		"Новая заявка", "Пришла заявка.", "trillix.ru", "hr@example.com")
+	if err != nil {
+		t.Fatalf("buildMessage: %v", err)
+	}
+	msg := string(raw)
+	for _, want := range []string{
+		"From: Отдел кадров <no-reply@trillix.ru>\r\n",
+		"Reply-To: hr@example.com\r\n",
+	} {
+		if !strings.Contains(msg, want) {
+			t.Fatalf("нет заголовка %q в письме:\n%s", want, msg)
+		}
+	}
+	if strings.Contains(msg, "hr@example.com>") {
+		t.Fatal("адрес автора попал в From — подменяется только имя")
+	}
+}
+
+// Без перебивок заголовка Reply-To в письме нет вовсе: пустой заголовок хуже
+// отсутствующего — часть фильтров считает его признаком плохо собранного письма.
+func TestBuildMessage_NoReplyToWhenUnset(t *testing.T) {
+	raw, err := buildMessage(
+		"Trillix <no-reply@trillix.ru>", "user@example.com",
+		"Тема", "Тело", "trillix.ru", "")
+	if err != nil {
+		t.Fatalf("buildMessage: %v", err)
+	}
+	if strings.Contains(string(raw), "Reply-To") {
+		t.Fatal("Reply-To стоит в письме, которого о нём не просили")
+	}
+}
+
 func TestBuildMessage(t *testing.T) {
 	raw, err := buildMessage(
 		"Trillix <no-reply@trillix.ru>", "user@example.com",
-		"Подтверждение почты", "Здравствуйте!\n\nСсылка: https://x/y\n", "trillix.ru")
+		"Подтверждение почты", "Здравствуйте!\n\nСсылка: https://x/y\n", "trillix.ru", "")
 	if err != nil {
 		t.Fatalf("buildMessage: %v", err)
 	}

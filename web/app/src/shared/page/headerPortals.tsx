@@ -4,7 +4,7 @@ import { Link } from '@tanstack/react-router'
 import { House } from 'lucide-react'
 
 import { withoutPeriod } from '../period'
-import { useAppHeaderSlots } from '../appHeader'
+import { useAppChromeSlots } from '../appChrome'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -27,7 +27,7 @@ import {
 // а «Ответы» или «Интеграции» показывает ряд табов под заголовком. Иначе путь и
 // табы говорят одно и то же дважды.
 export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
-  const { left } = useAppHeaderSlots()
+  const { left } = useAppChromeSlots()
   if (!left) return null
 
   // Дом добавляется ЗДЕСЬ, а не каждым экраном: он одинаков всюду, и передавать
@@ -77,7 +77,7 @@ export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
 // Действия экрана в правой части бара. Кнопки редактора, «Новое пространство» и
 // т.п. живут здесь, а не отдельной панелью под шапкой.
 export function PageActions({ children }: { children: React.ReactNode }) {
-  const { right } = useAppHeaderSlots()
+  const { right } = useAppChromeSlots()
   if (!right) return null
   return createPortal(children, right)
 }

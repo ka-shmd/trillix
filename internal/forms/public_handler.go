@@ -118,13 +118,27 @@ type publicFormResponse struct {
 	// и с бейджем). Рендерер по этому полю делает ровно две вещи — автосохраняет и
 	// предупреждает респондента; разъехаться они не могут, потому что факт один.
 	CollectPartial bool `json:"collectPartial"`
+	// Progress — рисовать ли шкалу прогресса (индикатор шагов). В отличие от
+	// ShowBadge и CollectPartial, это ЧИСТОЕ намерение автора, а не решение сервера:
+	// тарифа у шкалы нет, спрашивать поверх намерения нечего. Полем, а не выводом
+	// клиента из схемы, — потому что живёт оно в колонке формы, которой в снапшоте
+	// версии нет.
+	Progress bool `json:"progress"`
+	// AutoJump/SaveLocally — поведение формы у респондента (0044): переходить на
+	// следующую страницу сразу после ответа и хранить незавершённые ответы в браузере
+	// дольше сессии. Как и Progress — чистое намерение автора, без тарифа.
+	AutoJump    bool `json:"autoJump"`
+	SaveLocally bool `json:"saveLocally"`
 }
 
 // closedFormResponse — тело GET /public/v1/forms/{slug} для ЗАКРЫТОЙ формы (HTTP
 // 410 Gone). Схемы и токена нет — принимать ответ нельзя; рендерер по 410 рисует
 // экран «приём закрыт» из этих полей. closedMessage уже разрезолвлен (свой/дефолт).
 type closedFormResponse struct {
-	Closed        bool   `json:"closed"`
+	Closed bool `json:"closed"`
+	// Title — что написать заголовком: свой заголовок автора (0043), а если его нет
+	// — название формы. Разрешает СЕРВЕР, чтобы у рендерера не было двух источников
+	// одного заголовка и ветки «какой из них сейчас».
 	Title         string `json:"title"`
 	ClosedMessage string `json:"closedMessage"`
 	// Бейдж стоит и на этом экране: иначе он снимается разглядыванием второго
@@ -177,7 +191,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 			// Экран «приём закрыт» — единственное место рендерера, где заголовок
 			// показывается БЕЗ схемы (её в 410 нет вовсе), поэтому пустоту здесь
 			// замещаем так же, как в <title> вкладки.
-			Title:         titleOrFallback(pf.Title),
+			Title:         closedTitle(pf),
 			ClosedMessage: closedMessageOrDefault(pf.ClosedMessage),
 		})
 		return
@@ -192,7 +206,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// прежним телом — то есть бейдж оставался бы у всех, кто уже открывал форму,
 	// пока не сменится версия.
 	showBadge := h.showBadge(r, pf.WorkspaceID, pf.Branding)
-	etag := `"` + pf.VersionID.String() + badgeETagSuffix(showBadge) + `"`
+	etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally) + `"`
 	w.Header().Set("Cache-Control", "public, max-age=60")
 	w.Header().Set("ETag", etag)
 	if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -226,6 +240,9 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		Schema:         schema,
 		ShowBadge:      showBadge,
 		CollectPartial: h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
+		Progress:       pf.Progress,
+		AutoJump:       pf.AutoJump,
+		SaveLocally:    pf.SaveLocally,
 	})
 }
 
@@ -242,6 +259,16 @@ func (h *PublicHandler) collectPartial(r *http.Request, workspaceID uuid.UUID, i
 	return on
 }
 
+// closedTitle — заголовок экрана «приём закрыт»: свой заголовок автора, иначе
+// название формы (иначе — общий фолбэк, как в <title> вкладки: у формы без названия
+// заголовка нет вовсе).
+func closedTitle(pf PublicForm) string {
+	if pf.ClosedTitle != nil && *pf.ClosedTitle != "" {
+		return *pf.ClosedTitle
+	}
+	return titleOrFallback(pf.Title)
+}
+
 // showBadge — решение «рисовать ли бейдж» для этой выдачи. Сбой опроса тарифа не
 // имеет права уронить публичную форму: бейдж остаётся, причина уходит в лог с
 // request_id (лишний бейдж у платящего дешевле, чем пятисотка респонденту).
@@ -254,14 +281,28 @@ func (h *PublicHandler) showBadge(r *http.Request, workspaceID uuid.UUID, intent
 	return show
 }
 
-// badgeETagSuffix — метка состояния бейджа в ETag. Отдельной функцией, а не
-// тернарником по месту: суффикс участвует в сравнении с If-None-Match, и обе
-// стороны обязаны считать его одинаково.
-func badgeETagSuffix(showBadge bool) string {
+// viewETagSuffix — метка ПРЕДСТАВЛЕНИЯ в ETag: всё, что меняет тело ответа, не меняя
+// опубликованной версии. Сегодня это бейдж (тумблер автора плюс тариф) и шкала
+// прогресса (тумблер автора). Отдельной функцией, а не тернарником по месту: суффикс
+// участвует в сравнении с If-None-Match, и обе стороны обязаны считать его одинаково.
+//
+// МИНА: забытый здесь признак означает 304 с прежним телом до самой перепубликации —
+// автор переключил тумблер, а все, кто форму уже открывал, видят старое.
+func viewETagSuffix(showBadge, progress, autoJump, saveLocally bool) string {
+	suffix := ""
 	if showBadge {
-		return "+b"
+		suffix += "+b"
 	}
-	return ""
+	if progress {
+		suffix += "+p"
+	}
+	if autoJump {
+		suffix += "+j"
+	}
+	if saveLocally {
+		suffix += "+s"
+	}
+	return suffix
 }
 
 // closedMessageOrDefault — свой текст владельца, если задан, иначе дефолт.

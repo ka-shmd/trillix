@@ -216,6 +216,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         store={store}
         title={detail.title}
         badge={badge}
+        progress={detail.progress}
       />
       {/* Шторка остаётся смонтированной и в закрытом виде — иначе Radix не успевает
           проиграть закрытие, панель исчезает мгновенно, а оболочка едет назад 300 мс,

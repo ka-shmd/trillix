@@ -40,11 +40,15 @@ type formsService interface {
 	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
+	UpdateProgress(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
+	UpdateBehavior(ctx context.Context, userID, formID uuid.UUID, autoJump, saveLocally bool) (Form, error)
+	UpdateNotifyEmail(ctx context.Context, userID, formID uuid.UUID, n *domain.NotifyEmail) (Form, error)
 	UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
+	Reopen(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 }
 
 // Handler — HTTP-транспорт модуля forms. Все роуты приватные (за RequireAuth);
@@ -75,6 +79,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/forms/{id}/duplicate", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.duplicate))))
 	mux.Handle("POST /api/v1/forms/{id}/publish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.publish))))
 	mux.Handle("POST /api/v1/forms/{id}/unpublish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.unpublish))))
+	mux.Handle("POST /api/v1/forms/{id}/reopen", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.reopen))))
 }
 
 // --- DTO ---
@@ -117,6 +122,9 @@ type formDetailResponse struct {
 	CloseAt       *time.Time `json:"closeAt"`
 	ResponseLimit *int32     `json:"responseLimit"`
 	ClosedMessage *string    `json:"closedMessage"`
+	// ClosedTitle — заголовок экрана «приём закрыт» (0043); null = заголовком
+	// остаётся название формы.
+	ClosedTitle *string `json:"closedTitle"`
 	// Тумблер уведомления владельцу о новом ответе (слайс D). Только в детали формы.
 	NotifyOnSubmission bool `json:"notifyOnSubmission"`
 	// CollectPartial — тумблер сбора незавершённых ответов. Кабинет рисует по нему
@@ -127,6 +135,19 @@ type formDetailResponse struct {
 	// описана у Form.Branding). Карточка формы этого поля не читает — её Zod-тип на
 	// фронте его не объявляет и срезает.
 	Branding bool `json:"branding"`
+	// Progress — показывать ли шкалу прогресса (индикатор шагов многостраничной
+	// формы, миграция 0040). Та же мина, что у Branding: только в детали формы, а
+	// false у списка и мутаций значит «шкала снята».
+	Progress bool `json:"progress"`
+	// Behavior — раздел «Поведение» (0044). Та же мина, что у Branding: только в
+	// детали формы.
+	AutoJump    bool `json:"autoJump"`
+	SaveLocally bool `json:"saveLocally"`
+	// NotifyEmail — настройка письма о новом ответе; null = не настраивали, письмо
+	// уходит дефолтным шаблоном. Отдаётся НЕЗАВИСИМО от тарифа, как и карточка
+	// ссылки: кабинет показывает сохранённое всем, а применяет настройку отправка
+	// письма (гейт стоит там же и при сохранении).
+	NotifyEmail *notifyEmailBody `json:"notifyEmail"`
 	// LinkPreview — своя карточка ссылки; null = не настраивали, публичная страница
 	// берёт дефолты. Отдаётся НЕЗАВИСИМО от тарифа: окно кастомизации показывает
 	// сохранённое всем, а применяет карточку к самой ссылке публичный слой (гейт
@@ -145,12 +166,20 @@ type linkPreviewBody struct {
 	IconKey     string `json:"iconKey"`
 }
 
+// behaviorBody — фасет behavior в PATCH: раздел «Поведение» целиком (0044). Набором,
+// а не по тумблеру: это один экранный раздел, и кабинет сохраняет его одной кнопкой.
+type behaviorBody struct {
+	AutoJump    bool `json:"autoJump"`
+	SaveLocally bool `json:"saveLocally"`
+}
+
 // closeSettingsBody — фасет closeSettings в PATCH: полный набор настроек закрытия
-// (отсутствующее поле = снято). Замена всех трёх колонок разом, не частичный патч.
+// (отсутствующее поле = снято). Замена всех четырёх колонок разом, не частичный патч.
 type closeSettingsBody struct {
 	CloseAt       *time.Time `json:"closeAt"`
 	ResponseLimit *int32     `json:"responseLimit"`
 	ClosedMessage string     `json:"closedMessage"`
+	ClosedTitle   string     `json:"closedTitle"`
 }
 
 type listResponse struct {
@@ -184,7 +213,34 @@ type patchRequest struct {
 	NotifyOnSubmission *bool              `json:"notifyOnSubmission"`
 	CollectPartial     *bool              `json:"collectPartial"`
 	Branding           *bool              `json:"branding"`
+	Progress           *bool              `json:"progress"`
+	Behavior           *behaviorBody      `json:"behavior"`
+	NotifyEmail        *notifyEmailBody   `json:"notifyEmail"`
 	LinkPreview        *linkPreviewBody   `json:"linkPreview"`
+}
+
+// notifyEmailBody — настройка письма о новом ответе в контракте API. Адреса
+// отправителя и получателя здесь НЕТ: первый один на сервис, второй — владелец
+// аккаунта, и оба автору не принадлежат (domain.NotifyEmail).
+type notifyEmailBody struct {
+	FromName string `json:"fromName"`
+	ReplyTo  string `json:"replyTo"`
+	Subject  string `json:"subject"`
+	Body     string `json:"body"`
+}
+
+// toNotifyEmailBody — настройка в тело ответа; nil (не настраивали) остаётся null,
+// а не превращается в объект из пустых строк: у «не настраивали» одно представление.
+func toNotifyEmailBody(n *domain.NotifyEmail) *notifyEmailBody {
+	if n.Empty() {
+		return nil
+	}
+	return &notifyEmailBody{
+		FromName: n.FromName,
+		ReplyTo:  n.ReplyTo,
+		Subject:  n.Subject,
+		Body:     n.Body,
+	}
 }
 
 func toFormResponse(f Form) formResponse {
@@ -235,9 +291,14 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		CloseAt:            f.CloseAt,
 		ResponseLimit:      f.ResponseLimit,
 		ClosedMessage:      f.ClosedMessage,
+		ClosedTitle:        f.ClosedTitle,
 		NotifyOnSubmission: f.NotifyOnSubmission,
 		CollectPartial:     f.CollectPartial,
 		Branding:           f.Branding,
+		Progress:           f.Progress,
+		AutoJump:           f.AutoJump,
+		SaveLocally:        f.SaveLocally,
+		NotifyEmail:        toNotifyEmailBody(f.NotifyEmail),
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
 	}
 }
@@ -387,6 +448,9 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.NotifyOnSubmission != nil,
 		req.CollectPartial != nil,
 		req.Branding != nil,
+		req.Progress != nil,
+		req.Behavior != nil,
+		req.NotifyEmail != nil,
 		req.LinkPreview != nil,
 	}
 	for _, present := range facets {
@@ -395,7 +459,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/linkPreview", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/behavior/notifyEmail/linkPreview", domain.ErrValidation))
 		return
 	}
 
@@ -418,6 +482,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 			CloseAt:       cs.CloseAt,
 			ResponseLimit: cs.ResponseLimit,
 			ClosedMessage: cs.ClosedMessage,
+			ClosedTitle:   cs.ClosedTitle,
 		})
 	case req.NotifyOnSubmission != nil:
 		form, err = h.svc.UpdateNotifyOnSubmission(r.Context(), userID, formID, *req.NotifyOnSubmission)
@@ -425,6 +490,18 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateCollectPartial(r.Context(), userID, formID, *req.CollectPartial)
 	case req.Branding != nil:
 		form, err = h.svc.UpdateBranding(r.Context(), userID, formID, *req.Branding)
+	case req.Progress != nil:
+		form, err = h.svc.UpdateProgress(r.Context(), userID, formID, *req.Progress)
+	case req.Behavior != nil:
+		form, err = h.svc.UpdateBehavior(r.Context(), userID, formID, req.Behavior.AutoJump, req.Behavior.SaveLocally)
+	case req.NotifyEmail != nil:
+		ne := *req.NotifyEmail
+		form, err = h.svc.UpdateNotifyEmail(r.Context(), userID, formID, &domain.NotifyEmail{
+			FromName: strings.TrimSpace(ne.FromName),
+			ReplyTo:  strings.TrimSpace(ne.ReplyTo),
+			Subject:  strings.TrimSpace(ne.Subject),
+			Body:     ne.Body,
+		})
 	case req.LinkPreview != nil:
 		lp := *req.LinkPreview
 		form, err = h.svc.UpdateLinkPreview(r.Context(), userID, formID, &domain.LinkPreview{
@@ -504,6 +581,26 @@ func (h *Handler) unpublish(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	form, err := h.svc.Unpublish(r.Context(), userID, formID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toFormResponse(form))
+}
+
+// reopen открывает закрытую форму (status='published'), НЕ публикуя новой версии.
+// Тела нет. Не закрытая форма и форма без опубликованной версии → 422: открывать
+// нечего, а публикация черновика — отдельное действие автора.
+func (h *Handler) reopen(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	form, err := h.svc.Reopen(r.Context(), userID, formID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

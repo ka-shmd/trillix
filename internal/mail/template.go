@@ -129,14 +129,26 @@ var templates = map[Template]mailTemplate{
 
 // Render разворачивает письмо в тему и тело. Неизвестный шаблон — ошибка (в норме
 // не бывает, Template задаём мы). Вызывается реализациями Mailer.
+//
+// ПЕРЕБИВКИ АВТОРА СИЛЬНЕЕ ШАБЛОНА и заменяют его часть целиком: своя тема — вместо
+// темы, свой текст — вместо тела. Подстановок в авторском тексте пока НЕТ (задача в
+// BACKLOG.md), поэтому он не проходит через template.Execute вовсе: чужой текст с
+// «{{» иначе стал бы либо ошибкой рендера, либо дырой в шаблонизаторе.
 func Render(msg EmailMessage) (subject, body string, err error) {
 	t, ok := templates[msg.Template]
 	if !ok {
 		return "", "", fmt.Errorf("unknown email template %q", msg.Template)
 	}
+	subject = t.subject
+	if msg.Subject != "" {
+		subject = msg.Subject
+	}
+	if msg.Body != "" {
+		return subject, msg.Body, nil
+	}
 	var buf bytes.Buffer
 	if err := t.body.Execute(&buf, msg.Data); err != nil {
 		return "", "", fmt.Errorf("render email %q: %w", msg.Template, err)
 	}
-	return t.subject, buf.String(), nil
+	return subject, buf.String(), nil
 }

@@ -64,7 +64,13 @@ func (m SMTPMailer) Send(ctx context.Context, msg EmailMessage) error {
 	if err != nil {
 		return fmt.Errorf("parse MAIL_FROM %q: %w", m.From, err)
 	}
-	raw, err := buildMessage(m.From, msg.To, subject, body, senderDomain(from.Address, m.Host))
+	// Имя автора подменяет только ИМЯ в заголовке From; адрес остаётся сервисным —
+	// и в заголовке, и в конверте (MAIL FROM ниже берётся из from.Address).
+	header := m.From
+	if msg.FromName != "" {
+		header = (&netmail.Address{Name: msg.FromName, Address: from.Address}).String()
+	}
+	raw, err := buildMessage(header, msg.To, subject, body, senderDomain(from.Address, m.Host), msg.ReplyTo)
 	if err != nil {
 		return err
 	}
@@ -159,7 +165,7 @@ func senderDomain(address, fallback string) string {
 // MIME-кодируется (RFC 2047) — она кириллическая; тело едет base64 с переносами по
 // 76 символов (RFC 2045), заявленное Content-Transfer-Encoding. Message-ID и Date
 // добавляются осознанно: без них спам-фильтры (и mail-tester) снижают оценку.
-func buildMessage(from, to, subject, body, domain string) ([]byte, error) {
+func buildMessage(from, to, subject, body, domain, replyTo string) ([]byte, error) {
 	messageID, err := randomMessageID(domain)
 	if err != nil {
 		return nil, err
@@ -167,6 +173,11 @@ func buildMessage(from, to, subject, body, domain string) ([]byte, error) {
 	var b strings.Builder
 	writeHeader(&b, "From", from)
 	writeHeader(&b, "To", to)
+	// Reply-To ставит автор формы: «Ответить» в его почтовом клиенте уедет туда,
+	// куда он просил, а не на сервисный адрес, который писем не читает.
+	if replyTo != "" {
+		writeHeader(&b, "Reply-To", replyTo)
+	}
 	writeHeader(&b, "Subject", mime.QEncoding.Encode("utf-8", subject))
 	writeHeader(&b, "Date", time.Now().Format(time.RFC1123Z))
 	writeHeader(&b, "Message-ID", messageID)

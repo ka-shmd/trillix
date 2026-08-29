@@ -598,15 +598,47 @@ func (s *Service) notifyOwner(ctx context.Context, formID uuid.UUID, slug string
 		return
 	}
 	link := s.appBaseURL + "/forms/" + slug + "/responses"
-	err = s.mail.EnqueueCoalesced(ctx, s.db, "submission:"+formID.String(), mail.EmailMessage{
+	msg := mail.EmailMessage{
 		To:       owner.Email,
 		Template: mail.TemplateSubmissionDigest,
 		Data:     map[string]any{"form_title": owner.Title, "link": link, "count": 1},
-	}, notifyDigestWindow)
+	}
+	// Свой текст письма — платная настройка (0042), поэтому право спрашивается ЗДЕСЬ,
+	// на каждой отправке, а не один раз при сохранении: даунгрейд обязан вернуть
+	// дефолтное письмо сам, ничего не стирая, — тот же приём, что у бейджа.
+	//
+	// Перебивки едут в payload строки outbox: письмо уходит ПОЗЖЕ постановки, и
+	// диспетчер за настройкой формы уже не пойдёт.
+	if n := s.notifyEmailFor(ctx, owner); n != nil {
+		msg.FromName, msg.ReplyTo, msg.Subject, msg.Body = n.FromName, n.ReplyTo, n.Subject, n.Body
+	}
+	err = s.mail.EnqueueCoalesced(ctx, s.db, "submission:"+formID.String(), msg, notifyDigestWindow)
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Warn("owner notification not enqueued",
 			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
 	}
+}
+
+// notifyEmailFor — настройка письма, действующая прямо сейчас: nil значит «слать
+// дефолтным шаблоном».
+//
+// Сбой опроса тарифа даёт дефолтное письмо, а не отказ: уведомление обязано уйти, а
+// «не тем текстом» дешевле, чем «никаким». Тот же выбор, что у бейджа (лишний бренд
+// дешевле пятисотки), и обратный тому, что у сбора черновиков.
+func (s *Service) notifyEmailFor(ctx context.Context, owner forms.Owner) *domain.NotifyEmail {
+	if owner.NotifyEmail == nil {
+		return nil
+	}
+	d, err := s.plans.CheckWorkspace(ctx, owner.WorkspaceID, entitlements.FormNotifyEmail)
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Warn("plan lookup for notification email",
+			slog.String("workspace_id", owner.WorkspaceID.String()), slog.String("error", err.Error()))
+		return nil
+	}
+	if !d.Allowed {
+		return nil
+	}
+	return owner.NotifyEmail
 }
 
 // markVisitSubmitted отмечает конверсию визита. Вызывается ПОСЛЕ успешного приёма и

@@ -76,6 +76,10 @@ type Store interface {
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
+	UpdateProgress(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
+	UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error)
+	SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
+	UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (Owner, error)
@@ -420,6 +424,44 @@ func (s *Service) UpdateBranding(ctx context.Context, userID, formID uuid.UUID, 
 	return updated, nil
 }
 
+// UpdateBehavior заменяет раздел «Поведение» (0044): автопереход и хранение ответов
+// в браузере респондента. Тарифа у обеих настроек нет — ни здесь, ни на отдаче.
+func (s *Service) UpdateBehavior(ctx context.Context, userID, formID uuid.UUID, autoJump, saveLocally bool) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateFormBehavior(ctx, s.db, form.ID, form.WorkspaceID, autoJump, saveLocally)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// UpdateProgress переключает шкалу прогресса — индикатор шагов многостраничной
+// формы (миграция 0040).
+//
+// Живая колонка, как бейдж: намерение доезжает до респондента без перепубликации.
+// Тарифа у шкалы нет НИ ЗДЕСЬ, НИ НА ОТДАЧЕ — она открыта всем планам, поэтому
+// публичный путь берёт намерение как есть, без «факта» поверх него.
+func (s *Service) UpdateProgress(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	updated, err := s.repo.UpdateProgress(ctx, s.db, form.ID, form.WorkspaceID, show)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
 // UpdateCollectPartial переключает сбор незавершённых ответов (спека §10.0).
 //
 // ЕДИНСТВЕННОЕ МЕСТО В ПРОДУКТЕ, ГДЕ ТАРИФ ГЕЙТИТ СБОР, А НЕ ПОКАЗ (ADR §10):
@@ -450,6 +492,65 @@ func (s *Service) UpdateCollectPartial(ctx context.Context, userID, formID uuid.
 		return Form{}, err
 	}
 	return updated, nil
+}
+
+// UpdateNotifyEmail заменяет настройку письма о новом ответе (имя отправителя,
+// Reply-To, тема, текст; миграция 0042). Порядок как у остальных живых настроек:
+// валидация ввода, доступ (чужая/нет формы → 404), тариф, UPDATE.
+//
+// ТАРИФ СПРАШИВАЕТСЯ ЗДЕСЬ, в отличие от карточки ссылки: контрол держит кабинет
+// (решение владельца 2026-08-29 — «менять может только платный»), и сохранение
+// правки, которую интерфейс не даёт сделать, означало бы 402 в единственном месте,
+// куда он всё-таки доедет, — в чужом клиенте. Второй раз право спрашивается при
+// ОТПРАВКЕ письма (NotifyEmailFor): даунгрейд возвращает дефолтный шаблон сам.
+//
+// Снятие настройки (пустые поля) тариф НЕ спрашивает: вернуться к дефолтному письму
+// вправе любой план — иначе даунгрейд запирал бы автора в чужой настройке.
+func (s *Service) UpdateNotifyEmail(ctx context.Context, userID, formID uuid.UUID, n *domain.NotifyEmail) (Form, error) {
+	if err := domain.ValidateNotifyEmail(n); err != nil {
+		return Form{}, err
+	}
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if !n.Empty() {
+		d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormNotifyEmail)
+		if err != nil {
+			return Form{}, err
+		}
+		if !d.Allowed {
+			return Form{}, domain.ErrPlanRequired
+		}
+	}
+	updated, err := s.repo.UpdateFormNotifyEmail(ctx, s.db, form.ID, form.WorkspaceID, n)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// NotifyEmailFor — настройка письма, действующая для этого воркспейса ПРЯМО СЕЙЧАС:
+// nil значит «слать дефолтным шаблоном». Спрашивается на отправке, а не берётся из
+// колонки напрямую, ровно затем, чтобы даунгрейд возвращал дефолтное письмо сам.
+//
+// Сбой опроса тарифа даёт дефолтный шаблон, а не отказ: письмо обязано уйти, а
+// «не тем текстом» дешевле, чем «никаким».
+func (s *Service) NotifyEmailFor(ctx context.Context, workspaceID uuid.UUID, n *domain.NotifyEmail) (*domain.NotifyEmail, error) {
+	if n.Empty() {
+		return nil, nil
+	}
+	d, err := s.plans.CheckWorkspace(ctx, workspaceID, entitlements.FormNotifyEmail)
+	if err != nil {
+		return nil, err
+	}
+	if !d.Allowed {
+		return nil, nil
+	}
+	return n, nil
 }
 
 // UpdateLinkPreview заменяет карточку ссылки формы (имя площадки, заголовок,
@@ -702,6 +803,36 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 		return Form{}, err
 	}
 	return published, nil
+}
+
+// Reopen открывает закрытую форму: status='published', БЕЗ новой версии.
+// Респонденты видят ту же версию, что до закрытия (published_version_id закрытие
+// сохраняло).
+//
+// Публикацией это делать нельзя, хотя она дала бы тот же статус: публикация поднимет
+// номер версии, не изменив ни строчки документа, — а номер версии в продукте значит
+// «что именно видели респонденты», и накрутить его тумблером значит соврать. По той
+// же причине черновик открыть нечем: публиковать его — отдельное осознанное действие
+// автора, а не побочный эффект переключателя.
+func (s *Service) Reopen(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if form.Status != domain.FormStatusClosed {
+		return Form{}, fmt.Errorf("%w: открыть можно только закрытую форму", domain.ErrValidation)
+	}
+	if form.PublishedVersionID == nil {
+		return Form{}, fmt.Errorf("%w: у формы нет опубликованной версии", domain.ErrValidation)
+	}
+	reopened, err := s.repo.SetFormReopened(ctx, s.db, form.ID, form.WorkspaceID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return reopened, nil
 }
 
 // Unpublish снимает форму с публикации: status='closed'. published_version_id и его

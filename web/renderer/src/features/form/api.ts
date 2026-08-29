@@ -25,6 +25,17 @@ const publicFormSchema = z.object({
   // две вещи — автосохраняет и предупреждает респондента; разъехаться они не могут,
   // потому что факт один. Дефолт false: не собирать по недоразумению.
   collectPartial: z.boolean().default(false),
+  // progress — показывать ли шкалу прогресса (индикатор шагов). Чистое НАМЕРЕНИЕ
+  // автора, живая колонка формы (миграция 0040): тарифа у шкалы нет, решать поверх
+  // намерения серверу нечего. Дефолт false — тот же, что у колонки: поля нет (тело
+  // прошлой версии из кеша) — значит шкалы нет. Падать из-за отсутствия поля нельзя,
+  // правило то же, что у бейджа.
+  progress: z.boolean().default(false),
+  // Поведение формы у респондента (0044): листать страницу сразу после ответа и
+  // хранить незавершённые ответы дольше вкладки. Дефолты — те же, что у колонок:
+  // тело прошлой версии из кеша не имеет права включить ни то, ни другое.
+  autoJump: z.boolean().default(false),
+  saveLocally: z.boolean().default(false),
 })
 export type PublicForm = z.infer<typeof publicFormSchema>
 
@@ -63,7 +74,12 @@ export async function fetchPublicForm(slug: string, preview = false): Promise<Lo
   }
   if (res.status === 410) {
     const body = closedFormSchema.parse(await res.json())
-    return { status: 'closed', title: body.title, message: body.closedMessage, showBadge: body.showBadge }
+    return {
+      status: 'closed',
+      title: body.title,
+      message: body.closedMessage,
+      showBadge: body.showBadge,
+    }
   }
   if (!res.ok) {
     throw new Error(`форма не загрузилась: HTTP ${res.status}`)
@@ -135,7 +151,10 @@ export async function submitAnswers(slug: string, body: SubmitBody): Promise<Sub
   // в лог с request_id). Респонденту показываем человеческое — читать внутренности
   // сервера он не должен. У 4xx текст осмысленный (антиспам, лимит) — он и едет.
   if (res.status >= 500) {
-    return { status: 'rejected', message: 'Не удалось отправить — попробуйте ещё раз через минуту.' }
+    return {
+      status: 'rejected',
+      message: 'Не удалось отправить — попробуйте ещё раз через минуту.',
+    }
   }
   return { status: 'rejected', message: env.error.message }
 }

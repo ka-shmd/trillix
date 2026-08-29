@@ -60,6 +60,9 @@ type Form struct {
 	CloseAt       *time.Time
 	ResponseLimit *int32
 	ClosedMessage *string
+	// ClosedTitle — заголовок экрана «приём закрыт» (0043); nil = заголовком
+	// остаётся название формы.
+	ClosedTitle *string
 	// CollectPartial — собирать ли незавершённые ответы (спека §10.0): тумблер
 	// формы, живая колонка. Кабинету нужен, чтобы нарисовать состояние тумблера.
 	CollectPartial bool
@@ -72,10 +75,23 @@ type Form struct {
 	// из ответа Get/GetBySlug; кабинет так и делает (в карточке формы поля нет
 	// вовсе — formSchema его не объявляет, и Zod его срежет).
 	Branding bool
+	// Progress — показывать ли шкалу прогресса, индикатор шагов многостраничной
+	// формы (миграция 0040): намерение автора, живая колонка. Та же мина, что у
+	// Branding: заполняют только Get/GetBySlug, а false здесь значит «шкала снята».
+	Progress bool
 	// NotifyOnSubmission — слать ли владельцу письмо о новом ответе (слайс D; живая
 	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
 	// у результатов мутаций false, как и прочие read-only поля выше.
 	NotifyOnSubmission bool
+	// Behavior — раздел «Поведение» (0044): автопереход на следующую страницу и
+	// хранение ответов в браузере респондента дольше сессии. Живые колонки; та же
+	// мина, что у Branding, — заполняют только Get/GetBySlug.
+	AutoJump    bool
+	SaveLocally bool
+	// NotifyEmail — настройка письма о новом ответе (nil = не настраивали → письмо
+	// уходит дефолтным шаблоном). Живая колонка (0042); заполняют только
+	// Get/GetBySlug — та же мина, что у Branding.
+	NotifyEmail *domain.NotifyEmail
 	// LinkPreview — своя карточка ссылки (nil = не настраивали → дефолты публичной
 	// страницы). Живая колонка, как настройки закрытия; заполняют только
 	// Get/GetBySlug — её читает окно кастомизации на экране «Поделиться».
@@ -112,10 +128,12 @@ type PublicForm struct {
 	// отдать форму или показать «приём закрыт». SubmissionCount заполнен только при
 	// заданном ResponseLimit (иначе 0 — ветка лимита не считается). ClosedMessage
 	// nil/пусто → рендерер покажет дефолт.
-	Status          string
-	CloseAt         *time.Time
-	ResponseLimit   *int32
-	ClosedMessage   *string
+	Status        string
+	CloseAt       *time.Time
+	ResponseLimit *int32
+	ClosedMessage *string
+	// ClosedTitle — заголовок экрана «приём закрыт» (0043); nil = название формы.
+	ClosedTitle     *string
 	SubmissionCount int64
 	// NotifyOnSubmission — гейт письма владельцу о новом ответе (слайс D): приём
 	// ответа читает его отсюда (уже загруженной формы), чтобы не делать лишний запрос
@@ -131,6 +149,15 @@ type PublicForm struct {
 	// тумблер доезжал до респондента без перепубликации. Факт (намерение плюс право
 	// тарифа) считает service.ShowBadge при отдаче.
 	Branding bool
+	// Progress — намерение автора о шкале прогресса (миграция 0040): true =
+	// показывать индикатор шагов. Живая колонка по тем же доводам, что Branding, но
+	// БЕЗ тарифа: шкала открыта всем планам, и поверх намерения service ничего не
+	// спрашивает — рендерер получает его как есть.
+	Progress bool
+	// AutoJump/SaveLocally — поведение формы у респондента (0044). Как и Progress,
+	// чистое намерение автора: тарифа у них нет, и решать поверх нечего.
+	AutoJump    bool
+	SaveLocally bool
 	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
@@ -197,6 +224,25 @@ func ptrTime(v pgtype.Timestamptz) *time.Time {
 // испорченная строка обязана стоить дефолтного превью, а не пятисотки на форме,
 // которая исправно принимает ответы. Записываем сюда только мы и только через
 // ValidateLinkPreview, поэтому ветка недостижима в здоровой базе.
+// notifyEmailFromJSON разбирает колонку forms.notify_email: NULL, пустой JSON или
+// настройка из пустых строк → nil («не настраивали», письмо уходит дефолтным
+// шаблоном). Битый JSON тоже даёт nil, и по тому же доводу, что у карточки ссылки:
+// испорченная строка обязана стоить дефолтного письма, а не потерянного
+// уведомления.
+func notifyEmailFromJSON(raw []byte) *domain.NotifyEmail {
+	if len(raw) == 0 {
+		return nil
+	}
+	var n domain.NotifyEmail
+	if err := json.Unmarshal(raw, &n); err != nil {
+		return nil
+	}
+	if n.Empty() {
+		return nil
+	}
+	return &n
+}
+
 func linkPreviewFromJSON(raw []byte) *domain.LinkPreview {
 	if len(raw) == 0 {
 		return nil
@@ -322,10 +368,15 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		CloseAt:               ptrTime(row.CloseAt),
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
+		ClosedTitle:           ptrStr(row.ClosedTitle),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
 		Branding:              row.Branding,
+		Progress:              row.Progress,
+		AutoJump:              row.AutoJump,
+		SaveLocally:           row.SaveLocally,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
+		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -357,10 +408,15 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		CloseAt:               ptrTime(row.CloseAt),
 		ResponseLimit:         ptrInt32(row.ResponseLimit),
 		ClosedMessage:         ptrStr(row.ClosedMessage),
+		ClosedTitle:           ptrStr(row.ClosedTitle),
 		NotifyOnSubmission:    row.NotifyOnSubmission,
 		CollectPartial:        row.CollectPartial,
 		Branding:              row.Branding,
+		Progress:              row.Progress,
+		AutoJump:              row.AutoJump,
+		SaveLocally:           row.SaveLocally,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
+		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -445,12 +501,18 @@ func (Repo) UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, w
 	if msg != "" {
 		msgPtr = &msg
 	}
+	title := strings.TrimSpace(s.ClosedTitle)
+	var titlePtr *string
+	if title != "" {
+		titlePtr = &title
+	}
 	row, err := postgres.New(db).UpdateFormCloseSettings(ctx, postgres.UpdateFormCloseSettingsParams{
 		ID:            id,
 		WorkspaceID:   workspaceID,
 		CloseAt:       pgTime(s.CloseAt),
 		ResponseLimit: pgInt4(s.ResponseLimit),
 		ClosedMessage: pgText(msgPtr),
+		ClosedTitle:   pgText(titlePtr),
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form close settings: %w", err)
@@ -497,6 +559,12 @@ func (Repo) UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, 
 type Owner struct {
 	Email string
 	Title string
+	// WorkspaceID — чей тариф спрашивать перед тем, как взять СВОЙ текст письма:
+	// настройка платная, и даунгрейд обязан возвращать дефолтный шаблон сам, как
+	// возвращает бейдж (BILLING.md).
+	WorkspaceID uuid.UUID
+	// NotifyEmail — свой текст письма (nil = дефолтный шаблон).
+	NotifyEmail *domain.NotifyEmail
 }
 
 // GetSubmissionOwner отдаёт владельца формы и её имя для письма-уведомления (слайс
@@ -507,7 +575,12 @@ func (Repo) GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uui
 	if err != nil {
 		return Owner{}, fmt.Errorf("get submission owner: %w", err)
 	}
-	return Owner{Email: row.Email, Title: row.Title}, nil
+	return Owner{
+		Email:       row.Email,
+		Title:       row.Title,
+		WorkspaceID: row.WorkspaceID,
+		NotifyEmail: notifyEmailFromJSON(row.NotifyEmail),
+	}, nil
 }
 
 // ListFormNames возвращает пары (имя, заголовок) всех форм воркспейса — сервису для
@@ -588,10 +661,14 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		CloseAt:            ptrTime(row.CloseAt),
 		ResponseLimit:      ptrInt32(row.ResponseLimit),
 		ClosedMessage:      ptrStr(row.ClosedMessage),
+		ClosedTitle:        ptrStr(row.ClosedTitle),
 		SubmissionCount:    row.SubmissionCount,
 		NotifyOnSubmission: row.NotifyOnSubmission,
 		CollectPartial:     row.CollectPartial,
 		Branding:           row.Branding,
+		Progress:           row.Progress,
+		AutoJump:           row.AutoJump,
+		SaveLocally:        row.SaveLocally,
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }
@@ -715,6 +792,90 @@ func (Repo) UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, wor
 	}, nil
 }
 
+// UpdateFormBehavior заменяет раздел «Поведение» целиком (0044): автопереход и
+// хранение ответов в браузере респондента. Набором, а не по одной колонке: это один
+// экранный раздел, по отдельности эти настройки не спрашиваются нигде.
+func (Repo) UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error) {
+	row, err := postgres.New(db).UpdateFormBehavior(ctx, postgres.UpdateFormBehaviorParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		AutoJump:    autoJump,
+		SaveLocally: saveLocally,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form behavior: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// SetFormReopened открывает закрытую форму: status='published' БЕЗ новой версии.
+// 0 строк — это либо чужая форма, либо не закрытая (черновик, уже открытая); service
+// различает их по прочитанной ранее форме.
+func (Repo) SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error) {
+	row, err := postgres.New(db).SetFormReopened(ctx, postgres.SetFormReopenedParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("reopen form: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateFormNotifyEmail заменяет настройку письма о новом ответе в пределах
+// воркспейса. Пустая настройка нормализуется в NULL — «не настраивали» обязано
+// иметь ровно одно представление в колонке (domain.Empty). Право тарифа проверяет
+// service до вызова; pgx.ErrNoRows (чужая/нет формы) пробрасывается — 404.
+func (Repo) UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error) {
+	var raw []byte
+	if !n.Empty() {
+		var err error
+		raw, err = json.Marshal(n)
+		if err != nil {
+			return Form{}, fmt.Errorf("marshal notify email: %w", err)
+		}
+	}
+	row, err := postgres.New(db).UpdateFormNotifyEmail(ctx, postgres.UpdateFormNotifyEmailParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		NotifyEmail: raw,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form notify_email: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
 // UpdateBranding переключает бейдж «Сделано в Trillix». Тариф здесь не при чём:
 // право спрашивается при отдаче публичной формы (service.ShowBadge).
 func (Repo) UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error) {
@@ -725,6 +886,30 @@ func (Repo) UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceI
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form branding: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateProgress переключает шкалу прогресса (индикатор шагов). Тариф здесь ни при
+// чём вовсе: шкала открыта всем планам, гейта у неё нет ни в кабинете, ни на отдаче.
+func (Repo) UpdateProgress(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error) {
+	row, err := postgres.New(db).UpdateFormProgress(ctx, postgres.UpdateFormProgressParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		Progress:    show,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form progress: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,
