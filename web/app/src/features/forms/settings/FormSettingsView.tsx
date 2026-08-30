@@ -684,6 +684,11 @@ function NotifyEmailFields({
   // h-8 вместо своей высоты контрола: высоту строки бланка задаёт СТРОКА, иначе
   // ряды с полем и ряды с готовым значением стоят разной высоты и бланк рябит.
   const cell = 'h-8 w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
+  // Правая половина бланка — ЗНАЧЕНИЕ, и оно чёрное, даже когда его ещё не набрали:
+  // «Trillix» и «Новый ответ в Trillix» — не подсказка, что сюда писать, а текст,
+  // который уйдёт в письме, если поле не трогать. Серым остаётся только то, чего в
+  // письме не будет: пустой Reply-To и пустой текст (решение владельца 2026-08-30).
+  const defaulted = cell + ' placeholder:text-foreground'
 
   return (
     <div>
@@ -696,16 +701,14 @@ function NotifyEmailFields({
             placeholder="Trillix"
             maxLength={MAX_NOTIFY_FROM_NAME_LEN}
             onChange={(e) => set('notifyFromName', e.target.value)}
-            className={cell}
+            className={defaulted}
           />
         </Row>
         <Row label="От кого">
-          <span className="text-sm text-muted-foreground">служебный адрес Trillix</span>
+          <span className="text-sm">служебный адрес Trillix</span>
         </Row>
         <Row label="Кому">
-          <span className="text-sm text-muted-foreground">
-            владельцу пространства, на адрес его аккаунта
-          </span>
+          <span className="text-sm">владельцу пространства, на адрес его аккаунта</span>
         </Row>
         <Row label="Адрес для ответов">
           <div className="w-full">
@@ -716,7 +719,6 @@ function NotifyEmailFields({
               aria-label="Адрес для ответов"
               aria-invalid={replyToInvalid}
               value={draft.notifyReplyTo}
-              placeholder="Куда ответит ваш почтовый клиент"
               onChange={(e) => set('notifyReplyTo', e.target.value)}
               className={cell}
             />
@@ -735,7 +737,7 @@ function NotifyEmailFields({
             placeholder="Новый ответ в Trillix"
             maxLength={MAX_NOTIFY_SUBJECT_LEN}
             onChange={(e) => set('notifySubject', e.target.value)}
-            className={cell}
+            className={defaulted}
           />
         </Row>
         <div className="border-t px-3 py-2">
