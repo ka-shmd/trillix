@@ -380,8 +380,9 @@ func TestSubmit_NotifyEmail_DowngradeFallsBackToTemplate(t *testing.T) {
 	if subject != "" {
 		t.Fatalf("на закрытом тарифе письмо ушло с темой автора: %q", subject)
 	}
+	// Тема хранится спанами (0045), поэтому читается первым куском, а не строкой.
 	if err := testPool.QueryRow(context.Background(),
-		`SELECT coalesce(notify_email->>'subject','') FROM forms WHERE slug = $1`, slug).
+		`SELECT coalesce(notify_email->'subject'->0->>'t','') FROM forms WHERE slug = $1`, slug).
 		Scan(&saved); err != nil {
 		t.Fatalf("read form: %v", err)
 	}

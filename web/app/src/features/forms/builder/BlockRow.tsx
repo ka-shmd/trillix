@@ -67,12 +67,14 @@ import {
   pickHoverOption,
   pickOptionTarget,
 } from './optionDrop'
-import { useBuilderStore } from './storeContext'
+import { sourceLabel, sourcesFor } from './logic/model'
+import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
 import { useCaptionGuard } from './captionGuard'
 import { textCaret } from './caret'
 import { RichLine } from './RichLine'
+import { type MentionItem } from './MentionMenu'
 import { richCaret } from './richCaret'
 import { BOLD_MARKS, cutRange } from './richText'
 import { SlashMenu } from './SlashMenu'
@@ -502,6 +504,8 @@ const BlockRowBody = memo(function BlockRowBody({
   const makeQuestion = useBuilderStore((s) => s.makeQuestion)
   const makeField = useBuilderStore((s) => s.makeField)
   const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
+  const mentionSources = useMentionSources(block.id)
+  const mentionLive = useMentionLive(block.id, block.text)
   // Текстовая поверхность строки: <textarea> либо (проба 14.0) contenteditable. Тип
   // union, потому что поток строки с ней говорит только через адаптер каретки и о её
   // природе не знает — ровно ради этого адаптер и вводился (§2.6 спеки фазы 13).
@@ -862,9 +866,10 @@ const BlockRowBody = memo(function BlockRowBody({
                 label={captionName}
                 // Подстановка ответа по «@» (docs/design/mentions.md): доступна в любой
                 // текстовой строке полотна — подписи вопроса, заголовке раздела, абзаце,
-                // тексте согласия. Источники ищутся ОТ ЭТОГО блока, поэтому строка и
-                // передаёт свой id.
-                mentionsFor={block.id}
+                // тексте согласия. Источники считает ПОЛОТНО (они его, а не строки),
+                // строка их только показывает и рисует чипы.
+                mentionSources={mentionSources}
+                mentionLive={mentionLive}
                 defaultMarks={captionMarks}
                 onChange={onLabelChange}
                 onFocus={() => {
@@ -2219,3 +2224,33 @@ function OptionCard({
     </div>
   )
 }
+
+// Источники подстановки для строки полотна: отвечаемые вопросы ВЫШЕ неё. Правило и
+// функция — те же, что у условной логики (sourcesFor): одна модель на две возможности,
+// автору нечего запоминать.
+//
+// Документ читается БЕЗ ПОДПИСКИ (useBuilderStoreApi) и только в момент вызова — то
+// есть когда автор открыл меню «@». Подписка здесь означала бы, что каждая строка
+// полотна перерисовывается на правку любого блока: механизм, дважды уронивший перф
+// полотна в фазе 21.
+function useMentionSources(blockId: string): () => readonly MentionItem[] {
+  const store = useBuilderStoreApi()
+  return useCallback(() => {
+    const blocks = store.getState().blocks
+    return sourcesFor(blocks, blockId).map((b) => ({ id: b.id, label: sourceLabel(blocks, b) }))
+  }, [store, blockId])
+}
+
+// Живые источники — по ним строка отличает рабочий чип от мёртвого (источник удалён
+// или уехал ниже носителя). ЭТОТ список подписан на документ, потому что мёртвый чип
+// обязан тускнеть сразу; подписка включается, только пока в строке есть хоть один чип,
+// а таких строк на полотне единицы.
+function useMentionLive(blockId: string, text: Span[] | undefined): ReadonlySet<string> {
+  const hasChip = text?.some((s) => s.ref) ?? false
+  const blocks = useBuilderStore((s) => (hasChip ? s.blocks : NO_BLOCKS))
+  return useMemo(() => new Set(sourcesFor(blocks, blockId).map((b) => b.id)), [blocks, blockId])
+}
+
+// Стабильная пустота: свежий массив на каждый вызов селектора означал бы ре-рендер
+// строки на каждую правку любого блока — то, от чего подписка здесь и защищается.
+const NO_BLOCKS: never[] = []

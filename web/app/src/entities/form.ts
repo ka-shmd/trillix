@@ -1,6 +1,6 @@
 import { z } from 'zod'
 
-import { formSchemaSchema } from '@entities/formSchema'
+import { formSchemaSchema, richTextOf } from '@entities/formSchema'
 
 // Доменные типы форм. Единственный источник — эти Zod-схемы (web/CLAUDE.md),
 // зеркалят DTO из internal/forms/handler.go. Черновик схемы (draftSchema)
@@ -68,14 +68,25 @@ export const linkPreviewSchema = z.object({
 
 export type LinkPreview = z.infer<typeof linkPreviewSchema>
 
+// Потолки настройки письма о новом ответе (рун) — зеркалят domain.MaxNotify*Len.
+export const MAX_NOTIFY_FROM_NAME_LEN = 100
+export const MAX_NOTIFY_SUBJECT_LEN = 200
+export const MAX_NOTIFY_BODY_LEN = 2000
+
 // Письмо о новом ответе — что из него настраивает автор. Адресов отправителя и
 // получателя здесь НЕТ: первый один на сервис, второй — владелец пространства, и
 // оба автору не принадлежат (зеркалит domain.NotifyEmail).
 export const notifyEmailSchema = z.object({
   fromName: z.string(),
   replyTo: z.string(),
-  subject: z.string(),
-  body: z.string(),
+  // Тема и текст — СПАНЫ, а не строки (docs/design/mentions.md §10): кусок с полем
+  // `ref` — подстановка ответа, и без массива ей негде храниться. Потолки свои, а не
+  // общие с текстом блока: 200 и 2000 против 2000 у полотна.
+  //
+  // `default` обязателен: Go не пишет пустой массив в JSON (omitempty), и ответ api
+  // про ненастроенное письмо ключа не несёт вовсе.
+  subject: richTextOf(MAX_NOTIFY_SUBJECT_LEN).default([]),
+  body: richTextOf(MAX_NOTIFY_BODY_LEN).default([]),
   // Приложить к письму печатный лист ответа. Документ печатается в момент доставки
   // письма, поэтому настройка действует со следующего ответа. `default` — как у
   // прочих поздних булевых полей контракта: api, ещё не знающий поля, не обязан
@@ -89,10 +100,18 @@ export type NotifyEmail = z.infer<typeof notifyEmailSchema>
 export const EMPTY_NOTIFY_EMAIL: NotifyEmail = {
   fromName: '',
   replyTo: '',
-  subject: '',
-  body: '',
+  subject: [],
+  body: [],
   attachPdf: false,
 }
+
+// MENTION_ALL_ANSWERS — служебный источник подстановки «Все ответы»: весь ответ
+// строками «вопрос: ответ». Зеркалит domain.MentionAllAnswers; подчерк впереди
+// отделяет его от id блоков навсегда.
+//
+// Разворачивает его СЕРВЕР при постановке письма в очередь. В тексте формы этот
+// ref инертен — клиентский резолвер его не знает и даёт на его месте пустоту.
+export const MENTION_ALL_ANSWERS = '_all'
 
 // Потолки полей карточки (рун) — зеркалят domain.MaxLinkPreview*Len.
 export const MAX_LINK_PREVIEW_SITE_NAME_LEN = 100
@@ -214,11 +233,6 @@ export const MAX_CLOSED_MESSAGE_LEN = 2000
 // это его замена на экране, и разные границы означали бы, что название формы туда не
 // помещается целиком (зеркалит domain.MaxFormTitleLen).
 export const MAX_CLOSED_TITLE_LEN = 200
-
-// Потолки настройки письма о новом ответе (рун) — зеркалят domain.MaxNotify*Len.
-export const MAX_NOTIFY_FROM_NAME_LEN = 100
-export const MAX_NOTIFY_SUBJECT_LEN = 200
-export const MAX_NOTIFY_BODY_LEN = 2000
 
 // Настройки закрытия для отправки в PATCH (фасет closeSettings). Полный набор:
 // отсутствующее/пустое поле = ограничение снято. closedMessage — всегда строка

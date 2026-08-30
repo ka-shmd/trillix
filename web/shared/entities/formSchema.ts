@@ -1,8 +1,13 @@
-import { z } from 'zod'
-import { BLOCK_TYPES } from './blocks/contract'
+import { z } from "zod";
+import { BLOCK_TYPES } from "./blocks/contract";
 // Импортируется только то, чем пользуется САМ этот файл; предикаты, которые он лишь
 // отдаёт наружу, идут реэкспортом ниже (иначе линтер справедливо считает их неиспользованными).
-import { blockKind, canShareRow, carriesText, isAnswerableType } from './blocks/index'
+import {
+  blockKind,
+  canShareRow,
+  carriesText,
+  isAnswerableType,
+} from "./blocks/index";
 import {
   BLOCK_CLASS_RE,
   COVER_HEIGHT_MAX,
@@ -25,9 +30,9 @@ import {
   MAX_SUBMIT_LABEL_LEN,
   MAX_TEXT_LEN,
   MAX_THANK_YOU_TEXT_LEN,
-} from './blocks/limits'
-import { blockLogicSchema } from './blocks/logic'
-import { OWNED_SETTINGS, idSchema, settingsSchema } from './blocks/settings'
+} from "./blocks/limits";
+import { blockLogicSchema } from "./blocks/logic";
+import { OWNED_SETTINGS, idSchema, settingsSchema } from "./blocks/settings";
 
 // Схема формы — единый контракт двух сторон. Зеркало Go-типов и ValidateSchema
 // из internal/domain/schema.go: любая правка формата (тип блока, лимит, поле)
@@ -48,12 +53,12 @@ import { OWNED_SETTINGS, idSchema, settingsSchema } from './blocks/settings'
 // которых она жила. Формат до релиза меняется в лоб, а документы в БД чинятся
 // одноразовой правкой в том же PR. Поле остаётся — оно петля под первую настоящую
 // миграцию после релиза, и заводить его заново дороже, чем держать константой.
-export const SCHEMA_VERSION = 1
+export const SCHEMA_VERSION = 1;
 
 // Лимиты, схема настроек и предикаты типов — из реестра (blocks/). Реэкспорт, а не
 // повторное объявление: два объявления одного лимита — это два лимита.
-export * from './blocks/limits'
-export { type BlockType } from './blocks/contract'
+export * from "./blocks/limits";
+export { type BlockType } from "./blocks/contract";
 export {
   BLOCK_KINDS,
   blockKind,
@@ -67,7 +72,7 @@ export {
   isSingleChoiceType,
   requiresCaption,
   supportsPlaceholder,
-} from './blocks/index'
+} from "./blocks/index";
 export {
   LOGIC_OPERATORS,
   conditionSchema,
@@ -76,7 +81,7 @@ export {
   ruleSchema,
   type LogicCondition,
   type LogicOperator,
-} from './blocks/conditions'
+} from "./blocks/conditions";
 export {
   LOGIC_ACTIONS,
   blockLogicSchema,
@@ -85,26 +90,26 @@ export {
   type BlockLogic,
   type LogicAction,
   type LogicActionKind,
-} from './blocks/logic'
+} from "./blocks/logic";
 export {
   columnSchema,
   optionSchema,
   settingsSchema,
   type Option,
   type Settings,
-} from './blocks/settings'
-export { scaleRange } from './blocks/scale'
+} from "./blocks/settings";
+export { scaleRange } from "./blocks/scale";
 
 // Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
-export const DEFAULT_SUBMIT_LABEL = 'Отправить'
+export const DEFAULT_SUBMIT_LABEL = "Отправить";
 // Текст кнопки перехода на следующую страницу, когда автор своего не задал
 // (settings.nextLabel у закрывающего разрыва). Живёт рядом с дефолтом отправки: обе
 // кнопки шага, и обе поверхности их берут отсюда, а не литералом у себя.
-export const DEFAULT_NEXT_LABEL = 'Далее'
+export const DEFAULT_NEXT_LABEL = "Далее";
 
 // Экран «Спасибо» по умолчанию (когда thankYouText в схеме пуст).
-export const DEFAULT_THANK_YOU_TITLE = 'Спасибо!'
-export const DEFAULT_THANK_YOU_TEXT = 'Ваш ответ отправлен.'
+export const DEFAULT_THANK_YOU_TITLE = "Спасибо!";
+export const DEFAULT_THANK_YOU_TEXT = "Ваш ответ отправлен.";
 
 // isHttpUrl — единственное правило redirect-ссылки: абсолютный http(s)-URL с хостом.
 // Зеркалит validateRedirectURL в Go. `javascript:`, `data:`, относительные пути
@@ -112,14 +117,16 @@ export const DEFAULT_THANK_YOU_TEXT = 'Ваш ответ отправлен.'
 // публичном домене формы (инвариант 4). Рендерер проверяет повторно перед переходом —
 // доверять содержимому схемы на месте использования нельзя.
 export const isHttpUrl = (raw: string): boolean => {
-  let u: URL
+  let u: URL;
   try {
-    u = new URL(raw)
+    u = new URL(raw);
   } catch {
-    return false
+    return false;
   }
-  return (u.protocol === 'http:' || u.protocol === 'https:') && u.hostname !== ''
-}
+  return (
+    (u.protocol === "http:" || u.protocol === "https:") && u.hostname !== ""
+  );
+};
 
 // Тип блока. Список значений — из реестра (blocks/contract.ts, BLOCK_TYPES): значение
 // enum и файл типа появляются вместе, поэтому «тип есть в схеме, но про него ничего не
@@ -132,36 +139,28 @@ export const isHttpUrl = (raw: string): boolean => {
 // предикаты (isCaptionType/isContentType/carriesText/isChoiceType/…) ВЫВОДЯТСЯ из
 // реестра: до фазы 16 это были семь независимых наборов, и тип, забытый в наборе, молча
 // трактовался как соседний.
-export const blockTypeSchema = z.enum(BLOCK_TYPES)
-
-
-
-
-
+export const blockTypeSchema = z.enum(BLOCK_TYPES);
 
 // Телефон проверяется мягко (и здесь, и в Go): допустимые символы и количество
 // цифр, а не формат конкретной страны. Жёсткая маска РФ отсекала бы легальные
 // номера (+380, добавочные, международные) — для формы это дороже, чем принять
 // нестандартную запись. Финальная инстанция — сервер (validPhone в answers.go).
-export const MIN_PHONE_DIGITS = 5
-export const MAX_PHONE_DIGITS = 20
-const PHONE_ALLOWED = /^[0-9+()\-\s]+$/
+export const MIN_PHONE_DIGITS = 5;
+export const MAX_PHONE_DIGITS = 20;
+const PHONE_ALLOWED = /^[0-9+()\-\s]+$/;
 
 export const isValidPhone = (raw: string): boolean => {
-  if (!PHONE_ALLOWED.test(raw)) return false
-  const digits = raw.replace(/\D/g, '').length
-  return digits >= MIN_PHONE_DIGITS && digits <= MAX_PHONE_DIGITS
-}
+  if (!PHONE_ALLOWED.test(raw)) return false;
+  const digits = raw.replace(/\D/g, "").length;
+  return digits >= MIN_PHONE_DIGITS && digits <= MAX_PHONE_DIGITS;
+};
 
 // Значение отмеченного согласия. Ответ хранится строкой, а не булевым: это
 // конвенция проекта (number и date тоже строки), и главное — пустая строка = «не
 // отмечено» бесплатно ложится на isEmpty в validation.ts, поэтому обязательность
 // работает без спецслучая. Булев false туда не попадал бы (false !== ''), и
 // required у согласия молча перестал бы работать.
-export const CONSENT_YES = 'yes'
-
-
-
+export const CONSENT_YES = "yes";
 
 // Богатый текст блока (v3): плоский массив спанов вместо строки. Формат — ADR §10
 // ARCHITECTURE, обоснование и инварианты — docs/design/rich-text.md §2. Зеркало —
@@ -169,16 +168,16 @@ export const CONSENT_YES = 'yes'
 //
 // Булевы марки списком, значимые — своими полями. Список булевых открыт по
 // построению: новая марка — строка в MARKS, строка в fields.css, кнопка в панель.
-export const MARKS = ['b', 'i', 'u', 's'] as const
-export const markSchema = z.enum(MARKS)
-export type Mark = z.infer<typeof markSchema>
+export const MARKS = ["b", "i", "u", "s"] as const;
+export const markSchema = z.enum(MARKS);
+export type Mark = z.infer<typeof markSchema>;
 
 // Цвет — строгий `#rrggbb` в нижнем регистре, а не произвольная CSS-нотация (ADR §10,
 // решение владельца 2026-07-26 «цвет свободный»): значение уходит в inline-style
 // рендерера, и хотя React его экранирует, свободная нотация открыла бы место под
 // url(...) и наследие expression. Зеркалит isHexColor в Go.
-const HEX_COLOR = /^#[0-9a-f]{6}$/
-export const isHexColor = (s: string): boolean => HEX_COLOR.test(s)
+const HEX_COLOR = /^#[0-9a-f]{6}$/;
+export const isHexColor = (s: string): boolean => HEX_COLOR.test(s);
 
 // Спан — кусок текста с одинаковым оформлением. t непуст: пустой кусок — мусор,
 // который пришлось бы тащить через три поверхности рендера и через plainText.
@@ -189,15 +188,19 @@ export const spanSchema = z.strictObject({
   bg: z.string().regex(HEX_COLOR).optional(),
   // Ссылка — единственная марка с угрозой безопасности. Валидатор переиспользуется,
   // а не пишется заново (ADR §10): тот же isHttpUrl, что у redirectUrl.
-  href: z.string().max(MAX_REDIRECT_URL_LEN).refine(isHttpUrl, 'нужен http(s)-адрес').optional(),
+  href: z
+    .string()
+    .max(MAX_REDIRECT_URL_LEN)
+    .refine(isHttpUrl, "нужен http(s)-адрес")
+    .optional(),
   // Подстановка ответа: id отвечаемого блока, чей ответ встанет на место этого куска
   // у респондента (docs/design/mentions.md). Существование блока НЕ проверяется —
   // неразрешимая ссылка инертна, а не невалидна (§4 спеки), ровно как у условной
   // логики: кросс-блочное условие вернуло бы 422 на undo и на удалении вопроса.
   // t такого куска — имя вопроса, и оно же уезжает в plainText, то есть в данные.
   ref: idSchema.optional(),
-})
-export type Span = z.infer<typeof spanSchema>
+});
+export type Span = z.infer<typeof spanSchema>;
 
 // richTextSchema — текст блока целиком. Два лимита: число кусков (здесь) и суммарная
 // длина (superRefine ниже) — по отдельности ни один не ограничивает документ.
@@ -206,64 +209,89 @@ export type Span = z.infer<typeof spanSchema>
 // редактора. Кросс-элементное условие в валидаторе ловило бы 422 на undo и на
 // промежуточных состояниях набора, а автосейв обязан хранить недособранное — то же
 // решение, что у инертного бита ряда.
-export const richTextSchema = z
-  .array(spanSchema)
-  .max(MAX_SPANS)
-  .superRefine((spans, ctx) => {
-    const total = spans.reduce((n, s) => n + s.t.length, 0)
-    if (total > MAX_TEXT_LEN) {
-      ctx.addIssue({ code: 'custom', message: `текст длиннее ${MAX_TEXT_LEN} символов` })
-    }
-    for (const [i, s] of spans.entries()) {
-      const dup = s.m && new Set(s.m).size !== s.m.length
-      if (dup) {
-        ctx.addIssue({ code: 'custom', message: 'повторяющаяся марка', path: [i, 'm'] })
+export const richTextSchema = richTextOf(MAX_TEXT_LEN);
+
+// richTextOf — тот же текст с ЧУЖИМ потолком длины. Существует ради письма о новом
+// ответе (docs/design/mentions.md §10): его тема и текст — такие же спаны, но длину
+// им задают собственные потолки настройки. Зеркалит validateSpansLimit в Go.
+export function richTextOf(maxLen: number) {
+  return z
+    .array(spanSchema)
+    .max(MAX_SPANS)
+    .superRefine((spans, ctx) => {
+      const total = spans.reduce((n, s) => n + s.t.length, 0);
+      if (total > maxLen) {
+        ctx.addIssue({
+          code: "custom",
+          message: `текст длиннее ${maxLen} символов`,
+        });
       }
-      // Ссылка наружу и подстановка ответа на одном куске не имеют читаемого смысла
-      // ни на одной из трёх поверхностей, и разрешив пару, её пришлось бы определять
-      // в каждой (ADR §10). Проверка кусочная, а не кросс-блочная, — недособранного
-      // состояния, в котором пара законна, у редактора нет.
-      if (s.ref && s.href) {
-        ctx.addIssue({ code: 'custom', message: 'ссылка и подстановка вместе', path: [i, 'ref'] })
+      for (const [i, s] of spans.entries()) {
+        const dup = s.m && new Set(s.m).size !== s.m.length;
+        if (dup) {
+          ctx.addIssue({
+            code: "custom",
+            message: "повторяющаяся марка",
+            path: [i, "m"],
+          });
+        }
+        // Ссылка наружу и подстановка ответа на одном куске не имеют читаемого смысла
+        // ни на одной из трёх поверхностей, и разрешив пару, её пришлось бы определять
+        // в каждой (ADR §10). Проверка кусочная, а не кросс-блочная, — недособранного
+        // состояния, в котором пара законна, у редактора нет.
+        if (s.ref && s.href) {
+          ctx.addIssue({
+            code: "custom",
+            message: "ссылка и подстановка вместе",
+            path: [i, "ref"],
+          });
+        }
       }
-    }
-  })
+    });
+}
 
 // plainText — текст без оформления. Единственный способ, которым богатый текст попадает
 // в данные: подписи для CSV/воронки/сводки, тизер ссылки, aria-label. Зеркалит
 // PlainText в Go. Разметка в данные не протекает никогда.
 export const plainText = (spans: Span[] | undefined): string =>
-  spans ? spans.map((s) => s.t).join('') : ''
+  spans ? spans.map((s) => s.t).join("") : "";
 
 // sameRichText — равенство богатого текста ПО ЗНАЧЕНИЮ. Нужно там, где раньше хватало
 // сравнения строк по ссылке: набор символа приносит свежий массив с тем же содержимым,
 // и по ссылке любая правка выглядела бы изменением. От этого зависят три вещи, каждая
 // из которых ломается молча: no-op в updateBlock (лишний шаг истории — Ctrl+Z «съедает»
 // нажатие), флаг dirty и лишний PATCH автосейва.
-export const sameRichText = (a: Span[] | undefined, b: Span[] | undefined): boolean => {
-  const x = a ?? []
-  const y = b ?? []
-  if (x.length !== y.length) return false
+export const sameRichText = (
+  a: Span[] | undefined,
+  b: Span[] | undefined,
+): boolean => {
+  const x = a ?? [];
+  const y = b ?? [];
+  if (x.length !== y.length) return false;
   return x.every((s, i) => {
-    const o = y[i]!
-    if (s.t !== o.t || s.color !== o.color || s.bg !== o.bg || s.href !== o.href) return false
+    const o = y[i]!;
+    if (
+      s.t !== o.t ||
+      s.color !== o.color ||
+      s.bg !== o.bg ||
+      s.href !== o.href
+    )
+      return false;
     // ref сравнивается наравне с остальными: чип, переставший ссылаться (источник
     // удалён) или нацеленный на другой вопрос, отличается от прежнего ТОЛЬКО этим
     // полем — при сравнении без него правка не доехала бы ни до истории, ни до PATCH.
-    if (s.ref !== o.ref) return false
-    const sm = s.m ?? []
-    const om = o.m ?? []
-    return sm.length === om.length && sm.every((m, j) => m === om[j])
-  })
-}
+    if (s.ref !== o.ref) return false;
+    const sm = s.m ?? [];
+    const om = o.m ?? [];
+    return sm.length === om.length && sm.every((m, j) => m === om[j]);
+  });
+};
 
 // textFromString — подъём плоской строки в спаны (редактор, тесты). Пустая строка даёт
 // пустой массив, а не массив с пустым куском: одно представление пустоты, иначе дифф
 // автосейва шумит на ровном месте. Зеркалит TextFromString в Go.
-export const textFromString = (s: string): Span[] => (s === '' ? [] : [{ t: s }])
-
-
-
+export const textFromString = (s: string): Span[] =>
+  s === "" ? [] : [{ t: s }];
 
 // Один блок формы (v2). groupId связывает блоки одного вопроса. Пустой text и
 // choice без опций допустимы — нормальное недособранное состояние черновика,
@@ -291,36 +319,39 @@ export const blockSchema = z
     // рядом с нашими rf-*. Строгая форма, а не любая строка — в значении не должно
     // быть ни пробела (второй класс это второе имя), ни заглавных, ни чего-либо,
     // чем можно разорвать атрибут.
-    class: z.string().regex(BLOCK_CLASS_RE, 'строчные латинские буквы, цифры и дефис').optional(),
+    class: z
+      .string()
+      .regex(BLOCK_CLASS_RE, "строчные латинские буквы, цифры и дефис")
+      .optional(),
   })
   .superRefine((b, ctx) => {
     // Собственный text — только у carriesText-типов (подписи, контент, consent).
     if (b.text?.length && !carriesText(b.type)) {
       ctx.addIssue({
-        code: 'custom',
+        code: "custom",
         message: `тип ${b.type} не несёт собственного текста`,
-        path: ['text'],
-      })
+        path: ["text"],
+      });
     }
     // Имя — только у отвечаемых: у подписи и контента нет ответов, значит нет ни
     // колонки CSV, ни шага воронки, которые оно называет. Зеркалит Go.
     if (b.name && !isAnswerableType(b.type)) {
       ctx.addIssue({
-        code: 'custom',
+        code: "custom",
         message: `тип ${b.type} не собирает ответ и не имеет имени`,
-        path: ['name'],
-      })
+        path: ["name"],
+      });
     }
     // Условие и действия несёт только блок `logic`. Проверка внутриблочная: тип блока и
     // его содержимое лежат рядом, промежуточных состояний драга у этой пары нет. Что
     // тут по-прежнему НЕ проверяется — существование цели и её позиция относительно
     // блока: это кросс-блочное, и неразрешимое действие инертно, а не невалидно.
-    if (b.logic && b.type !== 'logic') {
+    if (b.logic && b.type !== "logic") {
       ctx.addIssue({
-        code: 'custom',
+        code: "custom",
         message: `тип ${b.type} не несёт условной логики`,
-        path: ['logic'],
-      })
+        path: ["logic"],
+      });
     }
 
     // column — у любого типа, кроме заголовка формы (canShareRow). Ряд — свойство
@@ -328,10 +359,10 @@ export const blockSchema = z
     // проверка его условий не видит — как не видит и кросс-блочного. Зеркалит Go.
     if (b.settings?.column !== undefined && !canShareRow(b.type)) {
       ctx.addIssue({
-        code: 'custom',
+        code: "custom",
         message: `тип ${b.type} не может делить ряд`,
-        path: ['settings', 'column'],
-      })
+        path: ["settings", "column"],
+      });
     }
 
     // columnWidth — там же, где column, и по тому же правилу: доля ряда у типа, который
@@ -339,15 +370,15 @@ export const blockSchema = z
     // долей по ряду, здесь по-прежнему НЕ проверяется — это кросс-блочное. Зеркалит Go.
     if (b.settings?.columnWidth !== undefined && !canShareRow(b.type)) {
       ctx.addIssue({
-        code: 'custom',
+        code: "custom",
         message: `тип ${b.type} не может делить ряд`,
-        path: ['settings', 'columnWidth'],
-      })
+        path: ["settings", "columnWidth"],
+      });
     }
 
-    const settings = b.settings
-    if (!settings) return
-    const kind = blockKind(b.type)
+    const settings = b.settings;
+    if (!settings) return;
+    const kind = blockKind(b.type);
 
     // Закреплённые за типом ключи настроек: у чужого типа их наличие — ошибка. До
     // фазы 16 это были три рукописные ветви (картинка, шкала, опции), и четвёртая
@@ -357,27 +388,31 @@ export const blockSchema = z
     // Сообщение дедуплицируется по СУЩЕСТВИТЕЛЬНОМУ, а не по ключу: пара
     // scaleMin/scaleMax — одна настройка «шкала», и на чужом типе она обязана давать
     // одно замечание, как давала до фазы.
-    const said = new Set<string>()
+    const said = new Set<string>();
     for (const { key, noun, present } of OWNED_SETTINGS) {
-      if (said.has(noun)) continue
-      if (!present(settings[key])) continue
-      if (kind.ownSettings.includes(key)) continue
-      said.add(noun)
+      if (said.has(noun)) continue;
+      if (!present(settings[key])) continue;
+      if (kind.ownSettings.includes(key)) continue;
+      said.add(noun);
       ctx.addIssue({
-        code: 'custom',
+        code: "custom",
         message: `тип ${b.type} не имеет ${noun}`,
-        path: ['settings', key],
-      })
+        path: ["settings", key],
+      });
     }
 
     // Правила самого типа поверх формы настроек: диапазон шкалы, уникальность id
     // вариантов. Живут в файле типа (blocks/scale.ts, blocks/choice.ts) — это свойство
     // типа, а не документа.
     for (const issue of kind.issues?.(settings) ?? []) {
-      ctx.addIssue({ code: 'custom', message: issue.message, path: issue.path })
+      ctx.addIssue({
+        code: "custom",
+        message: issue.message,
+        path: issue.path,
+      });
     }
-  })
-export type Block = z.infer<typeof blockSchema>
+  });
+export type Block = z.infer<typeof blockSchema>;
 
 // ОФОРМЛЕНИЕ СТРАНИЦЫ — обложка и логотип. Зеркало internal/domain/cover.go
 // (правится тем же PR, с тестами обеих сторон).
@@ -402,19 +437,31 @@ export const coverSchema = z
     y: z.number().int().min(COVER_Y_MIN).max(COVER_Y_MAX).optional(),
     // Высота полосы в процентах высоты окна. Осмысленна и у цвета, и у картинки —
     // в отличие от y, поэтому пары «только вместе с imageKey» здесь нет.
-    height: z.number().int().min(COVER_HEIGHT_MIN).max(COVER_HEIGHT_MAX).optional(),
+    height: z
+      .number()
+      .int()
+      .min(COVER_HEIGHT_MIN)
+      .max(COVER_HEIGHT_MAX)
+      .optional(),
   })
   .superRefine((c, ctx) => {
-    const hasColor = Boolean(c.color)
-    const hasImage = Boolean(c.imageKey)
+    const hasColor = Boolean(c.color);
+    const hasImage = Boolean(c.imageKey);
     if (hasColor === hasImage) {
-      ctx.addIssue({ code: 'custom', message: 'нужен ровно один из color и imageKey' })
+      ctx.addIssue({
+        code: "custom",
+        message: "нужен ровно один из color и imageKey",
+      });
     }
     if (c.y !== undefined && !hasImage) {
-      ctx.addIssue({ code: 'custom', message: 'y задаётся только вместе с картинкой', path: ['y'] })
+      ctx.addIssue({
+        code: "custom",
+        message: "y задаётся только вместе с картинкой",
+        path: ["y"],
+      });
     }
-  })
-export type FormCover = z.infer<typeof coverSchema>
+  });
+export type FormCover = z.infer<typeof coverSchema>;
 
 // Логотип — картинка плюс её геометрия. Размер и скругление необязательны, и
 // отсутствие ключа значит дефолт fields.css (100×100, радиус 50), а не ноль:
@@ -424,12 +471,13 @@ export const logoSchema = z.strictObject({
   width: z.number().int().min(LOGO_SIZE_MIN).max(LOGO_SIZE_MAX).optional(),
   height: z.number().int().min(LOGO_SIZE_MIN).max(LOGO_SIZE_MAX).optional(),
   radius: z.number().int().min(LOGO_RADIUS_MIN).max(LOGO_RADIUS_MAX).optional(),
-})
-export type FormLogo = z.infer<typeof logoSchema>
+});
+export type FormLogo = z.infer<typeof logoSchema>;
 
 // coverY — точка фокуса с подставленным дефолтом. Единая точка подстановки:
 // рендерер и превью не должны каждый знать, что «нет ключа» = центр.
-export const coverY = (cover: FormCover | undefined): number => cover?.y ?? DEFAULT_COVER_Y
+export const coverY = (cover: FormCover | undefined): number =>
+  cover?.y ?? DEFAULT_COVER_Y;
 
 // ОФОРМЛЕНИЕ ФОРМЫ (фаза 22) — тема, цвета, шрифт, лэйаут, вид контролов.
 // Зеркало internal/domain/design.go (правится тем же PR, с тестами обеих сторон).
@@ -443,52 +491,52 @@ export const coverY = (cover: FormCover | undefined): number => cover?.y ?? DEFA
 
 // Списки перечислимых настроек — рядом со схемой и экспортируются: их читает
 // паритет-тест на Go, и они же наполняют выпадающие списки панели «Оформление».
-export const DESIGN_THEMES = ['light', 'dark'] as const
-export const DESIGN_DENSITIES = ['compact', 'normal', 'roomy'] as const
-export const DESIGN_ALIGNS = ['left', 'center'] as const
+export const DESIGN_THEMES = ["light", "dark"] as const;
+export const DESIGN_DENSITIES = ["compact", "normal", "roomy"] as const;
+export const DESIGN_ALIGNS = ["left", "center"] as const;
 // У КНОПКИ ТРИ ПОЛОЖЕНИЯ, а не два: она стоит в своём ряду, где есть и правый край.
 // Отдельный список, а не третье значение общего: у выравнивания ТЕКСТА формы правого
 // варианта нет и не планируется — правый текст на форме читается как брак вёрстки.
-export const DESIGN_BUTTON_ALIGNS = ['left', 'center', 'right'] as const
-export const DESIGN_OUTLINES = ['shadow', 'border', 'none'] as const
-export const DESIGN_BUTTON_VARIANTS = ['solid', 'outline'] as const
+export const DESIGN_BUTTON_ALIGNS = ["left", "center", "right"] as const;
+export const DESIGN_OUTLINES = ["shadow", "border", "none"] as const;
+export const DESIGN_BUTTON_VARIANTS = ["solid", "outline"] as const;
 // Порядок = порядок вкладок в панели: от самой узкой кнопки к самой управляемой.
 // `fixed` без `button.widthPx` означает дефолтные 200px — ровно так же, как любая
 // незаданная настройка означает сегодняшний вид, а не «пусто».
-export const DESIGN_BUTTON_WIDTHS = ['auto', 'full', 'fixed'] as const
-export const DESIGN_BUTTON_SIZES = ['sm', 'md', 'lg'] as const
+export const DESIGN_BUTTON_WIDTHS = ["auto", "full", "fixed"] as const;
+export const DESIGN_BUTTON_SIZES = ["sm", "md", "lg"] as const;
 // Курируемый список self-hosted семейств с кириллицей. Внешний CDN не подключить
 // физически (прод-CSP `font-src 'self' data:`), и ослаблять её не будем: подключённый
 // шрифт — запрос браузера респондента на чужой сервер, то есть передача IP третьему
 // лицу на публичной странице сбора персональных данных.
 // Порядок = порядок в панели: нейтральные гротески, потом характерные, антиква последней.
 export const DESIGN_FONTS = [
-  'system',
-  'inter',
-  'golos',
-  'manrope',
-  'onest',
-  'montserrat',
-  'lora',
-] as const
+  "system",
+  "inter",
+  "golos",
+  "manrope",
+  "onest",
+  "montserrat",
+  "lora",
+] as const;
 
 // Семейство, которым форма набрана, пока автор не выбрал другое. Хранится ОТСУТСТВИЕМ
 // ключа (как и все дефолты оформления), поэтому значение существует в трёх местах и
 // обязано совпадать: `--rf-font-family` в :root fields.css (кто рисует), `DesignFontDefault`
 // на Go (кто ставит preload на публичной странице) и эта константа (что показывает панель
 // при незаданном шрифте). Сходимость первых двух сторожит паритет-тест.
-export const DESIGN_FONT_DEFAULT = 'inter'
+export const DESIGN_FONT_DEFAULT = "inter";
 
 // Границы числовых настроек. Значение вне диапазона ОТВЕРГАЕТСЯ, а не зажимается:
 // молча исправленное число доживает до первого читателя, который решит, что оно
 // что-то значит.
-export const MIN_FONT_SIZE = 14
+export const MIN_FONT_SIZE = 14;
 // Потолок базы — 20, а не «сколько угодно»: line-height полотна остаётся
 // литеральным (числа обязаны совпадать с Tailwind-классами кластеров значков
 // редактора), и слишком крупная база перестанет помещаться в свою строку.
-export const MAX_FONT_SIZE = 20
-export const MIN_RADIUS = 0
-export const MAX_RADIUS = 24
+export const MAX_FONT_SIZE = 20;
+export const MIN_RADIUS = 0;
+export const MAX_RADIUS = 24;
 // Ширина колонки — ЧИСЛО, а не три варианта (решение владельца 2026-08-09): выбор из
 // «узкой/обычной/широкой» покрывает три макета из бесконечности, а форма под таблицу
 // вариантов или под мобильную рассылку требует своего числа. Низ — 400: уже колонка
@@ -496,13 +544,13 @@ export const MAX_RADIUS = 24
 // длиннее комфортной для чтения, и это уже не форма, а таблица.
 // Ширина кнопки в режиме `fixed` (--rf-submit-width). Низ — 80: уже кнопка не вмещает
 // «Отправить»; верх равен потолку колонки, шире неё кнопке всё равно не стать.
-export const MIN_BUTTON_WIDTH = 80
-export const MAX_BUTTON_WIDTH = 1200
+export const MIN_BUTTON_WIDTH = 80;
+export const MAX_BUTTON_WIDTH = 1200;
 // Что печатается в режиме `fixed`, если автор числа не задавал: токен
 // --rf-submit-width в этом режиме печатается ВСЕГДА, поэтому «незаданное» превращается
 // в число здесь. Панель показывает его же серым (NumberRow fallback). В контракте, а не
 // рядом с переводом в CSS, — тут его сторожит паритет-тест Go.
-export const BUTTON_WIDTH_DEFAULT = 200
+export const BUTTON_WIDTH_DEFAULT = 200;
 // Высота кнопки (--rf-submit-h). Диапазон тот же, что у высоты поля: кнопка и поле
 // стоят в одном ряду глазами респондента, и разные потолки у них были бы произволом.
 // Числами, а не ссылкой на границы поля: диапазоны СОВПАДАЮТ по решению, а не по
@@ -510,52 +558,52 @@ export const BUTTON_WIDTH_DEFAULT = 200
 // Go читает здесь литерал.
 // Кегль и скругление кнопки. Кегль от 10 (ниже надпись нечитаема) до 32 (выше кнопка
 // перестаёт быть кнопкой); скругление — тот же потолок, что у поля.
-export const MIN_BUTTON_FONT = 10
-export const MAX_BUTTON_FONT = 32
-export const MIN_BUTTON_RADIUS = 0
-export const MAX_BUTTON_RADIUS = 24
+export const MIN_BUTTON_FONT = 10;
+export const MAX_BUTTON_FONT = 32;
+export const MIN_BUTTON_RADIUS = 0;
+export const MAX_BUTTON_RADIUS = 24;
 
 // Воздух кнопки: свой ВЕРХНИЙ (добавляется к расстоянию, которое уже держит колонка;
 // воздух под кнопкой — поле страницы, а не свойство кнопки) и боковые поля внутри неё.
 // Ноль законен у обоих.
-export const MIN_BUTTON_MARGIN_TOP = 0
-export const MAX_BUTTON_MARGIN_TOP = 96
-export const MIN_BUTTON_PADDING_X = 0
-export const MAX_BUTTON_PADDING_X = 96
+export const MIN_BUTTON_MARGIN_TOP = 0;
+export const MAX_BUTTON_MARGIN_TOP = 96;
+export const MIN_BUTTON_PADDING_X = 0;
+export const MAX_BUTTON_PADDING_X = 96;
 
-export const MIN_BUTTON_HEIGHT = 28
-export const MAX_BUTTON_HEIGHT = 96
+export const MIN_BUTTON_HEIGHT = 28;
+export const MAX_BUTTON_HEIGHT = 96;
 
 // Боковые поля внутри контрола (--rf-input-px, по умолчанию 10px) и воздух между
 // вопросами (--rf-space-q, по умолчанию 24px). Ноль законен у обоих: поле без боковых
 // полей и вопросы вплотную — крайние, но осмысленные виды формы.
-export const MIN_PADDING_X = 0
-export const MAX_PADDING_X = 48
-export const MIN_MARGIN_BOTTOM = 0
-export const MAX_MARGIN_BOTTOM = 96
+export const MIN_PADDING_X = 0;
+export const MAX_PADDING_X = 48;
+export const MIN_MARGIN_BOTTOM = 0;
+export const MAX_MARGIN_BOTTOM = 96;
 
 // Толщина края контрола (--rf-ring-w, по умолчанию 1px). Ноль законен — кольцо
 // исчезает, слои тени остаются; потолок 8 — дальше край съедает поле изнутри.
-export const MIN_BORDER_WIDTH = 0
-export const MAX_BORDER_WIDTH = 8
+export const MIN_BORDER_WIDTH = 0;
+export const MAX_BORDER_WIDTH = 8;
 
 // Высота контрола (--rf-control-h, по умолчанию 36px — замер Tally). Низ — 28: ниже
 // строка 16/1.5 упирается в края поля; верх — 96: дальше поле перестаёт читаться как
 // строка ввода. Числом ходят и кнопки: --rf-submit-h выводится из этой же переменной,
 // пока автор не задал размер кнопки явно.
-export const MIN_FIELD_HEIGHT = 28
-export const MAX_FIELD_HEIGHT = 96
+export const MIN_FIELD_HEIGHT = 28;
+export const MAX_FIELD_HEIGHT = 96;
 
 // Потолок ширины поля (--rf-input-max). Низ — поле, в котором ещё виден вводимый
 // текст; верх равен потолку колонки: шире неё поле всё равно не станет, его режет
 // `width: 100%` родителя.
-export const MIN_FIELD_WIDTH = 120
-export const MAX_FIELD_WIDTH = 1200
+export const MIN_FIELD_WIDTH = 120;
+export const MAX_FIELD_WIDTH = 1200;
 
-export const MIN_COLUMN = 400
-export const MAX_COLUMN = 1200
+export const MIN_COLUMN = 400;
+export const MAX_COLUMN = 1200;
 
-const hexColor = z.string().regex(HEX_COLOR)
+const hexColor = z.string().regex(HEX_COLOR);
 
 export const designSchema = z.strictObject({
   theme: z.enum(DESIGN_THEMES).optional(),
@@ -588,7 +636,12 @@ export const designSchema = z.strictObject({
   layout: z
     .strictObject({
       width: z.number().int().min(MIN_COLUMN).max(MAX_COLUMN).optional(),
-      fontSize: z.number().int().min(MIN_FONT_SIZE).max(MAX_FONT_SIZE).optional(),
+      fontSize: z
+        .number()
+        .int()
+        .min(MIN_FONT_SIZE)
+        .max(MAX_FONT_SIZE)
+        .optional(),
       density: z.enum(DESIGN_DENSITIES).optional(),
       align: z.enum(DESIGN_ALIGNS).optional(),
     })
@@ -604,18 +657,43 @@ export const designSchema = z.strictObject({
       // законно. Отдельный ключ от числа нужен затем, чтобы подобранные px пережили
       // переключение туда-обратно; `true` или ничего — дефолт хранится отсутствием.
       fullWidth: z.literal(true).optional(),
-      width: z.number().int().min(MIN_FIELD_WIDTH).max(MAX_FIELD_WIDTH).optional(),
-      height: z.number().int().min(MIN_FIELD_HEIGHT).max(MAX_FIELD_HEIGHT).optional(),
-      borderWidth: z.number().int().min(MIN_BORDER_WIDTH).max(MAX_BORDER_WIDTH).optional(),
+      width: z
+        .number()
+        .int()
+        .min(MIN_FIELD_WIDTH)
+        .max(MAX_FIELD_WIDTH)
+        .optional(),
+      height: z
+        .number()
+        .int()
+        .min(MIN_FIELD_HEIGHT)
+        .max(MAX_FIELD_HEIGHT)
+        .optional(),
+      borderWidth: z
+        .number()
+        .int()
+        .min(MIN_BORDER_WIDTH)
+        .max(MAX_BORDER_WIDTH)
+        .optional(),
       // Мягкая тень под полем. Только `false`: тень — сегодняшний дефолт, а дефолт
       // хранится отсутствием ключа, поэтому в схему попадает лишь СНЯТИЕ тени.
       // Кольцо края этим не трогается — оно живёт своими borderWidth и palette.border.
       shadow: z.literal(false).optional(),
-      paddingX: z.number().int().min(MIN_PADDING_X).max(MAX_PADDING_X).optional(),
+      paddingX: z
+        .number()
+        .int()
+        .min(MIN_PADDING_X)
+        .max(MAX_PADDING_X)
+        .optional(),
       // Воздух ПЕРЕД следующим вопросом — для автора это «отступ снизу» текущего.
       // Ступени заголовков за ним не едут: правится расстояние между вопросами, а не
       // вся вертикальная шкала формы.
-      marginBottom: z.number().int().min(MIN_MARGIN_BOTTOM).max(MAX_MARGIN_BOTTOM).optional(),
+      marginBottom: z
+        .number()
+        .int()
+        .min(MIN_MARGIN_BOTTOM)
+        .max(MAX_MARGIN_BOTTOM)
+        .optional(),
       radius: z.number().int().min(MIN_RADIUS).max(MAX_RADIUS).optional(),
       outline: z.enum(DESIGN_OUTLINES).optional(),
     })
@@ -628,16 +706,46 @@ export const designSchema = z.strictObject({
       width: z.enum(DESIGN_BUTTON_WIDTHS).optional(),
       // Читается ТОЛЬКО при width: 'fixed' — как и число ширины поля, оно переживает
       // переключение режимов, чтобы подобранное значение дождалось возврата.
-      widthPx: z.number().int().min(MIN_BUTTON_WIDTH).max(MAX_BUTTON_WIDTH).optional(),
+      widthPx: z
+        .number()
+        .int()
+        .min(MIN_BUTTON_WIDTH)
+        .max(MAX_BUTTON_WIDTH)
+        .optional(),
       // Сильнее размера: `size` это три готовых набора (высота, поля, кегль), а число
       // — прямое указание. Заданная высота перебивает у набора только высоту, поля и
       // кегль остаются от него.
-      height: z.number().int().min(MIN_BUTTON_HEIGHT).max(MAX_BUTTON_HEIGHT).optional(),
+      height: z
+        .number()
+        .int()
+        .min(MIN_BUTTON_HEIGHT)
+        .max(MAX_BUTTON_HEIGHT)
+        .optional(),
       align: z.enum(DESIGN_BUTTON_ALIGNS).optional(),
-      fontSize: z.number().int().min(MIN_BUTTON_FONT).max(MAX_BUTTON_FONT).optional(),
-      radius: z.number().int().min(MIN_BUTTON_RADIUS).max(MAX_BUTTON_RADIUS).optional(),
-      marginTop: z.number().int().min(MIN_BUTTON_MARGIN_TOP).max(MAX_BUTTON_MARGIN_TOP).optional(),
-      paddingX: z.number().int().min(MIN_BUTTON_PADDING_X).max(MAX_BUTTON_PADDING_X).optional(),
+      fontSize: z
+        .number()
+        .int()
+        .min(MIN_BUTTON_FONT)
+        .max(MAX_BUTTON_FONT)
+        .optional(),
+      radius: z
+        .number()
+        .int()
+        .min(MIN_BUTTON_RADIUS)
+        .max(MAX_BUTTON_RADIUS)
+        .optional(),
+      marginTop: z
+        .number()
+        .int()
+        .min(MIN_BUTTON_MARGIN_TOP)
+        .max(MAX_BUTTON_MARGIN_TOP)
+        .optional(),
+      paddingX: z
+        .number()
+        .int()
+        .min(MIN_BUTTON_PADDING_X)
+        .max(MAX_BUTTON_PADDING_X)
+        .optional(),
       size: z.enum(DESIGN_BUTTON_SIZES).optional(),
     })
     .optional(),
@@ -653,10 +761,13 @@ export const designSchema = z.strictObject({
   css: z
     .string()
     .max(MAX_CUSTOM_CSS_LEN)
-    .refine((v) => !v.includes(CSS_MARKUP_ESCAPE), 'последовательность "</" не допускается')
+    .refine(
+      (v) => !v.includes(CSS_MARKUP_ESCAPE),
+      'последовательность "</" не допускается',
+    )
     .optional(),
-})
-export type FormDesign = z.infer<typeof designSchema>
+});
+export type FormDesign = z.infer<typeof designSchema>;
 
 // Пустой объект design допустим и значит «всё по умолчанию» — в отличие от обложки,
 // где пустота отвергается. Разница не в прихоти: у обложки два способа сказать «её
@@ -695,98 +806,108 @@ export const formSchemaSchema = z
     // автосейва не доезжает и 422 посреди набора не бывает.
     if (s.redirectUrl && !isHttpUrl(s.redirectUrl)) {
       ctx.addIssue({
-        code: 'custom',
-        message: 'ссылка должна начинаться с http:// или https://',
-        path: ['redirectUrl'],
-      })
+        code: "custom",
+        message: "ссылка должна начинаться с http:// или https://",
+        path: ["redirectUrl"],
+      });
     }
 
-    const seen = new Set<string>()
+    const seen = new Set<string>();
     // Группы (v2, зеркалит Go validateGroups): блоки одной группы идут подряд, в
     // группе не более одного отвечаемого блока. Связь подписи с полем — по groupId,
     // не по позиции.
-    const answerablePerGroup = new Map<string, number>()
-    const endedRun = new Set<string>()
-    let prevGroup = ''
+    const answerablePerGroup = new Map<string, number>();
+    const endedRun = new Set<string>();
+    let prevGroup = "";
     s.blocks.forEach((b, i) => {
       if (seen.has(b.id)) {
         ctx.addIssue({
-          code: 'custom',
+          code: "custom",
           message: `повторяющийся id блока ${b.id}`,
-          path: ['blocks', i, 'id'],
-        })
+          path: ["blocks", i, "id"],
+        });
       }
-      seen.add(b.id)
+      seen.add(b.id);
 
       if (b.groupId !== prevGroup) {
         if (endedRun.has(b.groupId)) {
           ctx.addIssue({
-            code: 'custom',
+            code: "custom",
             message: `группа ${b.groupId} не смежна (блоки группы разорваны)`,
-            path: ['blocks', i, 'groupId'],
-          })
+            path: ["blocks", i, "groupId"],
+          });
         }
-        if (prevGroup !== '') endedRun.add(prevGroup)
-        prevGroup = b.groupId
+        if (prevGroup !== "") endedRun.add(prevGroup);
+        prevGroup = b.groupId;
       }
       if (isAnswerableType(b.type)) {
-        const n = (answerablePerGroup.get(b.groupId) ?? 0) + 1
-        answerablePerGroup.set(b.groupId, n)
+        const n = (answerablePerGroup.get(b.groupId) ?? 0) + 1;
+        answerablePerGroup.set(b.groupId, n);
         if (n > 1) {
           ctx.addIssue({
-            code: 'custom',
+            code: "custom",
             message: `в группе ${b.groupId} больше одного отвечаемого блока`,
-            path: ['blocks', i, 'type'],
-          })
+            path: ["blocks", i, "type"],
+          });
         }
       }
-    })
+    });
 
     // Потолок блоков — зеркало Go: считаем блоки АВТОРА, заголовок формы не в счёт.
     // Иначе форма, собранная до фазы 15 ровно на потолке, после синтеза заголовка
     // получила бы 201 блок и перестала сохраняться совсем.
-    const authored = s.blocks.filter((b) => b.type !== 'form_title').length
+    const authored = s.blocks.filter((b) => b.type !== "form_title").length;
     if (authored > MAX_BLOCKS) {
-      ctx.addIssue({ code: 'custom', message: `больше ${MAX_BLOCKS} блоков`, path: ['blocks'] })
+      ctx.addIssue({
+        code: "custom",
+        message: `больше ${MAX_BLOCKS} блоков`,
+        path: ["blocks"],
+      });
     }
 
     // Заголовок формы (фаза 15, зеркалит Go validateFormTitle): он один, он первая
     // строка документа и он всегда одиночка. Отсутствие блока законно — версии,
     // опубликованные до v4, заголовка в схеме не несут вовсе.
-    const titles = s.blocks.filter((b) => b.type === 'form_title')
+    const titles = s.blocks.filter((b) => b.type === "form_title");
     if (titles.length > 1) {
-      ctx.addIssue({ code: 'custom', message: 'заголовок формы может быть только один', path: ['blocks'] })
+      ctx.addIssue({
+        code: "custom",
+        message: "заголовок формы может быть только один",
+        path: ["blocks"],
+      });
     }
-    const title = titles[0]
+    const title = titles[0];
     if (title) {
       // «Первый» — не косметика: заголовок рисуется как <h1> формы, и блок посреди
       // вопросов означал бы второй <h1> в середине страницы у респондента.
       if (s.blocks[0]?.id !== title.id) {
         ctx.addIssue({
-          code: 'custom',
-          message: 'заголовок формы должен быть первым блоком',
-          path: ['blocks'],
-        })
+          code: "custom",
+          message: "заголовок формы должен быть первым блоком",
+          path: ["blocks"],
+        });
       }
       // Спред, а не .length: Go считает РУНЫ (utf8.RuneCountInString), и на
       // суррогатных парах (эмодзи) .length дал бы вдвое больше — фронт запрещал бы
       // то, что бэкенд принимает.
       if ([...plainText(title.text)].length > MAX_FORM_TITLE_LEN) {
         ctx.addIssue({
-          code: 'custom',
+          code: "custom",
           message: `заголовок формы длиннее ${MAX_FORM_TITLE_LEN} символов`,
-          path: ['blocks'],
-        })
+          path: ["blocks"],
+        });
       }
       // Одиночка: попади form_title в группу поля, редактор показал бы заголовок
       // формы подписью вопроса.
-      if (s.blocks.some((b) => b.id !== title.id && b.groupId === title.groupId)) {
+      if (
+        s.blocks.some((b) => b.id !== title.id && b.groupId === title.groupId)
+      ) {
         ctx.addIssue({
-          code: 'custom',
-          message: 'заголовок формы не входит в группу вопроса',
-          path: ['blocks'],
-        })
+          code: "custom",
+          message: "заголовок формы не входит в группу вопроса",
+          path: ["blocks"],
+        });
       }
     }
-  })
-export type FormSchema = z.infer<typeof formSchemaSchema>
+  });
+export type FormSchema = z.infer<typeof formSchemaSchema>;
