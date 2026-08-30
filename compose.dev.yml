@@ -52,6 +52,24 @@ services:
       echo 'бакет готов';
       "
 
+  # Сервис печати PDF (ADR §10). В dev он есть, потому что иначе печать нельзя
+  # посмотреть вовсе: chromium в api-образ не кладётся, а на хосте его у нас нет.
+  # Образ собирается локально из того же Dockerfile, что уедет на прод.
+  #
+  # network_mode: host — dev-особенность, и единственная возможная: api и фронты
+  # живут НА ХОСТЕ (go run / vite), а принтеру нужно ходить к api за печатной
+  # страницей, api — к принтеру за документом. В прод-контуре оба в одной сети
+  # compose, и хостовая сеть там не нужна (deploy/compose.prod.yml).
+  printer:
+    build:
+      context: .
+      dockerfile: deploy/Dockerfile.printer
+    image: ghcr.io/ka-shmd/trillix-printer:latest
+    environment:
+      PRINTER_API_ORIGIN: http://127.0.0.1:8080
+    network_mode: host
+    restart: unless-stopped
+
 volumes:
   pg_data:
   minio_data:

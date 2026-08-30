@@ -24,6 +24,17 @@ const BUDGET_BYTES = 45 * 1024
 const EMBED_BUDGET_BYTES = 4 * 1024
 const EMBED_PREFIX = 'embed/'
 
+// Печатная страница ответа (dist/print/, ADR §10) — тоже отдельный счёт и по той же
+// причине: её код и её копии шрифтов качает НАШ ЖЕ принтер по внутренней сети, а не
+// респондент. Сложенная с формой, она означала бы вес, который никто никогда не
+// скачивает за раз, и вдобавок мгновенно съела бы весь остаток бюджета формы.
+//
+// Порог у неё свой и мягкий: страница рисуется теми же @fields, что и форма, поэтому
+// её вес — это вес формы плюс разбор данных. Сторожит он не скорость, а состав: если
+// сюда однажды приедет библиотека печати, число это покажет.
+const PRINT_BUDGET_BYTES = 60 * 1024
+const PRINT_PREFIX = 'print/'
+
 // Шрифты формы (фаза 22) — ТРЕТИЙ порог, снова отдельный, и снова потому, что
 // складывать разное значит не мерить ничего. Шрифт не в бандле: он не парсится и не
 // исполняется, приезжает параллельно и только тем респондентам, чьей форме он
@@ -70,8 +81,12 @@ function filesUnder(dir, ext, prefix = '') {
 }
 
 const allFiles = filesUnder(distDir, '.js')
-const jsFiles = allFiles?.filter((f) => !f.label.startsWith(EMBED_PREFIX)) ?? null
+const jsFiles =
+  allFiles?.filter(
+    (f) => !f.label.startsWith(EMBED_PREFIX) && !f.label.startsWith(PRINT_PREFIX),
+  ) ?? null
 const embedFiles = allFiles?.filter((f) => f.label.startsWith(EMBED_PREFIX)) ?? []
+const printFiles = allFiles?.filter((f) => f.label.startsWith(PRINT_PREFIX)) ?? []
 if (jsFiles === null) {
   console.error(`✗ нет собранной сборки в ${distDir} — сначала 'npm run build'`)
   process.exit(1)
@@ -101,10 +116,12 @@ if (total > BUDGET_BYTES) {
 }
 console.log('✓ в пределах бюджета')
 
-// Загрузчик собирается вторым проходом (vite.embed.config.ts). Его отсутствие —
-// не ошибка: `vite build` без второго прохода оставляет dist без embed/, и ронять
-// на этом проверку формы незачем.
-const fontFiles = filesUnder(distDir, '.woff2') ?? []
+// Шрифты печатной страницы — КОПИИ тех же файлов (у раздельных сборок общего чанка
+// нет). В счёт раздачи респонденту они не входят: он качает шрифт своей формы, а не
+// содержимое чужого каталога.
+const fontFiles = (filesUnder(distDir, '.woff2') ?? []).filter(
+  (f) => !f.label.startsWith(PRINT_PREFIX),
+)
 if (fontFiles.length > 0) {
   let fontTotal = 0
   console.log('')
@@ -124,6 +141,28 @@ if (fontFiles.length > 0) {
   console.log('✓ шрифты в пределах бюджета')
 }
 
+if (printFiles.length > 0) {
+  let printTotal = 0
+  console.log('')
+  for (const f of printFiles) {
+    const size = gzipSync(readFileSync(f.path)).length
+    printTotal += size
+    console.log(`  ${f.label}  ${kib(size)} gzip`)
+  }
+  console.log(`Печатная страница: ${kib(printTotal)} gzip · бюджет ${kib(PRINT_BUDGET_BYTES)}`)
+  if (printTotal > PRINT_BUDGET_BYTES) {
+    console.error(
+      `✗ бюджет печатной страницы превышен на ${kib(printTotal - PRINT_BUDGET_BYTES)}. ` +
+        `Посмотри, что в неё приехало: рисуется она теми же @fields, что и форма.`,
+    )
+    process.exit(1)
+  }
+  console.log('✓ печатная страница в пределах бюджета')
+}
+
+// Загрузчик собирается вторым проходом (vite.embed.config.ts), печатная страница —
+// третьим. Их отсутствие — не ошибка: `vite build` без этих проходов оставляет dist
+// без embed/ и print/, и ронять на этом проверку формы незачем.
 if (embedFiles.length > 0) {
   let embedTotal = 0
   console.log('')

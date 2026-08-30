@@ -18,6 +18,7 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/ka-shmd/trillix/internal/blob"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
 )
@@ -42,6 +43,15 @@ func (b *fakeBlob) PutObject(_ context.Context, bucket, key string, data []byte,
 	b.bucket, b.key, b.contentType = bucket, key, contentType
 	b.data = data
 	return nil
+}
+
+// GetObject отдаёт то, что положили: чтение появилось вместе с печатью ответов и
+// в фейке отвечает тем же объектом, если ключ совпал.
+func (b *fakeBlob) GetObject(_ context.Context, bucket, key string) ([]byte, string, error) {
+	if bucket != b.bucket || key != b.key {
+		return nil, "", blob.ErrNotFound
+	}
+	return b.data, b.contentType, nil
 }
 
 // makePNG кодирует настоящую w×h PNG-картинку (валидные байты для декода).

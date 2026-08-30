@@ -134,6 +134,39 @@ func (Repo) GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uui
 	}, nil
 }
 
+// PrintRow — ответ вместе со снапшотом схемы своей версии: то, из чего рисуется
+// печатная страница. Схема здесь СЫРАЯ (json.RawMessage), а не разобранная в
+// domain.FormSchema: рисует форму фронт по тому же контракту, что и рендерер
+// публичной страницы, и промежуточный разбор в Go только добавил бы место, где
+// печать может разойтись с формой.
+type PrintRow struct {
+	Submission
+	Schema json.RawMessage
+}
+
+// GetForPrint — один ответ формы вместе со схемой его версии (печать PDF).
+// pgx.ErrNoRows означает «печатать нечего»: ответа нет, он чужой формы или скрыт
+// тарифом. Вызывающий превращает это в 404 — существование чужого ответа наружу
+// не подтверждается.
+func (Repo) GetForPrint(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (PrintRow, error) {
+	row, err := postgres.New(db).GetSubmissionForPrint(ctx, postgres.GetSubmissionForPrintParams{
+		ID:     id,
+		FormID: formID,
+	})
+	if err != nil {
+		return PrintRow{}, err
+	}
+	return PrintRow{
+		Submission: Submission{
+			ID:          row.ID,
+			FormVersion: row.FormVersion,
+			Answers:     json.RawMessage(row.Answers),
+			CreatedAt:   row.CreatedAt.Time,
+		},
+		Schema: json.RawMessage(row.FormSchema),
+	}, nil
+}
+
 // ListForBackfill — пачка ответов формы для догрузки во внешнюю таблицу:
 // старые сверху, строго до отсечки, после курсора after (uuid.Nil — с начала).
 func (Repo) ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error) {

@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   image:
-    name: Go-образ → GHCR
+    name: Go-образы → GHCR
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,15 +27,37 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      # Кеш слоёв между релизами. Без него каждая сборка идёт с нуля, и слой
+      # установки пакетов пересоздаётся с новыми метаданными apt — digest другой,
+      # и прод тянет его целиком на КАЖДЫЙ тег. У образа печати это ~800 МБ
+      # (chromium и его десктопная обвязка), у api — десятки мегабайт. С кешем
+      # неизменившийся слой переиспользуется, и выкатка везёт только бинарь.
       - name: build & push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: deploy/Dockerfile
           push: true
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
           # Тег образа = git-тег (напр. v0.7.0). compose.prod.yml на VPS подставит
           # его через ${TAG} и сделает docker compose pull (фаза 9).
           tags: ghcr.io/${{ github.repository_owner }}/trillix-api:${{ github.ref_name }}
+      # Второй образ — сервис печати PDF (ADR §10): headless-Chromium не кладётся в
+      # distroless-образ api, поэтому у него свой Dockerfile и свой тег. Собирается
+      # тем же тегом, что api: compose на сервере подставляет один ${TAG} обоим, и
+      # разъехаться версиям нечем.
+      - name: build & push printer
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.printer
+          push: true
+          # Своя область кеша: у образов разные базы, общий scope затирал бы слои
+          # одного другим на каждой сборке.
+          cache-from: type=gha,scope=printer
+          cache-to: type=gha,scope=printer,mode=max
+          tags: ghcr.io/${{ github.repository_owner }}/trillix-printer:${{ github.ref_name }}
 
   static:
     name: Статика фронтов → GitHub Release

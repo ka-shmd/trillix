@@ -2,7 +2,7 @@ import { useRef, useState } from 'react'
 
 import { DEFAULT_MAX_FILES, DEFAULT_MAX_FILE_SIZE_MIB } from '@entities/formSchema'
 
-import { formatFileSize, useUploader, type UploadedFile } from '../fileUpload'
+import { formatFileSize, useKnownFiles, useUploader, type UploadedFile } from '../fileUpload'
 import { type Control, type ControlProps, invalidAttrs } from './contract'
 
 // Файл в ответе. Значение поля — массив id загрузок; всё остальное, что видит
@@ -20,6 +20,7 @@ export const fileControl: Control = (p) => <FileField {...p} />
 
 function FileField(p: ControlProps) {
   const upload = useUploader()
+  const shared = useKnownFiles()
   const [pending, setPending] = useState<Pending[]>([])
   const [done, setDone] = useState<UploadedFile[]>([])
   const [over, setOver] = useState(false)
@@ -38,7 +39,12 @@ function FileField(p: ControlProps) {
 
   // Имя и размер держатся рядом с id: показать их — местное дело, а ответ остаётся
   // массивом id. Список done переживает те же перерисовки, что и value.
-  const known = (id: string) => done.find((f) => f.id === id)
+  //
+  // Второй источник — карта уже приложенных файлов из контекста: её кладёт печатная
+  // страница отправленного ответа, где загрузки не было и done пуст навсегда.
+  // Порядок именно такой: свежая загрузка этой сессии главнее того, что пришло с
+  // сервера.
+  const known = (id: string) => done.find((f) => f.id === id) ?? shared?.[id]
 
   function accept(files: FileList | null) {
     if (!files || !upload || p.disabled) return

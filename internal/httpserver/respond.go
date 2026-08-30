@@ -100,6 +100,7 @@ var wrappedSentinels = []error{
 	domain.ErrConflict,
 	domain.ErrPlanRequired,
 	domain.ErrFormClosed,
+	domain.ErrUnavailable,
 }
 
 // statusForError — единственная таблица соответствия доменных ошибок и HTTP.
@@ -131,6 +132,8 @@ func statusForError(err error) (int, string) {
 		return http.StatusTooManyRequests, "rate_limited"
 	case errors.Is(err, domain.ErrTooLarge):
 		return http.StatusRequestEntityTooLarge, "payload_too_large"
+	case errors.Is(err, domain.ErrUnavailable):
+		return http.StatusServiceUnavailable, "unavailable"
 	default:
 		return http.StatusInternalServerError, "internal"
 	}

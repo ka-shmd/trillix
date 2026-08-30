@@ -25,6 +25,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/periodic"
 	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/printer"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/visits"
@@ -155,6 +156,16 @@ const (
 	// отсюда запас 5 при пополнении раз в 20 секунд.
 	avatarRatePerSec = 1.0 / 20.0
 	avatarBurst      = 5
+
+	// Печать PDF ответа (ADR §10). Два одновременных браузера — потолок для одной
+	// машины, на которой рядом живёт Postgres: третий запрос ждёт слота, а не
+	// поднимает третий браузер. Таймаут — на одну печать целиком (запрос к принтеру,
+	// включая работу chromium).
+	printConcurrency = 2
+	printTimeout     = 30 * time.Second
+	// Проверка связи с принтером при старте — секунда: он либо рядом (одна сеть
+	// compose, локальный хост), либо не отвечает вовсе.
+	printerPingTimeout = time.Second
 
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
@@ -432,14 +443,49 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	// Печать PDF ответа (ADR §10). Клиент есть только там, где настроен принтер:
+	// без него ручка честно отвечает 503, а не молчит. Семафор ограничивает число
+	// одновременно поднятых браузеров — защищаем свою машину, на которой рядом
+	// работает Postgres.
+	if cfg.PrinterURL != "" {
+		printClient := printer.New(cfg.PrinterURL, printConcurrency, printTimeout)
+		submissionsHandler = submissionsHandler.WithPrinter(printClient, cfg.FormTokenSecret)
+		// Проверяем связь СРАЗУ: опечатка в адресе (классика — прод-адрес
+		// http://printer:8090 в dev, где такого имени нет) иначе всплывёт только при
+		// первом клике по «Скачать PDF», у человека, который её не делал. Отказ не
+		// роняет старт: печать не критична, а принтер может подняться следом.
+		pingCtx, cancelPing := context.WithTimeout(context.Background(), printerPingTimeout)
+		err := printClient.Ping(pingCtx)
+		cancelPing()
+		if err != nil {
+			log.Warn("printer configured, but does not answer",
+				slog.String("url", cfg.PrinterURL), slog.String("error", err.Error()))
+		} else {
+			log.Info("printer configured", slog.String("url", cfg.PrinterURL))
+		}
+	}
 
-	srv := httpserver.New(cfg.HTTPAddr, log, pool,
+	routes := []httpserver.RouteRegistrar{
 		authHandler.Routes, authHandler.OAuthRoutes, authHandler.AccountRoutes,
 		workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
-		integrationsHandler.Routes)
+		integrationsHandler.Routes,
+	}
+
+	// Печатная страница ответа (ADR §10). Путь задаётся явно на каждом контуре
+	// (PRINT_PAGE_PATH); пусто — печати на контуре нет, и ручка PDF отвечает 503.
+	if path := cfg.PrintPagePath; path != "" {
+		printPage, err := submissions.NewPrintPageHandler(submissionsSvc, cfg.FormTokenSecret, path)
+		if err != nil {
+			return fmt.Errorf("init print page handler: %w", err)
+		}
+		routes = append(routes, printPage.Routes)
+		log.Info("print page configured", slog.String("path", path))
+	}
+
+	srv := httpserver.New(cfg.HTTPAddr, log, pool, routes...)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()

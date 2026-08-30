@@ -5,9 +5,11 @@ import (
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -17,6 +19,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
+	"github.com/ka-shmd/trillix/internal/printer"
 )
 
 // Middleware — HTTP-обёртка (RequireAuth из auth), инжектируемая в composition root:
@@ -33,6 +36,7 @@ type listService interface {
 	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error)
 	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
+	AuthorizePrint(ctx context.Context, userID, formID, submissionID uuid.UUID) (PrintAccess, error)
 	ListPartialsForForm(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (PartialPage, error)
 	DeletePartialForForm(ctx context.Context, userID, formID, visitID uuid.UUID) error
 }
@@ -52,16 +56,41 @@ const csvFlushEvery = 500
 // стрима — иначе большой экспорт на медленном канале обрубается на середине (TD-4).
 const exportWriteChunkTimeout = 30 * time.Second
 
-// Handler — приватный транспорт модуля submissions: автор смотрит и удаляет ответы
-// своей формы. Чтение (GET) — за RequireAuth; удаление (DELETE) — ещё и за RequireCSRF.
+// Handler — приватный транспорт модуля submissions: автор смотрит, печатает и
+// удаляет ответы своей формы. Чтение (GET) — за RequireAuth; удаление (DELETE) —
+// ещё и за RequireCSRF.
 type Handler struct {
 	svc         listService
 	requireAuth Middleware
 	requireCSRF Middleware
+	// printer — сервис печати PDF; nil означает «печати на этом контуре нет» (в dev
+	// контейнера принтера не существует). Ручка тогда отвечает 503 со словами, а не
+	// молчит и не притворяется, что документа нет.
+	printer PrintClient
+	// printSecret — секрет токенов печати, выведенный из секрета контура
+	// (printtoken.go). Пуст, когда печати нет.
+	printSecret []byte
+	now         func() time.Time
+}
+
+// PrintClient — потребляемый интерфейс сервиса печати (реализация — *printer.Client).
+// Путь, а не адрес: origin знает сам принтер, поэтому попросить его сходить на чужой
+// хост нельзя.
+type PrintClient interface {
+	PDF(ctx context.Context, path string) ([]byte, error)
 }
 
 func NewHandler(svc listService, requireAuth, requireCSRF Middleware) *Handler {
-	return &Handler{svc: svc, requireAuth: requireAuth, requireCSRF: requireCSRF}
+	return &Handler{svc: svc, requireAuth: requireAuth, requireCSRF: requireCSRF, now: time.Now}
+}
+
+// WithPrinter подключает печать. Отдельным сеттером, а не аргументом конструктора:
+// печать есть не на каждом контуре, и у конструктора уже три аргумента, из которых
+// два — обёртки-мидлвари.
+func (h *Handler) WithPrinter(client PrintClient, formTokenSecret []byte) *Handler {
+	h.printer = client
+	h.printSecret = derivePrintSecret(formTokenSecret)
+	return h
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -72,6 +101,11 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// из её строки и живёт по тем же правилам (то же окно наблюдения, тот же рендер).
 	mux.Handle("GET /api/v1/forms/{id}/submissions/summary/{block}", h.requireAuth(http.HandlerFunc(h.blockAnswers)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/count", h.requireAuth(http.HandlerFunc(h.count)))
+	// Печать — СВОЙ корень, а не подпуть /submissions/{sid}: рядом живёт
+	// /submissions/summary/{block}, и «{sid}/pdf» с ним неразличим для маршрутизатора
+	// (оба матчат .../submissions/summary/pdf). Тот же приём, что у черновиков,
+	// которые тоже вынесены из-под /submissions.
+	mux.Handle("GET /api/v1/forms/{id}/print/{sid}", h.requireAuth(http.HandlerFunc(h.pdf)))
 	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 	// Черновики — СВОЙ корень, а не подпуть /submissions: это другая таблица, другой
 	// курсор и другое право (гейт тарифа). Вкладка кабинета соседняя, данные — нет.
@@ -591,6 +625,104 @@ func (h *Handler) export(w http.ResponseWriter, r *http.Request) {
 func csvContentDisposition(formID uuid.UUID) string {
 	name := "submissions-" + formID.String() + ".csv"
 	return fmt.Sprintf("attachment; filename=%q", name)
+}
+
+// pdfPrintTimeout — потолок на всю печать: ожидание слота у принтера плюс работа
+// браузера. Дольше держать соединение бессмысленно — автор к этому времени уже
+// нажал кнопку второй раз.
+const pdfPrintTimeout = 25 * time.Second
+
+// pdfRetryAfter — что сказать автору, когда все слоты печати заняты. Секунды: печать
+// одного документа идёт единицы секунд, и повтор через десять почти наверняка
+// попадёт в свободный слот.
+const pdfRetryAfter = "10"
+
+// pdf печатает один ответ формы в PDF и отдаёт файл браузеру.
+//
+// Порядок принципиален: сначала право (AuthorizePrint — чужая форма или удалённый
+// ответ дают 404 ДО того, как поднимется браузер), потом токен печати, потом сама
+// печать. Синхронно: документ готовится секунды, а очередь, письмо и «ваш файл
+// готов» стоили бы больше, чем экономили (ARCHITECTURE §4.4).
+func (h *Handler) pdf(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	subID, err := uuid.Parse(r.PathValue("sid"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+
+	access, err := h.svc.AuthorizePrint(r.Context(), userID, formID, subID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	// Печать может быть не настроена на контуре (dev): это не ошибка автора и не
+	// отсутствие ответа, поэтому 503 и человеческий текст, а не 404 или 500.
+	if h.printer == nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: печать PDF на этом контуре не настроена", domain.ErrUnavailable))
+		return
+	}
+
+	ctx, cancel := context.WithTimeout(r.Context(), pdfPrintTimeout)
+	defer cancel()
+
+	token := issuePrintToken(h.printSecret, formID, subID, h.now().Add(printTokenTTL))
+	// Дедлайн записи продлевается по образцу экспорта CSV: общий WriteTimeout
+	// сервера (10 с) короче, чем печать вправе идти, и без продления соединение
+	// рвалось бы на середине документа (TD-4).
+	rc := http.NewResponseController(w)
+	if err := rc.SetWriteDeadline(time.Now().Add(pdfPrintTimeout + 5*time.Second)); err != nil {
+		httpserver.LoggerFrom(r.Context()).Warn("pdf: cannot extend write deadline",
+			slog.String("error", err.Error()))
+	}
+
+	doc, err := h.printer.PDF(ctx, "/internal/print/doc/"+token)
+	if err != nil {
+		switch {
+		case errors.Is(err, printer.ErrBusy):
+			w.Header().Set("Retry-After", pdfRetryAfter)
+			httpserver.WriteError(w, r, fmt.Errorf("%w: печать занята, попробуйте ещё раз", domain.ErrUnavailable))
+		case errors.Is(err, printer.ErrUnreachable):
+			// Связь с соседним сервисом, а не поломка кода: 503, а причина — в лог,
+			// потому что чинит её оператор контура, а не человек у экрана.
+			httpserver.LoggerFrom(r.Context()).Error("printer unreachable",
+				slog.String("error", err.Error()))
+			httpserver.WriteError(w, r, fmt.Errorf("%w: сервис печати недоступен", domain.ErrUnavailable))
+		default:
+			httpserver.WriteError(w, r, fmt.Errorf("print submission %s: %w", subID, err))
+		}
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/pdf")
+	w.Header().Set("Content-Disposition", pdfContentDisposition(access))
+	w.Header().Set("Content-Length", strconv.Itoa(len(doc)))
+	if _, err := w.Write(doc); err != nil {
+		httpserver.LoggerFrom(r.Context()).Warn("pdf write failed", slog.String("error", err.Error()))
+	}
+}
+
+// pdfContentDisposition — имя скачиваемого файла: «<форма> — <дата>.pdf». ASCII-имя
+// в filename остаётся техническим (кириллица в нём ломается у старых клиентов),
+// человеческое едет в filename* по RFC 5987 — так автор находит нужный файл в папке
+// «Загрузки» через полгода, а не разбирает там десяток submission-<uuid>.pdf.
+func pdfContentDisposition(a PrintAccess) string {
+	date := a.CreatedAt.UTC().Format("2006-01-02")
+	human := strings.TrimSpace(a.FormTitle)
+	if human == "" {
+		human = "Ответ"
+	}
+	human += " — " + date + ".pdf"
+	return fmt.Sprintf("attachment; filename=%q; filename*=UTF-8''%s",
+		"submission-"+date+".pdf", url.PathEscape(human))
 }
 
 // delete удаляет один ответ формы (GDPR-гигиена). За RequireAuth+RequireCSRF.

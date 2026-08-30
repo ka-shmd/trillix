@@ -129,12 +129,22 @@ cd e2e && npm test         # три сценария
 ```
 git tag v0.9.6 && git push origin v0.9.6
         │
-        ├── job image  → сборка Dockerfile → ghcr.io/ka-shmd/trillix-api:v0.9.6
+        ├── job image  → сборка Dockerfile          → ghcr.io/ka-shmd/trillix-api:v0.9.6
+        │                 сборка Dockerfile.printer  → ghcr.io/ka-shmd/trillix-printer:v0.9.6
         ├── job static → vite build обоих фронтов → tar.gz в GitHub Release
         │
         └── job deploy (needs: image, static)
               ssh deploy@<host> "TAG=v0.9.6 bash -s" < deploy/remote-update.sh
 ```
+
+**Слои кешируются между релизами** (`cache-from`/`cache-to: type=gha`, у каждого образа своя область). Без кеша каждая сборка идёт с нуля, слой `apt install` пересоздаётся с новыми метаданными, digest получается другой — и прод тянет его целиком на каждый тег: у образа печати это ~800 МБ. С кешем неизменившийся слой переиспользуется, и выкатка везёт только бинарь.
+
+**Образов ДВА, тег у них один.** Второй — сервис печати PDF (headless-Chromium, ADR §10):
+в distroless-образ api браузер не кладётся, поэтому у него свой `deploy/Dockerfile.printer`
+и своя строка в том же job. Тег общий не для красоты — `compose.prod.yml` подставляет один
+`${TAG}` обоим сервисам, и разъехаться версиям нечем. Печать на контуре включает переменная
+`PRINTER_URL` в серверном `.env`: без неё api поднимается, а кнопка «Скачать PDF» отвечает
+503 «печать не настроена».
 
 ### 5.2 Почему сервер тянет готовое сам
 

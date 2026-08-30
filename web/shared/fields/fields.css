@@ -1409,6 +1409,21 @@ textarea.rf-input {
   cursor: default;
 }
 
+/* Коробка ответа на печатной странице: тот же .rf-input, но текстом внутрь, а не
+   контролом (kinds/textInput.tsx). Высота перестаёт быть фиксированной, иначе
+   длинный ответ обрезался бы ровно так же, как в настоящем поле; выравнивание
+   строки по вертикали держит padding, а не line-height коробки. */
+.rf-input--static {
+  height: auto;
+  min-height: var(--rf-control-h);
+  white-space: pre-wrap;
+  overflow-wrap: break-word;
+}
+
+.rf-input--wide {
+  max-width: 100%;
+}
+
 /* СПИСОК ВАРИАНТОВ. Вариант — КАРТОЧКА ПО ШИРИНЕ ТЕКСТА, а не строка во всю
    колонку (замер Tally: карточки 123/195/202/127px в колонке 700px, шаг по
    вертикали 48 = 36 высота + 12 зазор). align-items: flex-start здесь — не

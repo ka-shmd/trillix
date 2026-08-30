@@ -27,6 +27,9 @@ type BlockFieldProps = {
   value?: Answer
   onChange?: (next: Answer) => void
   disabled?: boolean
+  // Печатная страница ответа: контролы показывают ответ целиком, а не обрезают его
+  // по своим размерам (см. readOnly в kinds/contract.ts).
+  readOnly?: boolean
   // Рендерер: сообщение об ошибке валидации и колбэк потери фокуса (проверка по
   // blur). В превью билдера отсутствуют — поле ведёт себя как раньше.
   error?: string
@@ -46,6 +49,7 @@ export function BlockField({
   value,
   onChange,
   disabled = true,
+  readOnly,
   error,
   onBlur,
 }: BlockFieldProps) {
@@ -88,6 +92,7 @@ export function BlockField({
         value={value}
         onChange={onChange}
         disabled={disabled}
+        readOnly={readOnly}
         invalid={!!error}
         errorId={errorId}
         onBlur={onBlur}

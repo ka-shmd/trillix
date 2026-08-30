@@ -50,6 +50,13 @@ var (
 	// чтобы плашка апгрейда не рекламировала пустоту.
 	ErrPlanRequired = errors.New("plan required")
 
+	// ErrUnavailable — возможность на этом контуре не настроена или временно не
+	// может отработать (печать PDF: контейнера принтера нет в dev; все слоты печати
+	// заняты). Маппится в 503. Отличается от 500 тем, что это НЕ поломка: повтор
+	// позже (или другой контур) сработает, и автору так и говорится — обёрнутым
+	// человеческим текстом, как у ErrConflict.
+	ErrUnavailable = errors.New("temporarily unavailable")
+
 	// Аутентификация.
 	ErrEmailTaken         = errors.New("email already registered")
 	ErrInvalidCredentials = errors.New("invalid email or password")

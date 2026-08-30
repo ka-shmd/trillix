@@ -44,6 +44,22 @@ type Config struct {
 	// vite-dev, Go его не обслуживает. В prod-local/prod — /srv/renderer/index.html
 	// (renderer-статика смонтирована в api read-only, см. deploy/compose.prod.yml).
 	PublicRendererIndexPath string
+	// PrintPagePath — путь в ФС к собранному print.html (печатная страница ответа,
+	// ADR §10). Go читает его на КАЖДУЮ печать и подставляет в него данные ответа.
+	//
+	// ОПЦИОНАЛЬНАЯ: пусто — печати на контуре нет, ручка PDF отвечает 503, а не
+	// молчит. Задаётся ЯВНО на каждом контуре, а не выводится из соседнего
+	// PublicRendererIndexPath (решение владельца 2026-08-30): вывод работал только
+	// там, где собранный индекс существует, то есть везде, кроме dev, — и печать
+	// оказывалась той единственной подсистемой, которую нельзя пощупать в dev.
+	// Правило «выводится из соседней, если пусто» пришлось бы вспоминать при каждом
+	// разговоре о конфиге, а строка рядом с PRINTER_URL читается сама.
+	PrintPagePath string
+	// PrinterURL — базовый адрес сервиса печати (контейнер `printer`, ADR §10):
+	// http://printer:8090. ОПЦИОНАЛЬНАЯ: пусто — печати на контуре нет, и ручка PDF
+	// честно отвечает 503, а не молчит. В dev пусто (контейнера нет), в
+	// prod-local/prod — адрес во внутренней сети compose; наружу принтер не смотрит.
+	PrinterURL string
 	// AppOrigin — origin кабинета (scheme://host[:port]) для строгой проверки
 	// заголовка Origin в CSRF-защите мутаций (defense-in-depth поверх double-submit).
 	// dev — http://localhost:5173 (vite кабинета); prod-local — https://app.localhost;
@@ -213,6 +229,10 @@ func Load() (Config, error) {
 	cfg.MailSMTPTLS = os.Getenv("MAIL_SMTP_TLS")
 	// Опциональная (пустая в dev — /r отдаёт vite-dev): os.Getenv, не required().
 	cfg.PublicRendererIndexPath = os.Getenv("PUBLIC_RENDERER_INDEX_PATH")
+	// Опциональная (пустая в dev — контейнера печати нет).
+	cfg.PrinterURL = strings.TrimRight(os.Getenv("PRINTER_URL"), "/")
+	// Опциональная (пустая — печати на контуре нет).
+	cfg.PrintPagePath = os.Getenv("PRINT_PAGE_PATH")
 	// Опциональные (нет приложения Яндекс ID — провайдер просто выключен).
 	cfg.YandexOAuthClientID = os.Getenv("YANDEX_OAUTH_CLIENT_ID")
 	cfg.YandexOAuthClientSecret = os.Getenv("YANDEX_OAUTH_CLIENT_SECRET")
@@ -347,4 +367,39 @@ func parseLogLevel(s string) (slog.Level, error) {
 	default:
 		return 0, fmt.Errorf("invalid LOG_LEVEL %q: want debug|info|warn|error", s)
 	}
+}
+
+// PrinterConfig — конфигурация сервиса печати (cmd/printer). Отдельный тип и
+// отдельный загрузчик, потому что это отдельный процесс: полный Config требует
+// DATABASE_URL и десяток секретов, которых у принтера нет и быть не должно.
+//
+// Живёт здесь, а не в cmd/printer, ради правила «os.Getenv вне пакета config
+// запрещён» (internal/CLAUDE.md): чтение окружения остаётся в одном месте, каким бы
+// маленьким процесс ни был.
+type PrinterConfig struct {
+	// HTTPAddr — адрес внутри контейнера; наружу порт не публикуется.
+	HTTPAddr string
+	// ChromiumBin — чем печатать. Переменная нужна не для гибкости, а потому что имя
+	// бинаря разнится между базовыми образами (chromium / chromium-browser).
+	ChromiumBin string
+	// APIOrigin — откуда принтер берёт печатные страницы. Origin знает ОН, а не тот,
+	// кто просит напечатать: api присылает только путь, поэтому попросить принтер
+	// сходить на чужой хост нельзя (SSRF не появляется вместе с печатью).
+	APIOrigin string
+}
+
+// LoadPrinter читает конфигурацию сервиса печати. Обязательных переменных нет:
+// значения по умолчанию верны для образа, в котором он и живёт.
+func LoadPrinter() PrinterConfig {
+	cfg := PrinterConfig{HTTPAddr: ":8090", ChromiumBin: "chromium", APIOrigin: "http://api:8080"}
+	if v := os.Getenv("PRINTER_ADDR"); v != "" {
+		cfg.HTTPAddr = v
+	}
+	if v := os.Getenv("CHROMIUM_BIN"); v != "" {
+		cfg.ChromiumBin = v
+	}
+	if v := os.Getenv("PRINTER_API_ORIGIN"); v != "" {
+		cfg.APIOrigin = strings.TrimRight(v, "/")
+	}
+	return cfg
 }

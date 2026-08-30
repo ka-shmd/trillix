@@ -62,6 +62,21 @@ x-app-env: &app-env
   GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
   GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
   GOOGLE_PICKER_API_KEY: ${GOOGLE_PICKER_API_KEY:-}
+  # Сервис печати PDF (ADR §10). ОПЦИОНАЛЬНАЯ (`:-`): контур без принтера
+  # поднимается, кнопка «Скачать PDF» отвечает 503 «печать не настроена».
+  PRINTER_URL: ${PRINTER_URL:-}
+  # Печатная страница ответа — в той же смонтированной статике рендерера, что и
+  # index.html. ОПЦИОНАЛЬНА (`:-`): пусто — печати на контуре нет.
+  PRINT_PAGE_PATH: ${PRINT_PAGE_PATH:-}
+
+# Окружение сервиса печати. Свой якорь, а не общий с api: принтеру не положено
+# знать ни DSN базы, ни секретов — он умеет ровно одно, запускать браузер. Пустой
+# набор здесь был бы честнее только на словах: дефолты живут в config.LoadPrinter,
+# а переменные нужны, чтобы контур мог их переопределить не пересобирая образ.
+x-printer-env: &printer-env
+  PRINTER_ADDR: ${PRINTER_ADDR:-:8090}
+  PRINTER_API_ORIGIN: ${PRINTER_API_ORIGIN:-http://api:8080}
+  CHROMIUM_BIN: ${CHROMIUM_BIN:-chromium}
 
 # Ротация docker-логов (фаза 10, шаг 4). Без неё json-file-логи растут безгранично и
 # со временем забивают диск VPS — Postgres перестаёт писать, прод ложится, причём
@@ -132,6 +147,24 @@ services:
     # Порт наружу НЕ публикуется: наружу api смотрит только через Caddy.
     # Healthcheck внутри контейнера не ставим — distroless без shell/curl;
     # живость проверяет внешний мониторинг по /healthz (фаза 10).
+    restart: unless-stopped
+
+  # Печать PDF ответов (ADR §10). Отдельный сервис, потому что печатает
+  # headless-Chromium, а он не кладётся в distroless-образ api. Состояния нет,
+  # базы нет, наружу порт НЕ публикуется: к нему ходит только api по внутренней
+  # сети, и он же ходит обратно за печатной страницей.
+  #
+  # Образ свой (deploy/Dockerfile.printer) и собирается тем же workflow, что и api.
+  # Контейнер переживает падение браузера: процесс браузера запускается на документ,
+  # и его смерть — это ошибка одной печати, а не сервиса.
+  printer:
+    image: ghcr.io/ka-shmd/trillix-printer:${TAG:-latest}
+    logging: *logging
+    environment: *printer-env
+    # Печать поднимает браузер: /dev/shm по умолчанию 64 МБ, и на странице с
+    # картинками chromium в него не помещается. Флаг --disable-dev-shm-usage в
+    # сервисе уже стоит, это второй пояс.
+    shm_size: 256mb
     restart: unless-stopped
 
   caddy:

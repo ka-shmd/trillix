@@ -24,6 +24,21 @@ export type Uploader = (args: {
   signal: AbortSignal
 }) => Promise<UploadedFile>
 
+// KnownFiles — имена и размеры файлов, приложенных к УЖЕ отправленному ответу
+// (id → файл). Нужны там, где форма показывается заполненной, а загрузки не было:
+// печатная страница ответа рисует список файлов по одним id из ответа, и без этой
+// карты у неё нет ничего, кроме слова «файл».
+//
+// Отдельный контекст, а не поле загрузчика: у печати загрузчика нет вовсе, а у
+// рендерера нет этой карты — совмещать их значило бы заставлять каждую поверхность
+// объявлять ненужную ей половину.
+const KnownFilesContext = createContext<Record<string, UploadedFile> | null>(null)
+
+export const KnownFilesProvider = KnownFilesContext.Provider
+
+export const useKnownFiles = (): Record<string, UploadedFile> | null =>
+  useContext(KnownFilesContext)
+
 const UploaderContext = createContext<Uploader | null>(null)
 
 export const UploaderProvider = UploaderContext.Provider
