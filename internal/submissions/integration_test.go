@@ -287,8 +287,15 @@ func setNotifyEmail(t *testing.T, slug, doc string) {
 // "submission_digest" — имя на проводе, см. mail.TemplateSubmissionNew.
 const notifyRow = `payload->>'template' = 'submission_digest'`
 
+// Тема и текст — СПАНЫ (0045): в них живёт подстановка ответа, и без массива ей
+// негде храниться.
 const ownNotifyEmail = `{"fromName":"Отдел кадров","replyTo":"hr@example.com",` +
-	`"subject":"Новая заявка","body":"Пришла заявка, смотрите в кабинете."}`
+	`"subject":[{"t":"Новая заявка"}],"body":[{"t":"Пришла заявка, смотрите в кабинете."}]}`
+
+// То же письмо с подстановками: чип на вопрос «Имя» в теме и «Все ответы» в тексте.
+// Имя вопроса лежит в `t` — оно же встанет в письмо, если ссылка не разрешится.
+const mentionNotifyEmail = `{"subject":[{"t":"Ответ от "},{"t":"Имя","ref":"b1"}],` +
+	`"body":[{"t":"Пришло:\n"},{"t":"Все ответы","ref":"_all"}]}`
 
 // Своё письмо доезжает до outbox целиком: перебивки едут в payload, потому что
 // отправка происходит ПОЗЖЕ постановки и за настройкой формы диспетчер уже не пойдёт.
@@ -315,6 +322,37 @@ func TestSubmit_NotifyEmail_CustomTemplateInPayload(t *testing.T) {
 	}
 	if fromName != "Отдел кадров" || replyTo != "hr@example.com" || subject != "Новая заявка" {
 		t.Fatalf("перебивки не доехали: from=%q replyTo=%q subject=%q", fromName, replyTo, subject)
+	}
+}
+
+// Подстановки разворачиваются ПРИ ПОСТАНОВКЕ в outbox (mentions.md §10): в payload
+// уезжает готовый плоский текст, а не ссылка на ответ. Диспетчер за схемой и ответом
+// не пойдёт — он их не увидит вовсе.
+func TestSubmit_NotifyEmail_MentionsResolvedInPayload(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	enableNotify(t, slug)
+	setNotifyEmail(t, slug, mentionNotifyEmail)
+	setNotifyEmailGate(t, true)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Кирилл"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var subject, text string
+	err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(payload->>'subject',''), coalesce(payload->>'body','')
+		   FROM outbox WHERE `+notifyRow).Scan(&subject, &text)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	if subject != "Ответ от Кирилл" {
+		t.Fatalf("тема = %q, ожидалось «Ответ от Кирилл»", subject)
+	}
+	if text != "Пришло:\nИмя: Кирилл" {
+		t.Fatalf("текст = %q, ожидалось «Пришло:⏎Имя: Кирилл»", text)
 	}
 }
 

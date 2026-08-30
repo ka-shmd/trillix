@@ -48,9 +48,10 @@ type Span struct {
 	BG    string `json:"bg,omitempty"`
 	Href  string `json:"href,omitempty"`
 	// Ref — подстановка ответа (docs/design/mentions.md): id отвечаемого блока, чей
-	// ответ встанет на место этого куска у респондента. Сервер подстановку не делает
-	// нигде — она живёт на клиенте, а сюда попадает всё, что читает данные: PlainText
-	// отдаёт T, то есть имя вопроса, и в CSV с воронкой уезжает оно.
+	// ответ встанет на место этого куска. В ТЕКСТЕ ФОРМЫ подстановку делает клиент, и
+	// сюда попадает всё, что читает данные: PlainText отдаёт T, то есть имя вопроса, и
+	// в CSV с воронкой уезжает оно. В ПИСЬМЕ о новом ответе (mentions.md §10) её делает
+	// сервер — MentionText, — потому что письмо собирает он.
 	Ref string `json:"ref,omitempty"`
 }
 
@@ -111,6 +112,13 @@ func isHexColor(s string) bool {
 // промежуточных состояниях набора, а автосейв обязан хранить недособранное — то же
 // решение, что у инертного бита ряда.
 func validateSpans(spans []Span) error {
+	return validateSpansLimit(spans, MaxTextLen)
+}
+
+// validateSpansLimit — те же инварианты с чужим потолком длины. Существует ради
+// письма о новом ответе (mentions.md §10): его тема и текст — такие же спаны, но
+// длину им задают собственные потолки настройки, а не MaxTextLen блока.
+func validateSpansLimit(spans []Span, maxRunes int) error {
 	if len(spans) > MaxSpans {
 		return fmt.Errorf("больше %d спанов текста", MaxSpans)
 	}
@@ -168,8 +176,8 @@ func validateSpans(spans []Span) error {
 			}
 		}
 	}
-	if total > MaxTextLen {
-		return fmt.Errorf("текст длиннее %d символов", MaxTextLen)
+	if total > maxRunes {
+		return fmt.Errorf("текст длиннее %d символов", maxRunes)
 	}
 	return nil
 }

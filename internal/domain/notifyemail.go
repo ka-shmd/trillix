@@ -25,7 +25,8 @@ const (
 	// текст: тот же класс, что имя площадки в карточке ссылки.
 	MaxNotifyFromNameLen = 100
 	// MaxNotifySubjectLen — тема письма. Почтовые клиенты обрезают её куда раньше,
-	// но потолок здесь про хранение, а не про показ.
+	// но потолок здесь про хранение, а не про показ. Считается по PlainText: автор
+	// меряет глазами текст, а не куски, на которые его порезал редактор.
 	MaxNotifySubjectLen = 200
 	// MaxNotifyBodyLen — текст письма. Тот же потолок, что у текста благодарности:
 	// оба — короткое письменное сообщение автора, и разные границы означали бы, что
@@ -42,12 +43,16 @@ type NotifyEmail struct {
 	// ReplyTo — куда ответит почтовый клиент, если владелец нажмёт «Ответить».
 	// Голый адрес без имени — как и везде в продукте.
 	ReplyTo string `json:"replyTo,omitempty"`
-	// Subject — тема письма.
-	Subject string `json:"subject,omitempty"`
-	// Body — текст письма. Подстановок (@Форма, @Все ответы) ЕЩЁ НЕТ: текст уходит
-	// как есть — задача в BACKLOG.md. Ссылку на таблицу ответов дефолтный шаблон
-	// добавляет сам, свой текст её не получает.
-	Body string `json:"body,omitempty"`
+	// Subject и Body — тема и текст письма СПАНАМИ, а не строками (mentions.md §10,
+	// миграция 0045). Спан с полем Ref — подстановка ответа: её разворачивает сервер
+	// в момент постановки письма в outbox (MentionText), и до почты доезжает уже
+	// плоский текст. Марок в письме нет — оно plain text, — но формат общий с текстом
+	// блока полотна: общее у двух поверхностей не оформление, а ссылка на ответ.
+	//
+	// Ссылку на таблицу ответов дефолтный шаблон добавляет сам, свой текст её не
+	// получает: подстановки под неё нет, автор вписывает адрес руками.
+	Subject []Span `json:"subject,omitempty"`
+	Body    []Span `json:"body,omitempty"`
 	// AttachPDF — приложить к письму печатный лист ответа. Документ печатается в
 	// момент ДОСТАВКИ письма (ADR §10), то есть настройка действует со следующего
 	// ответа и ничего не говорит про уже отправленные письма.
@@ -61,7 +66,7 @@ type NotifyEmail struct {
 // достаётся NULL, и у «не настраивали» остаётся ровно одно представление.
 func (n *NotifyEmail) Empty() bool {
 	return n == nil ||
-		(n.FromName == "" && n.ReplyTo == "" && n.Subject == "" && n.Body == "" && !n.AttachPDF)
+		(n.FromName == "" && n.ReplyTo == "" && len(n.Subject) == 0 && len(n.Body) == 0 && !n.AttachPDF)
 }
 
 // ValidateNotifyEmail — серверная проверка настройки (инвариант 3, независимо от
@@ -77,11 +82,24 @@ func ValidateNotifyEmail(n *NotifyEmail) error {
 	}{
 		{"fromName", n.FromName, MaxNotifyFromNameLen},
 		{"replyTo", n.ReplyTo, MaxTextAnswerLen},
-		{"subject", n.Subject, MaxNotifySubjectLen},
-		{"body", n.Body, MaxNotifyBodyLen},
 	} {
 		if n := utf8.RuneCountInString(f.v); n > f.max {
 			return schemaErr("notifyEmail: %s длиннее %d символов", f.name, f.max)
+		}
+	}
+	// Тема и текст — спаны, и проверяются тем же валидатором, что текст блока: те же
+	// марки, тот же запрет пары «ссылка + подстановка», тот же потолок числа кусков.
+	// Разные у них только потолки длины, и оба считаются по сумме кусков.
+	for _, f := range []struct {
+		name  string
+		spans []Span
+		max   int
+	}{
+		{"subject", n.Subject, MaxNotifySubjectLen},
+		{"body", n.Body, MaxNotifyBodyLen},
+	} {
+		if err := validateSpansLimit(f.spans, f.max); err != nil {
+			return schemaErr("notifyEmail: %s: %v", f.name, err)
 		}
 	}
 	// Reply-To проверяется строго: битый адрес здесь не «некрасиво», а письмо,
