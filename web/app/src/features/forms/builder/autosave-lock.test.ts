@@ -49,8 +49,7 @@ function seedDetail(qc: QueryClient) {
     saveLocally: false,
     notifyEmail: null,
     linkPreview: null,
-    notifyFrom: '',
-    notifyTo: '',
+    notifyMail: { from: '', to: '', fromName: '', subject: '' },
   })
 }
 

@@ -4,6 +4,7 @@ import {
   closeSettingsValue,
   isDirty,
   notifyEmailValue,
+  settingsFromForm,
   redirectValue,
   isoToLocalInput,
   localInputToIso,
@@ -12,6 +13,7 @@ import {
   validateSettings,
   type SettingsDraft,
 } from './draft'
+import { newFormDetail } from '../draft'
 
 const saved: SettingsDraft = {
   thankYouText: 'Спасибо',
@@ -36,6 +38,15 @@ const saved: SettingsDraft = {
   branding: true,
   autoJump: false,
   saveLocally: false,
+}
+
+// Письмо по умолчанию, каким его отдаёт сервер: имя отправителя и тема стоят в
+// бланке настоящим текстом, а на провод уезжают пустыми.
+const defaultMail = {
+  from: 'no-reply@trillix.ru',
+  to: 'owner@example.com',
+  fromName: 'Trillix',
+  subject: 'Новый ответ в Trillix',
 }
 
 describe('черновик страницы настроек', () => {
@@ -116,13 +127,16 @@ describe('черновик страницы настроек', () => {
   it('в письмо уезжают обрезанные поля, но текст — как набран', () => {
     // Пробелы по краям текста письма — часть письма: абзац, начатый с отступа,
     // автор написал намеренно. У имени, адреса и темы они всегда опечатка.
-    const value = notifyEmailValue({
-      ...saved,
-      notifyFromName: '  Отдел кадров ',
-      notifyReplyTo: ' hr@example.com ',
-      notifySubject: ' Заявка ',
-      notifyBody: '  Здравствуйте!  ',
-    })
+    const value = notifyEmailValue(
+      {
+        ...saved,
+        notifyFromName: '  Отдел кадров ',
+        notifyReplyTo: ' hr@example.com ',
+        notifySubject: ' Заявка ',
+        notifyBody: '  Здравствуйте!  ',
+      },
+      defaultMail,
+    )
     expect(value).toEqual({
       fromName: 'Отдел кадров',
       replyTo: 'hr@example.com',
@@ -135,8 +149,45 @@ describe('черновик страницы настроек', () => {
   it('вложение PDF — часть настройки письма и едет тем же запросом', () => {
     // Отдельной мутации у чекбокса нет: он живёт в письме, а не рядом с ним, —
     // иначе одна кнопка страницы посылала бы седьмой запрос ради одного булева.
-    expect(notifyEmailValue({ ...saved, notifyAttachPdf: true }).attachPdf).toBe(true)
+    expect(notifyEmailValue({ ...saved, notifyAttachPdf: true }, defaultMail).attachPdf).toBe(true)
     expect(pendingChanges(saved, { ...saved, notifyAttachPdf: true }).notifyEmail).toBe(true)
+  })
+
+  it('нетронутые имя отправителя и тема стоят в бланке текстом письма', () => {
+    // Поле показывает то, что уйдёт в письме, а не подсказку о том, что туда писать.
+    const form = { ...newFormDetail(), notifyMail: defaultMail }
+    const draft = settingsFromForm(form)
+    expect(draft.notifyFromName).toBe('Trillix')
+    expect(draft.notifySubject).toBe('Новый ответ в Trillix')
+
+    // Своё письмо сильнее умолчания.
+    const own = settingsFromForm({
+      ...form,
+      notifyEmail: {
+        fromName: '',
+        replyTo: '',
+        subject: 'Заявка с сайта',
+        body: '',
+        attachPdf: false,
+      },
+    })
+    expect(own.notifySubject).toBe('Заявка с сайта')
+    // Пустое поле в своей настройке — по-прежнему умолчание, а не пустая строка.
+    expect(own.notifyFromName).toBe('Trillix')
+  })
+
+  it('нетронутые имя отправителя и тема уезжают пустыми, а не текстом шаблона', () => {
+    // Иначе сегодняшний текст шаблона замёрз бы в колонке: правка шаблона перестала
+    // бы доезжать до всех, кто когда-либо открывал страницу и нажимал «Сохранить».
+    const value = notifyEmailValue(
+      { ...saved, notifyFromName: 'Trillix', notifySubject: 'Новый ответ в Trillix' },
+      defaultMail,
+    )
+    expect(value.fromName).toBe('')
+    expect(value.subject).toBe('')
+    // Переписанное — уезжает как есть.
+    const own = notifyEmailValue({ ...saved, notifySubject: 'Заявка с сайта' }, defaultMail)
+    expect(own.subject).toBe('Заявка с сайта')
   })
 
   it('включённый лимит требует целое больше нуля, выключенный — ничего', () => {

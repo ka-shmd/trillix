@@ -67,9 +67,14 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     closedTitle: form.closedTitle ?? '',
     closedMessage: form.closedMessage ?? '',
     notify: form.notifyOnSubmission,
-    notifyFromName: form.notifyEmail?.fromName ?? '',
+    // Имя отправителя и тема ПОДСТАВЛЯЮТСЯ УМОЛЧАНИЯМИ письма, когда автор их не
+    // переписывал: в бланке стоит настоящий текст письма, а не подсказка о нём.
+    // Подставляется и в черновик, и в сохранённое состояние — иначе открытая
+    // страница считалась бы изменённой, ничего не изменив (см. notifyEmailValue,
+    // который тем же умолчанием разворачивает значение обратно в пустое).
+    notifyFromName: form.notifyEmail?.fromName || form.notifyMail.fromName,
     notifyReplyTo: form.notifyEmail?.replyTo ?? '',
-    notifySubject: form.notifyEmail?.subject ?? '',
+    notifySubject: form.notifyEmail?.subject || form.notifyMail.subject,
     notifyBody: form.notifyEmail?.body ?? '',
     notifyAttachPdf: form.notifyEmail?.attachPdf ?? false,
     partial: form.collectPartial,
@@ -88,11 +93,21 @@ export function redirectValue(draft: SettingsDraft): string {
 
 // Настройка письма в виде, в котором её принимает API: обрезанные поля, кроме
 // текста (в нём пробелы по краям — часть письма).
-export function notifyEmailValue(draft: SettingsDraft): NotifyEmail {
+//
+// Значение, равное умолчанию, уезжает ПУСТЫМ. Это не оптимизация: «не настраивал»
+// хранится пустотой (колонка NULL), и записать в неё сегодняшний текст шаблона
+// значило бы заморозить его — правка шаблона перестала бы доезжать до всех, кто
+// когда-либо открывал эту страницу и сохранял её кнопкой.
+export function notifyEmailValue(
+  draft: SettingsDraft,
+  mail: FormDetail['notifyMail'],
+): NotifyEmail {
+  const fromName = draft.notifyFromName.trim()
+  const subject = draft.notifySubject.trim()
   return {
-    fromName: draft.notifyFromName.trim(),
+    fromName: fromName === mail.fromName ? '' : fromName,
     replyTo: draft.notifyReplyTo.trim(),
-    subject: draft.notifySubject.trim(),
+    subject: subject === mail.subject ? '' : subject,
     body: draft.notifyBody,
     attachPdf: draft.notifyAttachPdf,
   }

@@ -62,16 +62,17 @@ type Handler struct {
 	svc         formsService
 	requireAuth Middleware
 	requireCSRF Middleware
-	// notifyFrom — служебный адрес, с которого сервис шлёт письма (голый адрес из
-	// MAIL_FROM, без имени). Пуст, когда почта на контуре не настроена.
-	notifyFrom string
+	// notifyMail — письмо о новом ответе без авторских правок; адресат
+	// подставляется на каждый запрос детали (он свой у каждой формы). Пустое, когда
+	// почта на контуре не настроена.
+	notifyMail notifyMailBody
 }
 
-// WithNotifyFrom сообщает транспорту служебный адрес отправителя. Отдельным
-// сеттером, а не аргументом конструктора: адрес не имеет отношения к формам, он
-// нужен ровно одной строке бланка письма в настройках.
-func (h *Handler) WithNotifyFrom(addr string) *Handler {
-	h.notifyFrom = addr
+// WithNotifyMail сообщает транспорту, как выглядит письмо о новом ответе без правок
+// автора. Отдельным сеттером, а не аргументом конструктора: к формам это отношения
+// не имеет, нужно ровно одному бланку в настройках.
+func (h *Handler) WithNotifyMail(from, fromName, subject string) *Handler {
+	h.notifyMail = notifyMailBody{From: from, FromName: fromName, Subject: subject}
 	return h
 }
 
@@ -164,20 +165,19 @@ type formDetailResponse struct {
 	// ссылки: кабинет показывает сохранённое всем, а применяет настройку отправка
 	// письма (гейт стоит там же и при сохранении).
 	NotifyEmail *notifyEmailBody `json:"notifyEmail"`
-	// NotifyFrom и NotifyTo — адреса письма о новом ответе, которые автор НЕ
-	// настраивает: с какого адреса сервис шлёт и на какой придёт. Оба нужны бланку
-	// письма в настройках формы: строки «От кого» и «Кому» показывают реальные
-	// адреса, а не описание того, чем они являются.
+	// NotifyMail — письмо о новом ответе БЕЗ авторских правок: как его отправит
+	// сервис, если в notifyEmail пусто. Нужно бланку письма в настройках формы: он
+	// показывает автору настоящие адреса и настоящий текст, а не описание того, чем
+	// они являются, и вычислить их фронт не может.
 	//
 	// Получатель — почта ВЛАДЕЛЬЦА пространства, а не того, кто открыл страницу:
 	// письмо уходит владельцу, и участник команды обязан видеть настоящего адресата,
 	// иначе строка «Кому» врёт всем, кроме владельца. Новой утечки нет — почты
 	// участников пространства и так видны на экране участников.
 	//
-	// Пусто = адрес неизвестен (почта на контуре не настроена, владелец не
-	// разрезолвился): кабинет тогда рисует прежнее описание вместо адреса.
-	NotifyFrom string `json:"notifyFrom"`
-	NotifyTo   string `json:"notifyTo"`
+	// Пустые поля = значение неизвестно (почта на контуре не настроена, владелец не
+	// разрезолвился): кабинет тогда рисует описание вместо значения.
+	NotifyMail notifyMailBody `json:"notifyMail"`
 	// LinkPreview — своя карточка ссылки; null = не настраивали, публичная страница
 	// берёт дефолты. Отдаётся НЕЗАВИСИМО от тарифа: окно кастомизации показывает
 	// сохранённое всем, а применяет карточку к самой ссылке публичный слой (гейт
@@ -249,6 +249,17 @@ type patchRequest struct {
 	LinkPreview        *linkPreviewBody   `json:"linkPreview"`
 }
 
+// notifyMailBody — письмо по умолчанию: два адреса, которые автору не принадлежат,
+// и два текста, которые он вправе перебить (notifyEmail). Тема приезжает из самого
+// шаблона письма (mail.DefaultSubject), имя отправителя и адрес — из MAIL_FROM
+// контура: у всех четырёх строк один источник истины, и он на сервере.
+type notifyMailBody struct {
+	From     string `json:"from"`
+	To       string `json:"to"`
+	FromName string `json:"fromName"`
+	Subject  string `json:"subject"`
+}
+
 // notifyEmailBody — настройка письма о новом ответе в контракте API. Адреса
 // отправителя и получателя здесь НЕТ: первый один на сервис, второй — владелец
 // аккаунта, и оба автору не принадлежат (domain.NotifyEmail).
@@ -307,9 +318,9 @@ func toFormResponse(f Form) formResponse {
 // потребители детали к почте отношения не имеют вовсе.
 func (h *Handler) formDetail(ctx context.Context, f Form) formDetailResponse {
 	resp := toFormDetailResponse(f)
-	resp.NotifyFrom = h.notifyFrom
+	resp.NotifyMail = h.notifyMail
 	if owner, err := h.svc.SubmissionOwner(ctx, f.ID); err == nil {
-		resp.NotifyTo = owner.Email
+		resp.NotifyMail.To = owner.Email
 	} else {
 		httpserver.LoggerFrom(ctx).Warn("notification recipient not resolved for form detail",
 			slog.String("form_id", f.ID.String()), slog.String("error", err.Error()))

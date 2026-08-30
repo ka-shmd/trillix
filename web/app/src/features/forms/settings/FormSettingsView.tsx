@@ -198,7 +198,10 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
 
     if (jobs.notifyEmail) {
       try {
-        await updateNotifyEmail.mutateAsync({ id: form.id, value: notifyEmailValue(draft) })
+        await updateNotifyEmail.mutateAsync({
+          id: form.id,
+          value: notifyEmailValue(draft, form.notifyMail),
+        })
       } catch (e: unknown) {
         broke = true
         // 402 — тариф закрылся, пока страница была открыта (даунгрейд в соседней
@@ -687,11 +690,10 @@ function NotifyEmailFields({
   // h-8 вместо своей высоты контрола: высоту строки бланка задаёт СТРОКА, иначе
   // ряды с полем и ряды с готовым значением стоят разной высоты и бланк рябит.
   const cell = 'h-8 w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
-  // Правая половина бланка — ЗНАЧЕНИЕ, и оно чёрное, даже когда его ещё не набрали:
-  // «Trillix» и «Новый ответ в Trillix» — не подсказка, что сюда писать, а текст,
-  // который уйдёт в письме, если поле не трогать. Серым остаётся только то, чего в
-  // письме не будет: пустой Reply-To и пустой текст (решение владельца 2026-08-30).
-  const defaulted = cell + ' placeholder:text-foreground'
+  // Правая половина бланка — НАСТОЯЩИЙ ТЕКСТ ПИСЬМА, а не подсказка о нём: имя
+  // отправителя и тема приезжают умолчаниями с сервера и стоят в полях значениями,
+  // которые можно править по буквам (решение владельца 2026-08-30). Пустыми остаются
+  // только строки, которых в письме и не будет: Reply-To и свой текст.
 
   return (
     <div>
@@ -701,10 +703,9 @@ function NotifyEmailFields({
             {...lock}
             aria-label="Имя отправителя"
             value={draft.notifyFromName}
-            placeholder="Trillix"
             maxLength={MAX_NOTIFY_FROM_NAME_LEN}
             onChange={(e) => set('notifyFromName', e.target.value)}
-            className={defaulted}
+            className={cell}
           />
         </Row>
         {/* Оба адреса — настоящие, а не описание того, чем они являются: в письме
@@ -712,11 +713,11 @@ function NotifyEmailFields({
             настроена, владелец не разрезолвился) отступает к описанию — пустая
             строка бланка читалась бы как «письмо уйдёт в никуда». */}
         <Row label="От кого">
-          <span className="text-sm">{form.notifyFrom || 'служебный адрес Trillix'}</span>
+          <span className="text-sm">{form.notifyMail.from || 'служебный адрес Trillix'}</span>
         </Row>
         <Row label="Кому">
           <span className="text-sm">
-            {form.notifyTo || 'владельцу пространства, на адрес его аккаунта'}
+            {form.notifyMail.to || 'владельцу пространства, на адрес его аккаунта'}
           </span>
         </Row>
         <Row label="Адрес для ответов">
@@ -743,10 +744,9 @@ function NotifyEmailFields({
             {...lock}
             aria-label="Тема письма"
             value={draft.notifySubject}
-            placeholder="Новый ответ в Trillix"
             maxLength={MAX_NOTIFY_SUBJECT_LEN}
             onChange={(e) => set('notifySubject', e.target.value)}
-            className={defaulted}
+            className={cell}
           />
         </Row>
         <div className="border-t px-3 py-2">
