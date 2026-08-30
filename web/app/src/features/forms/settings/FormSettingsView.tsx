@@ -697,7 +697,11 @@ function NotifyEmailFields({
 
   return (
     <div>
-      <div className={`rounded-lg border${editable ? '' : ' pointer-events-none'}`}>
+      {/* Границы у бланка нет — он отделён от страницы ТЕНЬЮ (решение владельца
+          2026-08-30): рамка спорила с волосяными линиями строк внутри, а лист
+          письма и должен читаться листом, лежащим на странице. Своя подложка
+          обязательна: без неё тень падала бы на прозрачное и не читалась. */}
+      <div className={`rounded-lg bg-card shadow-sm${editable ? '' : ' pointer-events-none'}`}>
         <Row label="Имя отправителя">
           <Input
             {...lock}
