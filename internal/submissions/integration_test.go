@@ -281,10 +281,10 @@ func setNotifyEmail(t *testing.T, slug, doc string) {
 	}
 }
 
-// notifyRow — как отличить письмо о новом ответе от прочих строк outbox (письмо
-// подтверждения адреса от регистрации владельца лежит там же). Раньше отличали по
-// coalesce_key; с отменой дайджеста (2026-08-30) он у этих писем NULL, и различает
-// только шаблон. Значение "submission_digest" — историческое имя, см. mail.TemplateSubmissionNew.
+// notifyRow — как отличить письмо о новом ответе от прочих строк outbox: письмо
+// подтверждения адреса от регистрации владельца лежит там же, а coalesce_key у всех
+// строк NULL и никого ни от кого не отделяет. Различает только шаблон; значение
+// "submission_digest" — имя на проводе, см. mail.TemplateSubmissionNew.
 const notifyRow = `payload->>'template' = 'submission_digest'`
 
 const ownNotifyEmail = `{"fromName":"Отдел кадров","replyTo":"hr@example.com",` +
