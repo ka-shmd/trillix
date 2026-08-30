@@ -77,8 +77,10 @@ export const notifyEmailSchema = z.object({
   subject: z.string(),
   body: z.string(),
   // Приложить к письму печатный лист ответа. Документ печатается в момент доставки
-  // письма, поэтому настройка действует со следующего ответа.
-  attachPdf: z.boolean(),
+  // письма, поэтому настройка действует со следующего ответа. `default` — как у
+  // прочих поздних булевых полей контракта: api, ещё не знающий поля, не обязан
+  // ронять разбор всей формы.
+  attachPdf: z.boolean().default(false),
 })
 export type NotifyEmail = z.infer<typeof notifyEmailSchema>
 

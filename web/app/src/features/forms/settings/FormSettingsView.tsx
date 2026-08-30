@@ -676,112 +676,116 @@ function NotifyEmailFields({
   // — выключенное поле не ловит ни клика, ни фокуса, и объяснить, почему оно не
   // печатается, было бы негде. Клик по такому полю открывает разговор о тарифе.
   const lock = editable ? {} : { readOnly: true, onFocus: onLocked, onClick: onLocked }
-  const cell = 'w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
+  // h-8 вместо своей высоты контрола: высоту строки бланка задаёт СТРОКА, иначе
+  // ряды с полем и ряды с готовым значением стоят разной высоты и бланк рябит.
+  const cell = 'h-8 w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
 
   return (
-    <div className="rounded-lg border">
-      <Row label="Имя отправителя">
-        <Input
-          {...lock}
-          aria-label="Имя отправителя"
-          value={draft.notifyFromName}
-          placeholder="Trillix"
-          maxLength={MAX_NOTIFY_FROM_NAME_LEN}
-          onChange={(e) => set('notifyFromName', e.target.value)}
-          className={cell}
-        />
-      </Row>
-      <Row label="От кого">
-        <span className="text-sm text-muted-foreground">
-          служебный адрес Trillix — его менять нельзя
-        </span>
-      </Row>
-      <Row label="Кому">
-        <span className="text-sm text-muted-foreground">
-          владельцу пространства, на адрес его аккаунта
-        </span>
-      </Row>
-      <Row label="Адрес для ответов">
-        <div className="w-full">
+    <div>
+      <div className="rounded-lg border">
+        <Row label="Имя отправителя">
           <Input
             {...lock}
-            type="email"
-            inputMode="email"
-            aria-label="Адрес для ответов"
-            aria-invalid={replyToInvalid}
-            value={draft.notifyReplyTo}
-            placeholder="Куда ответит ваш почтовый клиент"
-            onChange={(e) => set('notifyReplyTo', e.target.value)}
+            aria-label="Имя отправителя"
+            value={draft.notifyFromName}
+            placeholder="Trillix"
+            maxLength={MAX_NOTIFY_FROM_NAME_LEN}
+            onChange={(e) => set('notifyFromName', e.target.value)}
             className={cell}
           />
-          {replyToInvalid && (
-            <p className="pb-1 text-sm text-destructive" role="alert">
-              Нужен адрес вида name@example.com
-            </p>
-          )}
+        </Row>
+        <Row label="От кого">
+          <span className="text-sm text-muted-foreground">служебный адрес Trillix</span>
+        </Row>
+        <Row label="Кому">
+          <span className="text-sm text-muted-foreground">
+            владельцу пространства, на адрес его аккаунта
+          </span>
+        </Row>
+        <Row label="Адрес для ответов">
+          <div className="w-full">
+            <Input
+              {...lock}
+              type="email"
+              inputMode="email"
+              aria-label="Адрес для ответов"
+              aria-invalid={replyToInvalid}
+              value={draft.notifyReplyTo}
+              placeholder="Куда ответит ваш почтовый клиент"
+              onChange={(e) => set('notifyReplyTo', e.target.value)}
+              className={cell}
+            />
+            {replyToInvalid && (
+              <p className="pb-1 text-sm text-destructive" role="alert">
+                Нужен адрес вида name@example.com
+              </p>
+            )}
+          </div>
+        </Row>
+        <Row label="Тема">
+          <Input
+            {...lock}
+            aria-label="Тема письма"
+            value={draft.notifySubject}
+            placeholder="Новый ответ в Trillix"
+            maxLength={MAX_NOTIFY_SUBJECT_LEN}
+            onChange={(e) => set('notifySubject', e.target.value)}
+            className={cell}
+          />
+        </Row>
+        <div className="border-t px-3 py-2">
+          <Textarea
+            {...lock}
+            aria-label="Текст письма"
+            value={draft.notifyBody}
+            placeholder="Оставьте пустым, чтобы письмо ушло обычным текстом со ссылкой на ответы."
+            maxLength={MAX_NOTIFY_BODY_LEN}
+            rows={7}
+            onChange={(e) => set('notifyBody', e.target.value)}
+            className="min-h-36 w-full resize-y border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+          />
         </div>
-      </Row>
-      <Row label="Тема">
-        <Input
-          {...lock}
-          aria-label="Тема письма"
-          value={draft.notifySubject}
-          placeholder="Новые ответы в Trillix"
-          maxLength={MAX_NOTIFY_SUBJECT_LEN}
-          onChange={(e) => set('notifySubject', e.target.value)}
-          className={cell}
-        />
-      </Row>
-      <div className="border-t px-3 py-2">
-        <Textarea
-          {...lock}
-          aria-label="Текст письма"
-          value={draft.notifyBody}
-          placeholder="Оставьте пустым, чтобы письмо ушло обычным текстом со ссылкой на ответы."
-          maxLength={MAX_NOTIFY_BODY_LEN}
-          rows={5}
-          onChange={(e) => set('notifyBody', e.target.value)}
-          className="min-h-24 w-full resize-y border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
-        />
-      </div>
-      {/* Чекбокс, в отличие от полей выше, `disabled` на бесплатном плане: у
+        {/* Чекбокс, в отличие от полей выше, `disabled` на бесплатном плане: у
           выключенного контрола нет readOnly-эквивалента, а клик по обёртке всё равно
           открывает разговор о тарифе. */}
-      <div
-        className="flex items-center gap-2 border-t px-3 py-2"
-        onClick={editable ? undefined : onLocked}
-      >
-        <Checkbox
-          id="notify-pdf"
-          checked={draft.notifyAttachPdf}
-          disabled={!editable}
-          onCheckedChange={(v) => set('notifyAttachPdf', v === true)}
-        />
-        <Label htmlFor="notify-pdf" className="font-normal">
-          Прикрепить PDF с ответом
-        </Label>
-        <span className="text-sm text-muted-foreground">— тот же лист, что «Скачать PDF»</span>
-      </div>
-      {!editable && (
-        <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2 text-sm text-muted-foreground">
-          <ProTag />
-          <span>Менять письмо можно на платном тарифе.</span>
-          <button type="button" className="underline underline-offset-2" onClick={onLocked}>
-            Посмотреть тарифы
-          </button>
+        <div
+          className="flex min-h-10 items-center gap-2 border-t px-3"
+          onClick={editable ? undefined : onLocked}
+        >
+          <Checkbox
+            id="notify-pdf"
+            checked={draft.notifyAttachPdf}
+            disabled={!editable}
+            onCheckedChange={(v) => set('notifyAttachPdf', v === true)}
+          />
+          <Label htmlFor="notify-pdf" className="font-normal">
+            Прикрепить PDF с ответом
+          </Label>
         </div>
+      </div>
+      {/* Метка тарифа стоит ПОД коробкой, а не строкой внутри неё: коробка — бланк
+          письма, и всё, что в ней лежит, читается как часть письма. Условие доступа
+          частью письма не является. */}
+      {!editable && (
+        <p className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+          <span>Своё письмо и PDF-вложение работают на платном тарифе,</span>
+          <button type="button" className="underline underline-offset-2" onClick={onLocked}>
+            посмотреть тарифы
+          </button>
+          <ProTag />
+        </p>
       )}
     </div>
   )
 }
 
-// Строка бланка: подпись слева, значение справа. Подпись фиксированной ширины —
-// иначе поля начинались бы в пяти разных местах и бланк перестал бы читаться
-// колонкой.
+// Строка бланка: подпись и сразу за ней значение, как в шапке письма («Тема: …»).
+// Подпись не колонка: значение начинается вплотную к ней, поэтому строка читается
+// фразой, а поле не отъезжает от своего названия на полэкрана.
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 border-b px-3 py-1 last:border-b-0">
-      <span className="w-40 shrink-0 text-sm text-muted-foreground">{label}</span>
+    <div className="flex min-h-10 items-center gap-2 border-b px-3 last:border-b-0">
+      <span className="shrink-0 text-sm text-muted-foreground">{label}:</span>
       {children}
     </div>
   )
