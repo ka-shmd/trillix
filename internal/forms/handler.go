@@ -264,11 +264,14 @@ type notifyMailBody struct {
 // отправителя и получателя здесь НЕТ: первый один на сервис, второй — владелец
 // аккаунта, и оба автору не принадлежат (domain.NotifyEmail).
 type notifyEmailBody struct {
-	FromName  string `json:"fromName"`
-	ReplyTo   string `json:"replyTo"`
-	Subject   string `json:"subject"`
-	Body      string `json:"body"`
-	AttachPDF bool   `json:"attachPdf"`
+	FromName string `json:"fromName"`
+	ReplyTo  string `json:"replyTo"`
+	// Subject и Body — спаны, а не строки (mentions.md §10): в них живёт подстановка
+	// ответа, и без массива её негде хранить. Доменный тип берётся как есть — свой
+	// зеркальный был бы вторым описанием одного формата.
+	Subject   []domain.Span `json:"subject"`
+	Body      []domain.Span `json:"body"`
+	AttachPDF bool          `json:"attachPdf"`
 }
 
 // toNotifyEmailBody — настройка в тело ответа; nil (не настраивали) остаётся null,
@@ -557,10 +560,13 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateBehavior(r.Context(), userID, formID, req.Behavior.AutoJump, req.Behavior.SaveLocally)
 	case req.NotifyEmail != nil:
 		ne := *req.NotifyEmail
+		// Тема и текст НЕ тримятся: пробел в спанах — кусок текста, за который
+		// отвечает редактор (он же ставит пробел за чипом), и обрезать его здесь
+		// значило бы менять документ мимо автора. Тримятся только два ярлыка.
 		form, err = h.svc.UpdateNotifyEmail(r.Context(), userID, formID, &domain.NotifyEmail{
 			FromName:  strings.TrimSpace(ne.FromName),
 			ReplyTo:   strings.TrimSpace(ne.ReplyTo),
-			Subject:   strings.TrimSpace(ne.Subject),
+			Subject:   ne.Subject,
 			Body:      ne.Body,
 			AttachPDF: ne.AttachPDF,
 		})

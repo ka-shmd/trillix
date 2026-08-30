@@ -1,7 +1,13 @@
 import { z } from 'zod'
 
-import { isHttpUrl } from '@entities/formSchema'
-import type { CloseSettingsInput, FormDetail, NotifyEmail } from '../../../entities/form'
+import { isHttpUrl, plainText, sameRichText, textFromString, type Span } from '@entities/formSchema'
+import {
+  MAX_NOTIFY_BODY_LEN,
+  MAX_NOTIFY_SUBJECT_LEN,
+  type CloseSettingsInput,
+  type FormDetail,
+  type NotifyEmail,
+} from '../../../entities/form'
 
 // Черновик страницы настроек: ВСЯ страница разом, а не раздел за разделом.
 //
@@ -39,8 +45,12 @@ export interface SettingsDraft {
   // нормализуется в NULL.
   notifyFromName: string
   notifyReplyTo: string
-  notifySubject: string
-  notifyBody: string
+  // Тема и текст письма — СПАНЫ (mentions.md §10): в них живёт подстановка ответа.
+  // ⚠ Сравнивать их можно только ПО ЗНАЧЕНИЮ (sameRichText): набор символа приносит
+  // свежий массив с тем же содержимым, и по ссылке страница осталась бы вечно
+  // несохранённой, а mergeServer затирал бы правку автора чужим значением.
+  notifySubject: Span[]
+  notifyBody: Span[]
   notifyAttachPdf: boolean
   partial: boolean
   // Живые колонки формы: шкала прогресса (0040) и бейдж «Сделано в Trillix» (0038).
@@ -74,8 +84,8 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     // который тем же умолчанием разворачивает значение обратно в пустое).
     notifyFromName: form.notifyEmail?.fromName || form.notifyMail.fromName,
     notifyReplyTo: form.notifyEmail?.replyTo ?? '',
-    notifySubject: form.notifyEmail?.subject || form.notifyMail.subject,
-    notifyBody: form.notifyEmail?.body ?? '',
+    notifySubject: defaultSubject(form),
+    notifyBody: form.notifyEmail?.body ?? [],
     notifyAttachPdf: form.notifyEmail?.attachPdf ?? false,
     partial: form.collectPartial,
     progress: form.progress,
@@ -87,6 +97,14 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
 
 // Что уедет в схему как redirectUrl. Выключенный тумблер — пустая строка: именно
 // так «переадресации нет» и хранится, отдельного признака у схемы нет.
+// Тема бланка: своя, если автор её писал, иначе УМОЛЧАНИЕ ПИСЬМА строкой с сервера.
+// Бланк показывает настоящий текст письма, а не подсказку о нём, и брать этот текст
+// фронту больше негде (mail.DefaultSubject).
+function defaultSubject(form: FormDetail): Span[] {
+  const own = form.notifyEmail?.subject ?? []
+  return own.length > 0 ? own : textFromString(form.notifyMail.subject)
+}
+
 export function redirectValue(draft: SettingsDraft): string {
   return draft.redirectOn ? draft.redirectUrl.trim() : ''
 }
@@ -103,14 +121,20 @@ export function notifyEmailValue(
   mail: FormDetail['notifyMail'],
 ): NotifyEmail {
   const fromName = draft.notifyFromName.trim()
-  const subject = draft.notifySubject.trim()
   return {
     fromName: fromName === mail.fromName ? '' : fromName,
     replyTo: draft.notifyReplyTo.trim(),
-    subject: subject === mail.subject ? '' : subject,
+    subject: isDefaultSubject(draft.notifySubject, mail.subject) ? [] : draft.notifySubject,
     body: draft.notifyBody,
     attachPdf: draft.notifyAttachPdf,
   }
+}
+
+// Тема равна умолчанию — и потому уезжает пустой. Чип в теме исключает это сразу,
+// даже если его имя совпало с текстом шаблона по буквам: подстановка — это правка
+// автора, и стереть её как «ничего не менял» нельзя.
+function isDefaultSubject(subject: Span[], fallback: string): boolean {
+  return !subject.some((s) => s.ref) && plainText(subject).trim() === fallback
 }
 
 // Тот же строгий разбор адреса, каким рендерер проверяет ответ на вопрос-email:
@@ -141,6 +165,11 @@ export interface SettingsInvalid {
   // Reply-To проверяется строго: битый адрес — это письмо, которое отвергнет
   // почтовый провайдер, то есть молча пропавшее уведомление.
   replyTo: boolean
+  // Потолки темы и текста письма. У contenteditable нет maxLength, поэтому длину
+  // держит сохранение: молча уехавший на сервер перебор вернулся бы 422 с общей
+  // фразой «ошибка сохранения», не назвав ни поля, ни причины.
+  notifySubjectLong: boolean
+  notifyBodyLong: boolean
   // Включённое закрытие по дате без даты — незаконченная настройка, как включённая
   // переадресация без адреса.
   closeAt: boolean
@@ -160,6 +189,8 @@ export function validateSettings(draft: SettingsDraft): SettingsInvalid {
     limit: limitOn && (limit === '' || !Number.isInteger(limitNum) || limitNum < 1),
     closeAt: draft.closeOn && localInputToIso(draft.closeLocal) === null,
     replyTo: replyTo !== '' && !emailCheck.safeParse(replyTo).success,
+    notifySubjectLong: plainText(draft.notifySubject).length > MAX_NOTIFY_SUBJECT_LEN,
+    notifyBodyLong: plainText(draft.notifyBody).length > MAX_NOTIFY_BODY_LEN,
   }
 }
 
@@ -192,8 +223,8 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
     notifyEmail:
       draft.notifyFromName.trim() !== saved.notifyFromName ||
       draft.notifyReplyTo.trim() !== saved.notifyReplyTo ||
-      draft.notifySubject.trim() !== saved.notifySubject ||
-      draft.notifyBody !== saved.notifyBody ||
+      !sameRichText(draft.notifySubject, saved.notifySubject) ||
+      !sameRichText(draft.notifyBody, saved.notifyBody) ||
       draft.notifyAttachPdf !== saved.notifyAttachPdf,
     partial: draft.partial !== saved.partial,
     progress: draft.progress !== saved.progress,
@@ -234,13 +265,24 @@ export function mergeServer(
 ): SettingsDraft {
   const merged: SettingsDraft = { ...draft }
   for (const key of Object.keys(next) as (keyof SettingsDraft)[]) {
-    if (prev[key] !== next[key]) Object.assign(merged, { [key]: next[key] })
+    if (!sameField(key, prev, next)) Object.assign(merged, { [key]: next[key] })
   }
   return merged
 }
 
+// Равенство ОДНОГО поля черновика. Существует ради двух полей-спанов: остальные —
+// строки, числа и флаги, и им хватает ===. Прямое сравнение массивов дало бы «поле
+// изменилось» на каждом рендере — тот же класс мины, что sameRichText чинит в сторе
+// полотна.
+function sameField(key: keyof SettingsDraft, a: SettingsDraft, b: SettingsDraft): boolean {
+  if (key === 'notifySubject' || key === 'notifyBody') {
+    return sameRichText(a[key], b[key])
+  }
+  return a[key] === b[key]
+}
+
 export function sameSettings(a: SettingsDraft, b: SettingsDraft): boolean {
-  return (Object.keys(a) as (keyof SettingsDraft)[]).every((key) => a[key] === b[key])
+  return (Object.keys(a) as (keyof SettingsDraft)[]).every((key) => sameField(key, a, b))
 }
 
 // isoToLocalInput — ISO-строка (UTC с сервера) → значение <input type="datetime-local">

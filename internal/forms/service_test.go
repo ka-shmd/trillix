@@ -810,7 +810,7 @@ func TestUpdateNotifyEmail_NeedsPlan(t *testing.T) {
 	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
 
 	_, err := svc.UpdateNotifyEmail(context.Background(), uuid.New(), store.form.ID,
-		&domain.NotifyEmail{Subject: "Новая заявка"})
+		&domain.NotifyEmail{Subject: domain.TextFromString("Новая заявка")})
 	if !errors.Is(err, domain.ErrPlanRequired) {
 		t.Fatalf("err = %v, want ErrPlanRequired", err)
 	}
@@ -842,7 +842,7 @@ func TestUpdateNotifyEmail_ResetNeedsNoPlan(t *testing.T) {
 // Даунгрейд возвращает дефолтное письмо, ничего не стирая: сохранённая настройка
 // остаётся в колонке и оживает после апгрейда — тот же приём, что у бейджа.
 func TestNotifyEmailFor_GateAtSend(t *testing.T) {
-	saved := &domain.NotifyEmail{Subject: "Новая заявка"}
+	saved := &domain.NotifyEmail{Subject: domain.TextFromString("Новая заявка")}
 	ws := domain.NewID()
 
 	svc := NewService(nil, fakeTx{}, &fakeStore{}, &fakeAccess{}, &fakePlans{allowed: false})
@@ -859,7 +859,7 @@ func TestNotifyEmailFor_GateAtSend(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NotifyEmailFor: %v", err)
 	}
-	if got == nil || got.Subject != "Новая заявка" {
+	if got == nil || domain.PlainText(got.Subject) != "Новая заявка" {
 		t.Fatalf("на платном тарифе обязана вернуться настройка автора: %+v", got)
 	}
 }

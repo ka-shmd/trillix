@@ -63,6 +63,7 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import { MailLine } from './MailLine'
 
 // Настройки формы — то, чего на полотне не видно: что делать после отправки, как
 // выглядит форма у респондента поверх документа, когда прекратить приём.
@@ -130,7 +131,13 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
 
   const invalid = validateSettings(draft)
   const anyInvalid =
-    invalid.url || invalid.urlMissing || invalid.limit || invalid.replyTo || invalid.closeAt
+    invalid.url ||
+    invalid.urlMissing ||
+    invalid.limit ||
+    invalid.replyTo ||
+    invalid.closeAt ||
+    invalid.notifySubjectLong ||
+    invalid.notifyBodyLong
   const dirty = isDirty(saved, draft)
 
   // Уход с несохранёнными правками — осознанный. Блокируется НАВИГАЦИЯ роутера
@@ -369,6 +376,8 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
               draft={draft}
               set={set}
               replyToInvalid={invalid.replyTo}
+              subjectTooLong={invalid.notifySubjectLong}
+              bodyTooLong={invalid.notifyBodyLong}
               editable={canCustomizeEmail}
               onLocked={() => setUpsell(true)}
             />
@@ -528,7 +537,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
               относится к полю, в которое человек ещё не печатал, и краснеть ему не за
               что — кнопка и так не даётся. */}
           <span
-            className={`text-sm ${failed || invalid.url || invalid.limit || invalid.replyTo ? 'text-destructive' : 'text-muted-foreground'}`}
+            className={`text-sm ${failed || invalid.url || invalid.limit || invalid.replyTo || invalid.notifySubjectLong || invalid.notifyBodyLong ? 'text-destructive' : 'text-muted-foreground'}`}
             role="status"
           >
             {invalid.url
@@ -539,11 +548,13 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
                   ? 'Проверьте адрес для ответов'
                   : invalid.limit
                     ? 'Проверьте лимит'
-                    : failed
-                      ? 'Не удалось сохранить'
-                      : dirty
-                        ? 'Есть несохранённые изменения'
-                        : 'Всё сохранено'}
+                    : invalid.notifySubjectLong || invalid.notifyBodyLong
+                      ? 'Письмо длиннее допустимого'
+                      : failed
+                        ? 'Не удалось сохранить'
+                        : dirty
+                          ? 'Есть несохранённые изменения'
+                          : 'Всё сохранено'}
           </span>
           <Button onClick={() => void save()} disabled={!dirty || anyInvalid || saving}>
             {saving ? 'Сохраняем…' : 'Сохранить'}
@@ -668,6 +679,8 @@ function NotifyEmailFields({
   draft,
   set,
   replyToInvalid,
+  subjectTooLong,
+  bodyTooLong,
   editable,
   onLocked,
 }: {
@@ -675,6 +688,8 @@ function NotifyEmailFields({
   draft: SettingsDraft
   set: <K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) => void
   replyToInvalid: boolean
+  subjectTooLong: boolean
+  bodyTooLong: boolean
   editable: boolean
   onLocked: () => void
 }) {
@@ -744,27 +759,42 @@ function NotifyEmailFields({
             )}
           </div>
         </Row>
+        {/* Тема и текст — RichLine, а не Input/Textarea: в них по «@» ставится чип
+            подстановки (mentions.md §10). Потолок длины у обоих проверяет сохранение
+            (validateSettings), а не атрибут поля: у contenteditable maxLength нет. */}
         <Row label="Тема">
-          <Input
-            {...lock}
-            aria-label="Тема письма"
-            value={draft.notifySubject}
-            maxLength={MAX_NOTIFY_SUBJECT_LEN}
-            onChange={(e) => set('notifySubject', e.target.value)}
-            className={cell}
-          />
+          <div className="w-full">
+            <MailLine
+              form={form}
+              label="Тема письма"
+              value={draft.notifySubject}
+              onChange={(v) => set('notifySubject', v)}
+              editable={editable}
+              className={`${cell} py-1.5 outline-none`}
+            />
+            {subjectTooLong && (
+              <p className="pb-1 text-sm text-destructive" role="alert">
+                Не длиннее {MAX_NOTIFY_SUBJECT_LEN} символов
+              </p>
+            )}
+          </div>
         </Row>
         <div className="border-t px-3 py-2">
-          <Textarea
-            {...lock}
-            aria-label="Текст письма"
+          <MailLine
+            form={form}
+            multiline
+            label="Текст письма"
             value={draft.notifyBody}
             placeholder="Оставьте пустым, чтобы письмо ушло обычным текстом со ссылкой на ответы."
-            maxLength={MAX_NOTIFY_BODY_LEN}
-            rows={7}
-            onChange={(e) => set('notifyBody', e.target.value)}
-            className="min-h-36 w-full resize-y border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+            onChange={(v) => set('notifyBody', v)}
+            editable={editable}
+            className="min-h-36 w-full outline-none"
           />
+          {bodyTooLong && (
+            <p className="pt-1 text-sm text-destructive" role="alert">
+              Не длиннее {MAX_NOTIFY_BODY_LEN} символов
+            </p>
+          )}
         </div>
         {/* Чекбокс, в отличие от полей выше, `disabled`: readOnly у него нет вовсе,
             а нажатую галочку от ненажатой надо отличать и на мёртвом бланке. */}

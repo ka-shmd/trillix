@@ -28,7 +28,7 @@ export function MentionMenu({
   children,
 }: {
   open: boolean
-  items: MentionItem[]
+  items: readonly MentionItem[]
   activeIndex: number
   onActiveChange: (index: number) => void
   onPick: (item: MentionItem) => void

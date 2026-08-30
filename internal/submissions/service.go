@@ -436,7 +436,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
 	s.dropPartial(ctx, pf.FormID, meta.VisitID)
 	if inserted && pf.NotifyOnSubmission {
-		s.notifyOwner(ctx, pf.FormID, id, slug)
+		s.notifyOwner(ctx, pf.FormID, id, slug, schema, clean)
 	}
 	if inserted {
 		s.enqueueIntegration(ctx, pf.FormID, id)
@@ -593,7 +593,13 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.T
 // одно уведомление; данные целы (владелец видит ответ в таблице), а следующий ответ
 // теряет одно уведомление. Сбой (нет владельца, пустой email, недоступна БД) уходит
 // в лог с request_id — ответ уже принят.
-func (s *Service) notifyOwner(ctx context.Context, formID, submissionID uuid.UUID, slug string) {
+func (s *Service) notifyOwner(
+	ctx context.Context,
+	formID, submissionID uuid.UUID,
+	slug string,
+	schema domain.FormSchema,
+	answers map[string]json.RawMessage,
+) {
 	owner, err := s.forms.SubmissionOwner(ctx, formID)
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Warn("submission owner not resolved for notification",
@@ -613,7 +619,17 @@ func (s *Service) notifyOwner(ctx context.Context, formID, submissionID uuid.UUI
 	// Перебивки едут в payload строки outbox: письмо уходит ПОЗЖЕ постановки, и
 	// диспетчер за настройкой формы уже не пойдёт.
 	if n := s.notifyEmailFor(ctx, owner); n != nil {
-		msg.FromName, msg.ReplyTo, msg.Subject, msg.Body = n.FromName, n.ReplyTo, n.Subject, n.Body
+		// Подстановки разворачиваются ЗДЕСЬ, а не при доставке (mentions.md §10):
+		// схема уже разобрана, ответ уже нормализован (скрытое логикой отброшено), и
+		// в payload уезжает готовый плоский текст — диспетчер за ними не пойдёт.
+		//
+		// Тема разворачивается отдельной функцией: она обязана остаться ОДНОЙ строкой,
+		// потому что уезжает в заголовок письма, а подставляется в неё недоверенный
+		// ввод респондента.
+		mc := domain.NewMentionContext(schema, answers, s.mentionFiles(ctx, submissionID, schema, n))
+		msg.FromName, msg.ReplyTo = n.FromName, n.ReplyTo
+		msg.Subject = domain.MentionLine(n.Subject, mc)
+		msg.Body = domain.MentionText(n.Body, mc)
 		// Вложение называется ССЫЛКОЙ, а не файлом: печатает его диспетчер при
 		// доставке (ADR §10). Печатать здесь значило бы держать браузер на пути
 		// приёма ответа.
@@ -630,6 +646,34 @@ func (s *Service) notifyOwner(ctx context.Context, formID, submissionID uuid.UUI
 		httpserver.LoggerFrom(ctx).Warn("owner notification not enqueued",
 			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
 	}
+}
+
+// mentionFiles — имена файлов ответа, нужные подстановке «Все ответы»: без них
+// вопрос-файл читался бы в письме как оставшийся без ответа.
+//
+// Поход в базу трижды обусловлен — сборка с файлами, форма с вопросом-файлом, письмо
+// с «Все ответы»: письмо ставится на самом нагруженном пути продукта, и лишний
+// запрос на каждый ответ здесь не бесплатен. Сбой запроса даёт nil, а не отказ:
+// уведомление без имён файлов дешевле, чем непришедшее.
+func (s *Service) mentionFiles(
+	ctx context.Context,
+	submissionID uuid.UUID,
+	schema domain.FormSchema,
+	n *domain.NotifyEmail,
+) map[string]domain.AnswerFile {
+	if s.files == nil || !domain.HasFileQuestion(schema) {
+		return nil
+	}
+	if !domain.MentionsAllAnswers(n.Body) && !domain.MentionsAllAnswers(n.Subject) {
+		return nil
+	}
+	files, err := s.files.InfoBySubmissions(ctx, []uuid.UUID{submissionID})
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Warn("file names for notification not resolved",
+			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
+		return nil
+	}
+	return files
 }
 
 // notifyEmailFor — настройка письма, действующая прямо сейчас: nil значит «слать

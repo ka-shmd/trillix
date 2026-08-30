@@ -1,5 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
+import { plainText, textFromString } from '@entities/formSchema'
+
 import {
   closeSettingsValue,
   isDirty,
@@ -30,8 +32,8 @@ const saved: SettingsDraft = {
   notify: false,
   notifyFromName: '',
   notifyReplyTo: '',
-  notifySubject: '',
-  notifyBody: '',
+  notifySubject: [],
+  notifyBody: [],
   notifyAttachPdf: false,
   partial: false,
   progress: false,
@@ -74,7 +76,17 @@ describe('черновик страницы настроек', () => {
     expect(pendingChanges(saved, { ...saved, partial: true }).partial).toBe(true)
     expect(pendingChanges(saved, { ...saved, progress: true }).progress).toBe(true)
     expect(pendingChanges(saved, { ...saved, branding: false }).branding).toBe(true)
-    expect(pendingChanges(saved, { ...saved, notifySubject: 'Заявка' }).notifyEmail).toBe(true)
+    expect(
+      pendingChanges(saved, { ...saved, notifySubject: textFromString('Заявка') }).notifyEmail,
+    ).toBe(true)
+    // Спаны сравниваются ПО ЗНАЧЕНИЮ: свежий массив с тем же содержимым правкой не
+    // является, иначе страница осталась бы вечно несохранённой.
+    expect(
+      pendingChanges(
+        { ...saved, notifyBody: textFromString('Текст') },
+        { ...saved, notifyBody: textFromString('Текст') },
+      ).notifyEmail,
+    ).toBe(false)
     expect(pendingChanges(saved, { ...saved, autoJump: true }).behavior).toBe(true)
     expect(pendingChanges(saved, { ...saved, saveLocally: true }).behavior).toBe(true)
   })
@@ -132,16 +144,16 @@ describe('черновик страницы настроек', () => {
         ...saved,
         notifyFromName: '  Отдел кадров ',
         notifyReplyTo: ' hr@example.com ',
-        notifySubject: ' Заявка ',
-        notifyBody: '  Здравствуйте!  ',
+        notifySubject: textFromString('Заявка'),
+        notifyBody: textFromString('  Здравствуйте!  '),
       },
       defaultMail,
     )
     expect(value).toEqual({
       fromName: 'Отдел кадров',
       replyTo: 'hr@example.com',
-      subject: 'Заявка',
-      body: '  Здравствуйте!  ',
+      subject: textFromString('Заявка'),
+      body: textFromString('  Здравствуйте!  '),
       attachPdf: false,
     })
   })
@@ -158,7 +170,7 @@ describe('черновик страницы настроек', () => {
     const form = { ...newFormDetail(), notifyMail: defaultMail }
     const draft = settingsFromForm(form)
     expect(draft.notifyFromName).toBe('Trillix')
-    expect(draft.notifySubject).toBe('Новый ответ в Trillix')
+    expect(plainText(draft.notifySubject)).toBe('Новый ответ в Trillix')
 
     // Своё письмо сильнее умолчания.
     const own = settingsFromForm({
@@ -166,12 +178,12 @@ describe('черновик страницы настроек', () => {
       notifyEmail: {
         fromName: '',
         replyTo: '',
-        subject: 'Заявка с сайта',
-        body: '',
+        subject: textFromString('Заявка с сайта'),
+        body: [],
         attachPdf: false,
       },
     })
-    expect(own.notifySubject).toBe('Заявка с сайта')
+    expect(plainText(own.notifySubject)).toBe('Заявка с сайта')
     // Пустое поле в своей настройке — по-прежнему умолчание, а не пустая строка.
     expect(own.notifyFromName).toBe('Trillix')
   })
@@ -180,14 +192,28 @@ describe('черновик страницы настроек', () => {
     // Иначе сегодняшний текст шаблона замёрз бы в колонке: правка шаблона перестала
     // бы доезжать до всех, кто когда-либо открывал страницу и нажимал «Сохранить».
     const value = notifyEmailValue(
-      { ...saved, notifyFromName: 'Trillix', notifySubject: 'Новый ответ в Trillix' },
+      {
+        ...saved,
+        notifyFromName: 'Trillix',
+        notifySubject: textFromString('Новый ответ в Trillix'),
+      },
       defaultMail,
     )
     expect(value.fromName).toBe('')
-    expect(value.subject).toBe('')
+    expect(value.subject).toEqual([])
     // Переписанное — уезжает как есть.
-    const own = notifyEmailValue({ ...saved, notifySubject: 'Заявка с сайта' }, defaultMail)
-    expect(own.subject).toBe('Заявка с сайта')
+    const own = notifyEmailValue(
+      { ...saved, notifySubject: textFromString('Заявка с сайта') },
+      defaultMail,
+    )
+    expect(plainText(own.subject)).toBe('Заявка с сайта')
+    // ЧИП в теме умолчанием не считается, даже если его имя совпало с текстом шаблона
+    // по буквам: подстановка — правка автора, и стереть её как «ничего не менял» нельзя.
+    const chip = notifyEmailValue(
+      { ...saved, notifySubject: [{ t: 'Новый ответ в Trillix', ref: 'b1' }] },
+      defaultMail,
+    )
+    expect(chip.subject).toHaveLength(1)
   })
 
   it('включённый лимит требует целое больше нуля, выключенный — ничего', () => {

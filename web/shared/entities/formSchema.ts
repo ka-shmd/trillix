@@ -206,28 +206,39 @@ export type Span = z.infer<typeof spanSchema>
 // редактора. Кросс-элементное условие в валидаторе ловило бы 422 на undo и на
 // промежуточных состояниях набора, а автосейв обязан хранить недособранное — то же
 // решение, что у инертного бита ряда.
-export const richTextSchema = z
-  .array(spanSchema)
-  .max(MAX_SPANS)
-  .superRefine((spans, ctx) => {
-    const total = spans.reduce((n, s) => n + s.t.length, 0)
-    if (total > MAX_TEXT_LEN) {
-      ctx.addIssue({ code: 'custom', message: `текст длиннее ${MAX_TEXT_LEN} символов` })
-    }
-    for (const [i, s] of spans.entries()) {
-      const dup = s.m && new Set(s.m).size !== s.m.length
-      if (dup) {
-        ctx.addIssue({ code: 'custom', message: 'повторяющаяся марка', path: [i, 'm'] })
+export const richTextSchema = richTextOf(MAX_TEXT_LEN)
+
+// richTextOf — тот же текст с ЧУЖИМ потолком длины. Существует ради письма о новом
+// ответе (docs/design/mentions.md §10): его тема и текст — такие же спаны, но длину им
+// задают собственные потолки настройки. Зеркалит validateSpansLimit в Go.
+export function richTextOf(maxLen: number) {
+  return z
+    .array(spanSchema)
+    .max(MAX_SPANS)
+    .superRefine((spans, ctx) => {
+      const total = spans.reduce((n, s) => n + s.t.length, 0)
+      if (total > maxLen) {
+        ctx.addIssue({ code: 'custom', message: `текст длиннее ${maxLen} символов` })
       }
-      // Ссылка наружу и подстановка ответа на одном куске не имеют читаемого смысла
-      // ни на одной из трёх поверхностей, и разрешив пару, её пришлось бы определять
-      // в каждой (ADR §10). Проверка кусочная, а не кросс-блочная, — недособранного
-      // состояния, в котором пара законна, у редактора нет.
-      if (s.ref && s.href) {
-        ctx.addIssue({ code: 'custom', message: 'ссылка и подстановка вместе', path: [i, 'ref'] })
+      for (const [i, s] of spans.entries()) {
+        const dup = s.m && new Set(s.m).size !== s.m.length
+        if (dup) {
+          ctx.addIssue({ code: 'custom', message: 'повторяющаяся марка', path: [i, 'm'] })
+        }
+        // Ссылка наружу и подстановка ответа на одном куске не имеют читаемого смысла
+        // ни на одной из трёх поверхностей, и разрешив пару, её пришлось бы определять
+        // в каждой (ADR §10). Проверка кусочная, а не кросс-блочная, — недособранного
+        // состояния, в котором пара законна, у редактора нет.
+        if (s.ref && s.href) {
+          ctx.addIssue({
+            code: 'custom',
+            message: 'ссылка и подстановка вместе',
+            path: [i, 'ref'],
+          })
+        }
       }
-    }
-  })
+    })
+}
 
 // plainText — текст без оформления. Единственный способ, которым богатый текст попадает
 // в данные: подписи для CSV/воронки/сводки, тизер ссылки, aria-label. Зеркалит

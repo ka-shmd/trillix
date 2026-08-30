@@ -26,7 +26,7 @@
 | [`logic.md`](logic.md) | фаза 21, условная логика в формах (**модель носителей отменена 2026-08-16**) | `v0.21.0` | [`logic-blocks.md`](logic-blocks.md), [`EDITOR.md`](../EDITOR.md) §15 |
 | [`logic-blocks.md`](logic-blocks.md) | переезд условной логики в блок полотна | — | [`EDITOR.md`](../EDITOR.md) §15, [`SCHEMA.md`](../SCHEMA.md) |
 | [`theme.md`](theme.md) | фаза 22, оформление формы: тема, цвета, шрифт, лэйаут, свой CSS | `v0.22.0` | [`EDITOR.md`](../EDITOR.md) §16, [`BILLING.md`](../BILLING.md), [`fields/README.md`](../../web/shared/fields/README.md) |
-| [`mentions.md`](mentions.md) | задача вне плана, подстановка ответов в тексте формы (`@`) | **не закрыта** — спека живая | [`EDITOR.md`](../EDITOR.md) §17 (пишется) |
+| [`mentions.md`](mentions.md) | задача вне плана, подстановка ответов в тексте формы (`@`) и в письме о новом ответе (§10) | **не закрыта** — спека живая | [`EDITOR.md`](../EDITOR.md) §17 (пишется) |
 | [`thankyou-page.md`](thankyou-page.md) | задача вне плана, страница «Спасибо» блоком полотна и имена страниц | **не закрыта** — спека живая | [`EDITOR.md`](../EDITOR.md) §6.2, [`SCHEMA.md`](../SCHEMA.md) |
 | [`answer-files.md`](answer-files.md) | фаза 24 `DEV-PLAN` (= 17 `POST-MVP`), загрузка файлов в ответах: блок «файл», приватный бакет, presigned-поток | **не закрыта** — спека живая | [`S3.md`](../S3.md), [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
 | [`integrations-gsheets.md`](integrations-gsheets.md) | фаза 25 `DEV-PLAN` (= часть фазы 15 `POST-MVP`), интеграции формы и первая из них — Google Таблицы (**отменены**: отказ от Picker'а, «одна таблица на форму», раскладка экрана, e2e) | закрыта 2026-08-23, тегом не закрыта | [`INTEGRATIONS.md`](../INTEGRATIONS.md) |

@@ -39,8 +39,6 @@ import {
   toggleMark,
 } from './richText'
 import { MentionMenu, type MentionItem } from './MentionMenu'
-import { sourceLabel, sourcesFor } from './logic/model'
-import { useBuilderStore } from './storeContext'
 import { richCaret, selectionRange, selectionRect, setCaret, setSelection } from './richCaret'
 import type { UpdateKind } from './store'
 import { FormatBar } from './FormatBar'
@@ -96,18 +94,37 @@ export interface RichLineProps {
   // (жирность там лежит в документе, а не в весе поверхности — см. .rf-b в fields.css).
   // Пусто/не передано — строка набирается без оформления, как абзац.
   defaultMarks?: readonly Mark[]
-  // id блока, которому принадлежит строка. Есть — в строке работает подстановка ответа
-  // по «@» (docs/design/mentions.md); нет — не работает вовсе. Заголовку формы её не
-  // передают намеренно: он стоит первой строкой документа, вопросов выше него не бывает,
-  // и меню там показывало бы пустоту всегда.
-  mentionsFor?: string
+  // mentionSources — что можно подставить в эту строку по «@» (docs/design/mentions.md).
+  // Не передано — подстановка в строке не работает вовсе: так живут заголовок формы (он
+  // стоит первой строкой документа, вопросов выше него не бывает) и все поверхности,
+  // которым подстановка не положена.
+  //
+  // ФУНКЦИЯ, А НЕ ГОТОВЫЙ СПИСОК: имена источников считаются проходом по документу, и
+  // делать это на каждый рендер каждой строки — ровно тот механизм, которым фаза 21
+  // дважды роняла перф полотна. Список берётся в момент, когда он нужен: меню открылось.
+  mentionSources?: () => readonly MentionItem[]
+  // mentionLive — id источников, которые ещё разрешаются: по ним чипы делятся на живые
+  // и мёртвые. Считает его ВЫЗЫВАЮЩИЙ и только пока в строке есть хоть один чип —
+  // подписка на документ его дело, а не строки.
+  mentionLive?: ReadonlySet<string>
+  // readOnly — поверхность показывает текст, но не принимает ни набора, ни фокуса.
+  // Нужна бланку письма на бесплатном тарифе: автор читает своё письмо обычным текстом,
+  // а не бледной заглушкой (решение владельца 2026-08-30).
+  readOnly?: boolean
+  // enterBreaksLine — плоский Enter переносит строку, как Shift+Enter. Полотну не нужен:
+  // там Enter создаёт СТРОКУ ДОКУМЕНТА, и перенос стоит на Shift. В бланке письма строк
+  // документа нет, а перенос — обычный жест набора текста.
+  enterBreaksLine?: boolean
 }
 
-// Пустой список источников — СТАБИЛЬНАЯ ссылка. Селектор стора возвращает её, пока
-// подстановка строке не нужна (чипов нет и меню закрыто): свежий массив на каждый вызов
-// означал бы ре-рендер этой строки на каждую правку ЛЮБОГО блока полотна — ровно тот
-// механизм, которым фаза 21 дважды роняла перф (STATUS, «подписка на s.blocks»).
-const NO_BLOCKS: never[] = []
+// Пустой список — СТАБИЛЬНАЯ ссылка: свежий массив на каждый рендер означал бы лишний
+// ре-рендер меню на каждый набранный символ.
+const NO_ITEMS: readonly MentionItem[] = []
+
+// Голый Enter — без модификаторов. Аккорды с Enter заняты (chords.enter, lineBreak,
+// Mod+Enter), и перенос обязан отличать себя от каждого из них.
+const plainEnter = (e: KeyboardEvent<HTMLElement>): boolean =>
+  e.code === 'Enter' && !e.shiftKey && !e.metaKey && !e.ctrlKey && !e.altKey
 const NO_MARKS: readonly Mark[] = []
 
 export function RichLine({
@@ -121,7 +138,10 @@ export function RichLine({
   onBlur,
   elRef,
   defaultMarks = NO_MARKS,
-  mentionsFor,
+  mentionSources,
+  mentionLive,
+  readOnly = false,
+  enterBreaksLine = false,
 }: RichLineProps) {
   const ref = useRef<HTMLDivElement>(null)
   // last — что мы сами в последний раз отдали наружу. Отличие пришедшего value от него
@@ -145,29 +165,14 @@ export function RichLine({
   const [at, setAt] = useState<{ start: number; query: string } | null>(null)
   const [atIndex, setAtIndex] = useState(0)
   const menuOpen = at !== null
-  // Документ нужен строке в двух случаях: пока открыто меню (собрать список вопросов) и
-  // пока в строке есть хоть один чип (пометить те, что перестали разрешаться). В
-  // остальное время селектор отдаёт стабильную пустоту и строка на правки документа не
-  // реагирует.
-  const needsDoc = Boolean(mentionsFor) && (menuOpen || value.some((s) => s.ref))
-  const docBlocks = useBuilderStore((s) => (needsDoc ? s.blocks : NO_BLOCKS))
-  // Что вообще можно подставить в эту строку: отвечаемые вопросы ВЫШЕ неё. Правило и
-  // функция — те же, что у условной логики: одна модель на две возможности, автору
-  // нечего запоминать.
-  const sources = useMemo(
-    () => (needsDoc && mentionsFor ? sourcesFor(docBlocks, mentionsFor) : NO_BLOCKS),
-    [needsDoc, mentionsFor, docBlocks],
-  )
-  // Имена считаются ТОЛЬКО пока меню открыто: derivedQuestionName проходит по документу
-  // ради каждого источника, и делать это на каждую правку любого блока ради чипа,
-  // который и так знает своё имя, незачем.
-  const items: MentionItem[] = useMemo(() => {
-    if (!menuOpen) return []
+  // Список источников берётся ТОЛЬКО пока меню открыто: собрать его стоит прохода по
+  // документу ради каждого имени, и делать это на каждую правку ради чипа, который и
+  // так знает своё имя, незачем.
+  const items: readonly MentionItem[] = useMemo(() => {
+    if (!menuOpen || !mentionSources) return NO_ITEMS
     const q = (at?.query ?? '').trim().toLowerCase()
-    return sources
-      .map((b) => ({ id: b.id, label: sourceLabel(docBlocks, b) }))
-      .filter((it) => q === '' || it.label.toLowerCase().includes(q))
-  }, [menuOpen, at?.query, sources, docBlocks])
+    return mentionSources().filter((it) => q === '' || it.label.toLowerCase().includes(q))
+  }, [menuOpen, at?.query, mentionSources])
 
   // Выделение отслеживается на документе: внутри contenteditable его меняют и мышь, и
   // клавиатура, и события у них разные — один `selectionchange` покрывает оба.
@@ -269,12 +274,11 @@ export function RichLine({
   useEffect(() => {
     const el = ref.current
     if (!el) return
-    const live = new Set(sources.map((b) => b.id))
     for (const chip of el.querySelectorAll<HTMLElement>('[data-ref]')) {
-      if (live.has(chip.dataset.ref ?? '')) delete chip.dataset.dead
+      if (mentionLive?.has(chip.dataset.ref ?? '')) delete chip.dataset.dead
       else chip.dataset.dead = ''
     }
-  }, [sources, value])
+  }, [mentionLive, value])
 
   // commit — единственный путь наружу: сериализуем поверхность в модель и отдаём её
   // вместе с позицией каретки.
@@ -314,7 +318,7 @@ export function RichLine({
   // открывалось бы посреди набора почты: «ivan@» в тексте вопроса — обычное дело, и
   // всплывающий там список вопросов был бы дефектом, а не подсказкой.
   function syncMention(text: string, pos: number): void {
-    if (!mentionsFor) return
+    if (!mentionSources) return
     setAtIndex(0)
     setAt((cur) => {
       if (cur) {
@@ -492,7 +496,7 @@ export function RichLine({
     }
     // Перенос строки — до потока полотна: `chords.enter` его уже не ловит (Shift
     // исключён явно), но браузеру отдавать нельзя — он вставит <br> мимо модели.
-    if (chords.lineBreak(e)) {
+    if (chords.lineBreak(e) || (enterBreaksLine && plainEnter(e))) {
       e.preventDefault()
       return breakLine(e.currentTarget)
     }
@@ -511,11 +515,11 @@ export function RichLine({
       // же defaultMarks, что и досев: подсказка обязана показывать текст таким, каким он
       // родится, иначе она обещает обычный вес, а автор получает жирный.
       data-bold={defaultMarks.includes('b') ? '' : undefined}
-      contentEditable
+      contentEditable={!readOnly}
       suppressContentEditableWarning
       role="textbox"
       aria-label={label}
-      tabIndex={0}
+      tabIndex={readOnly ? -1 : 0}
       className={className}
       onInput={() => {
         if (composing.current) return
@@ -561,7 +565,7 @@ export function RichLine({
 
   return (
     <>
-      {mentionsFor ? (
+      {mentionSources ? (
         <MentionMenu
           open={menuOpen}
           items={items}
