@@ -44,6 +44,15 @@ type Config struct {
 	// vite-dev, Go его не обслуживает. В prod-local/prod — /srv/renderer/index.html
 	// (renderer-статика смонтирована в api read-only, см. deploy/compose.prod.yml).
 	PublicRendererIndexPath string
+	// PrintPagePath — путь в ФС к собранному print.html (печатная страница ответа).
+	// ОПЦИОНАЛЬНАЯ и обычно ПУСТАЯ: в прод-контуре путь выводится из
+	// PublicRendererIndexPath — обе страницы приезжают одной сборкой в один каталог,
+	// и вторая строка в конфиге умела бы только разойтись с первой.
+	//
+	// Задаётся там, где этот вывод не работает: в dev собранного index.html нет
+	// вовсе (форму отдаёт vite), а печатную страницу посмотреть хочется — тогда сюда
+	// кладётся web/renderer/dist/print/print.html, собранный `npm run build:print`.
+	PrintPagePath string
 	// PrinterURL — базовый адрес сервиса печати (контейнер `printer`, ADR §10):
 	// http://printer:8090. ОПЦИОНАЛЬНАЯ: пусто — печати на контуре нет, и ручка PDF
 	// честно отвечает 503, а не молчит. В dev пусто (контейнера нет), в
@@ -220,6 +229,8 @@ func Load() (Config, error) {
 	cfg.PublicRendererIndexPath = os.Getenv("PUBLIC_RENDERER_INDEX_PATH")
 	// Опциональная (пустая в dev — контейнера печати нет).
 	cfg.PrinterURL = strings.TrimRight(os.Getenv("PRINTER_URL"), "/")
+	// Опциональная (пустая в прод-контуре — путь выводится из индекса рендерера).
+	cfg.PrintPagePath = os.Getenv("PRINT_PAGE_PATH")
 	// Опциональные (нет приложения Яндекс ID — провайдер просто выключен).
 	cfg.YandexOAuthClientID = os.Getenv("YANDEX_OAUTH_CLIENT_ID")
 	cfg.YandexOAuthClientSecret = os.Getenv("YANDEX_OAUTH_CLIENT_SECRET")

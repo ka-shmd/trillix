@@ -14,6 +14,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -85,8 +86,19 @@ func handlePrint(w http.ResponseWriter, r *http.Request, chromium, origin string
 		return
 	}
 
+	pageURL := origin + req.Path
+	// СТРАНИЦА ПРОВЕРЯЕТСЯ ДО ЗАПУСКА БРАУЗЕРА. Без этого принтер печатает что дали:
+	// на 404 (протухший токен, ненастроенная печать) chromium честно отрисовал бы
+	// страницу ошибки, и автор получил бы валидный PDF с JSON-отказом внутри —
+	// худший вид отказа, потому что он выглядит успехом.
+	if err := checkPage(r.Context(), pageURL); err != nil {
+		log.Error("page not printable", slog.String("error", err.Error()))
+		http.Error(w, "page not printable", http.StatusBadGateway)
+		return
+	}
+
 	started := time.Now()
-	pdf, err := printPage(r.Context(), chromium, origin+req.Path)
+	pdf, err := printPage(r.Context(), chromium, pageURL)
 	if err != nil {
 		log.Error("print failed", slog.String("error", err.Error()),
 			slog.Duration("elapsed", time.Since(started)))
@@ -99,6 +111,43 @@ func handlePrint(w http.ResponseWriter, r *http.Request, chromium, origin string
 	if _, err := w.Write(pdf); err != nil {
 		log.Warn("print response write failed", slog.String("error", err.Error()))
 	}
+}
+
+// checkPageTimeout — потолок на предварительную проверку страницы. Она у нас же и
+// рядом: секунды хватает с запасом, а зависший api не должен доедать время печати.
+const checkPageTimeout = 5 * time.Second
+
+// checkPage убеждается, что по адресу лежит наша страница, а не отказ. Проверяются
+// две вещи: статус (200) и тип (HTML) — сразу за ними идёт браузер, которому всё
+// равно, что рисовать.
+//
+// Цена — второй запрос той же страницы. Она невелика (документ отдаёт наш api из
+// файла и памяти) и оплачена тем, что отказ остаётся отказом, а не превращается в
+// PDF с текстом ошибки.
+func checkPage(ctx context.Context, pageURL string) error {
+	ctx, cancel := context.WithTimeout(ctx, checkPageTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return fmt.Errorf("build check request: %w", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return fmt.Errorf("check page: %w", err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 1<<20))
+		_ = resp.Body.Close()
+	}()
+
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("page status %d", resp.StatusCode)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		return fmt.Errorf("page content-type %q, want text/html", ct)
+	}
+	return nil
 }
 
 // printPage запускает браузер, ждёт документ и читает его с диска.

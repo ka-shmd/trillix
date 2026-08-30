@@ -464,7 +464,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// рендерера, и отдельной переменной окружения не имеет: путь выводится из
 	// PUBLIC_RENDERER_INDEX_PATH. В dev статики нет — печать на контуре просто
 	// отсутствует, как и HTML-страница формы /r/{slug}.
-	if path := printPagePath(cfg.PublicRendererIndexPath); path != "" {
+	if path := printPagePath(cfg.PrintPagePath, cfg.PublicRendererIndexPath); path != "" {
 		printPage, err := submissions.NewPrintPageHandler(submissionsSvc, cfg.FormTokenSecret, path)
 		if err != nil {
 			return fmt.Errorf("init print page handler: %w", err)
@@ -657,12 +657,18 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 // smtpTLSMode переводит валидированный конфиг MAIL_SMTP_TLS в режим транспорта.
 // config уже отверг чужие значения при старте, поэтому default недостижим —
 // оставлен страховкой (пусть безопасный: без шифрования наружу не пойдём молча).
-// printPagePath — путь к собранному print.html рядом со статикой рендерера
-// (dist/print/print.html, vite.print.config.ts → static/renderer/print/print.html).
-// Своей переменной окружения у него нет намеренно: обе страницы приезжают одной
-// сборкой в один каталог, и вторая строка в конфиге умела бы только разойтись с
-// первой. Пустой индекс (dev) означает «печати на контуре нет».
-func printPagePath(indexPath string) string {
+// printPagePath — путь к собранному print.html. В прод-контуре он ВЫВОДИТСЯ из пути
+// к индексу рендерера (dist/print/print.html, vite.print.config.ts →
+// static/renderer/print/print.html): обе страницы приезжают одной сборкой в один
+// каталог, и вторая строка в конфиге умела бы только разойтись с первой.
+//
+// Явный PRINT_PAGE_PATH перебивает вывод и нужен ровно там, где выводить не из чего:
+// в dev собранного index.html нет (форму отдаёт vite), а печать посмотреть хочется.
+// Пусто и то и другое — печати на контуре нет.
+func printPagePath(explicit, indexPath string) string {
+	if explicit != "" {
+		return explicit
+	}
 	if indexPath == "" {
 		return ""
 	}

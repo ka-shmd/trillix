@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build && vite build --config vite.embed.config.ts && vite build --config vite.print.config.ts",
+    "build:print": "vite build --config vite.print.config.ts",
     "check:bundle": "node scripts/check-bundle.mjs",
     "lint": "eslint .",
     "typecheck": "tsc -b",
