@@ -672,17 +672,22 @@ function NotifyEmailFields({
   editable: boolean
   onLocked: () => void
 }) {
-  // На бесплатном плане поля видны и НЕ редактируются: `readOnly`, а не `disabled`,
-  // — выключенное поле не ловит ни клика, ни фокуса, и объяснить, почему оно не
-  // печатается, было бы негде. Клик по такому полю открывает разговор о тарифе.
-  const lock = editable ? {} : { readOnly: true, onFocus: onLocked, onClick: onLocked }
+  // На бесплатном плане бланк ВИДЕН, но мёртв: поля не принимают ни клика, ни
+  // фокуса, ни набора, и ничего при этом не открывают (решение владельца
+  // 2026-08-30). Разговор о тарифе начинается только по явной ссылке под коробкой —
+  // случайный клик по полю не имеет права выкидывать диалог поверх страницы.
+  //
+  // `readOnly` + `tabIndex={-1}` под `pointer-events-none` на коробке, а не
+  // `disabled`: текст остаётся обычным, а не бледнеет, — автор читает своё письмо,
+  // а не догадывается, что в нём написано.
+  const lock = editable ? {} : { readOnly: true, tabIndex: -1 }
   // h-8 вместо своей высоты контрола: высоту строки бланка задаёт СТРОКА, иначе
   // ряды с полем и ряды с готовым значением стоят разной высоты и бланк рябит.
   const cell = 'h-8 w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
 
   return (
     <div>
-      <div className="rounded-lg border">
+      <div className={`rounded-lg border${editable ? '' : ' pointer-events-none'}`}>
         <Row label="Имя отправителя">
           <Input
             {...lock}
@@ -745,13 +750,9 @@ function NotifyEmailFields({
             className="min-h-36 w-full resize-y border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
           />
         </div>
-        {/* Чекбокс, в отличие от полей выше, `disabled` на бесплатном плане: у
-          выключенного контрола нет readOnly-эквивалента, а клик по обёртке всё равно
-          открывает разговор о тарифе. */}
-        <div
-          className="flex min-h-10 items-center gap-2 border-t px-3"
-          onClick={editable ? undefined : onLocked}
-        >
+        {/* Чекбокс, в отличие от полей выше, `disabled`: readOnly у него нет вовсе,
+            а нажатую галочку от ненажатой надо отличать и на мёртвом бланке. */}
+        <div className="flex min-h-10 items-center gap-2 border-t px-3">
           <Checkbox
             id="notify-pdf"
             checked={draft.notifyAttachPdf}
