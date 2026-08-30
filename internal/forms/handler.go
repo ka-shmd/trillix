@@ -43,6 +43,8 @@ type formsService interface {
 	UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error)
 	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
 	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
+	UpdateNotifyRespondent(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
+	UpdateRespondentEmail(ctx context.Context, userID, formID uuid.UUID, r *domain.RespondentEmail) (Form, error)
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
 	UpdateProgress(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
@@ -165,6 +167,12 @@ type formDetailResponse struct {
 	// ссылки: кабинет показывает сохранённое всем, а применяет настройку отправка
 	// письма (гейт стоит там же и при сохранении).
 	NotifyEmail *notifyEmailBody `json:"notifyEmail"`
+	// NotifyRespondent и RespondentEmail — тумблер и бланк письма респонденту
+	// (0046). Та же мина, что у Branding: только в детали формы. Бланк отдаётся
+	// независимо от тарифа, как и notifyEmail, — кабинет показывает сохранённое
+	// всем, а гейт стоит на сохранении и на отправке.
+	NotifyRespondent bool                 `json:"notifyRespondent"`
+	RespondentEmail  *respondentEmailBody `json:"respondentEmail"`
 	// NotifyMail — письмо о новом ответе БЕЗ авторских правок: как его отправит
 	// сервис, если в notifyEmail пусто. Нужно бланку письма в настройках формы: он
 	// показывает автору настоящие адреса и настоящий текст, а не описание того, чем
@@ -236,17 +244,19 @@ type titleRequest struct {
 // точка записи того же значения означала бы гарантированное расхождение колонки с
 // документом — какая из двух правок легла последней, столько заголовок и живёт.
 type patchRequest struct {
-	Name               *string            `json:"name"`
-	DraftSchema        *json.RawMessage   `json:"draftSchema"`
-	UpdatedAt          *time.Time         `json:"updatedAt"`
-	CloseSettings      *closeSettingsBody `json:"closeSettings"`
-	NotifyOnSubmission *bool              `json:"notifyOnSubmission"`
-	CollectPartial     *bool              `json:"collectPartial"`
-	Branding           *bool              `json:"branding"`
-	Progress           *bool              `json:"progress"`
-	Behavior           *behaviorBody      `json:"behavior"`
-	NotifyEmail        *notifyEmailBody   `json:"notifyEmail"`
-	LinkPreview        *linkPreviewBody   `json:"linkPreview"`
+	Name               *string              `json:"name"`
+	DraftSchema        *json.RawMessage     `json:"draftSchema"`
+	UpdatedAt          *time.Time           `json:"updatedAt"`
+	CloseSettings      *closeSettingsBody   `json:"closeSettings"`
+	NotifyOnSubmission *bool                `json:"notifyOnSubmission"`
+	CollectPartial     *bool                `json:"collectPartial"`
+	Branding           *bool                `json:"branding"`
+	Progress           *bool                `json:"progress"`
+	Behavior           *behaviorBody        `json:"behavior"`
+	NotifyEmail        *notifyEmailBody     `json:"notifyEmail"`
+	NotifyRespondent   *bool                `json:"notifyRespondent"`
+	RespondentEmail    *respondentEmailBody `json:"respondentEmail"`
+	LinkPreview        *linkPreviewBody     `json:"linkPreview"`
 }
 
 // notifyMailBody — письмо по умолчанию: два адреса, которые автору не принадлежат,
@@ -272,6 +282,35 @@ type notifyEmailBody struct {
 	Subject   []domain.Span `json:"subject"`
 	Body      []domain.Span `json:"body"`
 	AttachPDF bool          `json:"attachPdf"`
+}
+
+// respondentEmailBody — бланк письма респонденту в контракте API. От
+// notifyEmailBody отличается одним полем: sourceBlockId — вопрос, из ответа на
+// который берётся адрес получателя. Адреса получателя здесь нет и быть не может —
+// он приезжает ответом, а не настройкой (иначе форма стала бы рассыльщиком).
+type respondentEmailBody struct {
+	SourceBlockID string        `json:"sourceBlockId"`
+	FromName      string        `json:"fromName"`
+	ReplyTo       string        `json:"replyTo"`
+	Subject       []domain.Span `json:"subject"`
+	Body          []domain.Span `json:"body"`
+	AttachPDF     bool          `json:"attachPdf"`
+}
+
+// toRespondentEmailBody — бланк в тело ответа; nil остаётся null, как у письма
+// владельцу: у «не настраивали» одно представление.
+func toRespondentEmailBody(r *domain.RespondentEmail) *respondentEmailBody {
+	if r.Empty() {
+		return nil
+	}
+	return &respondentEmailBody{
+		SourceBlockID: r.SourceBlockID,
+		FromName:      r.FromName,
+		ReplyTo:       r.ReplyTo,
+		Subject:       r.Subject,
+		Body:          r.Body,
+		AttachPDF:     r.AttachPDF,
+	}
 }
 
 // toNotifyEmailBody — настройка в тело ответа; nil (не настраивали) остаётся null,
@@ -357,6 +396,8 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		ClosedMessage:      f.ClosedMessage,
 		ClosedTitle:        f.ClosedTitle,
 		NotifyOnSubmission: f.NotifyOnSubmission,
+		NotifyRespondent:   f.NotifyRespondent,
+		RespondentEmail:    toRespondentEmailBody(f.RespondentEmail),
 		CollectPartial:     f.CollectPartial,
 		Branding:           f.Branding,
 		Progress:           f.Progress,
@@ -515,6 +556,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.Progress != nil,
 		req.Behavior != nil,
 		req.NotifyEmail != nil,
+		req.NotifyRespondent != nil,
+		req.RespondentEmail != nil,
 		req.LinkPreview != nil,
 	}
 	for _, present := range facets {
@@ -523,7 +566,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/behavior/notifyEmail/linkPreview", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/behavior/notifyEmail/notifyRespondent/respondentEmail/linkPreview", domain.ErrValidation))
 		return
 	}
 
@@ -550,6 +593,18 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		})
 	case req.NotifyOnSubmission != nil:
 		form, err = h.svc.UpdateNotifyOnSubmission(r.Context(), userID, formID, *req.NotifyOnSubmission)
+	case req.NotifyRespondent != nil:
+		form, err = h.svc.UpdateNotifyRespondent(r.Context(), userID, formID, *req.NotifyRespondent)
+	case req.RespondentEmail != nil:
+		re := *req.RespondentEmail
+		form, err = h.svc.UpdateRespondentEmail(r.Context(), userID, formID, &domain.RespondentEmail{
+			SourceBlockID: re.SourceBlockID,
+			FromName:      re.FromName,
+			ReplyTo:       re.ReplyTo,
+			Subject:       re.Subject,
+			Body:          re.Body,
+			AttachPDF:     re.AttachPDF,
+		})
 	case req.CollectPartial != nil:
 		form, err = h.svc.UpdateCollectPartial(r.Context(), userID, formID, *req.CollectPartial)
 	case req.Branding != nil:
