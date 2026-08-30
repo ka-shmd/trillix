@@ -124,6 +124,20 @@ FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota;
 
+-- name: GetSubmissionForPrint :one
+-- Один ответ вместе со схемой ТОЙ версии, по которой он отправлен (печать PDF).
+-- Схема приезжает из form_versions, а не из forms.draft_schema: печатается тот
+-- документ, который видел респондент, — вопрос, удалённый автором позже, обязан
+-- остаться на бумаге вместе со своим ответом (ARCHITECTURE §3.2).
+--
+-- form_id в условии и NOT over_quota — по тем же основаниям, что у соседнего
+-- GetSubmissionForDelivery: связка «ответ принадлежит этой форме» проверяется, а
+-- скрытый тарифом ответ не печатается, раз он не показан и в кабинете.
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version, fv.schema AS form_schema
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota;
+
 -- name: ListSubmissionsForBackfill :many
 -- Пачка накопленных ответов для догрузки во внешнюю таблицу (фаза 25).
 --

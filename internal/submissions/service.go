@@ -149,6 +149,7 @@ type Store interface {
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
 	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
 	GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error)
+	GetForPrint(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (PrintRow, error)
 	ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error)
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
 	CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error)
@@ -1219,6 +1220,67 @@ func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionI
 		return domain.ErrNotFound
 	}
 	return nil
+}
+
+// PrintDoc — всё, из чего собирается печатная страница одного ответа: схема той
+// версии, которую видел респондент, его ответы и имена приложенных файлов.
+//
+// Схема и ответы едут наружу СЫРЫМИ: печатную страницу рисует тот же код полей,
+// что и публичную форму (`@fields`), и любая перепаковка по дороге завела бы
+// второй формат документа — то есть место, где печать однажды разойдётся с формой.
+type PrintDoc struct {
+	ID          uuid.UUID
+	FormTitle   string
+	FormVersion int32
+	CreatedAt   time.Time
+	Schema      json.RawMessage
+	Answers     json.RawMessage
+	// Files — приложенные к ответу файлы, upload_id → имя и размер. На бумаге у
+	// файла нет ссылки (подпись хранилища живёт минуту, а лист живёт годы) —
+	// печатается имя, поэтому карта нужна и здесь, как в таблице и выгрузке.
+	Files map[string]domain.AnswerFile
+}
+
+// PrintDocFor собирает документ одного ответа для печати: авторизация (чужая или
+// несуществующая форма → 404, инвариант 1), затем ответ вместе со схемой СВОЕЙ
+// версии.
+//
+// Право спрашивается то же, что у листинга (членство через forms.Get), а не своё:
+// печать — способ прочитать ответ, который человек и так видит на экране, и ставить
+// на неё отдельный барьер значило бы обещать защиту, которой рядом нет.
+func (s *Service) PrintDocFor(ctx context.Context, userID, formID, submissionID uuid.UUID) (PrintDoc, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return PrintDoc{}, err
+	}
+
+	row, err := s.repo.GetForPrint(ctx, s.db, formID, submissionID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PrintDoc{}, domain.ErrNotFound
+		}
+		return PrintDoc{}, fmt.Errorf("get submission %s for print: %w", submissionID, err)
+	}
+
+	doc := PrintDoc{
+		ID:          row.ID,
+		FormTitle:   form.Title,
+		FormVersion: row.FormVersion,
+		CreatedAt:   row.CreatedAt,
+		Schema:      row.Schema,
+		Answers:     row.Answers,
+	}
+
+	// Имена файлов — одним запросом по этому ответу: на бумаге у файла печатается
+	// имя, а в самих ответах лежат только id.
+	if s.files != nil {
+		files, err := s.files.InfoBySubmissions(ctx, []uuid.UUID{row.ID})
+		if err != nil {
+			return PrintDoc{}, err
+		}
+		doc.Files = files
+	}
+	return doc, nil
 }
 
 // hasFileBlock — есть ли в какой-нибудь версии формы вопрос-файл. Дешёвый обход
