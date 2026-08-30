@@ -1,0 +1,79 @@
+/* Стили печатной страницы ответа. Вид самой формы (.rf-*) — общий с рендерером и
+   кабинетом (web/shared/fields/fields.css), здесь только то, чего у экранной формы
+   нет: поля листа, подвал и правила, по которым бумага режется на страницы. */
+
+:root {
+  font-family: var(--rf-font-family);
+  color: var(--rf-text);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  /* Холст формы — тот же токен, что у рендерера: тёмная форма печатается тёмной,
+     раз автор её такой сделал. Печать фона включается ниже (print-color-adjust). */
+  background: var(--rf-canvas);
+}
+
+/* Лист А4 с полями. Поля СТРАНИЦЫ, а не колонки: собственные отступы .rf-page
+   (9rem сверху) на бумаге дали бы пустую первую треть листа, поэтому ниже они
+   ужимаются. */
+@page {
+  size: A4;
+  margin: 14mm 12mm;
+}
+
+.print-footer {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem 1rem;
+  justify-content: space-between;
+  margin-top: 1.5rem;
+  padding-top: 0.75rem;
+  border-top: 1px solid var(--rf-border, rgba(0, 0, 0, 0.12));
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
+  line-height: 1.5;
+  color: var(--rf-muted);
+}
+
+.print-footer-id {
+  /* Id — техническая строка, и читают её глазами по одному символу. */
+  font-variant-numeric: tabular-nums;
+}
+
+@media print {
+  /* Фон и цвета автора печатаются как есть: форма с тёмной темой или цветной
+     обложкой на бумаге обязана остаться собой, а не превратиться в чёрно-белый
+     конспект. */
+  html {
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+
+  /* Поля листа задаёт @page — колонка формы отдаёт свои и растягивается на всю
+     ширину печатной области. */
+  .rf-page {
+    max-width: none;
+    padding: 0;
+  }
+
+  /* Вопрос не разрывается между страницами: подпись на одном листе, а поле с
+     ответом на другом — это два разных документа, а не один. */
+  .rf-group,
+  .rf-option,
+  .rf-file-item {
+    break-inside: avoid;
+  }
+
+  /* Заголовок раздела не остаётся последней строкой листа. */
+  .rf-heading {
+    break-after: avoid;
+  }
+
+  .print-footer {
+    break-before: avoid;
+  }
+}
