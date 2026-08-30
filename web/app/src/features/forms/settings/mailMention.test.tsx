@@ -3,7 +3,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { act, cleanup, fireEvent, render } from '@testing-library/react'
 
-import { type Block, type Span, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
+import {
+  type Block,
+  type FormSchema,
+  type Span,
+  SCHEMA_VERSION,
+  textFromString,
+} from '@entities/formSchema'
 import { setCaret } from '../builder/richCaret'
 import { newFormDetail } from '../draft'
 import { MailLine } from './MailLine'
@@ -34,7 +40,8 @@ const blocks: Block[] = [
 
 function blank(multiline: boolean, editable = true) {
   const onChange = vi.fn<(v: Span[]) => void>()
-  const form = { ...newFormDetail(), draftSchema: { schemaVersion: SCHEMA_VERSION, blocks } }
+  const draftSchema: FormSchema = { schemaVersion: SCHEMA_VERSION, blocks }
+  const form = { ...newFormDetail(), draftSchema }
   render(
     <MailLine
       form={form}
