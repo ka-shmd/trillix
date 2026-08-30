@@ -119,19 +119,18 @@ export async function downloadSubmissionPdf(formId: string, submissionId: string
 
   const blob = await res.blob()
   const url = URL.createObjectURL(blob)
-  try {
-    const a = document.createElement('a')
-    a.href = url
-    a.download = fileNameFrom(res.headers.get('Content-Disposition'))
-    // Клик по узлу вне документа браузеры выполняют, но Safari требует его в DOM.
-    document.body.append(a)
-    a.click()
-    a.remove()
-  } finally {
-    // Отзываем СРАЗУ после клика: скачивание к этому моменту уже началось, а
-    // неотозванный URL держит blob в памяти вкладки до её закрытия.
-    URL.revokeObjectURL(url)
-  }
+  const a = document.createElement('a')
+  a.href = url
+  a.download = fileNameFrom(res.headers.get('Content-Disposition'))
+  // Клик по узлу вне документа браузеры выполняют, но Safari требует его в DOM.
+  document.body.append(a)
+  a.click()
+  a.remove()
+  // ⚠ МИНА: отзывать URL сразу после click() нельзя. Клик лишь СТАВИТ скачивание в
+  // очередь, и в Firefox и Safari отзыв в том же кадре успевает отобрать источник —
+  // файл молча не сохраняется. Отдаём кадр браузеру и только потом освобождаем blob
+  // (не освободить вовсе тоже нельзя: он висит в памяти вкладки до её закрытия).
+  setTimeout(() => URL.revokeObjectURL(url), 0)
 }
 
 // Имя файла берётся из ответа, а не собирается здесь: сервер уже знает и название

@@ -38,6 +38,10 @@ import (
 type printedPage struct {
 	html   string
 	status int
+	// headers — то, с чем страница уехала в браузер печати. Проверяется CSP: на
+	// странице лежит CSS автора формы, и политику ей ставит сам Go (Caddy этот путь
+	// не видит вовсе).
+	headers http.Header
 }
 
 // printStack поднимает кабинет с печатью: api (auth + листинг + печатная страница) и
@@ -94,7 +98,7 @@ func printStackOpts(t *testing.T, printerURL string) (*httptest.Server, *printed
 		}
 		defer func() { _ = resp.Body.Close() }()
 		body, _ := io.ReadAll(resp.Body)
-		seen.html, seen.status = string(body), resp.StatusCode
+		seen.html, seen.status, seen.headers = string(body), resp.StatusCode, resp.Header.Clone()
 		if resp.StatusCode != http.StatusOK {
 			http.Error(w, "page not printable", http.StatusBadGateway)
 			return
@@ -180,6 +184,38 @@ func TestPrintPDF_EndToEnd(t *testing.T) {
 	}
 	if !strings.Contains(page.html, "b1") {
 		t.Errorf("на странице нет вопроса формы: %.400q", page.html)
+	}
+}
+
+// CSP на печатной странице — не гигиена, а единственная стена вокруг авторского CSS
+// (`web/shared/fields/customCss.ts` так и говорит). Публичной форме её ставит Caddy,
+// печатной странице — сам Go: до `/internal/*` Caddy не доходит. Без заголовка чужой
+// CSS звал бы внешние адреса из браузера, который стоит во внутренней сети рядом с
+// базой.
+func TestPrintPage_SetsCSP(t *testing.T) {
+	resetDB(t)
+	srv, page := printStack(t)
+	owner, ownerID := authedClient(t, srv, "print-csp-"+uuid.NewString()[:8]+"@example.com")
+	slug := publishFormFor(t, ownerID, requiredNameSchema)
+	fid := formIDBySlug(t, slug)
+	subID := submitN(t, srv, slug, 1)[0].String()
+
+	if resp := getPDF(t, owner, srv, fid, subID); resp.StatusCode != http.StatusOK {
+		t.Fatalf("статус %d, ожидалось 200", resp.StatusCode)
+	}
+
+	csp := page.headers.Get("Content-Security-Policy")
+	if csp == "" {
+		t.Fatal("печатная страница уехала без Content-Security-Policy")
+	}
+	for _, want := range []string{"default-src 'self'", "connect-src 'none'", "frame-ancestors 'none'"} {
+		if !strings.Contains(csp, want) {
+			t.Errorf("в CSP нет %q: %s", want, csp)
+		}
+	}
+	// Чужой ответ не кешируется и не индексируется.
+	if got := page.headers.Get("Cache-Control"); got != "no-store" {
+		t.Errorf("Cache-Control = %q, ждали no-store", got)
 	}
 }
 

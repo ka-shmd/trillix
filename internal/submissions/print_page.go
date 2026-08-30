@@ -120,6 +120,24 @@ type printFile struct {
 	Size int64  `json:"size"`
 }
 
+// printCSP — политика печатной страницы, и она ОБЯЗАТЕЛЬНА, а не гигиена.
+//
+// На странице лежит CSS АВТОРА ФОРМЫ (design.css, платная возможность), и вся
+// безопасность этой возможности держится на политике: `customCss.ts` так и написано —
+// «сторож текста, а не стена, стена это CSP». Публичной форме политику ставит Caddy,
+// но печатную страницу Caddy не видит вовсе (`/internal/*` он не проксирует), и без
+// этого заголовка чужой CSS получал бы право звать внешние адреса из НАШЕГО браузера
+// печати: `background: url(http://…)` в контейнере, который сидит во внутренней сети
+// рядом с api и базой. Это не утечка ответа — это чужой запрос нашими руками.
+//
+// Состав уже, чем у формы: печатной странице не нужны ни blob:, ни фреймы, ни
+// соединения (данные приезжают впечатанными). `unsafe-inline` для стилей оставлен —
+// на нём и стоит вся возможность своего оформления; `data:` у картинок и шрифтов —
+// как у публичной формы, чтобы вид не разошёлся.
+const printCSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
+	"img-src 'self' data:; font-src 'self' data:; connect-src 'none'; object-src 'none'; " +
+	"base-uri 'none'; form-action 'none'; frame-src 'none'; frame-ancestors 'none'"
+
 // printMediaBase — префикс адресов картинок на печатной странице. Один на все
 // контуры: путь внутренний и от домена не зависит.
 const printMediaBase = "/internal/print"
@@ -171,6 +189,7 @@ func (h *PrintPageHandler) document(w http.ResponseWriter, r *http.Request) {
 	// Документ содержит чужой ответ: ни кешу, ни поисковику его видеть не положено.
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Robots-Tag", "noindex")
+	w.Header().Set("Content-Security-Policy", printCSP)
 	if _, err := fmt.Fprint(w, head,
 		`<script type="application/json" id="print-data">`, string(data), `</script>`,
 		tail); err != nil {

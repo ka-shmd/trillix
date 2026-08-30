@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"sync/atomic"
 	"time"
 )
 
@@ -45,6 +46,14 @@ type Client struct {
 	// slots — семафор одновременных печатей. Буферизованный канал, а не мьютекс:
 	// его можно ждать вместе с отменой контекста.
 	slots chan struct{}
+	// waiting — сколько запросов сейчас стоит в очереди за слотом, и потолок этой
+	// очереди. Семафор ограничивает БРАУЗЕРЫ, но не ждущих: без потолка сотня
+	// одновременных кликов (или скрипт по списку ответов) даёт сотню горутин и
+	// соединений, каждое из которых держится до своего дедлайна в четверть минуты.
+	// Переполненная очередь отвечает сразу — «занято» лучше, чем ожидание, которое
+	// всё равно не дождётся.
+	waiting  atomic.Int64
+	maxQueue int64
 }
 
 // New собирает клиента. concurrency — сколько документов печатается одновременно;
@@ -58,6 +67,9 @@ func New(baseURL string, concurrency int, timeout time.Duration) *Client {
 		baseURL: baseURL,
 		http:    &http.Client{Timeout: timeout},
 		slots:   make(chan struct{}, concurrency),
+		// Вчетверо больше, чем печатается одновременно: небольшая очередь сглаживает
+		// всплеск (два человека нажали разом), большая — только копит ожидание.
+		maxQueue: int64(concurrency) * 4,
 	}
 }
 
@@ -71,10 +83,16 @@ func New(baseURL string, concurrency int, timeout time.Duration) *Client {
 // Ожидание слота ограничено контекстом вызывающего: тот, кто ждёт дольше своего
 // дедлайна, получает ErrBusy, а не растущую очередь.
 func (c *Client) PDF(ctx context.Context, path string) ([]byte, error) {
+	if n := c.waiting.Add(1); n > c.maxQueue {
+		c.waiting.Add(-1)
+		return nil, ErrBusy
+	}
 	select {
 	case c.slots <- struct{}{}:
+		c.waiting.Add(-1)
 		defer func() { <-c.slots }()
 	case <-ctx.Done():
+		c.waiting.Add(-1)
 		return nil, ErrBusy
 	}
 

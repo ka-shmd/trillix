@@ -185,6 +185,12 @@ func printPage(ctx context.Context, chromium, pageURL string) ([]byte, error) {
 		"--print-to-pdf="+out,
 		pageURL,
 	)
+	// WaitDelay — страховка от зависшего браузера. CommandContext по отмене убивает
+	// САМ процесс, но CombinedOutput ждёт закрытия pipe'а, а его держат живые внуки:
+	// chromium плодит дочерние процессы, и осиротевший рендерер удерживал бы горутину
+	// печати после того, как всё уже отменено. С задержкой pipe закрывается
+	// принудительно, и запрос отдаёт ошибку, а не висит.
+	cmd.WaitDelay = 2 * time.Second
 	if combined, err := cmd.CombinedOutput(); err != nil {
 		// Вывод браузера — единственное, что объясняет отказ; он идёт в лог сервиса,
 		// а не наружу.
