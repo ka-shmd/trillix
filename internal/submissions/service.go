@@ -74,7 +74,19 @@ type Mailer interface {
 	EnqueueEmail(ctx context.Context, db postgres.DBTX, msg mail.EmailMessage) error
 }
 
-// Visits — коллаборатор из модуля visits: отмечает визит как закончившийся ответом
+// RespondentLimiter — потолок писем РЕСПОНДЕНТАМ на одну форму
+// (docs/design/respondent-email.md §5). Ключ — id формы; false значит «в этом окне
+// больше не шлём». Реализация — ratelimit.TokenBucket, в тестах ratelimit.AllowAll
+// (инвариант 6: лимитер подменяется пермиссивным, а не ослабляется).
+//
+// Потолок стоит здесь, а не на транспорте: квота отправки у провайдера общая на
+// весь сервис, и выесть её может одна виральная форма. Письма ВЛАДЕЛЬЦУ он не
+// касается — их получает один известный адрес, согласившийся их получать.
+type RespondentLimiter interface {
+	Allow(key string) bool
+}
+
+// Visits — коллаборатор из модуля visits// Visits — коллаборатор из модуля visits: отмечает визит как закончившийся ответом
 // (фаза 8.5 шаг 6). Реализация — *visits.Service; общение через интерфейс сервиса.
 //
 // Метод вызывается ПОСЛЕ коммита приёма и best-effort: аналитика не имеет права ни
@@ -230,7 +242,24 @@ type Service struct {
 	// appBaseURL — origin кабинета, из которого строится ссылка в таблицу ответов в
 	// письме владельцу (${appBaseURL}/forms/{slug}/responses). Совпадает с cfg.AppOrigin.
 	appBaseURL string
-	now        func() time.Time // подменяется в тестах (проверка даты закрытия)
+	// formBaseURL — origin публичного рендерера: из него собирается адрес самой
+	// формы для подвала письма респонденту. Совпадает с cfg.PublicRendererBaseURL.
+	//
+	// Вместе с respondentLimiter приезжает сеттером, а не девятым аргументом
+	// конструктора (тот же довод, что у files). Не настроено — письма респондентам
+	// НЕ уходят: письмо без подвала и без потолка отправлять нельзя, это ровно та
+	// обвязка, ради которой оно вообще разрешено (спека §5).
+	formBaseURL       string
+	respondentLimiter RespondentLimiter
+	now               func() time.Time // подменяется в тестах (проверка даты закрытия)
+}
+
+// WithRespondentMail подключает письмо респонденту: адрес формы для подвала и
+// потолок писем на форму. Вызывается при сборке приложения; без него тумблер формы
+// остаётся намерением, о котором путь отправки говорит в лог.
+func (s *Service) WithRespondentMail(formBaseURL string, limiter RespondentLimiter) *Service {
+	s.formBaseURL, s.respondentLimiter = formBaseURL, limiter
+	return s
 }
 
 func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, plans Plans, repo Store, appBaseURL string) *Service {
@@ -435,8 +464,8 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// строки (не для идемпотентного ретрая).
 	s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
 	s.dropPartial(ctx, pf.FormID, meta.VisitID)
-	if inserted && pf.NotifyOnSubmission {
-		s.notifyOwner(ctx, pf.FormID, id, slug, schema, clean)
+	if inserted && (pf.NotifyOnSubmission || pf.NotifyRespondent) {
+		s.notifyMail(ctx, pf, id, slug, schema, clean)
 	}
 	if inserted {
 		s.enqueueIntegration(ctx, pf.FormID, id)
@@ -576,36 +605,56 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.T
 	return page, nil
 }
 
-// notifyOwner ставит владельцу письмо о новом ответе — ОДНО ПИСЬМО НА ОДИН ответ
-// (ADR §10, отмена троттлинг-дайджеста 2026-08-30). Ссылка ведёт в таблицу ответов
-// кабинета.
-//
-// Защиты от шквала писем здесь больше нет: планы поток ответов не ограничивают, и
-// единственный потолок — rate limit приёма. Переливной клапан (порог на форму, сверх
-// которого остаток снова склеивается) записан в BACKLOG.md; механика коалесинга в
-// outbox для него сохранена и стоит без потребителей.
+// notifyMail ставит письма, поводом для которых стал принятый ответ: владельцу
+// формы и/или респонденту. Владельца резолвим ОДИН раз на оба письма — строка
+// нужна обоим (тариф, заголовки формы, бланки), а поход в базу стоит одинаково.
 //
 // Вызывается ПОСЛЕ приёма и best-effort, как markVisitSubmitted: уведомление —
 // вторичный эффект, и уронить из-за него принятый ответ нельзя (респондент увидел
 // бы «не удалось отправить» на записанном ответе). Поэтому НЕ в транзакции приёма:
 // это размен строгой атомарности «ответ+письмо» на неприкосновенность hot-path и
 // принятого ответа. Цена — краш в узком окне между коммитом ответа и enqueue теряет
-// одно уведомление; данные целы (владелец видит ответ в таблице), а следующий ответ
-// теряет одно уведомление. Сбой (нет владельца, пустой email, недоступна БД) уходит
-// в лог с request_id — ответ уже принят.
-func (s *Service) notifyOwner(
+// уведомление; данные целы (владелец видит ответ в таблице). Любой сбой уходит в
+// лог с request_id — ответ уже принят.
+func (s *Service) notifyMail(
 	ctx context.Context,
-	formID, submissionID uuid.UUID,
+	pf forms.PublicForm,
+	submissionID uuid.UUID,
 	slug string,
 	schema domain.FormSchema,
 	answers map[string]json.RawMessage,
 ) {
-	owner, err := s.forms.SubmissionOwner(ctx, formID)
+	owner, err := s.forms.SubmissionOwner(ctx, pf.FormID)
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Warn("submission owner not resolved for notification",
-			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+			slog.String("form_id", pf.FormID.String()), slog.String("error", err.Error()))
 		return
 	}
+	if pf.NotifyOnSubmission {
+		s.notifyOwner(ctx, pf.FormID, submissionID, slug, owner, schema, answers)
+	}
+	if pf.NotifyRespondent {
+		s.notifyRespondent(ctx, pf.FormID, submissionID, slug, owner, schema, answers)
+	}
+}
+
+// notifyOwner ставит владельцу письмо о новом ответе — ОДНО ПИСЬМО НА ОДИН ответ
+// (ADR §10, отмена троттлинг-дайджеста 2026-08-30). Ссылка ведёт в таблицу ответов
+// кабинета.
+//
+// Защиты от шквала писем здесь нет: планы поток ответов не ограничивают, и
+// единственный потолок — rate limit приёма. Переливной клапан (порог на форму, сверх
+// которого остаток снова склеивается) записан в BACKLOG.md; механика коалесинга в
+// outbox для него сохранена и стоит без потребителей. Потолок писем РЕСПОНДЕНТАМ
+// (notifyRespondent) — не он: тот стоит за адресатом, который нам не давал согласия.
+func (s *Service) notifyOwner(
+	ctx context.Context,
+	formID, submissionID uuid.UUID,
+	slug string,
+	owner forms.Owner,
+	schema domain.FormSchema,
+	answers map[string]json.RawMessage,
+) {
 	link := s.appBaseURL + "/forms/" + slug + "/responses"
 	msg := mail.EmailMessage{
 		To:       owner.Email,
@@ -626,7 +675,8 @@ func (s *Service) notifyOwner(
 		// Тема разворачивается отдельной функцией: она обязана остаться ОДНОЙ строкой,
 		// потому что уезжает в заголовок письма, а подставляется в неё недоверенный
 		// ввод респондента.
-		mc := domain.NewMentionContext(schema, answers, s.mentionFiles(ctx, submissionID, schema, n))
+		mc := domain.NewMentionContext(schema, answers,
+			s.mentionFiles(ctx, submissionID, schema, n.Subject, n.Body))
 		msg.FromName, msg.ReplyTo = n.FromName, n.ReplyTo
 		msg.Subject = domain.MentionLine(n.Subject, mc)
 		msg.Body = domain.MentionText(n.Body, mc)
@@ -641,9 +691,89 @@ func (s *Service) notifyOwner(
 			}}
 		}
 	}
-	err = s.mail.EnqueueEmail(ctx, s.db, msg)
-	if err != nil {
+	if err := s.mail.EnqueueEmail(ctx, s.db, msg); err != nil {
 		httpserver.LoggerFrom(ctx).Warn("owner notification not enqueued",
+			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+	}
+}
+
+// notifyRespondent ставит письмо ЧЕЛОВЕКУ, заполнившему форму
+// (docs/design/respondent-email.md). От письма владельцу отличается тем, что
+// адресата мы узнаём из ответа, а не из аккаунта, — отсюда четыре условия, каждое
+// из которых молча отменяет письмо:
+//
+//  1. обвязка не настроена на контуре (нет адреса формы для подвала или потолка);
+//  2. тариф не разрешает — здесь ОТКАЗ, а не отступление к дефолтному тексту, как
+//     у владельца: неподтверждённое право означает не «письмо не тем текстом», а
+//     письмо постороннему человеку за наш счёт;
+//  3. адреса нет (вопрос не выбран, удалён, не типа email, ответ пуст) — самый
+//     частый случай и совершенно штатный;
+//  4. выбран потолок писем на форму за окно.
+//
+// Ответ во всех четырёх случаях уже принят, и письмо владельцу уходит своим путём.
+func (s *Service) notifyRespondent(
+	ctx context.Context,
+	formID, submissionID uuid.UUID,
+	slug string,
+	owner forms.Owner,
+	schema domain.FormSchema,
+	answers map[string]json.RawMessage,
+) {
+	log := httpserver.LoggerFrom(ctx)
+	if s.formBaseURL == "" || s.respondentLimiter == nil {
+		log.Warn("respondent notification is not configured on this deployment",
+			slog.String("form_id", formID.String()))
+		return
+	}
+	d, err := s.plans.CheckWorkspace(ctx, owner.WorkspaceID, entitlements.FormRespondentEmail)
+	if err != nil {
+		log.Warn("plan lookup for respondent notification",
+			slog.String("workspace_id", owner.WorkspaceID.String()), slog.String("error", err.Error()))
+		return
+	}
+	if !d.Allowed {
+		return
+	}
+	r := owner.RespondentEmail
+	to := domain.RespondentAddress(r, schema, answers)
+	if to == "" {
+		return
+	}
+	// Потолок спрашивается ПОСЛЕДНИМ из условий: ответы без адреса не имеют права
+	// тратить окно формы, иначе анкета, где почту спрашивают необязательным
+	// вопросом, выедала бы его отказами.
+	if !s.respondentLimiter.Allow(formID.String()) {
+		log.Warn("respondent notification throttled, email skipped",
+			slog.String("form_id", formID.String()))
+		return
+	}
+	// Заголовок в подвале — ПУБЛИЧНЫЙ (owner.PublicTitle), а не внутреннее имя из
+	// кабинета: респондент заполнял форму, которая называлась так, и «Анкета
+	// (копия 2)» в его письме читалась бы как чужая кухня.
+	msg := mail.EmailMessage{
+		To:       to,
+		Template: mail.TemplateRespondentReceipt,
+		Data: map[string]any{
+			"form_title": owner.PublicTitle,
+			"form_link":  s.formBaseURL + "/" + slug,
+		},
+	}
+	if !r.Empty() {
+		mc := domain.NewMentionContext(schema, answers,
+			s.mentionFiles(ctx, submissionID, schema, r.Subject, r.Body))
+		msg.FromName, msg.ReplyTo = r.FromName, r.ReplyTo
+		msg.Subject = domain.MentionLine(r.Subject, mc)
+		msg.Body = domain.MentionText(r.Body, mc)
+		if r.AttachPDF {
+			msg.Attachments = []mail.AttachmentRef{{
+				Kind:         mail.KindSubmissionPDF,
+				FormID:       formID.String(),
+				SubmissionID: submissionID.String(),
+			}}
+		}
+	}
+	if err := s.mail.EnqueueEmail(ctx, s.db, msg); err != nil {
+		log.Warn("respondent notification not enqueued",
 			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
 	}
 }
@@ -659,12 +789,12 @@ func (s *Service) mentionFiles(
 	ctx context.Context,
 	submissionID uuid.UUID,
 	schema domain.FormSchema,
-	n *domain.NotifyEmail,
+	subject, body []domain.Span,
 ) map[string]domain.AnswerFile {
 	if s.files == nil || !domain.HasFileQuestion(schema) {
 		return nil
 	}
-	if !domain.MentionsAllAnswers(n.Body) && !domain.MentionsAllAnswers(n.Subject) {
+	if !domain.MentionsAllAnswers(body) && !domain.MentionsAllAnswers(subject) {
 		return nil
 	}
 	files, err := s.files.InfoBySubmissions(ctx, []uuid.UUID{submissionID})
