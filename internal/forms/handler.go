@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"strconv"
 	"strings"
@@ -34,6 +35,10 @@ type formsService interface {
 	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
+	// SubmissionOwner — адресат письма о новом ответе. Прав НЕ проверяет (это
+	// адресат, а не доступ), поэтому зовётся только ПОСЛЕ Get/GetBySlug, которые
+	// членство уже проверили.
+	SubmissionOwner(ctx context.Context, formID uuid.UUID) (Owner, error)
 	GetBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error)
 	UpdateName(ctx context.Context, userID, formID uuid.UUID, name string) (Form, error)
 	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
@@ -57,6 +62,17 @@ type Handler struct {
 	svc         formsService
 	requireAuth Middleware
 	requireCSRF Middleware
+	// notifyFrom — служебный адрес, с которого сервис шлёт письма (голый адрес из
+	// MAIL_FROM, без имени). Пуст, когда почта на контуре не настроена.
+	notifyFrom string
+}
+
+// WithNotifyFrom сообщает транспорту служебный адрес отправителя. Отдельным
+// сеттером, а не аргументом конструктора: адрес не имеет отношения к формам, он
+// нужен ровно одной строке бланка письма в настройках.
+func (h *Handler) WithNotifyFrom(addr string) *Handler {
+	h.notifyFrom = addr
+	return h
 }
 
 func NewHandler(svc formsService, requireAuth, requireCSRF Middleware) *Handler {
@@ -148,6 +164,20 @@ type formDetailResponse struct {
 	// ссылки: кабинет показывает сохранённое всем, а применяет настройку отправка
 	// письма (гейт стоит там же и при сохранении).
 	NotifyEmail *notifyEmailBody `json:"notifyEmail"`
+	// NotifyFrom и NotifyTo — адреса письма о новом ответе, которые автор НЕ
+	// настраивает: с какого адреса сервис шлёт и на какой придёт. Оба нужны бланку
+	// письма в настройках формы: строки «От кого» и «Кому» показывают реальные
+	// адреса, а не описание того, чем они являются.
+	//
+	// Получатель — почта ВЛАДЕЛЬЦА пространства, а не того, кто открыл страницу:
+	// письмо уходит владельцу, и участник команды обязан видеть настоящего адресата,
+	// иначе строка «Кому» врёт всем, кроме владельца. Новой утечки нет — почты
+	// участников пространства и так видны на экране участников.
+	//
+	// Пусто = адрес неизвестен (почта на контуре не настроена, владелец не
+	// разрезолвился): кабинет тогда рисует прежнее описание вместо адреса.
+	NotifyFrom string `json:"notifyFrom"`
+	NotifyTo   string `json:"notifyTo"`
 	// LinkPreview — своя карточка ссылки; null = не настраивали, публичная страница
 	// берёт дефолты. Отдаётся НЕЗАВИСИМО от тарифа: окно кастомизации показывает
 	// сохранённое всем, а применяет карточку к самой ссылке публичный слой (гейт
@@ -269,6 +299,24 @@ func toFormResponse(f Form) formResponse {
 
 // toFormDetailResponse — деталь формы (GET /forms/{id} и /forms/lookup): метаданные,
 // черновик схемы и живые настройки закрытия (их читает страница настроек кабинета).
+// formDetail собирает деталь формы вместе с адресами письма. Метод, а не функция:
+// служебный адрес отправителя живёт у транспорта, а адресат требует запроса.
+//
+// Сбой резолва адресата НЕ роняет деталь формы: строка «Кому» покажет описание
+// вместо адреса, а страница настроек откроется — редактор, «Поделиться» и прочие
+// потребители детали к почте отношения не имеют вовсе.
+func (h *Handler) formDetail(ctx context.Context, f Form) formDetailResponse {
+	resp := toFormDetailResponse(f)
+	resp.NotifyFrom = h.notifyFrom
+	if owner, err := h.svc.SubmissionOwner(ctx, f.ID); err == nil {
+		resp.NotifyTo = owner.Email
+	} else {
+		httpserver.LoggerFrom(ctx).Warn("notification recipient not resolved for form detail",
+			slog.String("form_id", f.ID.String()), slog.String("error", err.Error()))
+	}
+	return resp
+}
+
 func toFormDetailResponse(f Form) formDetailResponse {
 	// Редактор кабинета знает только текущий формат — старый черновик апгрейдится
 	// до v4 на отдаче. Ошибка невозможна на валидных данных БД; на всякий случай
@@ -403,7 +451,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toFormDetailResponse(form))
+	httpserver.WriteJSON(w, r, http.StatusOK, h.formDetail(r.Context(), form))
 }
 
 // getBySlug — тот же ответ, что get, но форма адресована slug'ом (query-параметр
@@ -423,7 +471,7 @@ func (h *Handler) getBySlug(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toFormDetailResponse(form))
+	httpserver.WriteJSON(w, r, http.StatusOK, h.formDetail(r.Context(), form))
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {

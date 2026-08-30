@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	netmail "net/mail"
 	"os"
 	"os/signal"
 	"syscall"
@@ -207,6 +208,16 @@ const (
 	ratelimitGCInterval = 10 * time.Minute
 )
 
+// senderAddress — адресная часть MAIL_FROM. Пустая строка, если разобрать не вышло:
+// адрес отправителя нужен одной подписи в кабинете, и падать из-за неё нельзя.
+func senderAddress(from string) string {
+	addr, err := netmail.ParseAddress(from)
+	if err != nil {
+		return ""
+	}
+	return addr.Address
+}
+
 func main() {
 	cfg, err := config.Load()
 	if err != nil {
@@ -348,7 +359,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc)
-	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF).
+		// Голый адрес из MAIL_FROM: в конфиге он с именем («Trillix <no-reply@…>»),
+		// а бланку письма в настройках нужна строка «От кого», а не заголовок From.
+		// Разбор не удался — строка останется пустой, и кабинет нарисует описание.
+		WithNotifyFrom(senderAddress(cfg.MailFrom))
 
 	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
 	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис

@@ -362,6 +362,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
             onChange={(v) => set('notify', v)}
           >
             <NotifyEmailFields
+              form={form}
               draft={draft}
               set={set}
               replyToInvalid={invalid.replyTo}
@@ -660,12 +661,14 @@ function CloseAtFields({
 // BACKLOG.md. Чекбокс PDF, наоборот, живой: печать вложения приезжает в момент
 // доставки письма, поэтому настройка действует со следующего ответа.
 function NotifyEmailFields({
+  form,
   draft,
   set,
   replyToInvalid,
   editable,
   onLocked,
 }: {
+  form: FormDetail
   draft: SettingsDraft
   set: <K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) => void
   replyToInvalid: boolean
@@ -704,11 +707,17 @@ function NotifyEmailFields({
             className={defaulted}
           />
         </Row>
+        {/* Оба адреса — настоящие, а не описание того, чем они являются: в письме
+            автор увидит именно эти строки. Пустой адрес (почта на контуре не
+            настроена, владелец не разрезолвился) отступает к описанию — пустая
+            строка бланка читалась бы как «письмо уйдёт в никуда». */}
         <Row label="От кого">
-          <span className="text-sm">служебный адрес Trillix</span>
+          <span className="text-sm">{form.notifyFrom || 'служебный адрес Trillix'}</span>
         </Row>
         <Row label="Кому">
-          <span className="text-sm">владельцу пространства, на адрес его аккаунта</span>
+          <span className="text-sm">
+            {form.notifyTo || 'владельцу пространства, на адрес его аккаунта'}
+          </span>
         </Row>
         <Row label="Адрес для ответов">
           <div className="w-full">
