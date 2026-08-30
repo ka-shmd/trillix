@@ -97,6 +97,19 @@ const (
 	// — потому что месяц оплаты не покупает свой текст навсегда: даунгрейд обязан
 	// вернуть дефолтный шаблон, ничего не стирая, и апгрейд оживит сохранённое.
 	FormNotifyEmail Key = "form_notify_email"
+	// FormRespondentEmail — право СЛАТЬ письмо респонденту после отправки формы
+	// (миграция 0046, docs/design/respondent-email.md).
+	//
+	// Свой ключ, а не FormNotifyEmail, и разница не в жадности. Там платной
+	// является ПЕРЕБИВКА письма владельцу — само письмо бесплатно, владелец пишет
+	// сам себе. Здесь платной становится сама ОТПРАВКА: адрес приезжает ответом,
+	// письмо уходит с нашего домена на адрес, который ввёл кто угодно, и на
+	// бесплатном тарифе это открытый канал рассылки. Общий ключ означал бы, что
+	// снятие гейта с одного письма молча открывает другое.
+	//
+	// ГЕЙТ ПРИРОДЫ БЕЙДЖА: спрашивается и при сохранении бланка, и при отправке
+	// каждого письма — даунгрейд гасит отправку, ничего не стирая.
+	FormRespondentEmail Key = "form_respondent_email"
 )
 
 // Kind — как читать значение ключа в plans.limits.
@@ -173,6 +186,7 @@ var CatalogOrder = []Key{
 	FormBranding,
 	FormLinkPreview,
 	FormNotifyEmail,
+	FormRespondentEmail,
 	StoragePerWorkspace,
 	Workspaces,
 }
@@ -190,4 +204,5 @@ var Catalog = map[Key]Feature{
 	SubmissionsPartial:  {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Незавершённые ответы"},
 	FormLinkPreview:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своя карточка ссылки"},
 	FormNotifyEmail:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё письмо о новом ответе"},
+	FormRespondentEmail: {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Письмо респонденту"},
 }
