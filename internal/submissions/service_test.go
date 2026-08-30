@@ -110,18 +110,13 @@ func (p fakePlans) PeriodStart() time.Time { return p.period.AddDate(0, -1, 0) }
 // okPlans — квота не исчерпана (обычный случай в тестах не про тарифы).
 func okPlans() fakePlans { return fakePlans{allowed: true} }
 
-// fakeMailer записывает коалесцирующие постановки для проверок.
+// fakeMailer записывает постановки писем для проверок.
 type fakeMailer struct {
-	calls []coalescedCall
+	calls []mail.EmailMessage
 }
 
-type coalescedCall struct {
-	key string
-	msg mail.EmailMessage
-}
-
-func (m *fakeMailer) EnqueueCoalesced(_ context.Context, _ postgres.DBTX, key string, msg mail.EmailMessage, _ time.Duration) error {
-	m.calls = append(m.calls, coalescedCall{key: key, msg: msg})
+func (m *fakeMailer) EnqueueEmail(_ context.Context, _ postgres.DBTX, msg mail.EmailMessage) error {
+	m.calls = append(m.calls, msg)
 	return nil
 }
 
@@ -180,16 +175,10 @@ func TestSubmit_NotifyOn_EnqueuesOwnerDigest(t *testing.T) {
 		t.Fatalf("поставлено уведомлений: %d, ожидалось 1", len(mailer.calls))
 	}
 	c := mailer.calls[0]
-	if c.key != "submission:"+pf.FormID.String() {
-		t.Errorf("ключ коалесинга = %q, ожидался submission:%s", c.key, pf.FormID)
+	if c.To != "owner@example.com" || c.Template != mail.TemplateSubmissionNew {
+		t.Errorf("письмо адресовано неверно: to=%q template=%q", c.To, c.Template)
 	}
-	if c.msg.To != "owner@example.com" || c.msg.Template != mail.TemplateSubmissionDigest {
-		t.Errorf("письмо адресовано неверно: to=%q template=%q", c.msg.To, c.msg.Template)
-	}
-	if c.msg.Data["count"] != 1 {
-		t.Errorf("стартовый count = %v, ожидался 1", c.msg.Data["count"])
-	}
-	if link, _ := c.msg.Data["link"].(string); link != "https://app.test/forms/slug1/responses" {
+	if link, _ := c.Data["link"].(string); link != "https://app.test/forms/slug1/responses" {
 		t.Errorf("ссылка = %q, ожидалась таблица ответов кабинета", link)
 	}
 }

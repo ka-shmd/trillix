@@ -208,7 +208,7 @@ func TestEnqueueEmail(t *testing.T) {
 func TestEnqueueCoalesced(t *testing.T) {
 	store := &fakeStore{}
 	svc := newTestService(store, &fakeMailer{})
-	msg := EmailMessage{To: "owner@example.com", Template: TemplateSubmissionDigest, Data: map[string]any{"count": 1}}
+	msg := EmailMessage{To: "owner@example.com", Template: TemplateSubmissionNew, Data: map[string]any{"count": 1}}
 
 	if err := svc.EnqueueCoalesced(context.Background(), nil, "submission:abc", msg, time.Hour); err != nil {
 		t.Fatalf("EnqueueCoalesced: %v", err)
