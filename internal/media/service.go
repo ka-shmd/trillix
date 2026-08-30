@@ -5,15 +5,19 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"image"
 	"image/jpeg" // именованный импорт регистрирует JPEG-декодер для image.Decode/DecodeConfig
 	"image/png"  // и PNG-декодер
 	"math"
+	"regexp"
+	"strings"
 
 	"github.com/google/uuid"
 	"golang.org/x/image/draw"
 
+	"github.com/ka-shmd/trillix/internal/blob"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
 )
@@ -158,21 +162,56 @@ type Forms interface {
 	Get(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error)
 }
 
-// blobPutter — узкий интерфейс над S3-клиентом: кладёт объект. Публичное чтение
-// идёт мимо приложения (Caddy→бакет), поэтому Get здесь не нужен.
-type blobPutter interface {
+// blobStore — узкий интерфейс над S3-клиентом. Кладёт объект и — с появлением
+// печати ответов (ADR §10) — отдаёт его обратно.
+//
+// Чтение здесь НЕ отменяет прежнего порядка: респонденту картинки по-прежнему
+// раздаёт Caddy прямо из бакета, мимо приложения. Через Go ходит ровно один
+// читатель — headless-браузер принтера: у него нет ни нашего домена, ни доверия к
+// сертификату prod-local, и путь до картинки у него ровно один — тот же api,
+// который отдал ему страницу.
+type blobStore interface {
 	PutObject(ctx context.Context, bucket, key string, data []byte, contentType string) error
+	GetObject(ctx context.Context, bucket, key string) (data []byte, contentType string, err error)
 }
 
 // Service — приём картинок. Хранилище скрыто за blobPutter, авторизация — за Forms.
 type Service struct {
 	forms  Forms
-	blob   blobPutter
+	blob   blobStore
 	bucket string
 }
 
-func NewService(f Forms, b blobPutter, bucket string) *Service {
+func NewService(f Forms, b blobStore, bucket string) *Service {
 	return &Service{forms: f, blob: b, bucket: bucket}
+}
+
+// keyPattern — что вообще может быть ключом картинки: `workspaceID/<sha256>.<ext>`.
+// Проверяется на ЧТЕНИИ, потому что ключ там приходит из URL, а не из нашей базы:
+// без проверки «..» в пути уводил бы запрос в соседний бакет.
+var keyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._/-]{0,255}$`)
+
+// Fetch отдаёт картинку по ключу — байты и их тип. Единственный потребитель —
+// печатная страница ответа (см. blobStore): она открыта браузером принтера, для
+// которого наш api это весь мир.
+//
+// Прав не спрашивает, и это не упущение: те же байты по тому же ключу Caddy отдаёт
+// любому желающему прямо из бакета — картинки формы публичны по построению.
+func (s *Service) Fetch(ctx context.Context, key string) ([]byte, string, error) {
+	if !keyPattern.MatchString(key) || strings.Contains(key, "..") {
+		return nil, "", domain.ErrNotFound
+	}
+	data, contentType, err := s.blob.GetObject(ctx, s.bucket, key)
+	if err != nil {
+		// Пропавший объект — 404, а не 500: ключ приезжает из чужого документа
+		// (схема старой версии могла ссылаться на картинку, которую уже унесла
+		// чистка сирот), и лист без картинки лучше отказа печатать вовсе.
+		if errors.Is(err, blob.ErrNotFound) {
+			return nil, "", domain.ErrNotFound
+		}
+		return nil, "", fmt.Errorf("fetch media %s: %w", key, err)
+	}
+	return data, contentType, nil
 }
 
 // Upload авторизует членство и кладёт картинку формы в бакет, возвращая стабильный

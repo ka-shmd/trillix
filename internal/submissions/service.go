@@ -1230,7 +1230,6 @@ func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionI
 // второй формат документа — то есть место, где печать однажды разойдётся с формой.
 type PrintDoc struct {
 	ID          uuid.UUID
-	FormTitle   string
 	FormVersion int32
 	CreatedAt   time.Time
 	Schema      json.RawMessage
@@ -1241,19 +1240,44 @@ type PrintDoc struct {
 	Files map[string]domain.AnswerFile
 }
 
-// PrintDocFor собирает документ одного ответа для печати: авторизация (чужая или
-// несуществующая форма → 404, инвариант 1), затем ответ вместе со схемой СВОЕЙ
-// версии.
+// PrintAccess — что известно об ответе тому, кто ИМЕЕТ ПРАВО его печатать: имя
+// формы и время приёма, из которых складывается имя файла PDF.
+type PrintAccess struct {
+	FormTitle string
+	CreatedAt time.Time
+}
+
+// AuthorizePrint отвечает на один вопрос: можно ли этому пользователю печатать этот
+// ответ. Право — то же, что у листинга (членство через forms.Get): печать это способ
+// прочитать ответ, который человек и так видит на экране, и свой барьер на неё
+// обещал бы защиту, которой рядом нет.
 //
-// Право спрашивается то же, что у листинга (членство через forms.Get), а не своё:
-// печать — способ прочитать ответ, который человек и так видит на экране, и ставить
-// на неё отдельный барьер значило бы обещать защиту, которой рядом нет.
-func (s *Service) PrintDocFor(ctx context.Context, userID, formID, submissionID uuid.UUID) (PrintDoc, error) {
+// Существование ответа проверяется ЗДЕСЬ, а не на печатной странице: иначе запрос на
+// удалённый или чужой ответ поднимал бы браузер, чтобы вернуть лист со словами
+// «печатать нечего» вместо честного 404.
+func (s *Service) AuthorizePrint(ctx context.Context, userID, formID, submissionID uuid.UUID) (PrintAccess, error) {
 	form, err := s.forms.Get(ctx, userID, formID)
 	if err != nil {
-		return PrintDoc{}, err
+		return PrintAccess{}, err
 	}
+	row, err := s.repo.GetForPrint(ctx, s.db, formID, submissionID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PrintAccess{}, domain.ErrNotFound
+		}
+		return PrintAccess{}, fmt.Errorf("authorize print of submission %s: %w", submissionID, err)
+	}
+	return PrintAccess{FormTitle: form.Title, CreatedAt: row.CreatedAt}, nil
+}
 
+// PrintDocFor собирает документ одного ответа для печати: схема СВОЕЙ версии, ответы
+// и имена файлов.
+//
+// ⚠ Прав НЕ проверяет — по тем же основаниям, что SheetRow: страницу открывает
+// headless-браузер принтера, у которого нет ни сессии, ни пользователя. Право
+// проверено раньше и в другом месте (AuthorizePrint), а сюда оно приезжает
+// подписанным токеном печати, который без права не выдаётся.
+func (s *Service) PrintDocFor(ctx context.Context, formID, submissionID uuid.UUID) (PrintDoc, error) {
 	row, err := s.repo.GetForPrint(ctx, s.db, formID, submissionID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -1264,7 +1288,6 @@ func (s *Service) PrintDocFor(ctx context.Context, userID, formID, submissionID 
 
 	doc := PrintDoc{
 		ID:          row.ID,
-		FormTitle:   form.Title,
 		FormVersion: row.FormVersion,
 		CreatedAt:   row.CreatedAt,
 		Schema:      row.Schema,

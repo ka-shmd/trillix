@@ -23,7 +23,7 @@ const preactPkg = fileURLToPath(new URL('./node_modules/preact', import.meta.url
 const zodPkg = fileURLToPath(new URL('./node_modules/zod', import.meta.url))
 
 export default defineConfig({
-  base: '/print/',
+  base: '/internal/print/',
   oxc: { jsx: { runtime: 'automatic' } },
   resolve: {
     // Тот же preact/compat, что у формы: страница печати рисуется теми же @fields, и

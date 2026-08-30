@@ -5,10 +5,18 @@ import './print.css'
 // Вид формы — тот же файл, что у публичной страницы и у кабинета.
 import '@fields/fields.css'
 
+import { setMediaBase } from '@fields/media'
+
 import { readPrintData } from './data'
 import { PrintView } from './PrintView'
 
 const data = readPrintData()
+
+// Откуда странице брать картинки, решает сервер (mediaBase в данных): у браузера
+// принтера нет доступа к раздаче Caddy, и адреса обложки, логотипа и картинок блоков
+// ведут на api. Выставляется ДО первой отрисовки — иначе первая же картинка уедет по
+// прежнему адресу и не найдётся.
+if (data) setMediaBase(data.mediaBase)
 
 createRoot(document.getElementById('root')!).render(
   <StrictMode>

@@ -8,6 +8,7 @@ import (
 	"log/slog"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"syscall"
 	"time"
 
@@ -25,6 +26,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/periodic"
 	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/printer"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/visits"
@@ -155,6 +157,13 @@ const (
 	// отсюда запас 5 при пополнении раз в 20 секунд.
 	avatarRatePerSec = 1.0 / 20.0
 	avatarBurst      = 5
+
+	// Печать PDF ответа (ADR §10). Два одновременных браузера — потолок для одной
+	// машины, на которой рядом живёт Postgres: третий запрос ждёт слота, а не
+	// поднимает третий браузер. Таймаут — на одну печать целиком (запрос к принтеру,
+	// включая работу chromium).
+	printConcurrency = 2
+	printTimeout     = 30 * time.Second
 
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
@@ -432,14 +441,39 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	// Печать PDF ответа (ADR §10). Клиент есть только там, где настроен принтер:
+	// без него ручка честно отвечает 503, а не молчит. Семафор ограничивает число
+	// одновременно поднятых браузеров — защищаем свою машину, на которой рядом
+	// работает Postgres.
+	if cfg.PrinterURL != "" {
+		submissionsHandler = submissionsHandler.WithPrinter(
+			printer.New(cfg.PrinterURL, printConcurrency, printTimeout), cfg.FormTokenSecret)
+		log.Info("printer configured", slog.String("url", cfg.PrinterURL))
+	}
 
-	srv := httpserver.New(cfg.HTTPAddr, log, pool,
+	routes := []httpserver.RouteRegistrar{
 		authHandler.Routes, authHandler.OAuthRoutes, authHandler.AccountRoutes,
 		workspacesHandler.Routes, formsHandler.Routes, formsPublic.Routes,
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
-		integrationsHandler.Routes)
+		integrationsHandler.Routes,
+	}
+
+	// Печатная страница ответа (ADR §10) живёт там же, где собранная статика
+	// рендерера, и отдельной переменной окружения не имеет: путь выводится из
+	// PUBLIC_RENDERER_INDEX_PATH. В dev статики нет — печать на контуре просто
+	// отсутствует, как и HTML-страница формы /r/{slug}.
+	if path := printPagePath(cfg.PublicRendererIndexPath); path != "" {
+		printPage, err := submissions.NewPrintPageHandler(submissionsSvc, cfg.FormTokenSecret, path)
+		if err != nil {
+			return fmt.Errorf("init print page handler: %w", err)
+		}
+		routes = append(routes, printPage.Routes)
+		log.Info("print page configured", slog.String("path", path))
+	}
+
+	srv := httpserver.New(cfg.HTTPAddr, log, pool, routes...)
 
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
@@ -623,6 +657,18 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 // smtpTLSMode переводит валидированный конфиг MAIL_SMTP_TLS в режим транспорта.
 // config уже отверг чужие значения при старте, поэтому default недостижим —
 // оставлен страховкой (пусть безопасный: без шифрования наружу не пойдём молча).
+// printPagePath — путь к собранному print.html рядом со статикой рендерера
+// (dist/print/print.html, vite.print.config.ts → static/renderer/print/print.html).
+// Своей переменной окружения у него нет намеренно: обе страницы приезжают одной
+// сборкой в один каталог, и вторая строка в конфиге умела бы только разойтись с
+// первой. Пустой индекс (dev) означает «печати на контуре нет».
+func printPagePath(indexPath string) string {
+	if indexPath == "" {
+		return ""
+	}
+	return filepath.Join(filepath.Dir(indexPath), "print", "print.html")
+}
+
 func smtpTLSMode(v string) mail.TLSMode {
 	switch v {
 	case config.MailSMTPTLSStartTLS:
