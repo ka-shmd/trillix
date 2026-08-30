@@ -101,7 +101,11 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// из её строки и живёт по тем же правилам (то же окно наблюдения, тот же рендер).
 	mux.Handle("GET /api/v1/forms/{id}/submissions/summary/{block}", h.requireAuth(http.HandlerFunc(h.blockAnswers)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/count", h.requireAuth(http.HandlerFunc(h.count)))
-	mux.Handle("GET /api/v1/forms/{id}/submissions/{sid}/pdf", h.requireAuth(http.HandlerFunc(h.pdf)))
+	// Печать — СВОЙ корень, а не подпуть /submissions/{sid}: рядом живёт
+	// /submissions/summary/{block}, и «{sid}/pdf» с ним неразличим для маршрутизатора
+	// (оба матчат .../submissions/summary/pdf). Тот же приём, что у черновиков,
+	// которые тоже вынесены из-под /submissions.
+	mux.Handle("GET /api/v1/forms/{id}/print/{sid}", h.requireAuth(http.HandlerFunc(h.pdf)))
 	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 	// Черновики — СВОЙ корень, а не подпуть /submissions: это другая таблица, другой
 	// курсор и другое право (гейт тарифа). Вкладка кабинета соседняя, данные — нет.
