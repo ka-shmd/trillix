@@ -755,7 +755,11 @@ func (s *Service) notifyRespondent(
 		Template: mail.TemplateRespondentReceipt,
 		Data: map[string]any{
 			"form_title": owner.PublicTitle,
-			"form_link":  s.formBaseURL + "/" + slug,
+			// Адрес формы собирается ровно так же, как его собирает og:url публичной
+			// страницы (forms/public_page.go) и ссылка на экране «Поделиться»:
+			// ${origin}/r/{slug}. Без "/r/" ссылка ведёт в никуда, и увидеть это
+			// можно только письмом — юниты подвала сверяют строку с собой же.
+			"form_link": s.formBaseURL + "/r/" + slug,
 		},
 	}
 	if !r.Empty() {

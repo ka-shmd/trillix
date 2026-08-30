@@ -875,7 +875,7 @@ func TestSubmit_Respondent_LetterGoesToAnswerAddress(t *testing.T) {
 	if text != "Ваш ответ получен." {
 		t.Fatalf("текст = %q", text)
 	}
-	if title != "Анкета" || link != "http://f.test/"+slug {
+	if title != "Анкета" || link != "http://f.test/r/"+slug {
 		t.Fatalf("подвалу не хватит данных: title=%q link=%q", title, link)
 	}
 }

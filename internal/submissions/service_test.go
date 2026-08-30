@@ -482,7 +482,7 @@ func TestSubmit_NotifyRespondent_EnqueuesLetterToAnswer(t *testing.T) {
 	if got := c.Data["form_title"]; got != "Моя форма" {
 		t.Errorf("в подвал уехал не публичный заголовок: %v", got)
 	}
-	if got := c.Data["form_link"]; got != "https://f.test/slug1" {
+	if got := c.Data["form_link"]; got != "https://f.test/r/slug1" {
 		t.Errorf("ссылка на форму = %v", got)
 	}
 }
