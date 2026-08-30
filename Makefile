@@ -4,6 +4,9 @@ COMPOSE := docker compose --env-file .env -f compose.dev.yml
 
 # prod-local контур: тот же образ/compose, что уедет на прод, но на *.localhost.
 API_IMAGE    := ghcr.io/ka-shmd/trillix-api:latest
+# Второй образ контура — сервис печати PDF (headless-Chromium; ADR §10). Собирается
+# рядом с api по той же причине, по какой они разделены: в distroless браузера нет.
+PRINTER_IMAGE := ghcr.io/ka-shmd/trillix-printer:latest
 PROD_PROJECT := trillix-prod-local
 # Прод-файл + override с локальным MinIO: хранилище нужно только здесь (на проде оно
 # арендованное, и compose.prod.yml этих сервисов не содержит вовсе).
@@ -74,6 +77,7 @@ sqlc: ## Сгенерировать типобезопасный код дост
 # (127.0.0.1) перекрыл бы prod-local. source в рецепте возвращает верный контур.
 prod-local: ## Репетиция прода: собрать образ+статику, поднять стек под https на *.localhost, smoke
 	docker build -f deploy/Dockerfile -t $(API_IMAGE) .
+	docker build -f deploy/Dockerfile.printer -t $(PRINTER_IMAGE) .
 	set -a && . ./.env.prod-local && set +a && \
 		./scripts/build-static.sh && $(PROD_COMPOSE) up -d
 	# Перечитать конфиг Caddy — ровно то же делает deploy/remote-update.sh на проде.

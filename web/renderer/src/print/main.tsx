@@ -1,9 +1,12 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 
-import './print.css'
-// Вид формы — тот же файл, что у публичной страницы и у кабинета.
+// ПОРЯДОК ИМПОРТА ЗНАЧИМ: сначала общий вид формы, затем печатные правила. У
+// селекторов одинаковая специфичность (`.rf-page` там и там), и в каскаде выигрывает
+// последний — переставишь местами, и поля листа снова станут экранными (9rem сверху,
+// колонка мимо центра).
 import '@fields/fields.css'
+import './print.css'
 
 import { setMediaBase } from '@fields/media'
 

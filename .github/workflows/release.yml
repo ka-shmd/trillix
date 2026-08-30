@@ -18,7 +18,7 @@ concurrency:
 
 jobs:
   image:
-    name: Go-образ → GHCR
+    name: Go-образы → GHCR
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -36,6 +36,17 @@ jobs:
           # Тег образа = git-тег (напр. v0.7.0). compose.prod.yml на VPS подставит
           # его через ${TAG} и сделает docker compose pull (фаза 9).
           tags: ghcr.io/${{ github.repository_owner }}/trillix-api:${{ github.ref_name }}
+      # Второй образ — сервис печати PDF (ADR §10): headless-Chromium не кладётся в
+      # distroless-образ api, поэтому у него свой Dockerfile и свой тег. Собирается
+      # тем же тегом, что api: compose на сервере подставляет один ${TAG} обоим, и
+      # разъехаться версиям нечем.
+      - name: build & push printer
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: deploy/Dockerfile.printer
+          push: true
+          tags: ghcr.io/${{ github.repository_owner }}/trillix-printer:${{ github.ref_name }}
 
   static:
     name: Статика фронтов → GitHub Release

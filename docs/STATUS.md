@@ -57,7 +57,7 @@
 
 ## Состав системы
 
-- **Go-API** — один бинарник, Go 1.26, 21 модуль в `internal/`
+- **Go-API** — Go 1.26, 22 модуля в `internal/`
   (`answerfiles`, `auth`, `blob`, `config`, `domain`, `entitlements`, `forms`, `geo`, `httpserver`,
   `integrations`, `mail`, `media`, `oauth`, `periodic`, `pgtest`, `postgres`, `ratelimit`,
   `submissions`, `token`, `visits`, `workspaces`).

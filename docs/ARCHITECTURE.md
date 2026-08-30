@@ -324,7 +324,8 @@ github.com/google/uuid           — UUID (v7 поддерживается; ал
 ```
 /
 ├── cmd/
-│   └── api/main.go              # composition root: конфиг, пул БД, DI руками, запуск
+│   ├── api/main.go              # composition root: конфиг, пул БД, DI руками, запуск
+│   └── printer/main.go          # сервис печати: адрес страницы → PDF (headless-Chromium)
 ├── internal/
 │   ├── config/                  # чтение и валидация env
 │   ├── domain/                  # чистые типы: Form, Block, Submission, ошибки домена
@@ -358,6 +359,7 @@ github.com/google/uuid           — UUID (v7 поддерживается; ал
 │   ├── integrations/            # модуль: подключение внешних аккаунтов пользователя и доставка в них (Google Таблицы)
 │   ├── mail/                    # транзакционный outbox + доставка писем (диспетчер, транспорт)
 │   ├── token/                   # подписанные HMAC-токены времени (антиспам публичных ручек)
+│   ├── printer/                 # клиент сервиса печати PDF: путь → документ, семафор печатей
 │   ├── ratelimit/               # in-memory token bucket по ключу + GC
 │   ├── periodic/                # именованные фоновые задачи (чистка сессий, GC лимитера, диспетчер outbox)
 │   ├── httpserver/              # сборка mux, middleware, JSON-хелперы

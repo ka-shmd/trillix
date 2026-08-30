@@ -1,0 +1,48 @@
+# Образ сервиса печати PDF (ADR §10). Отдельный от api, и это не удобство: api
+# живёт в distroless/static, куда headless-Chromium не положить — там нет ни
+# библиотек, ни shell, а браузер тянет за собой сотни системных зависимостей.
+#
+# Базовый образ — debian-slim с chromium из репозитория дистрибутива: свежесть
+# браузера тогда обслуживает apt, а не мы. Chromium ходит ровно в один адрес —
+# наш же api по внутренней сети compose (PRINTER_API_ORIGIN), — и печатает наши
+# собственные страницы.
+
+# --- Сборка ---------------------------------------------------------------
+# Версия builder'а совпадает с go.mod (go 1.26) — то же правило, что у api.
+FROM golang:1.26 AS builder
+WORKDIR /src
+
+COPY go.mod go.sum ./
+RUN go mod download
+
+COPY . .
+
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /printer ./cmd/printer
+
+# --- Рантайм --------------------------------------------------------------
+FROM debian:trixie-slim
+
+# chromium — сам браузер; fonts-* — кириллица и эмодзи В СИСТЕМЕ, а не в форме:
+# шрифт формы приезжает со страницей, но fallback-стек (system-ui) и любой символ
+# вне подмножества шрифта иначе печатались бы квадратами.
+# ca-certificates — на случай https-адреса api на будущем контуре.
+RUN apt-get update \
+	&& apt-get install --no-install-recommends -y \
+		chromium \
+		ca-certificates \
+		fonts-dejavu-core \
+		fonts-liberation2 \
+		fonts-noto-core \
+		fonts-noto-color-emoji \
+	&& rm -rf /var/lib/apt/lists/*
+
+# Непривилегированный пользователь: браузер запускается с --no-sandbox (в контейнере
+# песочница требует привилегий, которых у сервиса нет), и единственное, что остаётся
+# между ним и системой, — права процесса.
+RUN useradd --create-home --shell /usr/sbin/nologin printer
+USER printer
+WORKDIR /home/printer
+
+COPY --from=builder /printer /usr/local/bin/printer
+EXPOSE 8090
+ENTRYPOINT ["/usr/local/bin/printer"]
