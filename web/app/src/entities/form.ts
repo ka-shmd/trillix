@@ -76,6 +76,9 @@ export const notifyEmailSchema = z.object({
   replyTo: z.string(),
   subject: z.string(),
   body: z.string(),
+  // Приложить к письму печатный лист ответа. Документ печатается в момент доставки
+  // письма, поэтому настройка действует со следующего ответа.
+  attachPdf: z.boolean(),
 })
 export type NotifyEmail = z.infer<typeof notifyEmailSchema>
 
@@ -86,6 +89,7 @@ export const EMPTY_NOTIFY_EMAIL: NotifyEmail = {
   replyTo: '',
   subject: '',
   body: '',
+  attachPdf: false,
 }
 
 // Потолки полей карточки (рун) — зеркалят domain.MaxLinkPreview*Len.

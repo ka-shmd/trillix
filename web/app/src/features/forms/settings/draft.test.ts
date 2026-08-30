@@ -30,6 +30,7 @@ const saved: SettingsDraft = {
   notifyReplyTo: '',
   notifySubject: '',
   notifyBody: '',
+  notifyAttachPdf: false,
   partial: false,
   progress: false,
   branding: true,
@@ -127,7 +128,15 @@ describe('черновик страницы настроек', () => {
       replyTo: 'hr@example.com',
       subject: 'Заявка',
       body: '  Здравствуйте!  ',
+      attachPdf: false,
     })
+  })
+
+  it('вложение PDF — часть настройки письма и едет тем же запросом', () => {
+    // Отдельной мутации у чекбокса нет: он живёт в письме, а не рядом с ним, —
+    // иначе одна кнопка страницы посылала бы седьмой запрос ради одного булева.
+    expect(notifyEmailValue({ ...saved, notifyAttachPdf: true }).attachPdf).toBe(true)
+    expect(pendingChanges(saved, { ...saved, notifyAttachPdf: true }).notifyEmail).toBe(true)
   })
 
   it('включённый лимит требует целое больше нуля, выключенный — ничего', () => {

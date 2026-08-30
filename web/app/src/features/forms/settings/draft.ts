@@ -41,6 +41,7 @@ export interface SettingsDraft {
   notifyReplyTo: string
   notifySubject: string
   notifyBody: string
+  notifyAttachPdf: boolean
   partial: boolean
   // Живые колонки формы: шкала прогресса (0040) и бейдж «Сделано в Trillix» (0038).
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
@@ -70,6 +71,7 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     notifyReplyTo: form.notifyEmail?.replyTo ?? '',
     notifySubject: form.notifyEmail?.subject ?? '',
     notifyBody: form.notifyEmail?.body ?? '',
+    notifyAttachPdf: form.notifyEmail?.attachPdf ?? false,
     partial: form.collectPartial,
     progress: form.progress,
     branding: form.branding,
@@ -92,6 +94,7 @@ export function notifyEmailValue(draft: SettingsDraft): NotifyEmail {
     replyTo: draft.notifyReplyTo.trim(),
     subject: draft.notifySubject.trim(),
     body: draft.notifyBody,
+    attachPdf: draft.notifyAttachPdf,
   }
 }
 
@@ -175,7 +178,8 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
       draft.notifyFromName.trim() !== saved.notifyFromName ||
       draft.notifyReplyTo.trim() !== saved.notifyReplyTo ||
       draft.notifySubject.trim() !== saved.notifySubject ||
-      draft.notifyBody !== saved.notifyBody,
+      draft.notifyBody !== saved.notifyBody ||
+      draft.notifyAttachPdf !== saved.notifyAttachPdf,
     partial: draft.partial !== saved.partial,
     progress: draft.progress !== saved.progress,
     branding: draft.branding !== saved.branding,

@@ -657,8 +657,8 @@ function CloseAtFields({
 // в рассыльщик.
 //
 // Подстановок (@Форма, @Все ответы) ЕЩЁ НЕТ — текст уходит как есть; задача в
-// BACKLOG.md, там же PDF-вложение. Поэтому чекбокс PDF нарисован выключенным и с
-// красной меткой: строка есть, вложения нет.
+// BACKLOG.md. Чекбокс PDF, наоборот, живой: печать вложения приезжает в момент
+// доставки письма, поэтому настройка действует со следующего ответа.
 function NotifyEmailFields({
   draft,
   set,
@@ -744,14 +744,23 @@ function NotifyEmailFields({
           className="min-h-24 w-full resize-y border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
         />
       </div>
-      {/* ЗАГЛУШКА: вложения нет, задача в BACKLOG.md вместе с подстановками. */}
-      <div className="flex items-center gap-2 border-t px-3 py-2">
-        <TriangleAlert className="size-4 shrink-0 text-destructive" aria-hidden />
-        <Checkbox id="notify-pdf" checked={false} disabled />
-        <Label htmlFor="notify-pdf" className="font-normal text-muted-foreground">
-          Прикрепить PDF с ответами
+      {/* Чекбокс, в отличие от полей выше, `disabled` на бесплатном плане: у
+          выключенного контрола нет readOnly-эквивалента, а клик по обёртке всё равно
+          открывает разговор о тарифе. */}
+      <div
+        className="flex items-center gap-2 border-t px-3 py-2"
+        onClick={editable ? undefined : onLocked}
+      >
+        <Checkbox
+          id="notify-pdf"
+          checked={draft.notifyAttachPdf}
+          disabled={!editable}
+          onCheckedChange={(v) => set('notifyAttachPdf', v === true)}
+        />
+        <Label htmlFor="notify-pdf" className="font-normal">
+          Прикрепить PDF с ответом
         </Label>
-        <span className="text-sm font-medium text-destructive">— заглушка, PDF пока не делаем</span>
+        <span className="text-sm text-muted-foreground">— тот же лист, что «Скачать PDF»</span>
       </div>
       {!editable && (
         <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2 text-sm text-muted-foreground">
