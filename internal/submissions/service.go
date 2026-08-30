@@ -436,7 +436,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
 	s.dropPartial(ctx, pf.FormID, meta.VisitID)
 	if inserted && pf.NotifyOnSubmission {
-		s.notifyOwner(ctx, pf.FormID, slug)
+		s.notifyOwner(ctx, pf.FormID, id, slug)
 	}
 	if inserted {
 		s.enqueueIntegration(ctx, pf.FormID, id)
@@ -593,7 +593,7 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.T
 // одно уведомление; данные целы (владелец видит ответ в таблице), а следующий ответ
 // теряет одно уведомление. Сбой (нет владельца, пустой email, недоступна БД) уходит
 // в лог с request_id — ответ уже принят.
-func (s *Service) notifyOwner(ctx context.Context, formID uuid.UUID, slug string) {
+func (s *Service) notifyOwner(ctx context.Context, formID, submissionID uuid.UUID, slug string) {
 	owner, err := s.forms.SubmissionOwner(ctx, formID)
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Warn("submission owner not resolved for notification",
@@ -614,6 +614,16 @@ func (s *Service) notifyOwner(ctx context.Context, formID uuid.UUID, slug string
 	// диспетчер за настройкой формы уже не пойдёт.
 	if n := s.notifyEmailFor(ctx, owner); n != nil {
 		msg.FromName, msg.ReplyTo, msg.Subject, msg.Body = n.FromName, n.ReplyTo, n.Subject, n.Body
+		// Вложение называется ССЫЛКОЙ, а не файлом: печатает его диспетчер при
+		// доставке (ADR §10). Печатать здесь значило бы держать браузер на пути
+		// приёма ответа.
+		if n.AttachPDF {
+			msg.Attachments = []mail.AttachmentRef{{
+				Kind:         mail.KindSubmissionPDF,
+				FormID:       formID.String(),
+				SubmissionID: submissionID.String(),
+			}}
+		}
 	}
 	err = s.mail.EnqueueEmail(ctx, s.db, msg)
 	if err != nil {
@@ -1270,6 +1280,28 @@ func (s *Service) AuthorizePrint(ctx context.Context, userID, formID, submission
 		return PrintAccess{}, fmt.Errorf("authorize print of submission %s: %w", submissionID, err)
 	}
 	return PrintAccess{FormTitle: form.Title, CreatedAt: row.CreatedAt}, nil
+}
+
+// PrintAccessForDelivery — имя формы и дата ответа для вложения в письмо владельцу.
+//
+// ⚠ Прав НЕ проверяет, как и PrintDocFor: письмо отправляем мы сами, адресат —
+// владелец пространства (его же и вернул SubmissionOwner при постановке), и
+// пользователя, которому надо что-то разрешать, здесь просто нет. Существование
+// ответа проверяется: между постановкой письма и его доставкой ответ могли удалить,
+// и тогда вложения не будет (ErrNotFound → письмо уйдёт без файла).
+func (s *Service) PrintAccessForDelivery(ctx context.Context, formID, submissionID uuid.UUID) (PrintAccess, error) {
+	owner, err := s.forms.SubmissionOwner(ctx, formID)
+	if err != nil {
+		return PrintAccess{}, fmt.Errorf("print access for delivery, form %s: %w", formID, err)
+	}
+	row, err := s.repo.GetForPrint(ctx, s.db, formID, submissionID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PrintAccess{}, domain.ErrNotFound
+		}
+		return PrintAccess{}, fmt.Errorf("print access for delivery, submission %s: %w", submissionID, err)
+	}
+	return PrintAccess{FormTitle: owner.Title, CreatedAt: row.CreatedAt}, nil
 }
 
 // PrintDocFor собирает документ одного ответа для печати: схема СВОЕЙ версии, ответы

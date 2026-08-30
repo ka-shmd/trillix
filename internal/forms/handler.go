@@ -223,10 +223,11 @@ type patchRequest struct {
 // отправителя и получателя здесь НЕТ: первый один на сервис, второй — владелец
 // аккаунта, и оба автору не принадлежат (domain.NotifyEmail).
 type notifyEmailBody struct {
-	FromName string `json:"fromName"`
-	ReplyTo  string `json:"replyTo"`
-	Subject  string `json:"subject"`
-	Body     string `json:"body"`
+	FromName  string `json:"fromName"`
+	ReplyTo   string `json:"replyTo"`
+	Subject   string `json:"subject"`
+	Body      string `json:"body"`
+	AttachPDF bool   `json:"attachPdf"`
 }
 
 // toNotifyEmailBody — настройка в тело ответа; nil (не настраивали) остаётся null,
@@ -236,10 +237,11 @@ func toNotifyEmailBody(n *domain.NotifyEmail) *notifyEmailBody {
 		return nil
 	}
 	return &notifyEmailBody{
-		FromName: n.FromName,
-		ReplyTo:  n.ReplyTo,
-		Subject:  n.Subject,
-		Body:     n.Body,
+		FromName:  n.FromName,
+		ReplyTo:   n.ReplyTo,
+		Subject:   n.Subject,
+		Body:      n.Body,
+		AttachPDF: n.AttachPDF,
 	}
 }
 
@@ -497,10 +499,11 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	case req.NotifyEmail != nil:
 		ne := *req.NotifyEmail
 		form, err = h.svc.UpdateNotifyEmail(r.Context(), userID, formID, &domain.NotifyEmail{
-			FromName: strings.TrimSpace(ne.FromName),
-			ReplyTo:  strings.TrimSpace(ne.ReplyTo),
-			Subject:  strings.TrimSpace(ne.Subject),
-			Body:     ne.Body,
+			FromName:  strings.TrimSpace(ne.FromName),
+			ReplyTo:   strings.TrimSpace(ne.ReplyTo),
+			Subject:   strings.TrimSpace(ne.Subject),
+			Body:      ne.Body,
+			AttachPDF: ne.AttachPDF,
 		})
 	case req.LinkPreview != nil:
 		lp := *req.LinkPreview

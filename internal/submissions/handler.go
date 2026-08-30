@@ -716,13 +716,19 @@ func (h *Handler) pdf(w http.ResponseWriter, r *http.Request) {
 // «Загрузки» через полгода, а не разбирает там десяток submission-<uuid>.pdf.
 func pdfContentDisposition(a PrintAccess) string {
 	date := a.CreatedAt.UTC().Format("2006-01-02")
+	return fmt.Sprintf("attachment; filename=%q; filename*=UTF-8''%s",
+		"submission-"+date+".pdf", url.PathEscape(PDFFileName(a)))
+}
+
+// PDFFileName — человеческое имя документа: «<форма> — <дата>.pdf». Одно на две
+// поверхности: скачивание из кабинета и вложение в письмо владельцу — файл в папке
+// «Загрузки» и файл в почте не имеют права называться по-разному.
+func PDFFileName(a PrintAccess) string {
 	human := strings.TrimSpace(a.FormTitle)
 	if human == "" {
 		human = "Ответ"
 	}
-	human += " — " + date + ".pdf"
-	return fmt.Sprintf("attachment; filename=%q; filename*=UTF-8''%s",
-		"submission-"+date+".pdf", url.PathEscape(human))
+	return human + " — " + a.CreatedAt.UTC().Format("2006-01-02") + ".pdf"
 }
 
 // delete удаляет один ответ формы (GDPR-гигиена). За RequireAuth+RequireCSRF.

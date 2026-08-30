@@ -188,6 +188,12 @@ const (
 	outboxDispatchTimeout  = 30 * time.Second
 	outboxBatch            = 50
 	// Бэкофф ретраев доставки: первая неудача — 1 мин, дальше удвоение до потолка 1 ч.
+	// outboxPrintsPerTick — сколько PDF-вложений диспетчер печатает за один проход.
+	// Три при двух браузерах: печать 0.5–1 с, и без потолка пачка писем с вложениями
+	// выела бы весь тик (15 с при таймауте 30 с), задержав письма без вложений —
+	// в первую очередь сброс пароля, который едет той же очередью.
+	outboxPrintsPerTick = 3
+
 	outboxBackoffBase = time.Minute
 	outboxBackoffMax  = time.Hour
 
@@ -450,6 +456,12 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	if cfg.PrinterURL != "" {
 		printClient := printer.New(cfg.PrinterURL, printConcurrency, printTimeout)
 		submissionsHandler = submissionsHandler.WithPrinter(printClient, cfg.FormTokenSecret)
+		// Вторая поверхность печати — вложение в письме о новом ответе. Тот же клиент
+		// и тот же семафор: два браузера на машину считаются на всех потребителей
+		// вместе, а не каждым по отдельности.
+		mailSvc = mailSvc.WithAttachments(
+			submissions.NewPrintAttachments(submissionsSvc, printClient, cfg.FormTokenSecret),
+			outboxPrintsPerTick)
 		// Проверяем связь СРАЗУ: опечатка в адресе (классика — прод-адрес
 		// http://printer:8090 в dev, где такого имени нет) иначе всплывёт только при
 		// первом клике по «Скачать PDF», у человека, который её не делал. Отказ не

@@ -246,3 +246,123 @@ func TestEnqueueEmailRejectsEmptyRecipient(t *testing.T) {
 		t.Errorf("строка записана несмотря на пустого получателя: %+v", store.enqueued)
 	}
 }
+
+// --- вложения ----------------------------------------------------------------
+
+// fakeResolver — добыча вложения: либо файл, либо ошибка. Считает вызовы, чтобы
+// проверять потолок печатей на тик.
+type fakeResolver struct {
+	file  File
+	err   error
+	calls int
+}
+
+func (r *fakeResolver) Resolve(_ context.Context, _ AttachmentRef) (File, error) {
+	r.calls++
+	return r.file, r.err
+}
+
+func pendingWithAttachment(id uuid.UUID) Pending {
+	payload, _ := json.Marshal(EmailMessage{
+		To: "owner@example.com", Template: TemplateSubmissionNew,
+		Data:        map[string]any{"form_title": "Анкета", "link": "https://x"},
+		Attachments: []AttachmentRef{{Kind: KindSubmissionPDF, FormID: uuid.NewString(), SubmissionID: uuid.NewString()}},
+	})
+	return Pending{ID: id, Channel: ChannelEmail, Payload: payload}
+}
+
+// Вложение добывается при ДОСТАВКЕ и уезжает письмом; в payload его не было.
+func TestDispatch_ResolvesAttachment(t *testing.T) {
+	id := uuid.New()
+	store := &fakeStore{pending: []Pending{pendingWithAttachment(id)}}
+	mailer := &fakeMailer{}
+	res := &fakeResolver{file: File{Name: "Анкета.pdf", MIME: "application/pdf", Content: []byte("%PDF")}}
+	svc := newTestService(store, mailer).WithAttachments(res, 2)
+
+	if _, err := svc.Dispatch(context.Background()); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(mailer.sent) != 1 || len(mailer.sent[0].Files) != 1 {
+		t.Fatalf("письмо ушло без вложения: %+v", mailer.sent)
+	}
+	if got := mailer.sent[0].Files[0].Name; got != "Анкета.pdf" {
+		t.Errorf("имя вложения = %q", got)
+	}
+	if len(store.sent) != 1 {
+		t.Errorf("строка не помечена отправленной: %+v", store.sent)
+	}
+}
+
+// Печать не удалась — письмо всё равно уходит, но говорит об этом владельцу
+// (pdf_failed → строка в шаблоне). Откладывать письмо из-за вложения нельзя:
+// сломанный принтер прятал бы от владельца сами ответы.
+func TestDispatch_AttachmentFailure_SendsWithoutFile(t *testing.T) {
+	id := uuid.New()
+	store := &fakeStore{pending: []Pending{pendingWithAttachment(id)}}
+	mailer := &fakeMailer{}
+	svc := newTestService(store, mailer).WithAttachments(&fakeResolver{err: errors.New("принтер лежит")}, 2)
+
+	if _, err := svc.Dispatch(context.Background()); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(mailer.sent) != 1 {
+		t.Fatalf("письмо не ушло: %+v", mailer.sent)
+	}
+	if len(mailer.sent[0].Files) != 0 {
+		t.Errorf("вложение приехало, хотя печать провалилась")
+	}
+	if mailer.sent[0].Data["pdf_failed"] != true {
+		t.Errorf("письмо не сообщает о неудавшейся печати: %+v", mailer.sent[0].Data)
+	}
+	if len(store.failed) != 0 {
+		t.Errorf("строка ушла в бэкофф из-за вложения: %+v", store.failed)
+	}
+}
+
+// Резолвера нет вовсе (контур без печати) — то же самое: письмо с честной пометкой.
+func TestDispatch_NoResolver_SendsWithoutFile(t *testing.T) {
+	store := &fakeStore{pending: []Pending{pendingWithAttachment(uuid.New())}}
+	mailer := &fakeMailer{}
+	svc := newTestService(store, mailer)
+
+	if _, err := svc.Dispatch(context.Background()); err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if len(mailer.sent) != 1 || mailer.sent[0].Data["pdf_failed"] != true {
+		t.Fatalf("письмо без резолвера ушло не так: %+v", mailer.sent)
+	}
+}
+
+// Потолок печатей на тик: сверх него письма ждут следующего прохода НЕТРОНУТЫМИ —
+// ни отправленными, ни неудачными (иначе вложения растили бы attempts и уводили
+// письма в бэкофф). Письма без вложений потолком не ограничены и едут в том же тике.
+func TestDispatch_PrintBudget_PostponesRest(t *testing.T) {
+	plain, _ := json.Marshal(EmailMessage{To: "user@example.com", Template: "reset"})
+	plainID := uuid.New()
+	store := &fakeStore{pending: []Pending{
+		pendingWithAttachment(uuid.New()),
+		pendingWithAttachment(uuid.New()),
+		pendingWithAttachment(uuid.New()),
+		{ID: plainID, Channel: ChannelEmail, Payload: plain},
+	}}
+	mailer := &fakeMailer{}
+	res := &fakeResolver{file: File{Name: "a.pdf", MIME: "application/pdf", Content: []byte("%PDF")}}
+	svc := newTestService(store, mailer).WithAttachments(res, 2)
+
+	n, err := svc.Dispatch(context.Background())
+	if err != nil {
+		t.Fatalf("Dispatch: %v", err)
+	}
+	if res.calls != 2 {
+		t.Errorf("печатей за тик = %d, потолок 2", res.calls)
+	}
+	if n != 3 {
+		t.Errorf("доставлено = %d, ожидалось 3 (два с вложением + письмо без него)", n)
+	}
+	if len(store.failed) != 0 {
+		t.Errorf("отложенное письмо помечено неудачей: %+v", store.failed)
+	}
+	if len(store.sent) != 3 {
+		t.Errorf("помечено отправленными %d, ожидалось 3", len(store.sent))
+	}
+}

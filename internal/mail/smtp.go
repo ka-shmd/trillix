@@ -12,6 +12,7 @@ import (
 	"net"
 	netmail "net/mail"
 	"net/smtp"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -70,7 +71,7 @@ func (m SMTPMailer) Send(ctx context.Context, msg EmailMessage) error {
 	if msg.FromName != "" {
 		header = (&netmail.Address{Name: msg.FromName, Address: from.Address}).String()
 	}
-	raw, err := buildMessage(header, msg.To, subject, body, senderDomain(from.Address, m.Host), msg.ReplyTo)
+	raw, err := buildMessage(header, msg.To, subject, body, senderDomain(from.Address, m.Host), msg.ReplyTo, msg.Files)
 	if err != nil {
 		return err
 	}
@@ -161,14 +162,25 @@ func senderDomain(address, fallback string) string {
 	return fallback
 }
 
-// buildMessage собирает письмо RFC 5322: заголовки + plain-text тело. Тема
-// MIME-кодируется (RFC 2047) — она кириллическая; тело едет base64 с переносами по
-// 76 символов (RFC 2045), заявленное Content-Transfer-Encoding. Message-ID и Date
-// добавляются осознанно: без них спам-фильтры (и mail-tester) снижают оценку.
-func buildMessage(from, to, subject, body, domain, replyTo string) ([]byte, error) {
+// buildMessage собирает письмо RFC 5322: заголовки + plain-text тело, а при
+// вложениях — multipart/mixed с телом первой частью. Тема MIME-кодируется
+// (RFC 2047) — она кириллическая; тело едет base64 с переносами по 76 символов
+// (RFC 2045), заявленное Content-Transfer-Encoding. Message-ID и Date добавляются
+// осознанно: без них спам-фильтры (и mail-tester) снижают оценку.
+//
+// Multipart собирается руками, а не mime/multipart: тот пишет части как есть, а нам
+// нужно base64 с переносами и свои заголовки на каждой части — обёртка вокруг него
+// вышла бы длиннее прямой сборки.
+func buildMessage(from, to, subject, body, domain, replyTo string, files []File) ([]byte, error) {
 	messageID, err := randomMessageID(domain)
 	if err != nil {
 		return nil, err
+	}
+	var boundary string
+	if len(files) > 0 {
+		if boundary, err = randomBoundary(); err != nil {
+			return nil, err
+		}
 	}
 	var b strings.Builder
 	writeHeader(&b, "From", from)
@@ -182,11 +194,49 @@ func buildMessage(from, to, subject, body, domain, replyTo string) ([]byte, erro
 	writeHeader(&b, "Date", time.Now().Format(time.RFC1123Z))
 	writeHeader(&b, "Message-ID", messageID)
 	writeHeader(&b, "MIME-Version", "1.0")
+	if len(files) == 0 {
+		writeHeader(&b, "Content-Type", "text/plain; charset=UTF-8")
+		writeHeader(&b, "Content-Transfer-Encoding", "base64")
+		b.WriteString("\r\n")
+		b.WriteString(wrapBase64([]byte(body)))
+		return []byte(b.String()), nil
+	}
+
+	writeHeader(&b, "Content-Type", `multipart/mixed; boundary="`+boundary+`"`)
+	b.WriteString("\r\n")
+	b.WriteString("--" + boundary + "\r\n")
 	writeHeader(&b, "Content-Type", "text/plain; charset=UTF-8")
 	writeHeader(&b, "Content-Transfer-Encoding", "base64")
 	b.WriteString("\r\n")
-	b.WriteString(wrapBase64(body))
+	b.WriteString(wrapBase64([]byte(body)))
+	for _, f := range files {
+		b.WriteString("\r\n--" + boundary + "\r\n")
+		writeHeader(&b, "Content-Type", f.MIME)
+		writeHeader(&b, "Content-Transfer-Encoding", "base64")
+		writeHeader(&b, "Content-Disposition", attachmentDisposition(f.Name))
+		b.WriteString("\r\n")
+		b.WriteString(wrapBase64(f.Content))
+	}
+	b.WriteString("\r\n--" + boundary + "--\r\n")
 	return []byte(b.String()), nil
+}
+
+// attachmentDisposition — имя файла в письме. Кириллица едет в filename* по RFC 5987
+// (тот же приём, что у скачивания PDF из кабинета), а ASCII-имя в filename остаётся
+// техническим: старые клиенты ломают кириллицу в нём.
+func attachmentDisposition(name string) string {
+	return fmt.Sprintf("attachment; filename=%q; filename*=UTF-8''%s",
+		"submission.pdf", url.PathEscape(name))
+}
+
+// randomBoundary — разделитель частей multipart. Случайный: совпадение с байтами
+// вложения разорвало бы письмо посередине.
+func randomBoundary() (string, error) {
+	var buf [16]byte
+	if _, err := rand.Read(buf[:]); err != nil {
+		return "", fmt.Errorf("multipart boundary entropy: %w", err)
+	}
+	return "trillix-" + hex.EncodeToString(buf[:]), nil
 }
 
 func writeHeader(b *strings.Builder, name, value string) {
@@ -206,10 +256,11 @@ func randomMessageID(domain string) (string, error) {
 	return "<" + hex.EncodeToString(buf[:]) + "@" + domain + ">", nil
 }
 
-// wrapBase64 кодирует тело в base64 и режет на строки по 76 символов, разделённые
-// CRLF, как требует RFC 2045 для этого Content-Transfer-Encoding.
-func wrapBase64(s string) string {
-	encoded := base64.StdEncoding.EncodeToString([]byte(s))
+// wrapBase64 кодирует данные в base64 и режет на строки по 76 символов, разделённые
+// CRLF, как требует RFC 2045 для этого Content-Transfer-Encoding. Берёт байты, а не
+// строку: через неё же едут вложения, и лишняя копия мегабайтного PDF ни к чему.
+func wrapBase64(src []byte) string {
+	encoded := base64.StdEncoding.EncodeToString(src)
 	const lineLen = 76
 	var b strings.Builder
 	for len(encoded) > lineLen {

@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"net"
+	"net/url"
 	"strings"
 	"sync"
 	"testing"
@@ -18,7 +19,7 @@ import (
 func TestBuildMessage_AuthorOverrides(t *testing.T) {
 	raw, err := buildMessage(
 		"Отдел кадров <no-reply@trillix.ru>", "owner@example.com",
-		"Новая заявка", "Пришла заявка.", "trillix.ru", "hr@example.com")
+		"Новая заявка", "Пришла заявка.", "trillix.ru", "hr@example.com", nil)
 	if err != nil {
 		t.Fatalf("buildMessage: %v", err)
 	}
@@ -41,7 +42,7 @@ func TestBuildMessage_AuthorOverrides(t *testing.T) {
 func TestBuildMessage_NoReplyToWhenUnset(t *testing.T) {
 	raw, err := buildMessage(
 		"Trillix <no-reply@trillix.ru>", "user@example.com",
-		"Тема", "Тело", "trillix.ru", "")
+		"Тема", "Тело", "trillix.ru", "", nil)
 	if err != nil {
 		t.Fatalf("buildMessage: %v", err)
 	}
@@ -53,7 +54,7 @@ func TestBuildMessage_NoReplyToWhenUnset(t *testing.T) {
 func TestBuildMessage(t *testing.T) {
 	raw, err := buildMessage(
 		"Trillix <no-reply@trillix.ru>", "user@example.com",
-		"Подтверждение почты", "Здравствуйте!\n\nСсылка: https://x/y\n", "trillix.ru", "")
+		"Подтверждение почты", "Здравствуйте!\n\nСсылка: https://x/y\n", "trillix.ru", "", nil)
 	if err != nil {
 		t.Fatalf("buildMessage: %v", err)
 	}
@@ -210,3 +211,36 @@ func (s *fakeSMTP) serve() {
 func (s *fakeSMTP) wait() capturedSession { return <-s.done }
 
 func (s *fakeSMTP) Close() { _ = s.ln.Close() }
+
+// Вложение едет multipart/mixed: тело первой частью, файл — второй, с base64 и
+// человеческим именем в filename* (RFC 5987). Без вложений письмо остаётся
+// одночастным text/plain — проверено соседними тестами.
+func TestBuildMessage_Attachment(t *testing.T) {
+	pdf := []byte("%PDF-1.4 fake")
+	raw, err := buildMessage(
+		"Trillix <no-reply@trillix.ru>", "owner@example.com",
+		"Новый ответ", "Тело письма.", "trillix.ru", "",
+		[]File{{Name: "Анкета — 2026-08-30.pdf", MIME: "application/pdf", Content: pdf}})
+	if err != nil {
+		t.Fatalf("buildMessage: %v", err)
+	}
+	msg := string(raw)
+	if !strings.Contains(msg, "Content-Type: multipart/mixed; boundary=\"") {
+		t.Fatalf("письмо с вложением не multipart:\n%s", msg)
+	}
+	if !strings.Contains(msg, "Content-Type: application/pdf\r\n") {
+		t.Fatalf("нет части с PDF:\n%s", msg)
+	}
+	if !strings.Contains(msg, "filename*=UTF-8''"+url.PathEscape("Анкета — 2026-08-30.pdf")) {
+		t.Fatalf("имя файла не по RFC 5987:\n%s", msg)
+	}
+	if !strings.Contains(msg, base64.StdEncoding.EncodeToString(pdf)) {
+		t.Fatalf("байты вложения не доехали:\n%s", msg)
+	}
+	// Граница закрыта: незакрытый multipart часть клиентов показывает пустым письмом.
+	i := strings.Index(msg, "boundary=\"")
+	boundary := msg[i+len("boundary=\"") : i+len("boundary=\"")+strings.Index(msg[i+len("boundary=\""):], "\"")]
+	if !strings.HasSuffix(msg, "--"+boundary+"--\r\n") {
+		t.Fatalf("multipart не закрыт финальной границей:\n%s", msg)
+	}
+}
