@@ -739,6 +739,57 @@ func TestForms_LinkPreview(t *testing.T) {
 		`{"siteName":"Чужой","title":"","description":"","imageKey":"","iconKey":""}`, http.StatusNotFound)
 }
 
+// Письмо о новом ответе: тема и текст — СПАНЫ, и подстановка (`ref`) переживает
+// круговой перевод «PATCH → колонка JSONB → деталь формы». Формат сменился в 0045, и
+// проверять надо именно круг: потерянный `ref` не падает — он молча превращает чип в
+// обычный текст, и автор узнаёт об этом из пришедшего письма.
+func TestForms_NotifyEmail_MentionSurvivesRoundTrip(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-mail@example.com")
+
+	form := createForm(t, alice, srv, "Заявка")
+	setNotifyEmailGate(t, form.Slug, true)
+
+	patchNotifyEmail(t, alice, srv, form.ID,
+		`{"fromName":"","replyTo":"","attachPdf":false,`+
+			`"subject":[{"t":"Ответ от "},{"t":"Имя","ref":"b1"}],`+
+			`"body":[{"t":"Все ответы","ref":"_all"}]}`,
+		http.StatusOK)
+
+	d := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	if d.NotifyEmail == nil {
+		t.Fatal("настройка письма не вернулась в детали формы")
+	}
+	wantSubject := []domain.Span{{T: "Ответ от "}, {T: "Имя", Ref: "b1"}}
+	if !reflect.DeepEqual(d.NotifyEmail.Subject, wantSubject) {
+		t.Fatalf("тема вернулась как %+v, ожидалось %+v", d.NotifyEmail.Subject, wantSubject)
+	}
+	wantBody := []domain.Span{{T: "Все ответы", Ref: domain.MentionAllAnswers}}
+	if !reflect.DeepEqual(d.NotifyEmail.Body, wantBody) {
+		t.Fatalf("текст вернулся как %+v, ожидалось %+v", d.NotifyEmail.Body, wantBody)
+	}
+
+	// Ссылка наружу и подстановка на одном куске — 422 с обеих сторон (ADR §10).
+	patchNotifyEmail(t, alice, srv, form.ID,
+		`{"fromName":"","replyTo":"","attachPdf":false,"subject":[],`+
+			`"body":[{"t":"Имя","ref":"b1","href":"https://example.com"}]}`,
+		http.StatusUnprocessableEntity)
+
+	// Тема длиннее СВОЕГО потолка (200), а не потолка текста блока (2000).
+	patchNotifyEmail(t, alice, srv, form.ID,
+		`{"fromName":"","replyTo":"","attachPdf":false,"body":[],`+
+			`"subject":[{"t":"`+strings.Repeat("я", domain.MaxNotifySubjectLen+1)+`"}]}`,
+		http.StatusUnprocessableEntity)
+
+	// Пустые спаны = снять настройку: в колонке NULL, в детали null.
+	patchNotifyEmail(t, alice, srv, form.ID,
+		`{"fromName":"","replyTo":"","attachPdf":false,"subject":[],"body":[]}`, http.StatusOK)
+	if cleared := getFormDetail(t, alice, srv, form.ID, http.StatusOK); cleared.NotifyEmail != nil {
+		t.Fatalf("после сброса notifyEmail = %+v, ожидался null", cleared.NotifyEmail)
+	}
+}
+
 // Автосейв билдера: валидная схема сохраняется (канонизированной, updated_at
 // сдвигается), мусор → 422, устаревший updated_at → 409, схема без updated_at → 422.
 func TestForms_DraftSchemaAutosave(t *testing.T) {
@@ -1409,6 +1460,12 @@ type formDetailDTO struct {
 		ImageKey    string `json:"imageKey"`
 		IconKey     string `json:"iconKey"`
 	} `json:"linkPreview"`
+	NotifyEmail *struct {
+		FromName string        `json:"fromName"`
+		ReplyTo  string        `json:"replyTo"`
+		Subject  []domain.Span `json:"subject"`
+		Body     []domain.Span `json:"body"`
+	} `json:"notifyEmail"`
 }
 
 type listDTO struct {
@@ -1548,6 +1605,41 @@ func patchBranding(t *testing.T, c *http.Client, srv *httptest.Server, id string
 }
 
 // patchCloseSettings шлёт PATCH {closeSettings: <objJSON>} — живые настройки закрытия.
+// patchNotifyEmail шлёт PATCH {notifyEmail: …} — своё письмо о новом ответе.
+func patchNotifyEmail(t *testing.T, c *http.Client, srv *httptest.Server, id, objJSON string, wantStatus int) {
+	t.Helper()
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, `{"notifyEmail":`+objJSON+`}`, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH notifyEmail: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
+// setNotifyEmailGate открывает право на своё письмо у плана владельца формы: ключ
+// закрыт на бесплатных планах, а учётка теста заводится на бесплатном.
+func setNotifyEmailGate(t *testing.T, slug string, allowed bool) {
+	t.Helper()
+	value := "false"
+	if allowed {
+		value = "true"
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{form_notify_email}', $1::jsonb)
+		 WHERE code = (SELECT s.plan_code FROM subscriptions s
+		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
+		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
+		value, slug); err != nil {
+		t.Fatalf("set notify email gate: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(),
+			`UPDATE plans SET limits = jsonb_set(limits, '{form_notify_email}', 'false')
+			 WHERE code IN ('free', 'legacy_free')`); err != nil {
+			t.Fatalf("reset notify email gate: %v", err)
+		}
+	})
+}
+
 func patchLinkPreview(t *testing.T, c *http.Client, srv *httptest.Server, id, objJSON string, wantStatus int) {
 	t.Helper()
 	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, `{"linkPreview":`+objJSON+`}`, csrf(t, c, srv.URL))
