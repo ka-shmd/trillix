@@ -28,6 +28,8 @@ import {
   useUpdateCollectPartial,
   useUpdateNotifyEmail,
   useUpdateNotifyOnSubmission,
+  useUpdateNotifyRespondent,
+  useUpdateRespondentEmail,
   useUpdateProgress,
 } from '../queries'
 
@@ -38,6 +40,7 @@ import {
   closeSettingsValue,
   isDirty,
   notifyEmailValue,
+  respondentEmailValue,
   mergeServer,
   pendingChanges,
   redirectValue,
@@ -63,6 +66,14 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Switch } from '@/components/ui/switch'
 import { Textarea } from '@/components/ui/textarea'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import { sourceLabel } from '../builder/logic/model'
 import { MailLine } from './MailLine'
 
 // Настройки формы — то, чего на полотне не видно: что делать после отправки, как
@@ -112,6 +123,8 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   const updateBehavior = useUpdateBehavior()
   const updateNotifyEmail = useUpdateNotifyEmail()
   const updateBranding = useUpdateBranding()
+  const updateNotifyRespondent = useUpdateNotifyRespondent()
+  const updateRespondentEmail = useUpdateRespondentEmail()
 
   // Гейты тарифа. Оба спрашиваются у снимка плана пространства, и оба ДЕРЖАТ САМ
   // КОНТРОЛ, а не отказывают после нажатия (тот же приём, что у бейджа на экране
@@ -124,6 +137,10 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   // плане поля видны, но не редактируются, а попытка печатать открывает разговор о
   // тарифе. Бэк отвергает такую правку сам (402) — снимок плана мог устареть.
   const canCustomizeEmail = useFeatureAllowed('form_notify_email')
+  // Письмо респонденту платно ЦЕЛИКОМ, а не своим текстом: платной здесь является
+  // сама отправка (docs/design/respondent-email.md §6). Поэтому гейт держит ТУМБЛЕР,
+  // а не только поля бланка, — включить его на бесплатном плане нельзя.
+  const canSendRespondentEmail = useFeatureAllowed('form_respondent_email')
   const [upsell, setUpsell] = useState(false)
 
   const [saving, setSaving] = useState(false)
@@ -137,7 +154,10 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
     invalid.replyTo ||
     invalid.closeAt ||
     invalid.notifySubjectLong ||
-    invalid.notifyBodyLong
+    invalid.notifyBodyLong ||
+    invalid.respondentReplyTo ||
+    invalid.respondentSubjectLong ||
+    invalid.respondentBodyLong
   const dirty = isDirty(saved, draft)
 
   // Уход с несохранёнными правками — осознанный. Блокируется НАВИГАЦИЯ роутера
@@ -216,6 +236,38 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         // печатал, — но кнопка теперь честно говорит, что не сохранилось.
         if (e instanceof ApiError && e.code === 'plan_required') {
           toast.error('Настройка письма доступна на платном тарифе')
+        }
+      }
+    }
+
+    if (jobs.respondent) {
+      try {
+        await updateNotifyRespondent.mutateAsync({
+          id: form.id,
+          slug: form.slug,
+          enabled: draft.respondentOn,
+        })
+      } catch (e: unknown) {
+        broke = true
+        // Тумблер возвращается в серверное положение, как у сбора незавершённых:
+        // оставь его включённым — и страница вечно висела бы «несохранённой».
+        if (e instanceof ApiError && e.code === 'plan_required') {
+          set('respondentOn', form.notifyRespondent)
+          toast.error('Письмо респонденту доступно на платном тарифе')
+        }
+      }
+    }
+
+    if (jobs.respondentEmail) {
+      try {
+        await updateRespondentEmail.mutateAsync({
+          id: form.id,
+          value: respondentEmailValue(draft, form.respondentMail),
+        })
+      } catch (e: unknown) {
+        broke = true
+        if (e instanceof ApiError && e.code === 'plan_required') {
+          toast.error('Письмо респонденту доступно на платном тарифе')
         }
       }
     }
@@ -383,20 +435,33 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
             />
           </SettingRow>
 
-          {/* ЗАГЛУШКА (решение владельца 2026-08-29): строка нарисована, за ней
-              ничего нет. Стоит здесь намеренно и с красной меткой — чтобы дыра была
-              видна на самом экране, а не только в очереди задач. Что делать —
-              `BACKLOG.md`, пункт «Почта формы» — там же подстановки и PDF. Метка и
-              `disabled` снимаются вместе с реализацией. */}
+          {/* Тумблер, в отличие от письма владельцу, ДЕРЖИТ ГЕЙТ САМ: платной здесь
+              является отправка, а не текст, поэтому включить письмо на бесплатном
+              плане нельзя вовсе. Выключить — можно всегда (бэк тарифа на выключении
+              не спрашивает): даунгрейд не запирает автора в рассылке. */}
           <SettingRow
             id="notify-respondent"
             label="Уведомления респонденту"
             description="Письмо респонденту после отправки формы: свой текст и, если нужно, PDF с его ответами вложением."
-            checked={false}
-            onChange={() => undefined}
-            disabled
-            stub="Заглушка: строка нарисована, отправки нет. Задача — в BACKLOG.md, «Почта формы»."
-          />
+            pro
+            checked={draft.respondentOn}
+            onChange={(v) => {
+              if (v && !canSendRespondentEmail) {
+                setUpsell(true)
+                return
+              }
+              set('respondentOn', v)
+            }}
+          >
+            <RespondentEmailFields
+              form={form}
+              draft={draft}
+              set={set}
+              replyToInvalid={invalid.respondentReplyTo}
+              subjectTooLong={invalid.respondentSubjectLong}
+              bodyTooLong={invalid.respondentBodyLong}
+            />
+          </SettingRow>
         </div>
       </Section>
 
@@ -822,6 +887,163 @@ function NotifyEmailFields({
           <ProTag />
         </p>
       )}
+    </div>
+  )
+}
+
+// Бланк письма РЕСПОНДЕНТУ. Тот же лист, что у письма владельцу, и отличий два.
+//
+// Первое — строка «Кому»: у письма владельцу адресат известен и неизменяем, здесь
+// его выбирает автор, указывая вопрос-email формы. Хранится id вопроса, а не адрес:
+// адрес приезжает ответом (docs/design/respondent-email.md §3).
+//
+// Второе — мёртвого вида на бесплатном плане здесь НЕТ: гейт держит сам тумблер, и
+// до бланка на бесплатном плане просто не доходит. Поэтому поля всегда живые.
+function RespondentEmailFields({
+  form,
+  draft,
+  set,
+  replyToInvalid,
+  subjectTooLong,
+  bodyTooLong,
+}: {
+  form: FormDetail
+  draft: SettingsDraft
+  set: <K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) => void
+  replyToInvalid: boolean
+  subjectTooLong: boolean
+  bodyTooLong: boolean
+}) {
+  const blocks = form.draftSchema.blocks
+  const sources = blocks.filter((b) => b.type === 'email')
+  // Источник выбран, но такого вопроса в форме больше нет — автор удалил его на
+  // полотне уже после настройки письма. Молчать об этом нельзя: письмо перестало
+  // уходить, и узнать об этом иначе неоткуда.
+  const sourceGone =
+    draft.respondentSource !== '' && !sources.some((b) => b.id === draft.respondentSource)
+  const cell = 'h-8 w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
+
+  return (
+    <div>
+      <div className="rounded-lg border bg-card shadow-sm">
+        <Row label="Кому">
+          <div className="w-full">
+            {sources.length === 0 ? (
+              // Формы без единого вопроса-email письмо отправить не может в
+              // принципе: адрес брать неоткуда. Строка красная, потому что это
+              // незаконченная настройка, а не свойство формы.
+              <p className="py-1.5 text-sm font-medium text-destructive" role="status">
+                В форме нет вопроса «Email» — письмо уходить не будет. Добавьте его на полотне.
+              </p>
+            ) : (
+              <Select
+                value={sourceGone ? '' : draft.respondentSource}
+                onValueChange={(v) => set('respondentSource', v)}
+              >
+                <SelectTrigger
+                  size="sm"
+                  className={`${cell} justify-start gap-1 data-[size=sm]:h-8`}
+                  aria-label="Вопрос с адресом респондента"
+                >
+                  <SelectValue placeholder="Выберите вопрос с адресом" />
+                </SelectTrigger>
+                <SelectContent>
+                  {sources.map((b) => (
+                    <SelectItem key={b.id} value={b.id}>
+                      {sourceLabel(blocks, b)}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {sourceGone && (
+              <p className="pb-1 text-sm font-medium text-destructive" role="status">
+                Вопрос, из которого брался адрес, удалён — письмо уходить не будет.
+              </p>
+            )}
+          </div>
+        </Row>
+        <Row label="Имя отправителя">
+          <Input
+            aria-label="Имя отправителя письма респонденту"
+            value={draft.respondentFromName}
+            maxLength={MAX_NOTIFY_FROM_NAME_LEN}
+            onChange={(e) => set('respondentFromName', e.target.value)}
+            className={cell}
+          />
+        </Row>
+        <Row label="От кого">
+          <span className="text-sm">{form.respondentMail.from || 'служебный адрес Trillix'}</span>
+        </Row>
+        <Row label="Адрес для ответов">
+          <div className="w-full">
+            <Input
+              type="email"
+              inputMode="email"
+              aria-label="Адрес для ответов на письмо респонденту"
+              aria-invalid={replyToInvalid}
+              value={draft.respondentReplyTo}
+              onChange={(e) => set('respondentReplyTo', e.target.value)}
+              className={cell}
+            />
+            {replyToInvalid && (
+              <p className="pb-1 text-sm text-destructive" role="alert">
+                Нужен адрес вида name@example.com
+              </p>
+            )}
+          </div>
+        </Row>
+        <Row label="Тема">
+          <div className="w-full">
+            <MailLine
+              form={form}
+              label="Тема письма респонденту"
+              value={draft.respondentSubject}
+              onChange={(v) => set('respondentSubject', v)}
+              editable
+              className={`${cell} py-1.5 outline-none`}
+            />
+            {subjectTooLong && (
+              <p className="pb-1 text-sm text-destructive" role="alert">
+                Не длиннее {MAX_NOTIFY_SUBJECT_LEN} символов
+              </p>
+            )}
+          </div>
+        </Row>
+        <div className="border-t px-3 py-2">
+          <MailLine
+            form={form}
+            multiline
+            label="Текст письма респонденту"
+            value={draft.respondentBody}
+            placeholder="Оставьте пустым, чтобы письмо ушло обычным текстом с подтверждением ответа."
+            onChange={(v) => set('respondentBody', v)}
+            editable
+            className="min-h-36 w-full outline-none"
+          />
+          {bodyTooLong && (
+            <p className="pt-1 text-sm text-destructive" role="alert">
+              Не длиннее {MAX_NOTIFY_BODY_LEN} символов
+            </p>
+          )}
+        </div>
+        <div className="flex min-h-10 items-center gap-2 border-t px-3">
+          <Checkbox
+            id="respondent-pdf"
+            checked={draft.respondentAttachPdf}
+            onCheckedChange={(v) => set('respondentAttachPdf', v === true)}
+          />
+          <Label htmlFor="respondent-pdf" className="font-normal">
+            Прикрепить PDF с ответом
+          </Label>
+        </div>
+      </div>
+      {/* Подвал письма не показан полем бланка намеренно: он не настраивается и
+          уедет в любом случае. Строка под коробкой называет его как факт письма. */}
+      <p className="mt-2 text-sm text-muted-foreground">
+        В конце письма мы добавим строку о том, что человек получил его, потому что заполнил эту
+        форму, — без неё почтовые службы считают такие письма спамом.
+      </p>
     </div>
   )
 }

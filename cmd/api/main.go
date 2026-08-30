@@ -386,7 +386,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		// в самом шаблоне письма. Разбор не удался — строки пустые, и кабинет
 		// нарисует описание вместо значения.
 		WithNotifyMail(senderAddress(cfg.MailFrom), senderName(cfg.MailFrom),
-			mail.DefaultSubject(mail.TemplateSubmissionNew))
+			mail.DefaultSubject(mail.TemplateSubmissionNew)).
+		WithRespondentMail(senderAddress(cfg.MailFrom), senderName(cfg.MailFrom),
+			mail.DefaultSubject(mail.TemplateRespondentReceipt))
 
 	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
 	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис

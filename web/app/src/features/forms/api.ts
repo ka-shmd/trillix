@@ -11,6 +11,7 @@ import {
   type BehaviorInput,
   type LinkPreview,
   type NotifyEmail,
+  type RespondentEmail,
 } from '../../entities/form'
 
 // Транспорт forms: каждый ответ парсится Zod-схемой на границе; delete — 204 без тела.
@@ -104,6 +105,27 @@ export function updateNotifyEmail(id: string, value: NotifyEmail): Promise<Form>
   return apiRequest(`/forms/${id}`, {
     method: 'PATCH',
     body: { notifyEmail: value },
+    schema: formSchema,
+  })
+}
+
+// Тумблер письма респонденту (фасет notifyRespondent). 402 бывает на ВКЛЮЧЕНИИ:
+// платной здесь является сама отправка, а не свой текст. Выключение проходит на
+// любом тарифе — даунгрейд не запирает автора в рассылке.
+export function updateNotifyRespondent(id: string, enabled: boolean): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { notifyRespondent: enabled },
+    schema: formSchema,
+  })
+}
+
+// Бланк письма респонденту (фасет respondentEmail): вопрос-источник адреса, имя
+// отправителя, Reply-To, тема, текст, PDF. Гейт и сброс — как у notifyEmail.
+export function updateRespondentEmail(id: string, value: RespondentEmail): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { respondentEmail: value },
     schema: formSchema,
   })
 }

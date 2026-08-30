@@ -68,6 +68,10 @@ type Handler struct {
 	// подставляется на каждый запрос детали (он свой у каждой формы). Пустое, когда
 	// почта на контуре не настроена.
 	notifyMail notifyMailBody
+	// respondentMail — то же для письма РЕСПОНДЕНТУ (0046). Своя строка, а не общая
+	// с notifyMail: тема у писем разная, и бланк обязан показывать ту, которая
+	// действительно уйдёт. Адресата здесь нет вовсе — он приезжает ответом.
+	respondentMail notifyMailBody
 }
 
 // WithNotifyMail сообщает транспорту, как выглядит письмо о новом ответе без правок
@@ -75,6 +79,13 @@ type Handler struct {
 // не имеет, нужно ровно одному бланку в настройках.
 func (h *Handler) WithNotifyMail(from, fromName, subject string) *Handler {
 	h.notifyMail = notifyMailBody{From: from, FromName: fromName, Subject: subject}
+	return h
+}
+
+// WithRespondentMail — то же для письма респонденту: тем же сеттером и по той же
+// причине. Адрес отправителя общий (домен один на сервис), тема своя.
+func (h *Handler) WithRespondentMail(from, fromName, subject string) *Handler {
+	h.respondentMail = notifyMailBody{From: from, FromName: fromName, Subject: subject}
 	return h
 }
 
@@ -173,6 +184,10 @@ type formDetailResponse struct {
 	// всем, а гейт стоит на сохранении и на отправке.
 	NotifyRespondent bool                 `json:"notifyRespondent"`
 	RespondentEmail  *respondentEmailBody `json:"respondentEmail"`
+	// RespondentMail — письмо респонденту БЕЗ авторских правок, как notifyMail для
+	// письма владельцу. Поле To здесь всегда пустое: адресат приезжает ответом, и
+	// строку «Кому» бланк рисует описанием выбранного вопроса.
+	RespondentMail notifyMailBody `json:"respondentMail"`
 	// NotifyMail — письмо о новом ответе БЕЗ авторских правок: как его отправит
 	// сервис, если в notifyEmail пусто. Нужно бланку письма в настройках формы: он
 	// показывает автору настоящие адреса и настоящий текст, а не описание того, чем
@@ -361,6 +376,7 @@ func toFormResponse(f Form) formResponse {
 func (h *Handler) formDetail(ctx context.Context, f Form) formDetailResponse {
 	resp := toFormDetailResponse(f)
 	resp.NotifyMail = h.notifyMail
+	resp.RespondentMail = h.respondentMail
 	if owner, err := h.svc.SubmissionOwner(ctx, f.ID); err == nil {
 		resp.NotifyMail.To = owner.Email
 	} else {
