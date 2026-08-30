@@ -3,6 +3,7 @@ package mail
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"time"
@@ -75,14 +76,38 @@ type Service struct {
 	// отдельным полем: она была здесь первой и живёт своим интерфейсом Mailer
 	// с шаблонами, а не сырым payload.
 	transports map[string]Transport
-	now        func() time.Time // подменяется в тестах
+	// attachments — резолвер вложений; nil = «на этом контуре печати нет», и письмо
+	// с обещанным PDF уходит без него, а не копит ретраи.
+	attachments AttachmentResolver
+	// printsPerTick — сколько вложений диспетчер добывает за ОДИН проход. Потолок
+	// обязателен: печать идёт 0.5–1 с при двух браузерах на всю машину, а пачка
+	// диспетчера (batch) едет одним тиком с общим таймаутом, и в ней же лежит письмо
+	// со сбросом пароля. Без потолка пачка вложений выедала бы тик и уводила чужие
+	// письма в бэкофф. Письмо, которому вложения не досталось, НЕ помечается
+	// неудачей — оно просто ждёт следующего тика (attempts не растёт).
+	printsPerTick int
+	now           func() time.Time // подменяется в тестах
 }
+
+// errPrintBudget — «в этом тике вложений больше не добываем». Не ошибка доставки:
+// строка остаётся нетронутой и уезжает следующим проходом.
+var errPrintBudget = errors.New("outbox: print budget for this tick is spent")
 
 func NewService(db postgres.DBTX, repo Store, mailer Mailer, log *slog.Logger, batch int32, backoff Backoff) *Service {
 	return &Service{
 		db: db, repo: repo, mailer: mailer, log: log, batch: batch, backoff: backoff,
 		transports: map[string]Transport{}, now: time.Now,
 	}
+}
+
+// WithAttachments подключает добычу вложений и потолок печатей на проход диспетчера.
+// Вызывается при сборке приложения; без него письма с вложениями уходят без файлов.
+func (s *Service) WithAttachments(r AttachmentResolver, perTick int) *Service {
+	if perTick < 1 {
+		perTick = 1
+	}
+	s.attachments, s.printsPerTick = r, perTick
+	return s
 }
 
 // WithTransport подключает транспорт канала. Вызывается при сборке приложения
@@ -148,11 +173,15 @@ func (s *Service) Dispatch(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	sent := 0
+	budget := s.printsPerTick
 	for _, p := range pending {
 		if err := ctx.Err(); err != nil {
 			return sent, err // остановка процесса — не ошибка задачи
 		}
-		if err := s.deliver(ctx, p); err != nil {
+		if err := s.deliver(ctx, p, &budget); err != nil {
+			if errors.Is(err, errPrintBudget) {
+				continue // не неудача: письмо ждёт следующего тика нетронутым
+			}
 			s.markFailed(ctx, p, err)
 			continue
 		}
@@ -171,12 +200,15 @@ func (s *Service) Dispatch(ctx context.Context) (int, error) {
 // deliver маршрутизирует строку по каналу в нужный транспорт. Неизвестный канал
 // или битый payload — ошибка доставки (строка уйдёт на ретрай); в норме такого
 // не бывает, payload пишем мы сами.
-func (s *Service) deliver(ctx context.Context, p Pending) error {
+func (s *Service) deliver(ctx context.Context, p Pending, budget *int) error {
 	switch p.Channel {
 	case ChannelEmail:
 		var msg EmailMessage
 		if err := json.Unmarshal(p.Payload, &msg); err != nil {
 			return fmt.Errorf("unmarshal email payload: %w", err)
+		}
+		if err := s.attachFiles(ctx, &msg, budget); err != nil {
+			return err
 		}
 		return s.mailer.Send(ctx, msg)
 	default:
@@ -186,6 +218,51 @@ func (s *Service) deliver(ctx context.Context, p Pending) error {
 		}
 		return t.Deliver(ctx, p.Payload)
 	}
+}
+
+// attachFiles добывает вложения письма перед отправкой. Неудача добычи — НЕ ошибка
+// доставки: письмо уходит без файла с пометкой pdf_failed, которую дефолтный шаблон
+// превращает в строку для владельца. Обратное (откладывать письмо до починки печати)
+// означало бы, что сломанный принтер прячет от владельца сами ответы.
+//
+// Резолвера нет вовсе (контур без печати) — та же ветка: настройка формы обещает
+// вложение, и молчать об этом нельзя.
+func (s *Service) attachFiles(ctx context.Context, msg *EmailMessage, budget *int) error {
+	if len(msg.Attachments) == 0 {
+		return nil
+	}
+	if s.attachments == nil {
+		markPDFFailed(msg)
+		return nil
+	}
+	// Потолок спрашивается ОДИН РАЗ на письмо, а не на файл: письмо с несколькими
+	// вложениями чуть превысит бюджет тика, но никогда не зависнет навсегда — чего
+	// не избежать, если требовать, чтобы в остаток бюджета влезли все его файлы.
+	if *budget <= 0 {
+		return errPrintBudget
+	}
+	for _, ref := range msg.Attachments {
+		*budget--
+		f, err := s.attachments.Resolve(ctx, ref)
+		if err != nil {
+			s.log.Warn("outbox: attachment not resolved, email goes without it",
+				slog.String("to", msg.To), slog.String("kind", ref.Kind),
+				slog.String("submission_id", ref.SubmissionID),
+				slog.String("error", err.Error()))
+			markPDFFailed(msg)
+			continue
+		}
+		msg.Files = append(msg.Files, f)
+	}
+	return nil
+}
+
+// markPDFFailed сообщает шаблону, что обещанное вложение не приехало.
+func markPDFFailed(msg *EmailMessage) {
+	if msg.Data == nil {
+		msg.Data = map[string]any{}
+	}
+	msg.Data["pdf_failed"] = true
 }
 
 func (s *Service) markFailed(ctx context.Context, p Pending, cause error) {

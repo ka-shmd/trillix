@@ -198,7 +198,10 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
 
     if (jobs.notifyEmail) {
       try {
-        await updateNotifyEmail.mutateAsync({ id: form.id, value: notifyEmailValue(draft) })
+        await updateNotifyEmail.mutateAsync({
+          id: form.id,
+          value: notifyEmailValue(draft, form.notifyMail),
+        })
       } catch (e: unknown) {
         broke = true
         // 402 — тариф закрылся, пока страница была открыта (даунгрейд в соседней
@@ -362,6 +365,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
             onChange={(v) => set('notify', v)}
           >
             <NotifyEmailFields
+              form={form}
               draft={draft}
               set={set}
               replyToInvalid={invalid.replyTo}
@@ -657,122 +661,148 @@ function CloseAtFields({
 // в рассыльщик.
 //
 // Подстановок (@Форма, @Все ответы) ЕЩЁ НЕТ — текст уходит как есть; задача в
-// BACKLOG.md, там же PDF-вложение. Поэтому чекбокс PDF нарисован выключенным и с
-// красной меткой: строка есть, вложения нет.
+// BACKLOG.md. Чекбокс PDF, наоборот, живой: печать вложения приезжает в момент
+// доставки письма, поэтому настройка действует со следующего ответа.
 function NotifyEmailFields({
+  form,
   draft,
   set,
   replyToInvalid,
   editable,
   onLocked,
 }: {
+  form: FormDetail
   draft: SettingsDraft
   set: <K extends keyof SettingsDraft>(key: K, value: SettingsDraft[K]) => void
   replyToInvalid: boolean
   editable: boolean
   onLocked: () => void
 }) {
-  // На бесплатном плане поля видны и НЕ редактируются: `readOnly`, а не `disabled`,
-  // — выключенное поле не ловит ни клика, ни фокуса, и объяснить, почему оно не
-  // печатается, было бы негде. Клик по такому полю открывает разговор о тарифе.
-  const lock = editable ? {} : { readOnly: true, onFocus: onLocked, onClick: onLocked }
-  const cell = 'w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
+  // На бесплатном плане бланк ВИДЕН, но мёртв: поля не принимают ни клика, ни
+  // фокуса, ни набора, и ничего при этом не открывают (решение владельца
+  // 2026-08-30). Разговор о тарифе начинается только по явной ссылке под коробкой —
+  // случайный клик по полю не имеет права выкидывать диалог поверх страницы.
+  //
+  // `readOnly` + `tabIndex={-1}` под `pointer-events-none` на коробке, а не
+  // `disabled`: текст остаётся обычным, а не бледнеет, — автор читает своё письмо,
+  // а не догадывается, что в нём написано.
+  const lock = editable ? {} : { readOnly: true, tabIndex: -1 }
+  // h-8 вместо своей высоты контрола: высоту строки бланка задаёт СТРОКА, иначе
+  // ряды с полем и ряды с готовым значением стоят разной высоты и бланк рябит.
+  const cell = 'h-8 w-full border-0 bg-transparent px-0 shadow-none focus-visible:ring-0'
+  // Правая половина бланка — НАСТОЯЩИЙ ТЕКСТ ПИСЬМА, а не подсказка о нём: имя
+  // отправителя и тема приезжают умолчаниями с сервера и стоят в полях значениями,
+  // которые можно править по буквам (решение владельца 2026-08-30). Пустыми остаются
+  // только строки, которых в письме и не будет: Reply-To и свой текст.
 
   return (
-    <div className="rounded-lg border">
-      <Row label="Имя отправителя">
-        <Input
-          {...lock}
-          aria-label="Имя отправителя"
-          value={draft.notifyFromName}
-          placeholder="Trillix"
-          maxLength={MAX_NOTIFY_FROM_NAME_LEN}
-          onChange={(e) => set('notifyFromName', e.target.value)}
-          className={cell}
-        />
-      </Row>
-      <Row label="От кого">
-        <span className="text-sm text-muted-foreground">
-          служебный адрес Trillix — его менять нельзя
-        </span>
-      </Row>
-      <Row label="Кому">
-        <span className="text-sm text-muted-foreground">
-          владельцу пространства, на адрес его аккаунта
-        </span>
-      </Row>
-      <Row label="Адрес для ответов">
-        <div className="w-full">
+    <div>
+      {/* Рамка И тень (решение владельца 2026-08-30): рамка проводит край листа,
+          тень кладёт его на страницу. Подложка `bg-card` обязательна — без неё тень
+          падала бы на прозрачное и не читалась. */}
+      <div
+        className={`rounded-lg border bg-card shadow-sm${editable ? '' : ' pointer-events-none'}`}
+      >
+        <Row label="Имя отправителя">
           <Input
             {...lock}
-            type="email"
-            inputMode="email"
-            aria-label="Адрес для ответов"
-            aria-invalid={replyToInvalid}
-            value={draft.notifyReplyTo}
-            placeholder="Куда ответит ваш почтовый клиент"
-            onChange={(e) => set('notifyReplyTo', e.target.value)}
+            aria-label="Имя отправителя"
+            value={draft.notifyFromName}
+            maxLength={MAX_NOTIFY_FROM_NAME_LEN}
+            onChange={(e) => set('notifyFromName', e.target.value)}
             className={cell}
           />
-          {replyToInvalid && (
-            <p className="pb-1 text-sm text-destructive" role="alert">
-              Нужен адрес вида name@example.com
-            </p>
-          )}
+        </Row>
+        {/* Оба адреса — настоящие, а не описание того, чем они являются: в письме
+            автор увидит именно эти строки. Пустой адрес (почта на контуре не
+            настроена, владелец не разрезолвился) отступает к описанию — пустая
+            строка бланка читалась бы как «письмо уйдёт в никуда». */}
+        <Row label="От кого">
+          <span className="text-sm">{form.notifyMail.from || 'служебный адрес Trillix'}</span>
+        </Row>
+        <Row label="Кому">
+          <span className="text-sm">
+            {form.notifyMail.to || 'владельцу пространства, на адрес его аккаунта'}
+          </span>
+        </Row>
+        <Row label="Адрес для ответов">
+          <div className="w-full">
+            <Input
+              {...lock}
+              type="email"
+              inputMode="email"
+              aria-label="Адрес для ответов"
+              aria-invalid={replyToInvalid}
+              value={draft.notifyReplyTo}
+              onChange={(e) => set('notifyReplyTo', e.target.value)}
+              className={cell}
+            />
+            {replyToInvalid && (
+              <p className="pb-1 text-sm text-destructive" role="alert">
+                Нужен адрес вида name@example.com
+              </p>
+            )}
+          </div>
+        </Row>
+        <Row label="Тема">
+          <Input
+            {...lock}
+            aria-label="Тема письма"
+            value={draft.notifySubject}
+            maxLength={MAX_NOTIFY_SUBJECT_LEN}
+            onChange={(e) => set('notifySubject', e.target.value)}
+            className={cell}
+          />
+        </Row>
+        <div className="border-t px-3 py-2">
+          <Textarea
+            {...lock}
+            aria-label="Текст письма"
+            value={draft.notifyBody}
+            placeholder="Оставьте пустым, чтобы письмо ушло обычным текстом со ссылкой на ответы."
+            maxLength={MAX_NOTIFY_BODY_LEN}
+            rows={7}
+            onChange={(e) => set('notifyBody', e.target.value)}
+            className="min-h-36 w-full resize-y border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
+          />
         </div>
-      </Row>
-      <Row label="Тема">
-        <Input
-          {...lock}
-          aria-label="Тема письма"
-          value={draft.notifySubject}
-          placeholder="Новые ответы в Trillix"
-          maxLength={MAX_NOTIFY_SUBJECT_LEN}
-          onChange={(e) => set('notifySubject', e.target.value)}
-          className={cell}
-        />
-      </Row>
-      <div className="border-t px-3 py-2">
-        <Textarea
-          {...lock}
-          aria-label="Текст письма"
-          value={draft.notifyBody}
-          placeholder="Оставьте пустым, чтобы письмо ушло обычным текстом со ссылкой на ответы."
-          maxLength={MAX_NOTIFY_BODY_LEN}
-          rows={5}
-          onChange={(e) => set('notifyBody', e.target.value)}
-          className="min-h-24 w-full resize-y border-0 bg-transparent px-0 shadow-none focus-visible:ring-0"
-        />
+        {/* Чекбокс, в отличие от полей выше, `disabled`: readOnly у него нет вовсе,
+            а нажатую галочку от ненажатой надо отличать и на мёртвом бланке. */}
+        <div className="flex min-h-10 items-center gap-2 border-t px-3">
+          <Checkbox
+            id="notify-pdf"
+            checked={draft.notifyAttachPdf}
+            disabled={!editable}
+            onCheckedChange={(v) => set('notifyAttachPdf', v === true)}
+          />
+          <Label htmlFor="notify-pdf" className="font-normal">
+            Прикрепить PDF с ответом
+          </Label>
+        </div>
       </div>
-      {/* ЗАГЛУШКА: вложения нет, задача в BACKLOG.md вместе с подстановками. */}
-      <div className="flex items-center gap-2 border-t px-3 py-2">
-        <TriangleAlert className="size-4 shrink-0 text-destructive" aria-hidden />
-        <Checkbox id="notify-pdf" checked={false} disabled />
-        <Label htmlFor="notify-pdf" className="font-normal text-muted-foreground">
-          Прикрепить PDF с ответами
-        </Label>
-        <span className="text-sm font-medium text-destructive">— заглушка, PDF пока не делаем</span>
-      </div>
+      {/* Метка тарифа стоит ПОД коробкой, а не строкой внутри неё: коробка — бланк
+          письма, и всё, что в ней лежит, читается как часть письма. Условие доступа
+          частью письма не является. */}
       {!editable && (
-        <div className="flex flex-wrap items-center gap-2 border-t px-3 py-2 text-sm text-muted-foreground">
-          <ProTag />
-          <span>Менять письмо можно на платном тарифе.</span>
+        <p className="mt-2 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-sm text-muted-foreground">
+          <span>Своё письмо и PDF-вложение работают на платном тарифе,</span>
           <button type="button" className="underline underline-offset-2" onClick={onLocked}>
-            Посмотреть тарифы
+            посмотреть тарифы
           </button>
-        </div>
+          <ProTag />
+        </p>
       )}
     </div>
   )
 }
 
-// Строка бланка: подпись слева, значение справа. Подпись фиксированной ширины —
-// иначе поля начинались бы в пяти разных местах и бланк перестал бы читаться
-// колонкой.
+// Строка бланка: подпись и сразу за ней значение, как в шапке письма («Тема: …»).
+// Подпись не колонка: значение начинается вплотную к ней, поэтому строка читается
+// фразой, а поле не отъезжает от своего названия на полэкрана.
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
-    <div className="flex items-center gap-2 border-b px-3 py-1 last:border-b-0">
-      <span className="w-40 shrink-0 text-sm text-muted-foreground">{label}</span>
+    <div className="flex min-h-10 items-center gap-2 border-b px-3 last:border-b-0">
+      <span className="shrink-0 text-sm text-muted-foreground">{label}:</span>
       {children}
     </div>
   )

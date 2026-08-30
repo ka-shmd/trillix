@@ -22,10 +22,10 @@ func TestRenderPasswordReset(t *testing.T) {
 	}
 }
 
-func TestRenderSubmissionDigest(t *testing.T) {
+func TestRenderSubmissionNew(t *testing.T) {
 	subject, body, err := Render(EmailMessage{
-		Template: TemplateSubmissionDigest,
-		Data:     map[string]any{"form_title": "Анкета", "link": "https://app/forms/s/responses", "count": 5},
+		Template: TemplateSubmissionNew,
+		Data:     map[string]any{"form_title": "Анкета", "link": "https://app/forms/s/responses"},
 	})
 	if err != nil {
 		t.Fatalf("Render: %v", err)
@@ -33,10 +33,28 @@ func TestRenderSubmissionDigest(t *testing.T) {
 	if subject == "" {
 		t.Error("пустая тема письма")
 	}
-	for _, want := range []string{"Анкета", "5", "https://app/forms/s/responses"} {
+	for _, want := range []string{"Анкета", "https://app/forms/s/responses"} {
 		if !strings.Contains(body, want) {
-			t.Errorf("тело дайджеста не содержит %q:\n%s", want, body)
+			t.Errorf("тело письма не содержит %q:\n%s", want, body)
 		}
+	}
+	if strings.Contains(body, "печати") {
+		t.Errorf("строка о неудавшейся печати не имеет права стоять в обычном письме:\n%s", body)
+	}
+}
+
+// Печать вложения не удалась — владелец обязан узнать об этом из письма, а не из
+// нашего лога: вложение обещано его же настройкой.
+func TestRenderSubmissionNew_PDFFailed(t *testing.T) {
+	_, body, err := Render(EmailMessage{
+		Template: TemplateSubmissionNew,
+		Data:     map[string]any{"form_title": "Анкета", "link": "https://x", "pdf_failed": true},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if !strings.Contains(body, "не удалось") {
+		t.Errorf("тело не сообщает о неудавшейся печати:\n%s", body)
 	}
 }
 
@@ -52,8 +70,8 @@ func TestRenderUnknownTemplate(t *testing.T) {
 // ошибкой рендера, ни выполненным действием.
 func TestRender_AuthorOverrides(t *testing.T) {
 	subject, body, err := Render(EmailMessage{
-		Template: TemplateSubmissionDigest,
-		Data:     map[string]any{"form_title": "Анкета", "link": "https://x", "count": 1},
+		Template: TemplateSubmissionNew,
+		Data:     map[string]any{"form_title": "Анкета", "link": "https://x"},
 		Subject:  "Заявка с сайта",
 		Body:     "Пришла заявка {{.link}} — смотрите в кабинете.",
 	})
@@ -71,8 +89,8 @@ func TestRender_AuthorOverrides(t *testing.T) {
 // Перебита только тема — тело остаётся шаблонным и по-прежнему разворачивается.
 func TestRender_SubjectOnlyKeepsTemplateBody(t *testing.T) {
 	subject, body, err := Render(EmailMessage{
-		Template: TemplateSubmissionDigest,
-		Data:     map[string]any{"form_title": "Анкета", "link": "https://x", "count": 2},
+		Template: TemplateSubmissionNew,
+		Data:     map[string]any{"form_title": "Анкета", "link": "https://x"},
 		Subject:  "Заявка с сайта",
 	})
 	if err != nil {

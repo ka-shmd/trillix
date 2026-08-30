@@ -18,9 +18,15 @@ const (
 	// TemplateWorkspaceInvite — приглашение в пространство. Data:
 	// {"link": "<url>", "workspace": "<название>", "inviter": "<email позвавшего>"}.
 	TemplateWorkspaceInvite Template = "workspace_invite"
-	// TemplateSubmissionDigest — дайджест новых ответов владельцу. Data:
-	// {"form_title": "<название>", "link": "<url таблицы>", "count": <N>}.
-	TemplateSubmissionDigest Template = "submission_digest"
+	// TemplateSubmissionNew — письмо владельцу о новом ответе, ОДНО НА ОДИН ответ.
+	// Data: {"form_title": "<название>", "link": "<url таблицы>"}; при неудавшейся
+	// печати вложения диспетчер добавляет {"pdf_failed": true}.
+	//
+	// ⚠ Значение осталось "submission_digest", хотя дайджеста больше нет (ADR §10,
+	// отмена 2026-08-30): это значение лежит в payload строк outbox, поставленных до
+	// перехода. Переименуй — и такая строка станет «неизвестным шаблоном», то есть
+	// вечным ретраем: dead-letter у outbox нет.
+	TemplateSubmissionNew Template = "submission_digest"
 	// TemplateEmailChangeConfirm — письмо со ссылкой подтверждения НОВОГО адреса
 	// (фаза 23, слайс D). Уходит на новый адрес. Data: {"link": "<url>"}.
 	TemplateEmailChangeConfirm Template = "email_change_confirm"
@@ -78,11 +84,16 @@ var templates = map[Template]mailTemplate{
 				"— Trillix",
 		)),
 	},
-	TemplateSubmissionDigest: {
-		subject: "Новые ответы в Trillix",
+	TemplateSubmissionNew: {
+		subject: "Новый ответ в Trillix",
 		body: template.Must(template.New("submission_digest").Parse(
 			"Здравствуйте!\n\n" +
-				"На форму «{{.form_title}}» пришло новых ответов: {{.count}}.\n\n" +
+				"На форму «{{.form_title}}» пришёл новый ответ.\n\n" +
+				// Строка про неудавшуюся печать — единственный способ сказать владельцу,
+				// что вложение обещано настройкой, но не приехало. В СВОЁМ тексте автора
+				// её нет и быть не может: свой текст заменяет тело целиком (Render).
+				"{{if .pdf_failed}}Приложить PDF с ответом не удалось — сервис печати не " +
+				"ответил. Документ можно скачать в таблице ответов.\n\n{{end}}" +
 				"Открыть таблицу ответов:\n\n" +
 				"{{.link}}\n\n" +
 				"Уведомления можно отключить в настройках формы.\n\n" +
@@ -125,6 +136,16 @@ var templates = map[Template]mailTemplate{
 				"— Trillix",
 		)),
 	},
+}
+
+// DefaultSubject — тема письма, которую поставит шаблон, если автор не задал свою.
+// Существует ради БЛАНКА ПИСЬМА в настройках формы: он показывает автору настоящий
+// текст, а не подсказку, и брать этот текст ему больше негде. Копия строки на фронте
+// была бы зеркалом без сторожа — разошлась бы на первой же правке шаблона.
+//
+// Неизвестный шаблон даёт пустую строку: это подпись в интерфейсе, а не доставка.
+func DefaultSubject(t Template) string {
+	return templates[t].subject
 }
 
 // Render разворачивает письмо в тему и тело. Неизвестный шаблон — ошибка (в норме

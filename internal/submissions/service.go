@@ -36,12 +36,6 @@ const (
 	// документ, и ещё одна строка конфига дороже пользы. Хранить его вечно значит
 	// копить чужой неотправленный текст без причины.
 	PartialTTL = 30 * 24 * time.Hour
-
-	// notifyDigestWindow — окно троттлинга уведомлений владельцу (слайс D): все
-	// ответы, пришедшие за это окно после первого, склеиваются в одно письмо «N
-	// ответов». Ограничивает поток до ≤1 письма на форму за окно даже у вирусной
-	// формы; цена — одиночный ответ владелец увидит с задержкой в это окно.
-	notifyDigestWindow = 5 * time.Minute
 )
 
 // Forms — коллаборатор из модуля forms: отдаёт опубликованную форму по slug (приём
@@ -69,11 +63,15 @@ type Forms interface {
 	SubmissionOwner(ctx context.Context, formID uuid.UUID) (forms.Owner, error)
 }
 
-// Mailer — коллаборатор из модуля mail: ставит письмо-уведомление в outbox с
-// коалесингом (троттлинг-дайджест «N ответов»). Пишется в транзакции приёма ответа
-// (transactional outbox). Реализация — *mail.Service. Слайс D.
+// Mailer — коллаборатор из модуля mail: ставит письмо-уведомление в outbox.
+// Реализация — *mail.Service.
+//
+// Письмо — ОДНО НА ОДИН ответ (ADR §10, отмена дайджеста 2026-08-30), поэтому здесь
+// обычный EnqueueEmail, а не коалесцирующая постановка: склейка N ответов в одно
+// письмо несовместима с настраиваемым текстом (свой текст заменяет тело целиком) и
+// с PDF-вложением, у которого в дайджесте нет ответа на вопрос «чей ответ печатать».
 type Mailer interface {
-	EnqueueCoalesced(ctx context.Context, db postgres.DBTX, key string, msg mail.EmailMessage, delay time.Duration) error
+	EnqueueEmail(ctx context.Context, db postgres.DBTX, msg mail.EmailMessage) error
 }
 
 // Visits — коллаборатор из модуля visits: отмечает визит как закончившийся ответом
@@ -438,7 +436,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	s.markVisitSubmitted(ctx, pf.FormID, meta.VisitID)
 	s.dropPartial(ctx, pf.FormID, meta.VisitID)
 	if inserted && pf.NotifyOnSubmission {
-		s.notifyOwner(ctx, pf.FormID, slug)
+		s.notifyOwner(ctx, pf.FormID, id, slug)
 	}
 	if inserted {
 		s.enqueueIntegration(ctx, pf.FormID, id)
@@ -578,9 +576,14 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.T
 	return page, nil
 }
 
-// notifyOwner ставит владельцу письмо-дайджест о новом ответе — коалесцирующим
-// enqueue по ключу формы (ответы за окно склеиваются в одно письмо «N ответов»,
-// шквал ответов не даёт шквала писем). Ссылка ведёт в таблицу ответов кабинета.
+// notifyOwner ставит владельцу письмо о новом ответе — ОДНО ПИСЬМО НА ОДИН ответ
+// (ADR §10, отмена троттлинг-дайджеста 2026-08-30). Ссылка ведёт в таблицу ответов
+// кабинета.
+//
+// Защиты от шквала писем здесь больше нет: планы поток ответов не ограничивают, и
+// единственный потолок — rate limit приёма. Переливной клапан (порог на форму, сверх
+// которого остаток снова склеивается) записан в BACKLOG.md; механика коалесинга в
+// outbox для него сохранена и стоит без потребителей.
 //
 // Вызывается ПОСЛЕ приёма и best-effort, как markVisitSubmitted: уведомление —
 // вторичный эффект, и уронить из-за него принятый ответ нельзя (респондент увидел
@@ -588,10 +591,9 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.T
 // это размен строгой атомарности «ответ+письмо» на неприкосновенность hot-path и
 // принятого ответа. Цена — краш в узком окне между коммитом ответа и enqueue теряет
 // одно уведомление; данные целы (владелец видит ответ в таблице), а следующий ответ
-// открывает/наращивает дайджест заново. Сбой (нет владельца, пустой email, недоступна
-// БД) уходит в лог с request_id — ответ уже принят. Слайс D. Гонка диспетчера с
-// инкрементом во время отправки — TD-36. Слайс D.
-func (s *Service) notifyOwner(ctx context.Context, formID uuid.UUID, slug string) {
+// теряет одно уведомление. Сбой (нет владельца, пустой email, недоступна БД) уходит
+// в лог с request_id — ответ уже принят.
+func (s *Service) notifyOwner(ctx context.Context, formID, submissionID uuid.UUID, slug string) {
 	owner, err := s.forms.SubmissionOwner(ctx, formID)
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Warn("submission owner not resolved for notification",
@@ -601,8 +603,8 @@ func (s *Service) notifyOwner(ctx context.Context, formID uuid.UUID, slug string
 	link := s.appBaseURL + "/forms/" + slug + "/responses"
 	msg := mail.EmailMessage{
 		To:       owner.Email,
-		Template: mail.TemplateSubmissionDigest,
-		Data:     map[string]any{"form_title": owner.Title, "link": link, "count": 1},
+		Template: mail.TemplateSubmissionNew,
+		Data:     map[string]any{"form_title": owner.Title, "link": link},
 	}
 	// Свой текст письма — платная настройка (0042), поэтому право спрашивается ЗДЕСЬ,
 	// на каждой отправке, а не один раз при сохранении: даунгрейд обязан вернуть
@@ -612,8 +614,18 @@ func (s *Service) notifyOwner(ctx context.Context, formID uuid.UUID, slug string
 	// диспетчер за настройкой формы уже не пойдёт.
 	if n := s.notifyEmailFor(ctx, owner); n != nil {
 		msg.FromName, msg.ReplyTo, msg.Subject, msg.Body = n.FromName, n.ReplyTo, n.Subject, n.Body
+		// Вложение называется ССЫЛКОЙ, а не файлом: печатает его диспетчер при
+		// доставке (ADR §10). Печатать здесь значило бы держать браузер на пути
+		// приёма ответа.
+		if n.AttachPDF {
+			msg.Attachments = []mail.AttachmentRef{{
+				Kind:         mail.KindSubmissionPDF,
+				FormID:       formID.String(),
+				SubmissionID: submissionID.String(),
+			}}
+		}
 	}
-	err = s.mail.EnqueueCoalesced(ctx, s.db, "submission:"+formID.String(), msg, notifyDigestWindow)
+	err = s.mail.EnqueueEmail(ctx, s.db, msg)
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Warn("owner notification not enqueued",
 			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
@@ -1268,6 +1280,28 @@ func (s *Service) AuthorizePrint(ctx context.Context, userID, formID, submission
 		return PrintAccess{}, fmt.Errorf("authorize print of submission %s: %w", submissionID, err)
 	}
 	return PrintAccess{FormTitle: form.Title, CreatedAt: row.CreatedAt}, nil
+}
+
+// PrintAccessForDelivery — имя формы и дата ответа для вложения в письмо владельцу.
+//
+// ⚠ Прав НЕ проверяет, как и PrintDocFor: письмо отправляем мы сами, адресат —
+// владелец пространства (его же и вернул SubmissionOwner при постановке), и
+// пользователя, которому надо что-то разрешать, здесь просто нет. Существование
+// ответа проверяется: между постановкой письма и его доставкой ответ могли удалить,
+// и тогда вложения не будет (ErrNotFound → письмо уйдёт без файла).
+func (s *Service) PrintAccessForDelivery(ctx context.Context, formID, submissionID uuid.UUID) (PrintAccess, error) {
+	owner, err := s.forms.SubmissionOwner(ctx, formID)
+	if err != nil {
+		return PrintAccess{}, fmt.Errorf("print access for delivery, form %s: %w", formID, err)
+	}
+	row, err := s.repo.GetForPrint(ctx, s.db, formID, submissionID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PrintAccess{}, domain.ErrNotFound
+		}
+		return PrintAccess{}, fmt.Errorf("print access for delivery, submission %s: %w", submissionID, err)
+	}
+	return PrintAccess{FormTitle: owner.Title, CreatedAt: row.CreatedAt}, nil
 }
 
 // PrintDocFor собирает документ одного ответа для печати: схема СВОЕЙ версии, ответы

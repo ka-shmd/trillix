@@ -193,10 +193,10 @@ func enableNotify(t *testing.T, slug string) {
 	}
 }
 
-// Троттлинг (DoD слайса D): шквал ответов не даёт шквала писем. M ответов на форму
-// с включённым уведомлением (по умолчанию) → в outbox ОДНА неотправленная строка с
-// count = M, а не M писем. Коалесинг по ключу формы при enqueue.
-func TestSubmit_NotifyThrottling_CoalescesIntoOneDigest(t *testing.T) {
+// Письмо на КАЖДЫЙ ответ (ADR §10, отмена дайджеста 2026-08-30): M ответов на форму
+// с включённым уведомлением → M отдельных строк outbox, и ни одна не коалесится.
+// Прежнее поведение — одна строка с count = M — отменено вместе с дайджестом.
+func TestSubmit_NotifyPerSubmission_RowPerAnswer(t *testing.T) {
 	resetDB(t)
 	srv := newServer(t)
 	slug, _ := publishedForm(t, requiredNameSchema)
@@ -210,23 +210,23 @@ func TestSubmit_NotifyThrottling_CoalescesIntoOneDigest(t *testing.T) {
 		}
 	}
 
-	var rows, count int
+	var rows, coalesced int
 	err := testPool.QueryRow(context.Background(),
-		`SELECT count(*), coalesce(max((payload#>>'{data,count}')::int), 0)
-		 FROM outbox WHERE sent_at IS NULL AND coalesce_key IS NOT NULL`).Scan(&rows, &count)
+		`SELECT count(*), count(*) FILTER (WHERE coalesce_key IS NOT NULL)
+		 FROM outbox WHERE sent_at IS NULL AND `+notifyRow).Scan(&rows, &coalesced)
 	if err != nil {
 		t.Fatalf("read outbox: %v", err)
 	}
-	if rows != 1 {
-		t.Fatalf("в outbox %d коалесцируемых строк, ожидалась 1 (шквал → одно письмо)", rows)
+	if rows != M {
+		t.Fatalf("в outbox %d писем о новом ответе, ожидалось %d (одно на ответ)", rows, M)
 	}
-	if count != M {
-		t.Fatalf("счётчик дайджеста = %d, ожидался %d (по числу ответов)", count, M)
+	if coalesced != 0 {
+		t.Fatalf("%d писем поставлено с ключом коалесинга — дайджест отменён", coalesced)
 	}
 }
 
 // Отклонённый по лимиту ответ не шлёт уведомления: у формы с лимитом 1 первый ответ
-// принят (дайджест count=1), второй отклонён (410) — счётчик не растёт, второй строки нет.
+// принят (одно письмо), второй отклонён (410) — второй строки в outbox нет.
 func TestSubmit_OverLimit_NoExtraNotification(t *testing.T) {
 	resetDB(t)
 	srv := newServer(t)
@@ -246,15 +246,14 @@ func TestSubmit_OverLimit_NoExtraNotification(t *testing.T) {
 		t.Fatalf("второй ответ (сверх лимита): статус %d, ожидалось 410", resp.StatusCode)
 	}
 
-	var rows, count int
+	var rows int
 	err := testPool.QueryRow(context.Background(),
-		`SELECT count(*), coalesce(max((payload#>>'{data,count}')::int), 0)
-		 FROM outbox WHERE coalesce_key IS NOT NULL`).Scan(&rows, &count)
+		`SELECT count(*) FROM outbox WHERE `+notifyRow).Scan(&rows)
 	if err != nil {
 		t.Fatalf("read outbox: %v", err)
 	}
-	if rows != 1 || count != 1 {
-		t.Fatalf("дайджестов=%d count=%d, ожидалось 1 и 1 (отклонённый ответ не уведомляет)", rows, count)
+	if rows != 1 {
+		t.Fatalf("писем о новом ответе = %d, ожидалось 1 (отклонённый ответ не уведомляет)", rows)
 	}
 }
 
@@ -282,6 +281,12 @@ func setNotifyEmail(t *testing.T, slug, doc string) {
 	}
 }
 
+// notifyRow — как отличить письмо о новом ответе от прочих строк outbox: письмо
+// подтверждения адреса от регистрации владельца лежит там же, а coalesce_key у всех
+// строк NULL и никого ни от кого не отделяет. Различает только шаблон; значение
+// "submission_digest" — имя на проводе, см. mail.TemplateSubmissionNew.
+const notifyRow = `payload->>'template' = 'submission_digest'`
+
 const ownNotifyEmail = `{"fromName":"Отдел кадров","replyTo":"hr@example.com",` +
 	`"subject":"Новая заявка","body":"Пришла заявка, смотрите в кабинете."}`
 
@@ -304,7 +309,7 @@ func TestSubmit_NotifyEmail_CustomTemplateInPayload(t *testing.T) {
 	err := testPool.QueryRow(context.Background(),
 		`SELECT coalesce(payload->>'fromName',''), coalesce(payload->>'replyTo',''),
 		        coalesce(payload->>'subject','')
-		   FROM outbox WHERE coalesce_key IS NOT NULL`).Scan(&fromName, &replyTo, &subject)
+		   FROM outbox WHERE `+notifyRow).Scan(&fromName, &replyTo, &subject)
 	if err != nil {
 		t.Fatalf("read outbox: %v", err)
 	}
@@ -330,7 +335,7 @@ func TestSubmit_NotifyEmail_DowngradeFallsBackToTemplate(t *testing.T) {
 
 	var subject, saved string
 	if err := testPool.QueryRow(context.Background(),
-		`SELECT coalesce(payload->>'subject','') FROM outbox WHERE coalesce_key IS NOT NULL`).
+		`SELECT coalesce(payload->>'subject','') FROM outbox WHERE `+notifyRow).
 		Scan(&subject); err != nil {
 		t.Fatalf("read outbox: %v", err)
 	}
@@ -358,15 +363,15 @@ func TestSubmit_NotifyOff_NoOutboxRow(t *testing.T) {
 	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
 	}
-	// Считаем только дайджесты ответов (coalesce_key задан): письмо подтверждения
-	// email от регистрации владельца в publishedForm тоже лежит в outbox, но с NULL.
+	// Считаем только письма о новом ответе: письмо подтверждения email от регистрации
+	// владельца в publishedForm тоже лежит в outbox, но с другим шаблоном.
 	var n int
 	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM outbox WHERE coalesce_key IS NOT NULL`).Scan(&n); err != nil {
+		`SELECT count(*) FROM outbox WHERE `+notifyRow).Scan(&n); err != nil {
 		t.Fatalf("count outbox: %v", err)
 	}
 	if n != 0 {
-		t.Fatalf("при выключенном тумблере писем-дайджестов быть не должно, в outbox %d", n)
+		t.Fatalf("при выключенном тумблере писем о новом ответе быть не должно, в outbox %d", n)
 	}
 }
 

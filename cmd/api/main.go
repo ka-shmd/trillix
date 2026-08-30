@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	netmail "net/mail"
 	"os"
 	"os/signal"
 	"syscall"
@@ -188,6 +189,12 @@ const (
 	outboxDispatchTimeout  = 30 * time.Second
 	outboxBatch            = 50
 	// Бэкофф ретраев доставки: первая неудача — 1 мин, дальше удвоение до потолка 1 ч.
+	// outboxPrintsPerTick — сколько PDF-вложений диспетчер печатает за один проход.
+	// Три при двух браузерах: печать 0.5–1 с, и без потолка пачка писем с вложениями
+	// выела бы весь тик (15 с при таймауте 30 с), задержав письма без вложений —
+	// в первую очередь сброс пароля, который едет той же очередью.
+	outboxPrintsPerTick = 3
+
 	outboxBackoffBase = time.Minute
 	outboxBackoffMax  = time.Hour
 
@@ -200,6 +207,25 @@ const (
 	// уезжают на следующем — их карты и так малы.
 	ratelimitGCInterval = 10 * time.Minute
 )
+
+// senderAddress и senderName — адрес и имя из MAIL_FROM. Пустая строка, если
+// разобрать не вышло: обе строки нужны одной подписи в кабинете, и падать из-за неё
+// нельзя.
+func senderAddress(from string) string {
+	addr, err := netmail.ParseAddress(from)
+	if err != nil {
+		return ""
+	}
+	return addr.Address
+}
+
+func senderName(from string) string {
+	addr, err := netmail.ParseAddress(from)
+	if err != nil {
+		return ""
+	}
+	return addr.Name
+}
 
 func main() {
 	cfg, err := config.Load()
@@ -342,7 +368,13 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc)
-	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF).
+		// Письмо о новом ответе без авторских правок — для бланка в настройках формы.
+		// Адрес и имя разбираются из MAIL_FROM («Trillix <no-reply@…>»), тема живёт
+		// в самом шаблоне письма. Разбор не удался — строки пустые, и кабинет
+		// нарисует описание вместо значения.
+		WithNotifyMail(senderAddress(cfg.MailFrom), senderName(cfg.MailFrom),
+			mail.DefaultSubject(mail.TemplateSubmissionNew))
 
 	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
 	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис
@@ -450,6 +482,12 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	if cfg.PrinterURL != "" {
 		printClient := printer.New(cfg.PrinterURL, printConcurrency, printTimeout)
 		submissionsHandler = submissionsHandler.WithPrinter(printClient, cfg.FormTokenSecret)
+		// Вторая поверхность печати — вложение в письме о новом ответе. Тот же клиент
+		// и тот же семафор: два браузера на машину считаются на всех потребителей
+		// вместе, а не каждым по отдельности.
+		mailSvc = mailSvc.WithAttachments(
+			submissions.NewPrintAttachments(submissionsSvc, printClient, cfg.FormTokenSecret),
+			outboxPrintsPerTick)
 		// Проверяем связь СРАЗУ: опечатка в адресе (классика — прод-адрес
 		// http://printer:8090 в dev, где такого имени нет) иначе всплывёт только при
 		// первом клике по «Скачать PDF», у человека, который её не делал. Отказ не

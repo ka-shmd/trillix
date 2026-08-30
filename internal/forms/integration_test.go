@@ -96,7 +96,8 @@ func newStack(t *testing.T) *httptest.Server {
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
-	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
+	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF).
+		WithNotifyMail("no-reply@trillix.test", "Trillix", "Новый ответ в Trillix")
 	formsPublic, err := forms.NewPublicHandler(formsSvc, testTokenSecret,
 		"http://localhost:5174", "http://localhost:5174/og-preview.png", fixtureIndexPath(t),
 		allowLimiter{}, false)
@@ -171,6 +172,36 @@ func TestForms_CRUDFlow(t *testing.T) {
 	// Удаление → потом 404.
 	deleteForm(t, c, srv, created.ID, http.StatusNoContent)
 	getFormDetail(t, c, srv, created.ID, http.StatusNotFound)
+}
+
+// Бланк письма в настройках показывает НАСТОЯЩЕЕ письмо: служебный адрес отправителя
+// и его имя приезжают из конфига контура, тема — из шаблона письма, адресат — почта
+// владельца пространства. Ничего из этого фронт вычислить не может, поэтому всё
+// живёт в детали формы; копия темы на фронте разошлась бы с шаблоном молча.
+//
+// Проверяется и второй вход в ту же деталь — резолв по slug: страница настроек
+// адресует форму именно им, и забытое поле там выглядело бы как «адреса пропали на
+// одном экране из двух».
+func TestForms_Detail_NotifyAddresses(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+	created := createForm(t, c, srv, "Анкета")
+
+	byID := getFormDetail(t, c, srv, created.ID, http.StatusOK).NotifyMail
+	if byID.From != "no-reply@trillix.test" {
+		t.Errorf("from = %q, ожидался служебный адрес контура", byID.From)
+	}
+	if byID.To != "owner@example.com" {
+		t.Errorf("to = %q, ожидалась почта владельца пространства", byID.To)
+	}
+	if byID.FromName != "Trillix" || byID.Subject == "" {
+		t.Errorf("умолчания письма не доехали: fromName=%q subject=%q", byID.FromName, byID.Subject)
+	}
+
+	if bySlug := getFormDetailBySlug(t, c, srv, created.Slug, http.StatusOK).NotifyMail; bySlug != byID {
+		t.Errorf("резолв по slug отдал другое письмо: %+v", bySlug)
+	}
 }
 
 // Приватный резолв формы по slug (URL кабинета адресует форму slug'ом, как
@@ -1365,7 +1396,13 @@ type formDetailDTO struct {
 	SaveLocally   bool            `json:"saveLocally"`
 	Branding      bool            `json:"branding"`
 	Progress      bool            `json:"progress"`
-	LinkPreview   *struct {
+	NotifyMail    struct {
+		From     string `json:"from"`
+		To       string `json:"to"`
+		FromName string `json:"fromName"`
+		Subject  string `json:"subject"`
+	} `json:"notifyMail"`
+	LinkPreview *struct {
 		SiteName    string `json:"siteName"`
 		Title       string `json:"title"`
 		Description string `json:"description"`

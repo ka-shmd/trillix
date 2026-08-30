@@ -110,18 +110,13 @@ func (p fakePlans) PeriodStart() time.Time { return p.period.AddDate(0, -1, 0) }
 // okPlans — квота не исчерпана (обычный случай в тестах не про тарифы).
 func okPlans() fakePlans { return fakePlans{allowed: true} }
 
-// fakeMailer записывает коалесцирующие постановки для проверок.
+// fakeMailer записывает постановки писем для проверок.
 type fakeMailer struct {
-	calls []coalescedCall
+	calls []mail.EmailMessage
 }
 
-type coalescedCall struct {
-	key string
-	msg mail.EmailMessage
-}
-
-func (m *fakeMailer) EnqueueCoalesced(_ context.Context, _ postgres.DBTX, key string, msg mail.EmailMessage, _ time.Duration) error {
-	m.calls = append(m.calls, coalescedCall{key: key, msg: msg})
+func (m *fakeMailer) EnqueueEmail(_ context.Context, _ postgres.DBTX, msg mail.EmailMessage) error {
+	m.calls = append(m.calls, msg)
 	return nil
 }
 
@@ -166,7 +161,7 @@ func validPublishedForm(notify bool) forms.PublicForm {
 	}
 }
 
-func TestSubmit_NotifyOn_EnqueuesOwnerDigest(t *testing.T) {
+func TestSubmit_NotifyOn_EnqueuesOwnerLetter(t *testing.T) {
 	pf := validPublishedForm(true)
 	mailer := &fakeMailer{}
 	svc := NewService(nil, fakeTx{},
@@ -180,16 +175,10 @@ func TestSubmit_NotifyOn_EnqueuesOwnerDigest(t *testing.T) {
 		t.Fatalf("поставлено уведомлений: %d, ожидалось 1", len(mailer.calls))
 	}
 	c := mailer.calls[0]
-	if c.key != "submission:"+pf.FormID.String() {
-		t.Errorf("ключ коалесинга = %q, ожидался submission:%s", c.key, pf.FormID)
+	if c.To != "owner@example.com" || c.Template != mail.TemplateSubmissionNew {
+		t.Errorf("письмо адресовано неверно: to=%q template=%q", c.To, c.Template)
 	}
-	if c.msg.To != "owner@example.com" || c.msg.Template != mail.TemplateSubmissionDigest {
-		t.Errorf("письмо адресовано неверно: to=%q template=%q", c.msg.To, c.msg.Template)
-	}
-	if c.msg.Data["count"] != 1 {
-		t.Errorf("стартовый count = %v, ожидался 1", c.msg.Data["count"])
-	}
-	if link, _ := c.msg.Data["link"].(string); link != "https://app.test/forms/slug1/responses" {
+	if link, _ := c.Data["link"].(string); link != "https://app.test/forms/slug1/responses" {
 		t.Errorf("ссылка = %q, ожидалась таблица ответов кабинета", link)
 	}
 }
@@ -380,5 +369,61 @@ func TestDeletePartial_ForeignForm_404(t *testing.T) {
 	err := svc.DeletePartialForForm(context.Background(), uuid.New(), uuid.New(), uuid.New())
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ожидался ErrNotFound", err)
+	}
+}
+
+// Включённое вложение кладёт в письмо ССЫЛКУ на ответ, а не файл: печать делает
+// диспетчер при доставке. Ссылка обязана указывать на ТОТ ЖЕ ответ, что принят.
+func TestSubmit_NotifyEmail_AttachPDF_RefInPayload(t *testing.T) {
+	pf := validPublishedForm(true)
+	mailer := &fakeMailer{}
+	owner := forms.Owner{
+		Email: "owner@example.com", Title: "Моя форма",
+		NotifyEmail: &domain.NotifyEmail{AttachPDF: true},
+	}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: pf, owner: owner},
+		nil, mailer, okPlans(), &fakeSubStore{insertN: 1}, "https://app.test")
+
+	subID := uuid.New()
+	if err := svc.Submit(context.Background(), "slug1", subID, map[string]json.RawMessage{}, Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 1 {
+		t.Fatalf("поставлено писем: %d, ожидалось 1", len(mailer.calls))
+	}
+	att := mailer.calls[0].Attachments
+	if len(att) != 1 {
+		t.Fatalf("вложений в письме: %d, ожидалось 1", len(att))
+	}
+	if att[0].Kind != mail.KindSubmissionPDF {
+		t.Errorf("вид вложения = %q", att[0].Kind)
+	}
+	if att[0].SubmissionID != subID.String() || att[0].FormID != pf.FormID.String() {
+		t.Errorf("ссылка ведёт не на тот ответ: form=%s submission=%s", att[0].FormID, att[0].SubmissionID)
+	}
+	if len(mailer.calls[0].Files) != 0 {
+		t.Error("файл попал в постановку — печатать обязан диспетчер, а не путь приёма")
+	}
+}
+
+// Вложение — часть платной настройки письма: на закрытом тарифе оно не едет вовсе,
+// как и остальные перебивки (даунгрейд возвращает дефолтное письмо сам).
+func TestSubmit_NotifyEmail_AttachPDF_GatedByPlan(t *testing.T) {
+	mailer := &fakeMailer{}
+	owner := forms.Owner{
+		Email: "owner@example.com", Title: "Моя форма",
+		NotifyEmail: &domain.NotifyEmail{AttachPDF: true},
+	}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: validPublishedForm(true), owner: owner},
+		nil, mailer, fakePlans{allowed: false}, &fakeSubStore{insertN: 1}, "https://app.test")
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 1 {
+		t.Fatalf("поставлено писем: %d, ожидалось 1", len(mailer.calls))
+	}
+	if len(mailer.calls[0].Attachments) != 0 {
+		t.Error("на закрытом тарифе вложение всё равно обещано письму")
 	}
 }

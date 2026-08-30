@@ -68,5 +68,8 @@ export function newFormDetail(): FormDetail {
     notifyEmail: null,
     // Карточку ссылки не настраивали — публичная страница возьмёт дефолты.
     linkPreview: null,
+    // Письма у несозданной формы ещё нет: сервер не считал ни адресов, ни темы, —
+    // бланк настроек отступит к описанию вместо пустых строк.
+    notifyMail: { from: '', to: '', fromName: '', subject: '' },
   }
 }

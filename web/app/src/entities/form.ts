@@ -76,6 +76,11 @@ export const notifyEmailSchema = z.object({
   replyTo: z.string(),
   subject: z.string(),
   body: z.string(),
+  // Приложить к письму печатный лист ответа. Документ печатается в момент доставки
+  // письма, поэтому настройка действует со следующего ответа. `default` — как у
+  // прочих поздних булевых полей контракта: api, ещё не знающий поля, не обязан
+  // ронять разбор всей формы.
+  attachPdf: z.boolean().default(false),
 })
 export type NotifyEmail = z.infer<typeof notifyEmailSchema>
 
@@ -86,6 +91,7 @@ export const EMPTY_NOTIFY_EMAIL: NotifyEmail = {
   replyTo: '',
   subject: '',
   body: '',
+  attachPdf: false,
 }
 
 // Потолки полей карточки (рун) — зеркалят domain.MaxLinkPreview*Len.
@@ -170,6 +176,19 @@ export const formDetailSchema = formSchema.extend({
   // дефолтным шаблоном. Отдаётся независимо от тарифа (как карточка ссылки), а
   // применяется отправкой письма.
   notifyEmail: notifyEmailSchema.nullable(),
+  // Письмо о новом ответе БЕЗ авторских правок: как его отправит сервис, если
+  // notifyEmail пуст. Бланк в настройках показывает эти строки настоящим текстом
+  // полей, а не подсказкой. Считать их фронту не из чего: адреса живут в конфиге
+  // контура, тема — в шаблоне письма на сервере, и своя копия темы здесь разошлась
+  // бы с шаблоном молча. Пустая строка = значение неизвестно, бланк рисует описание.
+  notifyMail: z
+    .object({
+      from: z.string(),
+      to: z.string(),
+      fromName: z.string(),
+      subject: z.string(),
+    })
+    .default({ from: '', to: '', fromName: '', subject: '' }),
   // Поведение формы у респондента (0044): листать страницу сразу после ответа и
   // хранить незавершённые ответы в его браузере дольше вкладки. Живые колонки без
   // тарифа; только в детали формы.

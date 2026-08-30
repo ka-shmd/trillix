@@ -146,7 +146,7 @@ func TestOutboxCoalescesWhilePendingAndOpensNewWindowAfterSent(t *testing.T) {
 	digest := func() mail.EmailMessage {
 		return mail.EmailMessage{
 			To:       "owner@example.com",
-			Template: mail.TemplateSubmissionDigest,
+			Template: mail.TemplateSubmissionNew,
 			Data:     map[string]any{"form_title": "F", "link": "u", "count": 1},
 		}
 	}
