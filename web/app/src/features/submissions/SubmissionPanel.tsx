@@ -1,7 +1,10 @@
 import { useState } from 'react'
-import { Trash2 } from 'lucide-react'
+import { FileDown, Loader2, Trash2 } from 'lucide-react'
+
+import { toast } from 'sonner'
 
 import { type AnswerColumn } from './columns'
+import { downloadSubmissionPdf } from './api'
 import { answerFiles, formatAnswer } from './answerFormat'
 import { DeleteAnswerDialog } from './DeleteAnswerDialog'
 import { ROW_WORDS, type AnswerRow } from './rows'
@@ -37,6 +40,7 @@ export function SubmissionPanel({
   const knownIds = new Set(columns.map((c) => c.block.id))
   const extraIds = Object.keys(row.answers).filter((id) => !knownIds.has(id))
   const [confirming, setConfirming] = useState(false)
+  const [printing, setPrinting] = useState(false)
   const words = ROW_WORDS[row.kind]
   // Вопрос, на котором человек остановился, — единственное, что есть у черновика и
   // нет у ответа. Подписью, а не строкой списка: это не ответ на вопрос, а место
@@ -80,14 +84,37 @@ export function SubmissionPanel({
         ))}
       </dl>
 
-      <Button
-        variant="outline"
-        className="self-start text-destructive hover:text-destructive"
-        onClick={() => setConfirming(true)}
-      >
-        <Trash2 className="size-4" />
-        Удалить {words.oneLower}
-      </Button>
+      {/* Два действия в одну строку: печать и удаление. Печать — только у
+          отправленного ответа, по тому же доводу, что и в строке таблицы. Оба входа
+          в печать ведут в одну функцию (`api.downloadSubmissionPdf`) — обещать в
+          окне и в строке разные файлы было бы нельзя. */}
+      <div className="flex flex-wrap items-center gap-2">
+        {row.kind !== 'partial' && (
+          <Button
+            variant="outline"
+            disabled={printing}
+            onClick={() => {
+              setPrinting(true)
+              downloadSubmissionPdf(formId, row.id)
+                .catch((err: unknown) =>
+                  toast.error(err instanceof Error ? err.message : 'Не удалось напечатать ответ.'),
+                )
+                .finally(() => setPrinting(false))
+            }}
+          >
+            {printing ? <Loader2 className="size-4 animate-spin" /> : <FileDown className="size-4" />}
+            Скачать PDF
+          </Button>
+        )}
+        <Button
+          variant="outline"
+          className="text-destructive hover:text-destructive"
+          onClick={() => setConfirming(true)}
+        >
+          <Trash2 className="size-4" />
+          Удалить {words.oneLower}
+        </Button>
+      </div>
 
       <DeleteAnswerDialog
         formId={formId}

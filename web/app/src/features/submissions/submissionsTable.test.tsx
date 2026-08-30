@@ -159,6 +159,22 @@ describe('таблица ответов', () => {
     expect(screen.queryByText('не отправлен')).toBeNull()
   })
 
+  it('у отправленного ответа есть кнопка печати, у черновика её нет', () => {
+    // Лист печатается по версии, с которой ответ пришёл, и подписан «отправлен» —
+    // у черновика нет ни того, ни другого, поэтому кнопки у него быть не должно.
+    render(
+      <SubmissionsTable
+        rows={[...ROWS.map(listRow), ...PARTIALS.map(partialRow)]}
+        columns={previewColumns(answerColumns(BLOCKS))}
+        files={{}}
+        showVersion={false}
+        formId="f1"
+        onOpen={vi.fn()}
+      />,
+    )
+    expect(screen.getAllByRole('button', { name: /Скачать PDF/ })).toHaveLength(ROWS.length)
+  })
+
   it('незавершённые называет своими словами и показывает время правки, а не отправки', () => {
     // Та же таблица на два множества (rows.ts): подпись колонки даты и слова действий
     // берутся из kind строки. Скажи она «Дата отправки» над черновиком — владелец

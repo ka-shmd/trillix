@@ -1,7 +1,10 @@
 import { useState } from 'react'
-import { Eye, Trash2 } from 'lucide-react'
+import { Eye, FileDown, Loader2, Trash2 } from 'lucide-react'
+
+import { toast } from 'sonner'
 
 import { type AnswerColumn } from './columns'
+import { downloadSubmissionPdf } from './api'
 import { formatAnswer } from './answerFormat'
 import { DeleteAnswerDialog } from './DeleteAnswerDialog'
 import { ROW_WORDS, rowWords, type AnswerRow } from './rows'
@@ -104,12 +107,30 @@ export function SubmissionsTable({
   // Одно окно подтверждения на таблицу, а не по окну на строку: подтверждают по одному,
   // а сотня смонтированных диалогов — сотня порталов на пустом месте.
   const [confirming, setConfirming] = useState<AnswerRow | null>(null)
+  // Какая строка печатается прямо сейчас. Id, а не флаг: печать идёт секунды, и
+  // ждать её обязан ровно тот значок, по которому нажали, — иначе таблица гасит
+  // кнопки во всех строках разом.
+  const [printing, setPrinting] = useState<string | null>(null)
   // Слова колонки даты и действий — по составу страницы: один вид строк называет
   // себя своими словами, смешанный («Все ответы») — нейтральными (`rows.ts`).
   const words = rowWords(rows)
   // Метка вида нужна ТОЛЬКО в смешанной таблице: на вкладке «Частичные» все строки
   // черновики, и повторять это в каждой из них — шум.
   const marked = words === ROW_WORDS.mixed
+
+  // ПЕЧАТЬ ОТВЕТА (ADR §10). Файл готовит сервер: браузер печатает ту же страницу
+  // формы, что видел респондент, поэтому ждать приходится секунды — значок на это
+  // время превращается в вертушку, а не молчит.
+  async function print(row: AnswerRow) {
+    setPrinting(row.id)
+    try {
+      await downloadSubmissionPdf(formId, row.id)
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Не удалось напечатать ответ.')
+    } finally {
+      setPrinting(null)
+    }
+  }
 
   return (
     <>
@@ -161,6 +182,26 @@ export function SubmissionsTable({
                       >
                         <Eye className="size-4" />
                       </Button>
+                      {/* Печатается только ОТПРАВЛЕННЫЙ ответ: у черновика нет ни
+                          версии, по которой его рисовать, ни самого события отправки,
+                          а лист с подписью «отправлен» врал бы про то и другое. */}
+                      {row.kind !== 'partial' && (
+                        <Button
+                          variant="ghost"
+                          size="icon-sm"
+                          className="size-7 text-muted-foreground"
+                          aria-label={`Скачать PDF ${words.oneLower} от ${formatDateTime(row.at)}`}
+                          title="Скачать PDF"
+                          disabled={printing === row.id}
+                          onClick={() => void print(row)}
+                        >
+                          {printing === row.id ? (
+                            <Loader2 className="size-4 animate-spin" />
+                          ) : (
+                            <FileDown className="size-4" />
+                          )}
+                        </Button>
+                      )}
                       <Button
                         variant="ghost"
                         size="icon-sm"

@@ -1,4 +1,5 @@
 import { apiRequest } from '../../shared/api/client'
+import { toApiError } from '../../shared/api/errors'
 import {
   partialSubmissionsPageSchema,
   submissionsPageSchema,
@@ -100,4 +101,53 @@ export function submissionsExportUrl(formId: string): string {
 // добавит заголовок на не-GET).
 export function deleteSubmission(formId: string, submissionId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/submissions/${submissionId}`, { method: 'DELETE' })
+}
+
+// СКАЧИВАНИЕ PDF ОТВЕТА (ADR §10). Не ссылкой `<a href download>`, а запросом:
+// печать может отказать (403/404 — ответ удалили в соседней вкладке; 503 — печать
+// на контуре не настроена или все слоты заняты), и по ссылке автор увидел бы вместо
+// файла страницу с JSON-ошибкой. Здесь отказ приходит ApiError'ом, и его показывает
+// тост — как у любой другой мутации кабинета.
+//
+// Идёт мимо apiRequest намеренно: тот разбирает ответ как JSON, а здесь тело — файл.
+// Общими остаются база пути, credentials и разбор ошибки (toApiError).
+export async function downloadSubmissionPdf(formId: string, submissionId: string): Promise<void> {
+  const res = await fetch(`/api/v1/forms/${formId}/print/${submissionId}`, {
+    credentials: 'include',
+  })
+  if (!res.ok) throw await toApiError(res)
+
+  const blob = await res.blob()
+  const url = URL.createObjectURL(blob)
+  try {
+    const a = document.createElement('a')
+    a.href = url
+    a.download = fileNameFrom(res.headers.get('Content-Disposition'))
+    // Клик по узлу вне документа браузеры выполняют, но Safari требует его в DOM.
+    document.body.append(a)
+    a.click()
+    a.remove()
+  } finally {
+    // Отзываем СРАЗУ после клика: скачивание к этому моменту уже началось, а
+    // неотозванный URL держит blob в памяти вкладки до её закрытия.
+    URL.revokeObjectURL(url)
+  }
+}
+
+// Имя файла берётся из ответа, а не собирается здесь: сервер уже знает и название
+// формы, и дату приёма, и второе место, где это имя складывается, разошлось бы с
+// первым. RFC 5987 (`filename*=UTF-8''…`) — единственная форма, переживающая
+// кириллицу; ASCII-фолбэк `filename=` разбирается следом, а на непонятном заголовке
+// остаётся нейтральное имя, но файл всё равно скачивается.
+function fileNameFrom(disposition: string | null): string {
+  const utf8 = disposition?.match(/filename\*=UTF-8''([^;]+)/i)
+  if (utf8?.[1]) {
+    try {
+      return decodeURIComponent(utf8[1])
+    } catch {
+      // битое кодирование — падаем на фолбэки ниже
+    }
+  }
+  const ascii = disposition?.match(/filename="([^"]+)"/i)
+  return ascii?.[1] ?? 'Ответ.pdf'
 }
