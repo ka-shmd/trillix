@@ -163,6 +163,9 @@ const (
 	// включая работу chromium).
 	printConcurrency = 2
 	printTimeout     = 30 * time.Second
+	// Проверка связи с принтером при старте — секунда: он либо рядом (одна сеть
+	// compose, локальный хост), либо не отвечает вовсе.
+	printerPingTimeout = time.Second
 
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
@@ -445,9 +448,21 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// одновременно поднятых браузеров — защищаем свою машину, на которой рядом
 	// работает Postgres.
 	if cfg.PrinterURL != "" {
-		submissionsHandler = submissionsHandler.WithPrinter(
-			printer.New(cfg.PrinterURL, printConcurrency, printTimeout), cfg.FormTokenSecret)
-		log.Info("printer configured", slog.String("url", cfg.PrinterURL))
+		printClient := printer.New(cfg.PrinterURL, printConcurrency, printTimeout)
+		submissionsHandler = submissionsHandler.WithPrinter(printClient, cfg.FormTokenSecret)
+		// Проверяем связь СРАЗУ: опечатка в адресе (классика — прод-адрес
+		// http://printer:8090 в dev, где такого имени нет) иначе всплывёт только при
+		// первом клике по «Скачать PDF», у человека, который её не делал. Отказ не
+		// роняет старт: печать не критична, а принтер может подняться следом.
+		pingCtx, cancelPing := context.WithTimeout(context.Background(), printerPingTimeout)
+		err := printClient.Ping(pingCtx)
+		cancelPing()
+		if err != nil {
+			log.Warn("printer configured, but does not answer",
+				slog.String("url", cfg.PrinterURL), slog.String("error", err.Error()))
+		} else {
+			log.Info("printer configured", slog.String("url", cfg.PrinterURL))
+		}
 	}
 
 	routes := []httpserver.RouteRegistrar{

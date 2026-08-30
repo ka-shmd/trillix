@@ -26,6 +26,13 @@ import (
 // которое висит до дедлайна и обрывается.
 var ErrBusy = errors.New("printer: all print slots busy")
 
+// ErrUnreachable — до сервиса печати не достучались: он не поднят, лежит или адрес
+// в конфиге не тот (классика — прод-адрес `http://printer:8090` в dev, где имени
+// `printer` не существует). Отдельный сентинел, потому что наружу это 503
+// «печать недоступна», а НЕ 500: код цел, не работает связь с соседним сервисом, и
+// человеку у экрана надо сказать именно это.
+var ErrUnreachable = errors.New("printer: service unreachable")
+
 // maxPDFBytes — потолок размера ответа принтера. Печать ОДНОГО ответа формы — это
 // единицы страниц; десять мегабайт означают, что печатается не то, что мы думаем,
 // и читать это целиком в память не надо.
@@ -86,7 +93,9 @@ func (c *Client) PDF(ctx context.Context, path string) ([]byte, error) {
 
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("printer: request: %w", err)
+		// Причина внутри (dial, DNS, таймаут) остаётся в цепочке — она уезжает в лог
+		// api и отвечает на вопрос «почему», — но снаружи это одно состояние.
+		return nil, fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -110,4 +119,29 @@ func (c *Client) PDF(ctx context.Context, path string) ([]byte, error) {
 		return nil, errors.New("printer: response is not a PDF")
 	}
 	return pdf, nil
+}
+
+// Ping проверяет, отвечает ли сервис печати. Зовётся при старте api: опечатка в
+// PRINTER_URL иначе всплывает только при первом клике по «Скачать PDF», у человека,
+// который её не делал.
+//
+// Отказ НЕ роняет процесс: печать — не критичная подсистема, а принтер может
+// подняться позже (в compose он стартует рядом, порядок не гарантирован).
+func (c *Client) Ping(ctx context.Context) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, c.baseURL+"/healthz", nil)
+	if err != nil {
+		return fmt.Errorf("printer: build ping: %w", err)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
+	}
+	defer func() {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, 4096))
+		_ = resp.Body.Close()
+	}()
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%w: healthz status %d", ErrUnreachable, resp.StatusCode)
+	}
+	return nil
 }

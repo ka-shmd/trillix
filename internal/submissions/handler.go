@@ -686,12 +686,19 @@ func (h *Handler) pdf(w http.ResponseWriter, r *http.Request) {
 
 	doc, err := h.printer.PDF(ctx, "/internal/print/doc/"+token)
 	if err != nil {
-		if errors.Is(err, printer.ErrBusy) {
+		switch {
+		case errors.Is(err, printer.ErrBusy):
 			w.Header().Set("Retry-After", pdfRetryAfter)
 			httpserver.WriteError(w, r, fmt.Errorf("%w: печать занята, попробуйте ещё раз", domain.ErrUnavailable))
-			return
+		case errors.Is(err, printer.ErrUnreachable):
+			// Связь с соседним сервисом, а не поломка кода: 503, а причина — в лог,
+			// потому что чинит её оператор контура, а не человек у экрана.
+			httpserver.LoggerFrom(r.Context()).Error("printer unreachable",
+				slog.String("error", err.Error()))
+			httpserver.WriteError(w, r, fmt.Errorf("%w: сервис печати недоступен", domain.ErrUnavailable))
+		default:
+			httpserver.WriteError(w, r, fmt.Errorf("print submission %s: %w", subID, err))
 		}
-		httpserver.WriteError(w, r, fmt.Errorf("print submission %s: %w", subID, err))
 		return
 	}
 

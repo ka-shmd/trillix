@@ -44,6 +44,18 @@ type printedPage struct {
 // фейковый принтер, который вместо браузера скачивает страницу обычным GET.
 func printStack(t *testing.T) (*httptest.Server, *printedPage) {
 	t.Helper()
+	return printStackOpts(t, "")
+}
+
+// printStackWithPrinter — тот же стек, но принтер по заданному адресу (проверка
+// поведения при недоступном сервисе печати). Фейковый принтер тогда не поднимается.
+func printStackWithPrinter(t *testing.T, printerURL string) (*httptest.Server, *printedPage) {
+	t.Helper()
+	return printStackOpts(t, printerURL)
+}
+
+func printStackOpts(t *testing.T, printerURL string) (*httptest.Server, *printedPage) {
+	t.Helper()
 
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
@@ -92,8 +104,12 @@ func printStack(t *testing.T) (*httptest.Server, *printedPage) {
 	}))
 	t.Cleanup(fake.Close)
 
+	url := fake.URL
+	if printerURL != "" {
+		url = printerURL
+	}
 	subPrivate := submissions.NewHandler(subSvc, authH.RequireAuth, authH.RequireCSRF).
-		WithPrinter(printer.New(fake.URL, 2, 10*time.Second), testSecret)
+		WithPrinter(printer.New(url, 2, 10*time.Second), testSecret)
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
@@ -220,6 +236,24 @@ func TestPrintPDF_MissingSubmissionIs404(t *testing.T) {
 	}
 	if page.html != "" {
 		t.Error("принтер был вызван на несуществующем ответе")
+	}
+}
+
+// Недоступный принтер — 503 «сервис печати недоступен», а НЕ 500. Разница не
+// косметическая: 500 говорит «у нас сломался код» и отправляет человека писать в
+// поддержку, 503 — «печать сейчас не работает», и чинит её оператор контура. Ровно
+// на этом обожглись 2026-08-30: прод-адрес принтера в dev-конфиге давал голый 500.
+func TestPrintPDF_UnreachablePrinterIs503(t *testing.T) {
+	resetDB(t)
+	srv, _ := printStackWithPrinter(t, "http://127.0.0.1:1") // никто не слушает
+	owner, ownerID := authedClient(t, srv, "print-down-"+uuid.NewString()[:8]+"@example.com")
+	slug := publishFormFor(t, ownerID, requiredNameSchema)
+	fid := formIDBySlug(t, slug)
+	subID := submitN(t, srv, slug, 1)[0].String()
+
+	resp := getPDF(t, owner, srv, fid, subID)
+	if resp.StatusCode != http.StatusServiceUnavailable {
+		t.Errorf("статус %d, ожидалось 503", resp.StatusCode)
 	}
 }
 
