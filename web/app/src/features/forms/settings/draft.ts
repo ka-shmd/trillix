@@ -131,6 +131,22 @@ function defaultRespondentSubject(form: FormDetail): Span[] {
   return own.length > 0 ? own : textFromString(form.respondentMail.subject)
 }
 
+// Вопрос-источник адреса ПО УМОЛЧАНИЮ: первый вопрос типа email в документе
+// (решение владельца 2026-08-31). Это именно умолчание СЕЛЕКТА, а не серверный
+// автоподбор: подставленное значение уезжает в колонку обычным сохранением, и
+// хранимый источник всегда остаётся точным id.
+//
+// ⚠ Разница не косметическая. Сервер, трактующий пустой источник как «первый
+// email-вопрос», менял бы получателя писем на каждой правке полотна — молча и
+// задним числом; ровно поэтому автоподбор и был отвергнут (respondent-email.md §3).
+// Здесь же автор видит подставленный вопрос на экране и может его сменить.
+//
+// Пустая строка — форма без единого вопроса-email: подставлять нечего, и бланк
+// говорит об этом красной строкой.
+export function firstEmailQuestion(form: FormDetail): string {
+  return form.draftSchema.blocks.find((b) => b.type === 'email')?.id ?? ''
+}
+
 export function redirectValue(draft: SettingsDraft): string {
   return draft.redirectOn ? draft.redirectUrl.trim() : ''
 }

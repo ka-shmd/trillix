@@ -5,6 +5,7 @@ import { plainText, textFromString } from '@entities/formSchema'
 import {
   closeSettingsValue,
   isDirty,
+  firstEmailQuestion,
   notifyEmailValue,
   respondentEmailValue,
   settingsFromForm,
@@ -17,6 +18,7 @@ import {
   type SettingsDraft,
 } from './draft'
 import { newFormDetail } from '../draft'
+import { type FormDetail } from '../../../entities/form'
 
 const saved: SettingsDraft = {
   thankYouText: 'Спасибо',
@@ -382,5 +384,31 @@ describe('pendingChanges письма респонденту', () => {
     const a = { ...saved, respondentBody: textFromString('Спасибо') }
     const b = { ...saved, respondentBody: textFromString('Спасибо') }
     expect(pendingChanges(a, b).respondentEmail).toBe(false)
+  })
+})
+
+// Умолчание селекта — ПЕРВЫЙ вопрос типа email в документе (решение владельца
+// 2026-08-31). Считается по черновику формы, потому что автор правит письмо рядом
+// с формой, которую сейчас редактирует.
+describe('firstEmailQuestion', () => {
+  const withBlocks = (blocks: FormDetail['draftSchema']['blocks']): FormDetail => ({
+    ...newFormDetail(),
+    draftSchema: { ...newFormDetail().draftSchema, blocks },
+  })
+
+  it('берёт первый email по порядку документа, а не первый вопрос', () => {
+    const form = withBlocks([
+      { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+      { id: 'b2', groupId: 'g2', type: 'email', settings: {} },
+      { id: 'b3', groupId: 'g3', type: 'email', settings: {} },
+    ])
+    expect(firstEmailQuestion(form)).toBe('b2')
+  })
+
+  // Подставлять нечего — бланк скажет об этом красной строкой, а не молча
+  // притворится настроенным.
+  it('форма без вопроса-email даёт пустоту', () => {
+    const form = withBlocks([{ id: 'b1', groupId: 'g1', type: 'short_text', settings: {} }])
+    expect(firstEmailQuestion(form)).toBe('')
   })
 })

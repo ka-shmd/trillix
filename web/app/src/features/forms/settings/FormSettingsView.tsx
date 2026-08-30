@@ -38,6 +38,7 @@ import { TimeField } from '../../../shared/TimeField'
 import { LazyCalendar } from './lazyCalendar'
 import {
   closeSettingsValue,
+  firstEmailQuestion,
   isDirty,
   notifyEmailValue,
   respondentEmailValue,
@@ -449,6 +450,18 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
               if (v && !canSendRespondentEmail) {
                 setUpsell(true)
                 return
+              }
+              // Включение подставляет источник адреса, если автор его ещё не
+              // выбирал: почти всегда это единственный вопрос-email формы, и
+              // пустой селект под свежевключённым тумблером означал бы настройку,
+              // которая выглядит готовой и не работает.
+              //
+              // Подставляем ПРИ ДЕЙСТВИИ автора, а не в settingsFromForm: там оно
+              // легло бы и в черновик, и в сохранённое состояние разом — страница
+              // не считалась бы изменённой, значение до сервера не доехало бы, и
+              // письма не уходили бы при заполненном на вид бланке.
+              if (v && draft.respondentSource === '') {
+                set('respondentSource', firstEmailQuestion(form))
               }
               set('respondentOn', v)
             }}
