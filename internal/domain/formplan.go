@@ -191,22 +191,8 @@ func ValidatePlan(p FormPlan) error {
 
 	blocks := 1 // заголовок формы
 	for i, item := range p.Items {
-		n := i + 1
-		if _, ok := planKinds[item.Type]; !ok {
-			return planErr("пункт %d: тип %q не поддерживается; возьми один из: %s",
-				n, item.Type, strings.Join(planTypeNames(), ", "))
-		}
-		if utf8.RuneCountInString(item.Text) > MaxTextLen {
-			return planErr("пункт %d: текст длиннее %d символов", n, MaxTextLen)
-		}
-		if item.Type != BlockPageBreak && strings.TrimSpace(item.Text) == "" {
-			return planErr("пункт %d (%s): пустой текст", n, item.Type)
-		}
-		if err := validatePlanOptions(n, item); err != nil {
-			return err
-		}
-		if err := validatePlanScale(n, item); err != nil {
-			return err
+		if err := validatePlanItem(item); err != nil {
+			return fmt.Errorf("пункт %d: %w", i+1, err)
 		}
 		blocks += planItemBlocks(item.Type)
 	}
@@ -216,45 +202,59 @@ func ValidatePlan(p FormPlan) error {
 	return nil
 }
 
-// validatePlanOptions — у выбора варианты обязательны. Это строже валидатора
-// черновика, который пустой choice допускает: там пустота — состояние автора,
-// который ещё печатает, а здесь — вопрос, на который нельзя ответить, и починить
-// его вторая попытка модели может, а человек за неё не должен.
-func validatePlanOptions(n int, item PlanItem) error {
-	if !item.Type.isChoice() {
-		return nil
+// validatePlanItem — проверка ОДНОГО пункта: она нужна и плану целиком, и правке
+// в разговоре, где пункт приходит поштучно. Номер пункта дописывает вызывающий:
+// в плане это порядок, в правке — ключ, и общего у них ничего нет.
+//
+// У выбора варианты обязательны. Это строже валидатора черновика, который пустой
+// choice допускает: там пустота — состояние автора, который ещё печатает, а здесь
+// — вопрос, на который нельзя ответить, и починить его вторая попытка модели
+// может, а человек за неё не должен.
+func validatePlanItem(item PlanItem) error {
+	if _, ok := planKinds[item.Type]; !ok {
+		return planErr("тип %q не поддерживается; возьми один из: %s",
+			item.Type, strings.Join(planTypeNames(), ", "))
 	}
-	if len(item.Options) == 0 {
-		return planErr("пункт %d (%s): нет вариантов ответа", n, item.Type)
+	if err := checkTextLen(item.Text, MaxTextLen); err != nil {
+		return err
 	}
-	if len(item.Options) > MaxOptions {
-		return planErr("пункт %d: больше %d вариантов", n, MaxOptions)
+	if item.Type != BlockPageBreak && strings.TrimSpace(item.Text) == "" {
+		return planErr("пустой текст у пункта %s", item.Type)
 	}
-	for _, o := range item.Options {
-		if strings.TrimSpace(o) == "" {
-			return planErr("пункт %d: пустой вариант ответа", n)
+	if item.Type.isChoice() {
+		if len(item.Options) == 0 {
+			return planErr("нет вариантов ответа у пункта %s", item.Type)
 		}
-		if utf8.RuneCountInString(o) > MaxOptionLabelLen {
-			return planErr("пункт %d: вариант длиннее %d символов", n, MaxOptionLabelLen)
+		if len(item.Options) > MaxOptions {
+			return planErr("больше %d вариантов", MaxOptions)
+		}
+		for _, o := range item.Options {
+			if strings.TrimSpace(o) == "" {
+				return planErr("пустой вариант ответа")
+			}
+			if utf8.RuneCountInString(o) > MaxOptionLabelLen {
+				return planErr("вариант длиннее %d символов", MaxOptionLabelLen)
+			}
+		}
+	}
+	if item.Type == BlockScale && (item.ScaleMin != 0 || item.ScaleMax != 0) {
+		// Границы либо обе не заданы (тогда дефолт), либо осмысленны. Правило то
+		// же, что в схеме: половина диапазона — ошибка.
+		if item.ScaleMin < ScaleLowerBound || item.ScaleMax > ScaleUpperBound {
+			return planErr("шкала вне диапазона %d..%d", ScaleLowerBound, ScaleUpperBound)
+		}
+		if item.ScaleMin >= item.ScaleMax {
+			return planErr("начало шкалы (%d) не меньше конца (%d)", item.ScaleMin, item.ScaleMax)
 		}
 	}
 	return nil
 }
 
-// validatePlanScale — границы шкалы либо обе не заданы (тогда дефолт), либо
-// осмысленны. Правило то же, что в схеме: половина диапазона — ошибка.
-func validatePlanScale(n int, item PlanItem) error {
-	if item.Type != BlockScale {
-		return nil
-	}
-	if item.ScaleMin == 0 && item.ScaleMax == 0 {
-		return nil
-	}
-	if item.ScaleMin < ScaleLowerBound || item.ScaleMax > ScaleUpperBound {
-		return planErr("пункт %d: шкала вне диапазона %d..%d", n, ScaleLowerBound, ScaleUpperBound)
-	}
-	if item.ScaleMin >= item.ScaleMax {
-		return planErr("пункт %d: начало шкалы (%d) не меньше конца (%d)", n, item.ScaleMin, item.ScaleMax)
+// checkTextLen — общий потолок текста: пункт плана, подпись правки и заголовок
+// формы меряются одинаково (в рунах), а числа у них разные.
+func checkTextLen(text string, max int) error {
+	if utf8.RuneCountInString(text) > max {
+		return planErr("текст длиннее %d символов", max)
 	}
 	return nil
 }
