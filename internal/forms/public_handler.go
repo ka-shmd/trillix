@@ -37,8 +37,8 @@ type publicFormService interface {
 	// автора плюс разрешение тарифа. nil = дефолты страницы.
 	LinkPreviewFor(ctx context.Context, workspaceID uuid.UUID, p *domain.LinkPreview) (*domain.LinkPreview, error)
 	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
-	// Форма без пароля пропускается всегда.
-	VerifyUnlock(formID uuid.UUID, hasPassword bool, tok string) error
+	// sealed — шифротекст пароля прямо сейчас; пустой = пароля нет, пропускаем всегда.
+	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
 	// Unlock сверяет названный пароль и выдаёт токен разблокировки со сроком.
 	Unlock(ctx context.Context, slug, password string) (string, time.Time, error)
 }
@@ -65,7 +65,10 @@ type PublicHandler struct {
 	// адресу: подбор одной формы закрывал бы человеку все остальные; не по одному
 	// slug: один подбирающий закрывал бы форму всем участникам.
 	unlockLimiter UnlockLimiter
-	trustedProxy  bool // за Caddy честный IP клиента — из X-Forwarded-For (TD-1)
+	// unlockIPLimiter — обычное ведро по IP перед ним (см. Routes): ограничивает
+	// частоту, с которой один адрес вообще создаёт ключи в ведре выше.
+	unlockIPLimiter httpserver.RateLimiter
+	trustedProxy    bool // за Caddy честный IP клиента — из X-Forwarded-For (TD-1)
 	// indexPath — путь к собранному index.html рендерера. Пустой в dev: тогда /r не
 	// обслуживается Go (форму отдаёт vite-dev), и index не читается вовсе.
 	indexPath string
@@ -114,8 +117,9 @@ type UnlockLimiter interface {
 //
 // МИНА: без него ручка разблокировки НЕ регистрируется вовсе (404). Молча пускать
 // подбор без лимита нельзя (инвариант 6), а тихо работать без ручки — заметно сразу.
-func (h *PublicHandler) WithUnlockLimiter(l UnlockLimiter) *PublicHandler {
+func (h *PublicHandler) WithUnlockLimiter(l UnlockLimiter, byIP httpserver.RateLimiter) *PublicHandler {
 	h.unlockLimiter = l
+	h.unlockIPLimiter = byIP
 	return h
 }
 
@@ -127,7 +131,15 @@ func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	limited := httpserver.RateLimitByIP(h.tokenLimiter, h.trustedProxy, "слишком много запросов")
 	mux.Handle("GET /public/v1/form-token", limited(http.HandlerFunc(h.formToken)))
 	if h.unlockLimiter != nil {
-		mux.HandleFunc("POST /public/v1/forms/{slug}/unlock", h.unlock)
+		// ДВА лимитера, и это не перестраховка. Внешний — по IP, как у всех прочих
+		// публичных ручек с телом: без него один адрес льёт запросы с произвольной
+		// частотой. Внутренний — по паре «IP + slug», он и есть барьер подбора.
+		//
+		// МИНА: без внешнего ключи внутреннего ведра задаёт АТАКУЮЩИЙ (slug приходит
+		// из адреса), и карта лимитера растёт на каждый новый slug до ближайшей
+		// сборки мусора — то есть ведро подбора само становится способом съесть память.
+		unlockLimited := httpserver.RateLimitByIP(h.unlockIPLimiter, h.trustedProxy, "слишком много попыток")
+		mux.Handle("POST /public/v1/forms/{slug}/unlock", unlockLimited(http.HandlerFunc(h.unlock)))
 	}
 	if h.indexPath != "" {
 		mux.HandleFunc("GET /r/{slug}", h.getHTML)
@@ -222,6 +234,14 @@ const maxUnlockBodyBytes = 4 << 10
 func (h *PublicHandler) unlock(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	slug := r.PathValue("slug")
+	// Slug нашей формы — nanoid фиксированной длины (domain.SlugLen). Чужая длина не
+	// может принадлежать ни одной форме, поэтому отвечаем 404, как несуществующей, и
+	// НЕ заводим под неё ведро: длину сегмента адреса ограничивает только заголовок
+	// запроса, и ключ лимитера иначе растёт вместе с ним.
+	if len(slug) != domain.SlugLen {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
 	key := httpserver.ClientIP(r, h.trustedProxy) + "|" + slug
 	if !h.unlockLimiter.Allow(key) {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много попыток, подождите минуту", domain.ErrRateLimited))
@@ -290,9 +310,9 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// автор. Кэш выключаем на весь путь формы с паролем — и на отказе, и после
 	// разблокировки: публичный max-age у тела с вопросами означал бы, что общий
 	// прокси раздаёт его кому угодно.
-	if pf.HasPassword {
+	if len(pf.PasswordSealed) > 0 {
 		w.Header().Set("Cache-Control", "no-store")
-		if err := h.svc.VerifyUnlock(pf.FormID, pf.HasPassword, r.Header.Get(UnlockHeader)); err != nil {
+		if err := h.svc.VerifyUnlock(pf.FormID, pf.PasswordSealed, r.Header.Get(UnlockHeader)); err != nil {
 			httpserver.WriteJSON(w, r, http.StatusUnauthorized, lockedFormResponse{
 				Locked:    true,
 				Title:     titleOrFallback(pf.Title),
@@ -335,7 +355,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// вопросами означал бы, что общий прокси раздаёт содержимое закрытой формы
 	// кому угодно, а сама выдача зависит от заголовка запроса, которого нет в ключе
 	// кэша. Минута кэша разблокированной формы того не стоит.
-	if !pf.HasPassword {
+	if len(pf.PasswordSealed) == 0 {
 		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally) + `"`
 		w.Header().Set("Cache-Control", "public, max-age=60")
 		w.Header().Set("ETag", etag)

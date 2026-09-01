@@ -15,6 +15,14 @@ import { z } from 'zod'
 
 const storageKey = (slug: string) => `trillix-unlock:${slug}`
 
+// Запасная память на случай, когда sessionStorage недоступен: приватный режим,
+// запрет хранения третьей стороне у встроенной формы. Живёт до перезагрузки страницы
+// и ровно этим отличается от штатного пути — пароль спросят снова после F5.
+//
+// МИНА: без неё разблокировка в таком браузере не работает ВОВСЕ, а не «работает
+// хуже»: верный пароль принимается, токен молча теряется, форма снова просит пароль.
+const memory = new Map<string, string>()
+
 /**
  * Токен разблокировки этой формы, если он есть в этой вкладке.
  *
@@ -24,19 +32,24 @@ const storageKey = (slug: string) => `trillix-unlock:${slug}`
  */
 export function unlockToken(slug: string): string {
   try {
-    return sessionStorage.getItem(storageKey(slug)) ?? ''
+    const stored = sessionStorage.getItem(storageKey(slug))
+    if (stored !== null) return stored
   } catch {
-    return ''
+    // Хранилище недоступно — читаем из запасной памяти ниже.
   }
+  return memory.get(slug) ?? ''
 }
 
 export function rememberUnlock(slug: string, token: string): void {
+  // В память кладём ВСЕГДА, а не только в ветке отказа: одна дорога чтения на два
+  // хранилища дешевле, чем ветка «где искать», и делает отказ storage незаметным.
+  memory.set(slug, token)
   try {
     sessionStorage.setItem(storageKey(slug), token)
   } catch {
-    // Хранить негде — форма останется открытой в этой загрузке страницы и
-    // спросит пароль после перезагрузки. Терять из-за этого разблокировку прямо
-    // сейчас незачем: токен уже у вызывающего.
+    // Хранить негде: разблокировка живёт до перезагрузки страницы, а не до закрытия
+    // вкладки. Это единственная разница, и она лучше, чем форма, которую в таком
+    // браузере нельзя открыть вовсе.
   }
 }
 

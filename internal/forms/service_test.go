@@ -1855,7 +1855,7 @@ func TestUnlock_VerifiesPassword(t *testing.T) {
 	if !expiry.After(time.Now()) {
 		t.Fatalf("срок токена уже вышел: %v", expiry)
 	}
-	if err := svc.VerifyUnlock(store.form.ID, true, tok); err != nil {
+	if err := svc.VerifyUnlock(store.form.ID, sealed, tok); err != nil {
 		t.Fatalf("свой же токен не принят: %v", err)
 	}
 }
@@ -1875,20 +1875,57 @@ func TestVerifyUnlock(t *testing.T) {
 	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
 	svc := passwordService(store)
 	formID := domain.NewID()
-	tok := issueUnlockToken(deriveUnlockSecret([]byte(passwordSecret)), formID, time.Now().Add(time.Hour))
+	sealed := []byte("шифротекст пароля")
+	tok := issueUnlockToken(deriveUnlockSecret([]byte(passwordSecret)), formID, sealed, time.Now().Add(time.Hour))
 
 	// Форма без пароля пропускается всегда — в том числе без токена вовсе.
-	if err := svc.VerifyUnlock(formID, false, ""); err != nil {
+	if err := svc.VerifyUnlock(formID, nil, ""); err != nil {
 		t.Fatalf("форма без пароля: %v", err)
 	}
-	if err := svc.VerifyUnlock(formID, true, ""); !errors.Is(err, domain.ErrFormLocked) {
+	if err := svc.VerifyUnlock(formID, sealed, ""); !errors.Is(err, domain.ErrFormLocked) {
 		t.Fatalf("без токена: err = %v, want ErrFormLocked", err)
 	}
-	if err := svc.VerifyUnlock(domain.NewID(), true, tok); !errors.Is(err, domain.ErrFormLocked) {
+	if err := svc.VerifyUnlock(domain.NewID(), sealed, tok); !errors.Is(err, domain.ErrFormLocked) {
 		t.Fatalf("токен чужой формы принят: %v", err)
 	}
-	if err := svc.VerifyUnlock(formID, true, tok); err != nil {
+	if err := svc.VerifyUnlock(formID, sealed, tok); err != nil {
 		t.Fatalf("годный токен: %v", err)
+	}
+}
+
+// СМЕНА ПАРОЛЯ ГАСИТ ВЫДАННЫЕ ТОКЕНЫ. Без этого автор, у которого пароль утёк, менял
+// бы его и ещё сутки не мог никого отсечь — то есть смена пароля не была бы способом
+// отозвать доступ, хотя ровно этого от неё и ждут (решение владельца 2026-09-01).
+func TestVerifyUnlock_PasswordChangeRevokesTokens(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := passwordService(store)
+	formID := domain.NewID()
+
+	oldSealed, err := sealPassword([]byte(passwordSecret), "прежний")
+	if err != nil {
+		t.Fatalf("sealPassword: %v", err)
+	}
+	tok := issueUnlockToken(deriveUnlockSecret([]byte(passwordSecret)), formID, oldSealed, time.Now().Add(time.Hour))
+	if err := svc.VerifyUnlock(formID, oldSealed, tok); err != nil {
+		t.Fatalf("токен под свой пароль обязан работать: %v", err)
+	}
+
+	newSealed, err := sealPassword([]byte(passwordSecret), "новый")
+	if err != nil {
+		t.Fatalf("sealPassword: %v", err)
+	}
+	if err := svc.VerifyUnlock(formID, newSealed, tok); !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("токен пережил смену пароля: err = %v, want ErrFormLocked", err)
+	}
+
+	// И тот же пароль, перезапечатанный заново (новый nonce), тоже гасит токен:
+	// шифротекст другой, а различать «тот же пароль» и «другой» проверяющему нечем.
+	resealed, err := sealPassword([]byte(passwordSecret), "прежний")
+	if err != nil {
+		t.Fatalf("sealPassword: %v", err)
+	}
+	if err := svc.VerifyUnlock(formID, resealed, tok); !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("перезапечатанный пароль токен не погасил: %v", err)
 	}
 }
 
@@ -1904,7 +1941,7 @@ func TestPasswordWithoutSecret(t *testing.T) {
 	if store.passwordSet {
 		t.Fatal("без секрета в колонку что-то записано")
 	}
-	if err := svc.VerifyUnlock(store.form.ID, true, "любой токен"); !errors.Is(err, domain.ErrFormLocked) {
+	if err := svc.VerifyUnlock(store.form.ID, []byte("шифротекст"), "любой токен"); !errors.Is(err, domain.ErrFormLocked) {
 		t.Fatalf("без секрета форма под паролем открылась: %v", err)
 	}
 }

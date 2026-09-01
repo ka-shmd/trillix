@@ -56,8 +56,8 @@ const testUnlockToken = "unlocked"
 
 // VerifyUnlock повторяет ПРАВИЛО сервиса, а не результат: форма без пароля
 // пропускается всегда, форма с паролем — только по годному токену.
-func (f fakePublicSvc) VerifyUnlock(_ uuid.UUID, hasPassword bool, tok string) error {
-	if !hasPassword || tok == testUnlockToken {
+func (f fakePublicSvc) VerifyUnlock(_ uuid.UUID, sealed []byte, tok string) error {
+	if len(sealed) == 0 || tok == testUnlockToken {
 		return nil
 	}
 	return domain.ErrFormLocked
@@ -115,6 +115,10 @@ func (f fakePublicSvc) LinkPreviewFor(_ context.Context, _ uuid.UUID, p *domain.
 
 var testSecret = []byte("dev-only-form-token-secret-not-a-real-key")
 
+// testSlug — slug настоящей длины (domain.SlugLen): ручка разблокировки отвергает
+// чужую длину до всякого ведра, и короткая заглушка «s» получала бы 404.
+const testSlug = "abcdefghij"
+
 const (
 	testBaseURL = "http://localhost:5174"
 	testOGImage = "http://localhost:5174/og-preview.png"
@@ -170,7 +174,7 @@ func newPublicMuxWithUnlock(t *testing.T, svc publicFormService, unlock UnlockLi
 		t.Fatalf("NewPublicHandler: %v", err)
 	}
 	mux := http.NewServeMux()
-	h.WithUnlockLimiter(unlock).Routes(mux)
+	h.WithUnlockLimiter(unlock, allowLimiter{}).Routes(mux)
 	return mux
 }
 
@@ -574,12 +578,12 @@ func TestFormToken_RateLimited_Returns429(t *testing.T) {
 // Форма под паролем не отдаёт схему: в теле 401 только название и бейдж.
 func TestPublicGet_Locked_HidesSchema(t *testing.T) {
 	svc := fakePublicSvc{pf: PublicForm{
-		Title:       "Опрос про доставку",
-		Version:     1,
-		VersionID:   uuid.New(),
-		Schema:      json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Секретный вопрос"}]}]}`),
-		Status:      "published",
-		HasPassword: true,
+		Title:          "Опрос про доставку",
+		Version:        1,
+		VersionID:      uuid.New(),
+		Schema:         json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Секретный вопрос"}]}]}`),
+		Status:         "published",
+		PasswordSealed: []byte("шифротекст"),
 	}}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil))
@@ -613,12 +617,12 @@ func TestPublicGet_Locked_HidesSchema(t *testing.T) {
 // С годным токеном форма отдаётся как обычно — но по-прежнему без публичного кэша.
 func TestPublicGet_Unlocked_ReturnsSchemaUncached(t *testing.T) {
 	svc := fakePublicSvc{pf: PublicForm{
-		Title:       "Опрос",
-		Version:     1,
-		VersionID:   uuid.New(),
-		Schema:      json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Вопрос"}]}]}`),
-		Status:      "published",
-		HasPassword: true,
+		Title:          "Опрос",
+		Version:        1,
+		VersionID:      uuid.New(),
+		Schema:         json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Вопрос"}]}]}`),
+		Status:         "published",
+		PasswordSealed: []byte("шифротекст"),
 	}}
 	req := httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil)
 	req.Header.Set(UnlockHeader, testUnlockToken)
@@ -640,13 +644,13 @@ func TestPublicGet_Unlocked_ReturnsSchemaUncached(t *testing.T) {
 // пароля его показывать не за что.
 func TestPublicGet_LockedBeatsClosed(t *testing.T) {
 	svc := fakePublicSvc{pf: PublicForm{
-		Title:         "Опрос",
-		Version:       1,
-		VersionID:     uuid.New(),
-		Schema:        json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		Status:        "closed",
-		ClosedMessage: ptr("Мы набрали участников, спасибо"),
-		HasPassword:   true,
+		Title:          "Опрос",
+		Version:        1,
+		VersionID:      uuid.New(),
+		Schema:         json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		Status:         "closed",
+		ClosedMessage:  ptr("Мы набрали участников, спасибо"),
+		PasswordSealed: []byte("шифротекст"),
 	}}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil))
@@ -660,11 +664,11 @@ func TestPublicGet_LockedBeatsClosed(t *testing.T) {
 }
 
 func TestPublicUnlock(t *testing.T) {
-	svc := fakePublicSvc{password: "правильный", pf: PublicForm{HasPassword: true}}
+	svc := fakePublicSvc{password: "правильный", pf: PublicForm{PasswordSealed: []byte("шифротекст")}}
 	mux := newPublicMux(t, svc)
 
 	post := func(body string) *httptest.ResponseRecorder {
-		req := httptest.NewRequest(http.MethodPost, "/public/v1/forms/s/unlock", strings.NewReader(body))
+		req := httptest.NewRequest(http.MethodPost, "/public/v1/forms/"+testSlug+"/unlock", strings.NewReader(body))
 		rec := httptest.NewRecorder()
 		mux.ServeHTTP(rec, req)
 		return rec
@@ -697,14 +701,31 @@ func TestPublicUnlock(t *testing.T) {
 // ГЛАВНОЕ у лимита: ведро списывается ДО сравнения, поэтому исчерпавший его не
 // проходит и с ВЕРНЫМ паролем. Иначе подбор стоил бы ровно столько же.
 func TestPublicUnlock_LimitBeatsCorrectPassword(t *testing.T) {
-	svc := fakePublicSvc{password: "правильный", pf: PublicForm{HasPassword: true}}
+	svc := fakePublicSvc{password: "правильный", pf: PublicForm{PasswordSealed: []byte("шифротекст")}}
 	mux := newPublicMuxWithUnlock(t, svc, denyLimiter{})
 
-	req := httptest.NewRequest(http.MethodPost, "/public/v1/forms/s/unlock", strings.NewReader(`{"password":"правильный"}`))
+	req := httptest.NewRequest(http.MethodPost, "/public/v1/forms/"+testSlug+"/unlock", strings.NewReader(`{"password":"правильный"}`))
 	rec := httptest.NewRecorder()
 	mux.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("статус = %d, want 429", rec.Code)
+	}
+}
+
+// Slug неправдоподобной длины отвергается ДО ведра и до базы: иначе ключ парного
+// лимитера («IP|slug») задаёт клиент, и карта растёт вместе с длиной адреса.
+func TestPublicUnlock_RejectsImplausibleSlug(t *testing.T) {
+	svc := fakePublicSvc{password: "правильный", pf: PublicForm{PasswordSealed: []byte("шифротекст")}}
+	mux := newPublicMux(t, svc)
+
+	for _, slug := range []string{"s", strings.Repeat("x", 4096)} {
+		req := httptest.NewRequest(http.MethodPost, "/public/v1/forms/"+slug+"/unlock",
+			strings.NewReader(`{"password":"правильный"}`))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		if rec.Code != http.StatusNotFound {
+			t.Fatalf("slug длиной %d: статус = %d, want 404", len(slug), rec.Code)
+		}
 	}
 }

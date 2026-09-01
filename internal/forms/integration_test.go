@@ -109,7 +109,7 @@ func newStack(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	authH.Routes(mux)
 	formsH.Routes(mux)
-	formsPublic.WithUnlockLimiter(allowLimiter{}).Routes(mux)
+	formsPublic.WithUnlockLimiter(allowLimiter{}, allowLimiter{}).Routes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -2155,4 +2155,35 @@ func unlockForm(t *testing.T, c *http.Client, srv *httptest.Server, slug, passwo
 		t.Fatal("токен разблокировки пуст")
 	}
 	return out.Token
+}
+
+// Ручка разблокировки обязана видеть форму ровно так же, как её отдача. Иначе она
+// становится оракулом существования: у формы удалённого аккаунта GET отдаёт 404
+// (фаза 23, слайс G), а unlock отвечал бы 401 — то есть подтверждал, что форма была.
+func TestForms_Password_UnlockHidesFormOfDeletedOwner(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-password6@example.com")
+
+	form := createForm(t, alice, srv, "Анкета")
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+	patchPassword(t, alice, srv, form.ID, `"секрет"`, http.StatusOK)
+
+	// Владелец удалил аккаунт: форма перестаёт существовать для публичного пути.
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE users SET deleted_at = now() WHERE email = $1`, "alice-password6@example.com"); err != nil {
+		t.Fatalf("пометить аккаунт удалённым: %v", err)
+	}
+
+	anon := newClient(t)
+	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
+
+	// И разблокировка — тоже 404, даже с ВЕРНЫМ паролем: иначе она отличала бы
+	// «форма была» от «такой формы нет» ровно там, где отдача их уравнивает.
+	r := do(t, anon, http.MethodPost, srv.URL+"/public/v1/forms/"+form.Slug+"/unlock",
+		`{"password":"секрет"}`, "")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("unlock у формы удалённого владельца: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
 }

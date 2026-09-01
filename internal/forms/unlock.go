@@ -12,12 +12,18 @@ import (
 	"github.com/google/uuid"
 )
 
-// ТОКЕН РАЗБЛОКИРОВКИ — доказательство того, что этот браузер уже назвал пароль
-// ЭТОЙ формы, и ничего больше.
+// ТОКЕН РАЗБЛОКИРОВКИ — доказательство того, что этот браузер назвал ДЕЙСТВУЮЩИЙ
+// пароль ЭТОЙ формы, и ничего больше.
 //
-// Формат: "<formID>.<unixMillis истечения>.<base64url(hmac)>". Подпись покрывает всё,
-// что перед ней, поэтому подменить id формы в готовом токене нельзя — иначе один
-// пароль открывал бы все формы сервиса.
+// Формат: "<formID>.<unixMillis истечения>.<base64url(hmac)>". Подпись покрывает id
+// формы, срок И САМ ПАРОЛЬ (его шифротекст), поэтому подменить id в готовом токене
+// нельзя — иначе один пароль открывал бы все формы сервиса, — а смена пароля
+// мгновенно гасит все выданные токены.
+//
+// ПАРОЛЬ В ТЕКСТ ТОКЕНА НЕ ВХОДИТ: он только подмешан в подпись. Проверяющий
+// пересчитывает её по шифротексту, который лежит в базе прямо сейчас, поэтому
+// предъявить старый токен после смены пароля нельзя, а вывести из токена что-либо о
+// пароле — нельзя тем более.
 //
 // Секрет производный от секрета токена формы, с отдельной меткой назначения: тот же
 // приём и тот же довод, что у токена печати (internal/submissions/printtoken.go) —
@@ -41,15 +47,17 @@ func deriveUnlockSecret(formTokenSecret []byte) []byte {
 	return h.Sum(nil)
 }
 
-// issueUnlockToken выпускает токен на форму, действительный до expiry.
-func issueUnlockToken(secret []byte, formID uuid.UUID, expiry time.Time) string {
+// issueUnlockToken выпускает токен на форму с ЭТИМ паролем, действительный до expiry.
+// sealed — шифротекст пароля на момент выдачи: он уезжает в подпись, а не в текст.
+func issueUnlockToken(secret []byte, formID uuid.UUID, sealed []byte, expiry time.Time) string {
 	payload := formID.String() + "." + strconv.FormatInt(expiry.UnixMilli(), 10)
-	return payload + "." + base64.RawURLEncoding.EncodeToString(signUnlock(secret, payload))
+	return payload + "." + base64.RawURLEncoding.EncodeToString(signUnlock(secret, payload, sealed))
 }
 
-// validUnlockToken — годен ли токен для этой формы прямо сейчас. Причина отказа
-// наружу не различается: снаружи это в любом случае «введите пароль».
-func validUnlockToken(secret []byte, tok string, formID uuid.UUID, now time.Time) bool {
+// validUnlockToken — годен ли токен для этой формы с ЭТИМ паролем прямо сейчас.
+// sealed — шифротекст пароля, лежащий в базе сейчас; сменился он — подпись не сойдётся.
+// Причина отказа наружу не различается: снаружи это в любом случае «введите пароль».
+func validUnlockToken(secret []byte, tok string, formID uuid.UUID, sealed []byte, now time.Time) bool {
 	if len(secret) == 0 {
 		return false
 	}
@@ -63,7 +71,7 @@ func validUnlockToken(secret []byte, tok string, formID uuid.UUID, now time.Time
 	if err != nil {
 		return false
 	}
-	if !hmac.Equal(sig, signUnlock(secret, payload)) {
+	if !hmac.Equal(sig, signUnlock(secret, payload, sealed)) {
 		return false
 	}
 	// Сверяем id формы ПОСЛЕ подписи: до неё сравнивать нечего — строка не наша.
@@ -77,8 +85,14 @@ func validUnlockToken(secret []byte, tok string, formID uuid.UUID, now time.Time
 	return now.Before(time.UnixMilli(expiry))
 }
 
-func signUnlock(secret []byte, payload string) []byte {
+// signUnlock подписывает «id формы + срок + текущий пароль». Нулевой байт-разделитель
+// между текстовой частью и шифротекстом обязателен: в payload его быть не может
+// (uuid и число), поэтому разбор подписанного сообщения однозначен и склеить чужую
+// пару «payload, пароль» в ту же подпись нельзя.
+func signUnlock(secret []byte, payload string, sealed []byte) []byte {
 	h := hmac.New(sha256.New, secret)
 	h.Write([]byte(payload))
+	h.Write([]byte{0})
+	h.Write(sealed)
 	return h.Sum(nil)
 }

@@ -82,6 +82,13 @@ const (
 	unlockRatePerSec = 1.0 / 30.0
 	unlockBurst      = 6
 
+	// Ведро по одному IP ПЕРЕД ведром попыток. Шире парного (человек с несколькими
+	// формами под паролем не должен упираться), но ограничивает частоту, с которой
+	// один адрес вообще заводит ключи в парном ведре: там ключ содержит slug из
+	// адреса, то есть его выбирает клиент.
+	unlockIPRatePerSec = 1.0 / 5.0
+	unlockIPBurst      = 20
+
 	// Жёсткий лимит на выдачу слота загрузки по IP (фаза 24, своё ведро). Ведро
 	// уже, чем у приёма ответа, и это осознанно: каждый слот — строка в базе и
 	// право записи в наш бакет, то есть чужие байты за наш счёт. Запас 10,
@@ -430,7 +437,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		return fmt.Errorf("init public forms handler: %w", err)
 	}
 	unlockLimiter := ratelimit.NewTokenBucket(unlockRatePerSec, unlockBurst)
-	formsPublic = formsPublic.WithUnlockLimiter(unlockLimiter)
+	unlockIPLimiter := ratelimit.NewTokenBucket(unlockIPRatePerSec, unlockIPBurst)
+	formsPublic = formsPublic.WithUnlockLimiter(unlockLimiter, unlockIPLimiter)
 
 	blobClient := blob.New(blob.Config{
 		Endpoint:  cfg.S3Endpoint,
@@ -707,7 +715,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + emailChangeLimiter.GC() + confirmEmailLimiter.GC() +
 				twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +
-				respondentMailLimiter.GC() + unlockLimiter.GC()
+				respondentMailLimiter.GC() + unlockLimiter.GC() + unlockIPLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}

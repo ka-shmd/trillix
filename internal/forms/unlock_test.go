@@ -11,10 +11,11 @@ import (
 func TestUnlockTokenRoundTrip(t *testing.T) {
 	secret := deriveUnlockSecret([]byte("form-token-secret-long-enough-32b"))
 	formID := uuid.New()
+	sealed := []byte("шифротекст пароля")
 	now := time.Now()
-	tok := issueUnlockToken(secret, formID, now.Add(time.Hour))
+	tok := issueUnlockToken(secret, formID, sealed, now.Add(time.Hour))
 
-	if !validUnlockToken(secret, tok, formID, now) {
+	if !validUnlockToken(secret, tok, formID, sealed, now) {
 		t.Fatal("свежий токен своей формы обязан приниматься")
 	}
 }
@@ -23,32 +24,36 @@ func TestUnlockTokenRejects(t *testing.T) {
 	secret := deriveUnlockSecret([]byte("form-token-secret-long-enough-32b"))
 	other := deriveUnlockSecret([]byte("совершенно другой секрет приложения"))
 	formID := uuid.New()
+	sealed := []byte("шифротекст пароля")
 	now := time.Now()
-	tok := issueUnlockToken(secret, formID, now.Add(time.Hour))
+	tok := issueUnlockToken(secret, formID, sealed, now.Add(time.Hour))
 
 	tests := []struct {
 		name   string
 		secret []byte
 		tok    string
 		formID uuid.UUID
+		sealed []byte
 		now    time.Time
 	}{
 		// Главная проверка: токен привязан к ФОРМЕ. Без неё один известный пароль
 		// открывал бы все формы сервиса разом.
-		{"токен чужой формы", secret, tok, uuid.New(), now},
-		{"срок вышел", secret, tok, formID, now.Add(2 * time.Hour)},
-		{"подписан другим секретом", other, tok, formID, now},
-		{"подпись подделана", secret, tok[:len(tok)-4] + "AAAA", formID, now},
+		{"токен чужой формы", secret, tok, uuid.New(), sealed, now},
+		{"срок вышел", secret, tok, formID, sealed, now.Add(2 * time.Hour)},
+		{"подписан другим секретом", other, tok, formID, sealed, now},
+		{"подпись подделана", secret, tok[:len(tok)-4] + "AAAA", formID, sealed, now},
 		// Подмена id в готовом токене: payload переписан, подпись осталась старой.
-		{"id формы подменён", secret, uuid.New().String() + tok[strings.Index(tok, "."):], formID, now},
-		{"мусор вместо токена", secret, "не токен", formID, now},
-		{"пусто", secret, "", formID, now},
+		{"id формы подменён", secret, uuid.New().String() + tok[strings.Index(tok, "."):], formID, sealed, now},
+		{"мусор вместо токена", secret, "не токен", formID, sealed, now},
+		{"пусто", secret, "", formID, sealed, now},
 		// Ненастроенный секрет не пускает никого: пароль стоит, открыть нечем.
-		{"секрета нет", nil, tok, formID, now},
+		{"секрета нет", nil, tok, formID, sealed, now},
+		// Пароль сменился — подпись пересчитывается по новому шифротексту и не сходится.
+		{"пароль сменился", secret, tok, formID, []byte("другой шифротекст"), now},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if validUnlockToken(tt.secret, tt.tok, tt.formID, tt.now) {
+			if validUnlockToken(tt.secret, tt.tok, tt.formID, tt.sealed, tt.now) {
 				t.Fatal("токен обязан быть отвергнут")
 			}
 		})

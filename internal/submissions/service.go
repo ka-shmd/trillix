@@ -44,10 +44,10 @@ const (
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
 	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
-	// Форма без пароля пропускается всегда; с паролем нужен годный токен ИМЕННО
-	// этой формы. Спрашивается у forms, а не решается здесь: секрет подписи обязан
-	// лежать в одном месте (design/form-password.md §3.3).
-	VerifyUnlock(formID uuid.UUID, hasPassword bool, tok string) error
+	// sealed — шифротекст пароля прямо сейчас (пустой = пароля нет). Спрашивается у
+	// forms, а не решается здесь: секрет подписи обязан лежать в одном месте
+	// (design/form-password.md §3.3).
+	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
 	// CollectPartial — собирать ли черновики у этой формы прямо сейчас: тумблер
 	// автора плюс разрешение тарифа (даунгрейд останавливает сбор).
 	CollectPartial(ctx context.Context, workspaceID uuid.UUID, intent bool) (bool, error)
@@ -327,7 +327,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// Пароль формы (0047) — раньше всего остального: ответ на форму, которую этот
 	// браузер не открывал, принимать нечем. Экран ввода пароля в рендерере эту
 	// проверку НЕ заменяет: сюда приходят curl'ом, а не только со страницы.
-	if err := s.forms.VerifyUnlock(pf.FormID, pf.HasPassword, meta.Unlock); err != nil {
+	if err := s.forms.VerifyUnlock(pf.FormID, pf.PasswordSealed, meta.Unlock); err != nil {
 		return err
 	}
 
@@ -912,7 +912,7 @@ func (s *Service) SavePartial(ctx context.Context, slug string, p PartialInput) 
 	}
 	// Пароль формы (0047): черновик — это те же ответы респондента, и складывать их
 	// автору от того, кто формы не открывал, незачем.
-	if err := s.forms.VerifyUnlock(pf.FormID, pf.HasPassword, p.Unlock); err != nil {
+	if err := s.forms.VerifyUnlock(pf.FormID, pf.PasswordSealed, p.Unlock); err != nil {
 		return err
 	}
 	if domain.FormClosed(pf.Status, pf.CloseAt, pf.ResponseLimit, pf.SubmissionCount, s.now().UTC()) {

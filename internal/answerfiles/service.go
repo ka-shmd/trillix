@@ -22,10 +22,10 @@ import (
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
 	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
-	// Форма без пароля пропускается всегда; с паролем нужен годный токен ИМЕННО
-	// этой формы. Спрашивается у forms, а не решается здесь: секрет подписи обязан
-	// лежать в одном месте (design/form-password.md §3.3).
-	VerifyUnlock(formID uuid.UUID, hasPassword bool, tok string) error
+	// sealed — шифротекст пароля прямо сейчас (пустой = пароля нет). Спрашивается у
+	// forms, а не решается здесь: секрет подписи обязан лежать в одном месте
+	// (design/form-password.md §3.3).
+	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
 	// Get проверяет членство пользователя в воркспейсе формы; чужая или
 	// несуществующая → domain.ErrNotFound (анти-IDOR, приватное не раскрывается).
 	// Скачиванию нужен только факт доступа, не поля формы.
@@ -107,7 +107,7 @@ func (s *Service) IssueSlot(ctx context.Context, req SlotRequest) (Slot, error) 
 	}
 	// Пароль формы (0047) — до всего: право писать в наш бакет не выдаётся тому, кто
 	// формы не открывал. Без этой строки пароль обходился бы загрузкой файлов.
-	if err := s.forms.VerifyUnlock(pf.FormID, pf.HasPassword, req.Unlock); err != nil {
+	if err := s.forms.VerifyUnlock(pf.FormID, pf.PasswordSealed, req.Unlock); err != nil {
 		return Slot{}, err
 	}
 	// Закрытая форма файлов не принимает: приём ответа всё равно ответит 410, и

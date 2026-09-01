@@ -41,8 +41,8 @@ const testUnlockToken = "unlocked"
 
 // VerifyUnlock повторяет правило сервиса форм: без пароля пускаем всегда, с паролем
 // — только по годному токену.
-func (f fakeForms) VerifyUnlock(_ uuid.UUID, hasPassword bool, tok string) error {
-	if !hasPassword || tok == testUnlockToken {
+func (f fakeForms) VerifyUnlock(_ uuid.UUID, sealed []byte, tok string) error {
+	if len(sealed) == 0 || tok == testUnlockToken {
 		return nil
 	}
 	return domain.ErrFormLocked
@@ -585,7 +585,7 @@ func TestSubmit_NotifyRespondent_NotConfigured(t *testing.T) {
 // Экран ввода пароля в рендерере эту проверку не заменяет: сюда ходят curl'ом.
 func TestSubmit_LockedForm(t *testing.T) {
 	pf := validPublishedForm(false)
-	pf.HasPassword = true
+	pf.PasswordSealed = []byte("шифротекст")
 	store := &fakeSubStore{insertN: 1}
 	svc := NewService(nil, fakeTx{}, fakeForms{pf: pf}, nil, &fakeMailer{}, okPlans(), store, "https://app.test")
 
@@ -607,7 +607,7 @@ func TestSubmit_LockedForm(t *testing.T) {
 // открывал, незачем.
 func TestSavePartial_LockedForm(t *testing.T) {
 	pf := validPublishedForm(false)
-	pf.HasPassword = true
+	pf.PasswordSealed = []byte("шифротекст")
 	pf.CollectPartial = true
 	store := &fakeSubStore{}
 	svc := NewService(nil, fakeTx{}, fakeForms{pf: pf, partialAllowed: true},

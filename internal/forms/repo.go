@@ -178,15 +178,17 @@ type PublicForm struct {
 	// чистое намерение автора: тарифа у них нет, и решать поверх нечего.
 	AutoJump    bool
 	SaveLocally bool
-	// HasPassword — форма закрыта паролем (0047). Признак, а не сам пароль: на
-	// публичном пути сравнивать нечего, пароль спрашивает ручка разблокировки.
+	// PasswordSealed — шифротекст пароля формы (0047); nil = пароля нет. Наружу не
+	// отдаётся ни в одном ответе: он нужен только чтобы ПРОВЕРИТЬ токен
+	// разблокировки, в подпись которого подмешан, — оттого смена пароля и гасит
+	// выданные токены (Service.VerifyUnlock).
 	//
 	// ⚠ МИНА: спросить его обязан КАЖДЫЙ публичный вход по slug — отдача формы,
 	// приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
 	// не может: решение принимается по строке формы, а не по маршруту. Забытая
 	// проверка означает форму, которая спрашивает пароль на экране и пускает мимо
 	// него; список входов — design/form-password.md §3.3.
-	HasPassword bool
+	PasswordSealed []byte
 	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
@@ -733,7 +735,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		Progress:           row.Progress,
 		AutoJump:           row.AutoJump,
 		SaveLocally:        row.SaveLocally,
-		HasPassword:        row.HasPassword,
+		PasswordSealed:     row.Password,
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }

@@ -36,31 +36,52 @@ afterEach(() => {
 
 describe('хранилище токена', () => {
   it('токен живёт на вкладке и раздаётся по slug', () => {
-    expect(unlockToken('a')).toBe('')
-    rememberUnlock('a', 'tok-a')
-    expect(unlockToken('a')).toBe('tok-a')
+    expect(unlockToken('store-1')).toBe('')
+    rememberUnlock('store-1', 'tok-a')
+    expect(unlockToken('store-1')).toBe('tok-a')
     // Токен одной формы не выдаётся за другую: у каждой свой ключ.
-    expect(unlockToken('b')).toBe('')
+    expect(unlockToken('store-2')).toBe('')
   })
 
   it('без токена заголовка нет вовсе — запрос открытой формы не меняется', () => {
-    expect(unlockHeaders('a')).toEqual({})
-    rememberUnlock('a', 'tok-a')
-    expect(unlockHeaders('a')).toEqual({ 'X-Form-Unlock': 'tok-a' })
+    expect(unlockHeaders('store-3')).toEqual({})
+    rememberUnlock('store-3', 'tok-a')
+    expect(unlockHeaders('store-3')).toEqual({ 'X-Form-Unlock': 'tok-a' })
+  })
+
+  // Хранилище может быть недоступно вовсе: приватный режим, запрет хранения третьей
+  // стороне у встроенной формы. Разблокировка обязана работать до перезагрузки
+  // страницы — иначе верный пароль принимается, токен теряется, и форму в таком
+  // браузере нельзя открыть ВООБЩЕ.
+  it('отказ sessionStorage не теряет токен в этой загрузке страницы', async () => {
+    vi.stubGlobal('sessionStorage', {
+      getItem: () => {
+        throw new Error('storage disabled')
+      },
+      setItem: () => {
+        throw new Error('storage disabled')
+      },
+      removeItem: () => undefined,
+    })
+    stubFetch(new Response(JSON.stringify({ token: 'tok', expiresIn: 86400 }), { status: 200 }))
+
+    expect(await unlockForm('no-storage', 'секрет')).toEqual({ status: 'ok' })
+    expect(unlockToken('no-storage')).toBe('tok')
+    expect(unlockHeaders('no-storage')).toEqual({ 'X-Form-Unlock': 'tok' })
   })
 })
 
 describe('unlockForm', () => {
   it('верный пароль → токен сохранён', async () => {
     stubFetch(new Response(JSON.stringify({ token: 'tok', expiresIn: 86400 }), { status: 200 }))
-    expect(await unlockForm('abc', 'секрет')).toEqual({ status: 'ok' })
-    expect(unlockToken('abc')).toBe('tok')
+    expect(await unlockForm('unlock-ok', 'секрет')).toEqual({ status: 'ok' })
+    expect(unlockToken('unlock-ok')).toBe('tok')
   })
 
   it('401 → wrong, токен не сохраняется', async () => {
     stubFetch(new Response(null, { status: 401 }))
-    expect(await unlockForm('abc', 'не тот')).toEqual({ status: 'wrong' })
-    expect(unlockToken('abc')).toBe('')
+    expect(await unlockForm('unlock-wrong', 'не тот')).toEqual({ status: 'wrong' })
+    expect(unlockToken('unlock-wrong')).toBe('')
   })
 
   it('429 → limited (попытки исчерпаны), отдельно от неверного пароля', async () => {

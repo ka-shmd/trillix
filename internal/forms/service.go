@@ -1083,21 +1083,27 @@ func (s *Service) Unlock(ctx context.Context, slug, password string) (string, ti
 		return "", time.Time{}, domain.ErrFormLocked
 	}
 	expiry := s.now().UTC().Add(unlockTTL)
-	return issueUnlockToken(deriveUnlockSecret(s.secret), formID, expiry), expiry, nil
+	return issueUnlockToken(deriveUnlockSecret(s.secret), formID, sealed, expiry), expiry, nil
 }
 
-// VerifyUnlock — пускать ли этот запрос к содержимому формы. Форма без пароля
-// пропускается всегда; форма с паролем требует годного токена ИМЕННО ЭТОЙ формы.
+// VerifyUnlock — пускать ли этот запрос к содержимому формы. sealed — шифротекст
+// пароля, лежащий в колонке ПРЯМО СЕЙЧАС: пустой означает «пароля нет», и тогда
+// пропускаем всегда.
+//
+// Шифротекст, а не признак «пароль есть», ровно затем, чтобы СМЕНА ПАРОЛЯ ГАСИЛА
+// выданные токены: он подмешан в подпись, и токен, выпущенный под прежний пароль,
+// перестаёт сходиться в тот же момент, когда автор сохранил новый. Без этого автор,
+// сменивший утёкший пароль, ещё сутки не мог бы никого отсечь.
 //
 // Живёт в forms, а не у каждого потребителя, по той же причине, что ShowBadge и
 // CollectPartial: это решение о форме, и секрет подписи обязан лежать в одном месте.
 // Зовут его четыре публичных входа — отдача формы, приём ответа, автосохранение и
 // выдача слота файла (design/form-password.md §3.3).
-func (s *Service) VerifyUnlock(formID uuid.UUID, hasPassword bool, tok string) error {
-	if !hasPassword {
+func (s *Service) VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error {
+	if len(sealed) == 0 {
 		return nil
 	}
-	if validUnlockToken(deriveUnlockSecret(s.secret), tok, formID, s.now().UTC()) {
+	if validUnlockToken(deriveUnlockSecret(s.secret), tok, formID, sealed, s.now().UTC()) {
 		return nil
 	}
 	return domain.ErrFormLocked

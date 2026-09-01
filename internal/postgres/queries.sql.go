@@ -1728,6 +1728,8 @@ const getFormPasswordBySlug = `-- name: GetFormPasswordBySlug :one
 SELECT f.id AS form_id, f.password
 FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
+JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
 WHERE f.slug = $1
 `
 
@@ -1736,11 +1738,13 @@ type GetFormPasswordBySlugRow struct {
 	Password []byte
 }
 
-// Шифротекст пароля и id формы по slug — ТОЛЬКО для публичной ручки разблокировки.
-// Отдельный запрос, а не поле в GetPublicFormBySlug, намеренно: там форма читается на
-// КАЖДОМ открытии, и возить шифротекст пароля по горячему пути ради одной ручки, куда
-// приходят раз за сессию, незачем. Черновик отсекается тем же INNER JOIN по
-// published_version_id: у неопубликованной формы пароль не спрашивают (её и нет, 404).
+// Шифротекст пароля и id формы по slug — для публичной ручки разблокировки.
+//
+// ⚠ ВИДИМОСТЬ ФОРМЫ ЗДЕСЬ ОБЯЗАНА СОВПАДАТЬ С GetPublicFormBySlug, иначе ручка
+// становится оракулом существования: она отвечала бы 401/200 там, где отдача формы
+// отвечает 404. Отсюда те же три джойна — опубликованная версия (черновик не
+// показываем, инвариант 5) и ЖИВОЙ владелец пространства (фаза 23, слайс G: форма
+// удалённого аккаунта не существует ни для кого).
 func (q *Queries) GetFormPasswordBySlug(ctx context.Context, slug string) (GetFormPasswordBySlugRow, error) {
 	row := q.db.QueryRow(ctx, getFormPasswordBySlug, slug)
 	var i GetFormPasswordBySlugRow
@@ -1930,14 +1934,15 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- колонки без тарифа, как progress: рендерер получает намерение автора как есть.
     f.auto_jump,
     f.save_locally,
-    -- has_password: закрыта ли форма паролем (0047). Признак, а не шифротекст: на
-    -- публичном пути сравнивать нечего — пароль спрашивает отдельная ручка
-    -- разблокировки, а здесь решается только «отдать схему или 401 form_locked».
+    -- password: шифротекст пароля формы (0047); NULL = пароля нет. Едет ЦЕЛИКОМ, а не
+    -- признаком «пароль есть», потому что он подмешан в подпись токена разблокировки:
+    -- проверяющий пересчитывает подпись по текущему шифротексту, и смена пароля тем
+    -- самым гасит все выданные токены. Наружу он не отдаётся ни в одном ответе.
     --
-    -- ⚠ МИНА: этот признак обязан спросить КАЖДЫЙ публичный вход по slug — отдача
-    -- формы, приём ответа, автосохранение, выдача слота файла. Общего middleware нет
-    -- и быть не может: решение принимается по строке формы (design/form-password.md §3.3).
-    (f.password IS NOT NULL)::bool AS has_password,
+    -- ⚠ МИНА: пароль обязан спросить КАЖДЫЙ публичный вход по slug — отдача формы,
+    -- приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
+    -- не может: решение принимается по строке формы (design/form-password.md §3.3).
+    f.password,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -1968,7 +1973,7 @@ type GetPublicFormBySlugRow struct {
 	Progress           bool
 	AutoJump           bool
 	SaveLocally        bool
-	HasPassword        bool
+	Password           []byte
 	SubmissionCount    int64
 }
 
@@ -2011,7 +2016,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.Progress,
 		&i.AutoJump,
 		&i.SaveLocally,
-		&i.HasPassword,
+		&i.Password,
 		&i.SubmissionCount,
 	)
 	return i, err
