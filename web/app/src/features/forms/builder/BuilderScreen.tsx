@@ -37,7 +37,17 @@ import { Button } from '@/components/ui/button'
 // draft задан, пока формы НЕТ на сервере (ленивое создание, features/forms/draft.ts):
 // detail тогда синтетическая, detail.id пуст, и всё, что адресует форму по id,
 // спрашивает ensureForm — она заводит форму по первой надобности.
-export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: DraftCreation }) {
+export function BuilderScreen({
+  detail,
+  draft,
+  onGenerate,
+}: {
+  detail: FormDetail
+  draft?: DraftCreation
+  // Сборка формы по описанию (фаза 26): приезжает из маршрута, потому что знает про
+  // пространство и переход в редактор новой формы. Полотно её только предлагает.
+  onGenerate?: (prompt: string) => Promise<void>
+}) {
   // Бейдж решается ЗДЕСЬ, а не в превью: экран уже живёт внутри провайдера Query и
   // уже ходит в чужие фичи, а превью остаётся чистым видом стора — иначе провайдер
   // потребовался бы каждому, кто его рисует, включая тесты раскладки. Намерение
@@ -202,7 +212,12 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
 
       {status === 'conflict' && <ConflictBanner />}
 
-      <SlashEditor formId={uploadTo} engine={engine} onOpenDesign={() => setDesignOpen(true)} />
+      <SlashEditor
+        formId={uploadTo}
+        engine={engine}
+        onOpenDesign={() => setDesignOpen(true)}
+        onGenerate={onGenerate}
+      />
       {/* Просмотр — слой поверх окна (PreviewOverlay), а внутри слоя — СВОЙ документ
           (TD-60): свой CSS автора обязан быть здесь виден и обязан не покидать фрейм,
           иначе `.rf-input{display:none}` из формы погасил бы поля самого кабинета.

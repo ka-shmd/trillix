@@ -59,6 +59,20 @@ export function createForm(title?: string, workspaceId?: string): Promise<Form> 
   })
 }
 
+// Сборка формы по описанию словами (фаза 26). Ответ — та же карточка формы, что у
+// создания: черновик уже лежит в базе, и кабинету остаётся уйти в редактор по slug.
+//
+// Отказы разбирает вызывающий по КОДУ: 402 plan_required — кончилась месячная
+// квота, 404 not_found — провайдер модели на контуре не настроен либо пространство
+// чужое, 429 rate_limited, 503 unavailable — модель не ответила или не справилась.
+export function generateForm(prompt: string, workspaceId?: string): Promise<Form> {
+  return apiRequest('/forms/generate', {
+    method: 'POST',
+    body: { prompt, ...(workspaceId ? { workspaceId } : {}) },
+    schema: formSchema,
+  })
+}
+
 // Переименование ВНУТРЕННЕГО имени (дашборд). Не трогает публичный заголовок; пустая
 // строка сбрасывает имя (кабинет снова показывает заголовок). См. ADR §10.
 export function updateFormName(id: string, name: string): Promise<Form> {
