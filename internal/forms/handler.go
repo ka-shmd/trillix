@@ -573,7 +573,19 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	form, err := h.svc.Generate(r.Context(), userID, req.Prompt, wsID)
+	// ДЕДЛАЙН ЗАПИСИ ПРОДЛЕВАЕТСЯ, иначе ручка не работает вовсе: общий WriteTimeout
+	// сервера — 10 секунд, а модель отвечает единицами секунд и вправе задержаться.
+	// Соединение рвалось бы посреди ожидания, и кабинет (через прокси vite) видел
+	// бы 502 вместо ответа. Тот же приём и та же причина, что у печати PDF и
+	// стриминга CSV (TD-4).
+	//
+	// Потолок на всю операцию — generateTimeout: он же ограничивает и клиента
+	// модели вместе с его повтором, потому что контекст запроса едет в него насквозь.
+	ctx, cancel := context.WithTimeout(r.Context(), generateTimeout)
+	defer cancel()
+	httpserver.ExtendWriteDeadline(w, httpserver.LoggerFrom(r.Context()), generateTimeout+5*time.Second)
+
+	form, err := h.svc.Generate(ctx, userID, req.Prompt, wsID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -871,6 +883,11 @@ func parseWorkspaceID(w http.ResponseWriter, r *http.Request, raw *string) (*uui
 	}
 	return &id, true
 }
+
+// generateTimeout — потолок на всю сборку формы: два вызова модели (второй —
+// починка) с запасом. Человек ждёт ответа на экране, и минута ожидания отказа —
+// предел терпимого; типичный ответ приходит за единицы секунд.
+const generateTimeout = 60 * time.Second
 
 // generateRequest — описание формы словами и (необязательно) пространство, в
 // котором её создать.

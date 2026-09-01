@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"time"
 )
@@ -20,9 +21,17 @@ const (
 	// ошибку на той стороне.
 	maxResponseBytes = 1 << 20
 	// Провайдер стоит в цепочке пользовательского запроса (автор ждёт форму на
-	// экране), поэтому таймаут обязателен. 60 с — с запасом: замер 2026-09-01 дал
-	// 1,8–8 с на планах из трёх-пяти вопросов.
-	requestTimeout = 60 * time.Second
+	// экране), поэтому таймаут обязателен. 30 с — с запасом на ответ (замер
+	// 2026-09-01: 1,8–8 с на планах из трёх-пяти вопросов) и вдвое короче потолка
+	// всей операции (forms.generateTimeout): зависший вызов обязан оставить время
+	// повтору, иначе ретрай существует только на бумаге.
+	requestTimeout = 30 * time.Second
+	// dialTimeout — отдельно и коротко: наблюдаемый способ отказа этого провайдера
+	// — не медленный ответ, а НЕустановленное соединение (замер 2026-09-01: часть
+	// попыток не доходила до TCP вовсе). Без своего потолка такая попытка съедала
+	// бы весь requestTimeout, ничего не отправив; с ним отказ виден за секунды, и
+	// повтор успевает сработать.
+	dialTimeout = 5 * time.Second
 	// attempts — сколько раз пробуем один запрос. Ретрай ровно один: генерация
 	// стоит денег, а провайдер, отказавший дважды, не станет доступнее с третьей
 	// попытки. Ретраятся отказ транспорта, 5xx и пустой ответ; 4xx — нет, это наш
@@ -62,7 +71,11 @@ type Options struct {
 func NewClient(o Options) *Client {
 	httpClient := o.HTTPClient
 	if httpClient == nil {
-		httpClient = &http.Client{Timeout: requestTimeout}
+		// Свой транспорт, а не http.DefaultTransport: у дефолтного дозвон длится
+		// 30 с, и на этом провайдере он оказался главным источником ожидания.
+		transport := http.DefaultTransport.(*http.Transport).Clone()
+		transport.DialContext = (&net.Dialer{Timeout: dialTimeout, KeepAlive: 30 * time.Second}).DialContext
+		httpClient = &http.Client{Timeout: requestTimeout, Transport: transport}
 	}
 	log := o.Log
 	if log == nil {
