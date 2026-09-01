@@ -307,6 +307,75 @@ func TestLoad(t *testing.T) {
 		}
 	})
 
+	// Генерация форм (фаза 26): контур без провайдера обязан подниматься, а
+	// заявленный провайдер без параметров — падать при старте, а не при первом
+	// запросе автора.
+	t.Run("AI_TRANSPORT не задан — подсистема выключена", func(t *testing.T) {
+		setValidEnv(t)
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() вернул ошибку без AI_TRANSPORT: %v", err)
+		}
+		if cfg.AITransport != AITransportOff || cfg.AIEnabled() {
+			t.Errorf("AITransport = %q, AIEnabled = %v; ожидалось выключено", cfg.AITransport, cfg.AIEnabled())
+		}
+	})
+
+	t.Run("openai с полными параметрами — успех", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("AI_TRANSPORT", "openai")
+		t.Setenv("AI_BASE_URL", "https://llm.api.cloud.yandex.net/v1/")
+		t.Setenv("AI_API_KEY", "ключ")
+		t.Setenv("AI_MODEL", "gpt://каталог/модель/latest")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() вернул ошибку: %v", err)
+		}
+		if !cfg.AIEnabled() {
+			t.Error("AIEnabled() = false при AI_TRANSPORT=openai")
+		}
+		// Хвостовой слэш снимается: путь дописывает клиент.
+		if cfg.AIBaseURL != "https://llm.api.cloud.yandex.net/v1" {
+			t.Errorf("AIBaseURL = %q, ожидался без хвостового слэша", cfg.AIBaseURL)
+		}
+	})
+
+	t.Run("openai без ключа — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("AI_TRANSPORT", "openai")
+		t.Setenv("AI_BASE_URL", "https://llm.api.cloud.yandex.net/v1")
+		t.Setenv("AI_MODEL", "gpt://каталог/модель/latest")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "AI_API_KEY") {
+			t.Fatalf("ошибка = %v, ожидалось упоминание AI_API_KEY", err)
+		}
+	})
+
+	t.Run("openai с адресом без схемы — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("AI_TRANSPORT", "openai")
+		t.Setenv("AI_BASE_URL", "llm.api.cloud.yandex.net/v1")
+		t.Setenv("AI_API_KEY", "ключ")
+		t.Setenv("AI_MODEL", "модель")
+
+		if _, err := Load(); err == nil {
+			t.Fatal("Load() не вернул ошибку при AI_BASE_URL без http(s)://")
+		}
+	})
+
+	t.Run("неизвестный AI_TRANSPORT — ошибка", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("AI_TRANSPORT", "yandex")
+
+		_, err := Load()
+		if err == nil || !strings.Contains(err.Error(), "AI_TRANSPORT") {
+			t.Fatalf("ошибка = %v, ожидалось упоминание AI_TRANSPORT", err)
+		}
+	})
+
 	t.Run("несколько недостающих переменных перечислены разом", func(t *testing.T) {
 		setValidEnv(t)
 		t.Setenv("HTTP_ADDR", "")

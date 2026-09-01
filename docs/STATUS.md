@@ -114,10 +114,10 @@ shadcn, за границей ленивой загрузки) — заморо�
 
 ## Состав системы
 
-- **Go-API** — Go 1.26, 22 модуля в `internal/`
-  (`answerfiles`, `auth`, `blob`, `config`, `domain`, `entitlements`, `forms`, `geo`, `httpserver`,
-  `integrations`, `mail`, `media`, `oauth`, `periodic`, `pgtest`, `postgres`, `ratelimit`,
-  `submissions`, `token`, `visits`, `workspaces`).
+- **Go-API** — Go 1.26, 23 модуля в `internal/`
+  (`ai`, `answerfiles`, `auth`, `blob`, `config`, `domain`, `entitlements`, `forms`, `geo`,
+  `httpserver`, `integrations`, `mail`, `media`, `oauth`, `periodic`, `pgtest`, `postgres`,
+  `ratelimit`, `submissions`, `token`, `visits`, `workspaces`).
 - **PostgreSQL 16** — 47 миграций (`0001`…`0047_form_password`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui; графики аналитики — recharts за ленивой загрузкой (`features/insights/lazyCharts.tsx`), в общий чанк не входит.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 45 КиБ gzip** (сейчас
