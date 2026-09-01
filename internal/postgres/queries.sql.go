@@ -1479,6 +1479,11 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
+    -- password: шифротекст пароля формы (0047). Кабинету он едет ЦЕЛИКОМ, а не
+    -- признаком «пароль есть»: автор видит и копирует свой пароль (решение владельца,
+    -- design/form-password.md §2.1), расшифровывает его service. Публичному пути
+    -- шифротекст не нужен — GetPublicFormBySlug берёт только признак.
+    f.password,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1513,6 +1518,7 @@ type GetFormRow struct {
 	SaveLocally           bool
 	NotifyRespondent      bool
 	RespondentEmail       []byte
+	Password              []byte
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1551,6 +1557,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.SaveLocally,
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
+		&i.Password,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1576,6 +1583,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
+    f.password,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1610,6 +1618,7 @@ type GetFormBySlugRow struct {
 	SaveLocally           bool
 	NotifyRespondent      bool
 	RespondentEmail       []byte
+	Password              []byte
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1650,6 +1659,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.SaveLocally,
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
+		&i.Password,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1711,6 +1721,30 @@ func (q *Queries) GetFormIntegrationByID(ctx context.Context, id uuid.UUID) (Get
 		&i.UserID,
 		&i.ExternalEmail,
 	)
+	return i, err
+}
+
+const getFormPasswordBySlug = `-- name: GetFormPasswordBySlug :one
+SELECT f.id AS form_id, f.password
+FROM forms f
+JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.slug = $1
+`
+
+type GetFormPasswordBySlugRow struct {
+	FormID   uuid.UUID
+	Password []byte
+}
+
+// Шифротекст пароля и id формы по slug — ТОЛЬКО для публичной ручки разблокировки.
+// Отдельный запрос, а не поле в GetPublicFormBySlug, намеренно: там форма читается на
+// КАЖДОМ открытии, и возить шифротекст пароля по горячему пути ради одной ручки, куда
+// приходят раз за сессию, незачем. Черновик отсекается тем же INNER JOIN по
+// published_version_id: у неопубликованной формы пароль не спрашивают (её и нет, 404).
+func (q *Queries) GetFormPasswordBySlug(ctx context.Context, slug string) (GetFormPasswordBySlugRow, error) {
+	row := q.db.QueryRow(ctx, getFormPasswordBySlug, slug)
+	var i GetFormPasswordBySlugRow
+	err := row.Scan(&i.FormID, &i.Password)
 	return i, err
 }
 
@@ -1896,6 +1930,14 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- колонки без тарифа, как progress: рендерер получает намерение автора как есть.
     f.auto_jump,
     f.save_locally,
+    -- has_password: закрыта ли форма паролем (0047). Признак, а не шифротекст: на
+    -- публичном пути сравнивать нечего — пароль спрашивает отдельная ручка
+    -- разблокировки, а здесь решается только «отдать схему или 401 form_locked».
+    --
+    -- ⚠ МИНА: этот признак обязан спросить КАЖДЫЙ публичный вход по slug — отдача
+    -- формы, приём ответа, автосохранение, выдача слота файла. Общего middleware нет
+    -- и быть не может: решение принимается по строке формы (design/form-password.md §3.3).
+    (f.password IS NOT NULL)::bool AS has_password,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -1926,6 +1968,7 @@ type GetPublicFormBySlugRow struct {
 	Progress           bool
 	AutoJump           bool
 	SaveLocally        bool
+	HasPassword        bool
 	SubmissionCount    int64
 }
 
@@ -1968,6 +2011,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.Progress,
 		&i.AutoJump,
 		&i.SaveLocally,
+		&i.HasPassword,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -4930,6 +4974,52 @@ type UpdateFormNotifyRespondentRow struct {
 func (q *Queries) UpdateFormNotifyRespondent(ctx context.Context, arg UpdateFormNotifyRespondentParams) (UpdateFormNotifyRespondentRow, error) {
 	row := q.db.QueryRow(ctx, updateFormNotifyRespondent, arg.ID, arg.WorkspaceID, arg.NotifyRespondent)
 	var i UpdateFormNotifyRespondentRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateFormPassword = `-- name: UpdateFormPassword :one
+UPDATE forms
+SET password = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormPasswordParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Password    []byte
+}
+
+type UpdateFormPasswordRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Пароль на форму (0047): шифротекст либо NULL (снять). Живая колонка, как настройки
+// закрытия: и включение, и снятие действуют немедленно, без перепубликации. Тарифа
+// здесь нет вовсе — пароль бесплатен на всех планах (решение владельца 2026-09-01).
+// Шифрует service; repo и БД видят только байты.
+func (q *Queries) UpdateFormPassword(ctx context.Context, arg UpdateFormPasswordParams) (UpdateFormPasswordRow, error) {
+	row := q.db.QueryRow(ctx, updateFormPassword, arg.ID, arg.WorkspaceID, arg.Password)
+	var i UpdateFormPasswordRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

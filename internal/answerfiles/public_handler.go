@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/token"
 )
@@ -106,6 +107,7 @@ func (h *PublicHandler) issue(w http.ResponseWriter, r *http.Request) {
 	}
 
 	slot, err := h.svc.IssueSlot(r.Context(), SlotRequest{
+		Unlock:      r.Header.Get(forms.UnlockHeader),
 		Slug:        r.PathValue("slug"),
 		BlockID:     req.BlockID,
 		FileName:    req.FileName,

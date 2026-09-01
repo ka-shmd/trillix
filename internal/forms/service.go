@@ -2,9 +2,11 @@ package forms
 
 import (
 	"context"
+	"crypto/subtle"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
 	"strconv"
 	"strings"
@@ -16,6 +18,7 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
+	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -80,6 +83,8 @@ type Store interface {
 	UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error)
 	UpdateFormNotifyRespondent(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormRespondentEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, r *domain.RespondentEmail) (Form, error)
+	UpdateFormPassword(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, sealed []byte) (Form, error)
+	GetFormPasswordBySlug(ctx context.Context, db postgres.DBTX, slug string) (uuid.UUID, []byte, error)
 	SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
 	UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
@@ -176,6 +181,16 @@ type Service struct {
 	// nil = «модуля файлов в этой сборке нет» (юнит-тесты): удаление формы тогда
 	// работает как раньше.
 	files AnswerFiles
+	// secret — секрет токена формы (FORM_TOKEN_SECRET). Из него выводятся ключ
+	// шифрования пароля формы и секрет подписи токенов разблокировки (0047).
+	// Подключается сеттером, как files: конструктор зовут из полусотни тестов, и
+	// шестой позиционный аргумент к ним всем — правка ради одного применения.
+	//
+	// Пустой секрет = ОТКАЗ, а не работа без защиты: поставить пароль нельзя
+	// (errNoSecret), а уже стоящий не пускает никого — форма молчит, но не
+	// открывается. Молча пускать было бы ровно тем, от чего пароль ставили.
+	secret []byte
+	now    func() time.Time // срок токена разблокировки; подменяется в тестах
 }
 
 // AnswerFiles — коллаборатор из модуля answerfiles: снос файлов удаляемой формы.
@@ -186,7 +201,14 @@ type AnswerFiles interface {
 }
 
 func NewService(db postgres.DBTX, tx Transactor, repo Store, access Access, plans Plans) *Service {
-	return &Service{db: db, tx: tx, repo: repo, access: access, plans: plans}
+	return &Service{db: db, tx: tx, repo: repo, access: access, plans: plans, now: time.Now}
+}
+
+// WithSecret подключает секрет токена формы: из него выводятся ключ шифрования
+// пароля формы и подпись токенов разблокировки (0047).
+func (s *Service) WithSecret(secret []byte) *Service {
+	s.secret = secret
+	return s
 }
 
 // WithFiles подключает модуль файлов ответов (тот же приём, что WithFiles у
@@ -352,7 +374,11 @@ func (s *Service) GetForAction(ctx context.Context, userID, formID uuid.UUID, ac
 
 // Get возвращает форму по id, если пользователь состоит в её воркспейсе.
 func (s *Service) Get(ctx context.Context, userID, formID uuid.UUID) (Form, error) {
-	return s.formForUser(ctx, userID, formID, domain.ActionFormRead)
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormRead)
+	if err != nil {
+		return Form{}, err
+	}
+	return s.withPassword(ctx, form), nil
 }
 
 // GetBySlug возвращает форму по slug, если пользователь состоит в её воркспейсе.
@@ -361,7 +387,11 @@ func (s *Service) Get(ctx context.Context, userID, formID uuid.UUID) (Form, erro
 // slug: чужая/несуществующая форма — domain.ErrNotFound (404, существование не
 // раскрываем), как и в formForUser.
 func (s *Service) GetBySlug(ctx context.Context, userID uuid.UUID, slug string) (Form, error) {
-	return s.formForUserBySlug(ctx, userID, slug, domain.ActionFormRead)
+	form, err := s.formForUserBySlug(ctx, userID, slug, domain.ActionFormRead)
+	if err != nil {
+		return Form{}, err
+	}
+	return s.withPassword(ctx, form), nil
 }
 
 // UpdateCloseSettings заменяет настройки закрытия формы (дата/лимит/текст «приём
@@ -952,6 +982,125 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 		}
 	}
 	return pf, nil
+}
+
+// MaxFormPasswordLen — потолок пароля формы в рунах. Минимума нет намеренно: это
+// не пароль аккаунта, а общий секрет для своих, и требовать от автора «восемь
+// символов и цифру» для опроса среди коллег незачем. Пустая строка сюда не доходит
+// вовсе — она означает «снять пароль» (nil).
+const MaxFormPasswordLen = 128
+
+// UpdatePassword ставит или снимает пароль формы (0047). nil = снять.
+//
+// Тарифа здесь НЕТ вовсе: пароль бесплатен на всех планах (решение владельца
+// 2026-09-01, design/form-password.md §2.2) — он про приватность, а не про объём.
+// Живая колонка: и постановка, и снятие действуют без перепубликации.
+func (s *Service) UpdatePassword(ctx context.Context, userID, formID uuid.UUID, password *string) (Form, error) {
+	var sealed []byte
+	if password != nil {
+		// Пробелы НЕ тримятся: пароль — это ровно та строка, которую автор разослал
+		// участникам, и молча отрезать от неё край значило бы, что скопированный из
+		// настроек пароль не подходит к собственной форме.
+		if *password == "" {
+			return Form{}, fmt.Errorf("%w: пароль не может быть пустым", domain.ErrValidation)
+		}
+		if utf8.RuneCountInString(*password) > MaxFormPasswordLen {
+			return Form{}, fmt.Errorf("%w: пароль длиннее %d символов", domain.ErrValidation, MaxFormPasswordLen)
+		}
+	}
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if password != nil {
+		// Шифруем ДО UPDATE: ненастроенный секрет обязан отказать, а не записать
+		// пустоту, которую следующий читатель примет за «пароля нет».
+		sealed, err = sealPassword(s.secret, *password)
+		if err != nil {
+			return Form{}, fmt.Errorf("seal form password %s: %w", form.ID, err)
+		}
+	}
+	updated, err := s.repo.UpdateFormPassword(ctx, s.db, form.ID, form.WorkspaceID, sealed)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// withPassword дополняет форму расшифрованным паролем — для экрана настроек: автор
+// свой пароль видит и копирует (design/form-password.md §2.1).
+//
+// Сбой расшифровки НЕ роняет экран настроек: он означает ровно одно — секрет
+// приложения сменили, и старый шифротекст больше не читается (ротация
+// FORM_TOKEN_SECRET, S3.md-раннбук). Автору в этом случае честнее увидеть форму с
+// включённым паролем и пустым полем — то есть «пароль стоит, но показать его нечем»,
+// — чем пятисотку на странице настроек.
+func (s *Service) withPassword(ctx context.Context, form Form) Form {
+	if len(form.PasswordSealed) == 0 {
+		return form
+	}
+	plain, err := openPassword(s.secret, form.PasswordSealed)
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Error("расшифровка пароля формы",
+			slog.String("form_id", form.ID.String()), slog.String("error", err.Error()))
+		return form
+	}
+	form.Password = &plain
+	return form
+}
+
+// Unlock сверяет пароль, названный респондентом, и выдаёт токен разблокировки на
+// сутки. Неверный пароль и форма без пароля неотличимы снаружи (ErrFormLocked):
+// подбирающему незачем узнавать, на какую форму пароль вообще стоит.
+//
+// СРАВНЕНИЕ — ПОСТОЯННОЕ ПО ВРЕМЕНИ: строки приходят от того, кого мы не знаем, и
+// побайтовое сравнение с ранним выходом мерило бы длину общего префикса.
+//
+// Лимит попыток стоит ПЕРЕД этим вызовом, в транспорте (ведро по паре «IP + slug»),
+// и списывается до сравнения — иначе верный пароль обходил бы исчерпанный лимит и
+// подбор стоил бы ровно столько же.
+func (s *Service) Unlock(ctx context.Context, slug, password string) (string, time.Time, error) {
+	formID, sealed, err := s.repo.GetFormPasswordBySlug(ctx, s.db, slug)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", time.Time{}, domain.ErrNotFound
+		}
+		return "", time.Time{}, err
+	}
+	if len(sealed) == 0 {
+		// Пароля на форме нет — открывать нечего. 401, а не 200 с токеном: токен
+		// «ни от чего» пришлось бы потом отличать от настоящего.
+		return "", time.Time{}, domain.ErrFormLocked
+	}
+	plain, err := openPassword(s.secret, sealed)
+	if err != nil {
+		return "", time.Time{}, fmt.Errorf("open form password %s: %w", formID, err)
+	}
+	if subtle.ConstantTimeCompare([]byte(plain), []byte(password)) != 1 {
+		return "", time.Time{}, domain.ErrFormLocked
+	}
+	expiry := s.now().UTC().Add(unlockTTL)
+	return issueUnlockToken(deriveUnlockSecret(s.secret), formID, expiry), expiry, nil
+}
+
+// VerifyUnlock — пускать ли этот запрос к содержимому формы. Форма без пароля
+// пропускается всегда; форма с паролем требует годного токена ИМЕННО ЭТОЙ формы.
+//
+// Живёт в forms, а не у каждого потребителя, по той же причине, что ShowBadge и
+// CollectPartial: это решение о форме, и секрет подписи обязан лежать в одном месте.
+// Зовут его четыре публичных входа — отдача формы, приём ответа, автосохранение и
+// выдача слота файла (design/form-password.md §3.3).
+func (s *Service) VerifyUnlock(formID uuid.UUID, hasPassword bool, tok string) error {
+	if !hasPassword {
+		return nil
+	}
+	if validUnlockToken(deriveUnlockSecret(s.secret), tok, formID, s.now().UTC()) {
+		return nil
+	}
+	return domain.ErrFormLocked
 }
 
 // ShowBadge — показывать ли бейдж «Сделано в Trillix» на публичной форме.

@@ -3,6 +3,7 @@ package forms
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -35,7 +36,19 @@ type publicFormService interface {
 	// LinkPreviewFor — своя карточка ссылки, действующая прямо сейчас: намерение
 	// автора плюс разрешение тарифа. nil = дефолты страницы.
 	LinkPreviewFor(ctx context.Context, workspaceID uuid.UUID, p *domain.LinkPreview) (*domain.LinkPreview, error)
+	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
+	// Форма без пароля пропускается всегда.
+	VerifyUnlock(formID uuid.UUID, hasPassword bool, tok string) error
+	// Unlock сверяет названный пароль и выдаёт токен разблокировки со сроком.
+	Unlock(ctx context.Context, slug, password string) (string, time.Time, error)
 }
+
+// UnlockHeader — заголовок, которым рендерер предъявляет токен разблокировки.
+// Заголовок, а не cookie: встроенная в чужой сайт форма — третья сторона, и её
+// cookie браузеры режут (design/form-password.md §3.4). Исключение одно —
+// автосохранение черновика: последнее уходит через sendBeacon, который заголовков не
+// умеет, и там токен едет в теле.
+const UnlockHeader = "X-Form-Unlock"
 
 // PublicHandler — публичный транспорт форм (без авторизации и CSRF): отдаёт схему
 // опубликованной версии по slug. Отдельный от Handler ровно потому, что у этих
@@ -48,7 +61,11 @@ type PublicHandler struct {
 	// tokenLimiter — ведро выдачи токена времени. Не опционально: это единственное,
 	// что вообще ограничивает заготовку токенов пачкой (ADR §10).
 	tokenLimiter httpserver.RateLimiter
-	trustedProxy bool // за Caddy честный IP клиента — из X-Forwarded-For (TD-1)
+	// unlockLimiter — ведро попыток пароля, ключ «IP|slug» (0047). Не по одному
+	// адресу: подбор одной формы закрывал бы человеку все остальные; не по одному
+	// slug: один подбирающий закрывал бы форму всем участникам.
+	unlockLimiter UnlockLimiter
+	trustedProxy  bool // за Caddy честный IP клиента — из X-Forwarded-For (TD-1)
 	// indexPath — путь к собранному index.html рендерера. Пустой в dev: тогда /r не
 	// обслуживается Go (форму отдаёт vite-dev), и index не читается вовсе.
 	indexPath string
@@ -86,6 +103,22 @@ func NewPublicHandler(svc publicFormService, tokenSecret []byte, publicBaseURL, 
 	return h, nil
 }
 
+// UnlockLimiter — ведро попыток пароля по ключу «IP|slug». Реализация —
+// ratelimit.TokenBucket; в тестах инжектируется пермиссивная (инвариант 6).
+type UnlockLimiter interface {
+	Allow(key string) bool
+}
+
+// WithUnlockLimiter подключает ведро попыток пароля. Сеттером, а не аргументом
+// конструктора: его зовут из тестов публичной отдачи, которым пароль не нужен.
+//
+// МИНА: без него ручка разблокировки НЕ регистрируется вовсе (404). Молча пускать
+// подбор без лимита нельзя (инвариант 6), а тихо работать без ручки — заметно сразу.
+func (h *PublicHandler) WithUnlockLimiter(l UnlockLimiter) *PublicHandler {
+	h.unlockLimiter = l
+	return h
+}
+
 // Routes регистрирует публичные эндпоинты форм на общем mux: JSON-ручку рендерера
 // (/public/v1) и — только когда задан собранный index.html (прод) — HTML-страницу
 // формы с OG-мета (/r/{slug}). В dev /r отдаёт vite-dev, поэтому Go его не регит.
@@ -93,6 +126,9 @@ func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/v1/forms/{slug}", h.get)
 	limited := httpserver.RateLimitByIP(h.tokenLimiter, h.trustedProxy, "слишком много запросов")
 	mux.Handle("GET /public/v1/form-token", limited(http.HandlerFunc(h.formToken)))
+	if h.unlockLimiter != nil {
+		mux.HandleFunc("POST /public/v1/forms/{slug}/unlock", h.unlock)
+	}
 	if h.indexPath != "" {
 		mux.HandleFunc("GET /r/{slug}", h.getHTML)
 	}
@@ -146,6 +182,77 @@ type closedFormResponse struct {
 	ShowBadge bool `json:"showBadge"`
 }
 
+// lockedFormResponse — тело GET /public/v1/forms/{slug} для формы под паролем (HTTP
+// 401 form_locked). Схемы и токена здесь нет — до пароля рендереру их видеть нечем.
+type lockedFormResponse struct {
+	Locked bool `json:"locked"`
+	// Title — название формы: экран ввода пароля его ПОКАЗЫВАЕТ (решение владельца
+	// 2026-09-01, design/form-password.md §2.3). Пароль прячет вопросы и ответы, а не
+	// факт существования формы; <title> вкладки и OG-карточка остаются как были.
+	Title string `json:"title"`
+	// Бейдж стоит и на этом экране — по тому же доводу, что на экране «приём закрыт»:
+	// иначе он снимается разглядыванием второго экрана.
+	ShowBadge bool `json:"showBadge"`
+}
+
+// unlockRequest/unlockResponse — тело POST /public/v1/forms/{slug}/unlock.
+type unlockRequest struct {
+	Password string `json:"password"`
+}
+
+type unlockResponse struct {
+	Token string `json:"token"`
+	// ExpiresIn — сколько секунд токен ещё годен. Рендереру он нужен, чтобы не
+	// предъявлять заведомо просроченный и не показывать из-за этого отказ вместо
+	// экрана пароля.
+	ExpiresIn int `json:"expiresIn"`
+}
+
+// maxUnlockBodyBytes — потолок тела заявки на разблокировку (инвариант 3). В нём
+// только пароль, чей потолок — 128 рун.
+const maxUnlockBodyBytes = 4 << 10
+
+// unlock сверяет пароль и выдаёт токен разблокировки.
+//
+// ЛИМИТ СПИСЫВАЕТСЯ ДО СВЕРКИ и по паре «IP + slug». До сверки — потому что иначе
+// верный пароль обходил бы исчерпанное ведро, и подбор стоил бы ровно столько же:
+// угадал — прошёл. По паре — потому что ведро по одному адресу закрывало бы
+// подбираемой формой все остальные, а по одному slug один подбирающий закрывал бы
+// форму всем её участникам.
+func (h *PublicHandler) unlock(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	slug := r.PathValue("slug")
+	key := httpserver.ClientIP(r, h.trustedProxy) + "|" + slug
+	if !h.unlockLimiter.Allow(key) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много попыток, подождите минуту", domain.ErrRateLimited))
+		return
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxUnlockBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req unlockRequest
+	if err := dec.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpserver.WriteError(w, r, fmt.Errorf("%w: тело больше %d байт", domain.ErrTooLarge, maxUnlockBodyBytes))
+			return
+		}
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+
+	tok, expiry, err := h.svc.Unlock(r.Context(), slug, req.Password)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, unlockResponse{
+		Token:     tok,
+		ExpiresIn: int(time.Until(expiry).Seconds()),
+	})
+}
+
 // formTokenResponse — тело GET /public/v1/form-token.
 type formTokenResponse struct {
 	Token string `json:"token"`
@@ -176,6 +283,23 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		// ErrNotFound → 404 для черновика/несуществующей (приватное не раскрывается).
 		httpserver.WriteError(w, r, err)
 		return
+	}
+
+	// Пароль — ПЕРВЫЙ барьер, раньше проверки закрытости: под паролем прячется всё
+	// содержимое формы, включая текст экрана «приём закрыт», который тоже написал
+	// автор. Кэш выключаем на весь путь формы с паролем — и на отказе, и после
+	// разблокировки: публичный max-age у тела с вопросами означал бы, что общий
+	// прокси раздаёт его кому угодно.
+	if pf.HasPassword {
+		w.Header().Set("Cache-Control", "no-store")
+		if err := h.svc.VerifyUnlock(pf.FormID, pf.HasPassword, r.Header.Get(UnlockHeader)); err != nil {
+			httpserver.WriteJSON(w, r, http.StatusUnauthorized, lockedFormResponse{
+				Locked:    true,
+				Title:     titleOrFallback(pf.Title),
+				ShowBadge: h.showBadge(r, pf.WorkspaceID, pf.Branding),
+			})
+			return
+		}
 	}
 
 	// Форма была публичной, но больше не принимает ответы (снята/дата/лимит) → 410

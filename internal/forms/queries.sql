@@ -58,6 +58,11 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
+    -- password: шифротекст пароля формы (0047). Кабинету он едет ЦЕЛИКОМ, а не
+    -- признаком «пароль есть»: автор видит и копирует свой пароль (решение владельца,
+    -- design/form-password.md §2.1), расшифровывает его service. Публичному пути
+    -- шифротекст не нужен — GetPublicFormBySlug берёт только признак.
+    f.password,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -87,6 +92,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
+    f.password,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -251,6 +257,27 @@ SET auto_jump = $3, save_locally = $4, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormPassword :one
+-- Пароль на форму (0047): шифротекст либо NULL (снять). Живая колонка, как настройки
+-- закрытия: и включение, и снятие действуют немедленно, без перепубликации. Тарифа
+-- здесь нет вовсе — пароль бесплатен на всех планах (решение владельца 2026-09-01).
+-- Шифрует service; repo и БД видят только байты.
+UPDATE forms
+SET password = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: GetFormPasswordBySlug :one
+-- Шифротекст пароля и id формы по slug — ТОЛЬКО для публичной ручки разблокировки.
+-- Отдельный запрос, а не поле в GetPublicFormBySlug, намеренно: там форма читается на
+-- КАЖДОМ открытии, и возить шифротекст пароля по горячему пути ради одной ручки, куда
+-- приходят раз за сессию, незачем. Черновик отсекается тем же INNER JOIN по
+-- published_version_id: у неопубликованной формы пароль не спрашивают (её и нет, 404).
+SELECT f.id AS form_id, f.password
+FROM forms f
+JOIN form_versions fv ON fv.id = f.published_version_id
+WHERE f.slug = $1;
+
 -- name: UpdateFormLinkPreview :one
 -- Своя карточка ссылки формы (og:site_name/title/description/image + иконка).
 -- Живая колонка, как настройки закрытия: применяется без перепубликации. Окно
@@ -355,6 +382,14 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- колонки без тарифа, как progress: рендерер получает намерение автора как есть.
     f.auto_jump,
     f.save_locally,
+    -- has_password: закрыта ли форма паролем (0047). Признак, а не шифротекст: на
+    -- публичном пути сравнивать нечего — пароль спрашивает отдельная ручка
+    -- разблокировки, а здесь решается только «отдать схему или 401 form_locked».
+    --
+    -- ⚠ МИНА: этот признак обязан спросить КАЖДЫЙ публичный вход по slug — отдача
+    -- формы, приём ответа, автосохранение, выдача слота файла. Общего middleware нет
+    -- и быть не может: решение принимается по строке формы (design/form-password.md §3.3).
+    (f.password IS NOT NULL)::bool AS has_password,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count

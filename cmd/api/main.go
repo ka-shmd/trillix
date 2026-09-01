@@ -71,6 +71,17 @@ const (
 	formTokenRatePerSec = 1.0 / 3.0
 	formTokenBurst      = 30
 
+	// Лимит попыток пароля формы — ведро по паре «IP + slug» (0047). Ключ парный
+	// намеренно: по одному адресу подбор одной формы закрывал бы человеку все
+	// остальные, по одному slug один подбирающий закрывал бы форму всем участникам.
+	//
+	// Шесть попыток и одна новая в 30 секунд: человек, которому пароль прислали,
+	// ошибётся раз-другой и попадёт, а перебор словаря упирается в стену на седьмой
+	// строке. Ведро списывается ДО сравнения (public_handler.unlock), поэтому верный
+	// пароль исчерпанный лимит не обходит.
+	unlockRatePerSec = 1.0 / 30.0
+	unlockBurst      = 6
+
 	// Жёсткий лимит на выдачу слота загрузки по IP (фаза 24, своё ведро). Ведро
 	// уже, чем у приёма ответа, и это осознанно: каждый слот — строка в базе и
 	// право записи в наш бакет, то есть чужие байты за наш счёт. Запас 10,
@@ -379,7 +390,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
 	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
 
-	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc)
+	// Секрет токена формы: из него выводятся ключ шифрования пароля формы и подпись
+	// токенов разблокировки (0047). Без него пароль поставить нельзя, а уже
+	// стоящий не пускает никого — отказ, а не работа без защиты.
+	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc).
+		WithSecret(cfg.FormTokenSecret)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF).
 		// Письмо о новом ответе без авторских правок — для бланка в настройках формы.
 		// Адрес и имя разбираются из MAIL_FROM («Trillix <no-reply@…>»), тема живёт
@@ -414,6 +429,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	if err != nil {
 		return fmt.Errorf("init public forms handler: %w", err)
 	}
+	unlockLimiter := ratelimit.NewTokenBucket(unlockRatePerSec, unlockBurst)
+	formsPublic = formsPublic.WithUnlockLimiter(unlockLimiter)
 
 	blobClient := blob.New(blob.Config{
 		Endpoint:  cfg.S3Endpoint,
@@ -690,7 +707,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + emailChangeLimiter.GC() + confirmEmailLimiter.GC() +
 				twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +
-				respondentMailLimiter.GC()
+				respondentMailLimiter.GC() + unlockLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}

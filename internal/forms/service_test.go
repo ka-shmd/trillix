@@ -45,6 +45,12 @@ type fakeStore struct {
 	publicForm PublicForm
 	publicErr  error
 
+	// Управление паролем формы (0047): что лежит в колонке и что туда записали.
+	sealedPassword []byte
+	passwordErr    error
+	lastSealed     []byte
+	passwordSet    bool
+
 	// Управление чтением версий (CSV-экспорт).
 	versions []Version
 
@@ -154,6 +160,20 @@ func (f *fakeStore) UpdateFormNotifyRespondent(_ context.Context, _ postgres.DBT
 	f.updated = true
 	f.lastRespondentOn = enabled
 	return Form{ID: id, WorkspaceID: workspaceID, NotifyRespondent: enabled}, nil
+}
+
+func (f *fakeStore) UpdateFormPassword(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, sealed []byte) (Form, error) {
+	f.updated = true
+	f.passwordSet = true
+	f.lastSealed = sealed
+	return Form{ID: id, WorkspaceID: workspaceID, PasswordSealed: sealed}, nil
+}
+
+func (f *fakeStore) GetFormPasswordBySlug(_ context.Context, _ postgres.DBTX, _ string) (uuid.UUID, []byte, error) {
+	if f.passwordErr != nil {
+		return uuid.Nil, nil, f.passwordErr
+	}
+	return f.form.ID, f.sealedPassword, nil
 }
 
 func (f *fakeStore) UpdateFormRespondentEmail(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, r *domain.RespondentEmail) (Form, error) {

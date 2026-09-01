@@ -51,6 +51,7 @@ type Form struct {
 	SaveLocally        bool
 	NotifyRespondent   bool
 	RespondentEmail    []byte
+	Password           []byte
 }
 
 type FormIntegration struct {

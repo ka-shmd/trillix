@@ -35,6 +35,19 @@ func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error)
 	return f.pf, nil
 }
 
+// testUnlockToken — «правильный» токен разблокировки в фейке; подпись проверяется
+// в своих тестах модуля forms, здесь важно лишь, что сервис отказывает без токена.
+const testUnlockToken = "unlocked"
+
+// VerifyUnlock повторяет правило сервиса форм: без пароля пускаем всегда, с паролем
+// — только по годному токену.
+func (f fakeForms) VerifyUnlock(_ uuid.UUID, hasPassword bool, tok string) error {
+	if !hasPassword || tok == testUnlockToken {
+		return nil
+	}
+	return domain.ErrFormLocked
+}
+
 // CollectPartial повторяет правило сервиса: без тумблера сбора нет, с тумблером
 // решает тариф. partialAllowed=false — план, который сбор больше не разрешает.
 func (f fakeForms) CollectPartial(_ context.Context, _ uuid.UUID, intent bool) (bool, error) {

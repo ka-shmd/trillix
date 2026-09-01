@@ -41,10 +41,33 @@ type fakePublicSvc struct {
 	// cardAllowed — разрешает ли тариф свою карточку ссылки (form_link_preview).
 	cardAllowed bool
 	cardErr     error
+	// password — пароль формы в фейке (пусто = пароля нет).
+	password string
 }
 
 func (f fakePublicSvc) PublicForm(_ context.Context, _ string) (PublicForm, error) {
 	return f.pf, f.err
+}
+
+// testUnlockToken — «правильный» токен разблокировки в фейке. Настоящую подпись
+// здесь проверять незачем (для неё есть unlock_test.go): транспорту важно ровно то,
+// что он ПЕРЕДАЁТ заголовок и уважает отказ.
+const testUnlockToken = "unlocked"
+
+// VerifyUnlock повторяет ПРАВИЛО сервиса, а не результат: форма без пароля
+// пропускается всегда, форма с паролем — только по годному токену.
+func (f fakePublicSvc) VerifyUnlock(_ uuid.UUID, hasPassword bool, tok string) error {
+	if !hasPassword || tok == testUnlockToken {
+		return nil
+	}
+	return domain.ErrFormLocked
+}
+
+func (f fakePublicSvc) Unlock(_ context.Context, _, password string) (string, time.Time, error) {
+	if f.password == "" || password != f.password {
+		return "", time.Time{}, domain.ErrFormLocked
+	}
+	return testUnlockToken, time.Now().Add(time.Hour), nil
 }
 
 // ShowBadge в фейке повторяет ПРАВИЛО, а не результат: автор бейдж не снимал —
