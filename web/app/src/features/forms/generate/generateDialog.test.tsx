@@ -121,7 +121,7 @@ describe('сборка формы по описанию', () => {
     expect(screen.getByRole('button', { name: 'Собираю…' }).hasAttribute('disabled')).toBe(true)
     expect(screen.getByRole('button', { name: 'Отмена' }).hasAttribute('disabled')).toBe(true)
     expect(screen.getByLabelText('Что за форма').hasAttribute('disabled')).toBe(true)
-    expect(document.body.textContent).toContain('это занимает несколько секунд')
+    expect(document.body.textContent).toContain('Обычно 15–40 секунд')
 
     await act(async () => {
       release?.()

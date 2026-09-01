@@ -127,7 +127,7 @@ export function GenerateFormDialog({
             />
             <p className="mt-2 text-sm text-muted-foreground">
               {pending
-                ? 'Собираю форму — это занимает несколько секунд.'
+                ? 'Собираю форму. Обычно 15–40 секунд — окно можно не закрывать.'
                 : `${prompt.length} из ${MAX_PROMPT_LEN} символов`}
             </p>
             {failure && (

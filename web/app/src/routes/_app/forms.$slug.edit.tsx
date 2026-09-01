@@ -53,8 +53,16 @@ function FormEditor() {
   // Живость экрана: сохранение досылается на размонтировании (useAutosave), и форма
   // может родиться уже после ухода автора с полотна. Кэш обновить в этот момент
   // правильно, а вот утащить человека в редактор — нет.
+  //
+  // МИНА: живость обязана ВЗВОДИТЬСЯ в теле эффекта, а не только гаситься в уборке.
+  // React в StrictMode прогоняет эффект дважды (монтирование → уборка → монтирование),
+  // и без первой строки флаг оставался бы false навсегда — то есть в dev-сборке
+  // переход после создания формы не случался бы вовсе.
   const alive = useRef(true)
-  useEffect(() => () => void (alive.current = false), [])
+  useEffect(() => {
+    alive.current = true
+    return () => void (alive.current = false)
+  }, [])
 
   const draft: DraftCreation | undefined = isDraft
     ? {
@@ -94,10 +102,15 @@ function FormEditor() {
   // с сервера.
   async function generate(prompt: string) {
     const form = await generateForm(prompt, await resolveWorkspaceId(qc, workspaceSlug))
+    // Деталь собранной формы кладётся в кэш ДО перехода: иначе редактор откроется
+    // пустым и мигнёт загрузкой на схеме, которая уже есть на сервере.
+    await qc.fetchQuery(formDetailQueryOptions(form.slug))
     void qc.invalidateQueries({ queryKey: formKeys.list() })
     if (!alive.current) return
-    setDraftDetail(null)
-    void navigate({
+
+    // ПОРЯДОК: сперва адрес, потом выход из режима черновика. Наоборот — значит
+    // один кадр с включённым запросом на старом slug (`new`), то есть лишний 404.
+    await navigate({
       to: '/forms/$slug/edit',
       params: { slug: form.slug },
       search: (prev) => prev,
@@ -106,6 +119,7 @@ function FormEditor() {
       // формы — обычный переход: к ней возвращаться есть зачем.
       replace: isDraft,
     })
+    if (alive.current) setDraftDetail(null)
   }
 
   if (!detail) {
