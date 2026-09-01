@@ -110,6 +110,14 @@ const (
 	// ГЕЙТ ПРИРОДЫ БЕЙДЖА: спрашивается и при сохранении бланка, и при отправке
 	// каждого письма — даунгрейд гасит отправку, ничего не стирая.
 	FormRespondentEmail Key = "form_respondent_email"
+
+	// AIGenerations — сколько раз за месяц можно собрать или поправить форму
+	// текстом (фаза 26, миграция 0048). Квота, а не тумблер: каждый вызов стоит
+	// денег снаружи, и вопрос здесь «сколько», а не «можно ли».
+	//
+	// Безлимита у этого ключа не бывает ни на одном плане — null означал бы
+	// открытый счёт у провайдера, оплачиваемый нами.
+	AIGenerations Key = "ai_generations"
 )
 
 // Kind — как читать значение ключа в plans.limits.
@@ -156,6 +164,11 @@ const (
 	// (строки workspace_members с role='owner'). Периода у этого счётчика нет:
 	// удалил пространство — освободилось место, ждать первого числа не нужно.
 	WorkspacesMeter
+	// AIGenerationsMeter — расход берётся из workspace_usage.ai_generations за
+	// период. Свой счётчик, а не SubmissionsMeter: обнуляются они вместе (период
+	// один), но считают разное, и общая колонка означала бы, что ответы съедают
+	// генерации.
+	AIGenerationsMeter
 )
 
 // Feature — описание возможности.
@@ -188,6 +201,7 @@ var CatalogOrder = []Key{
 	FormNotifyEmail,
 	FormRespondentEmail,
 	StoragePerWorkspace,
+	AIGenerations,
 	Workspaces,
 }
 
@@ -205,4 +219,5 @@ var Catalog = map[Key]Feature{
 	FormLinkPreview:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своя карточка ссылки"},
 	FormNotifyEmail:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё письмо о новом ответе"},
 	FormRespondentEmail: {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Письмо респонденту"},
+	AIGenerations:       {Kind: Quota, Scope: WorkspaceScope, Meter: AIGenerationsMeter, Title: "Генераций формы в месяц"},
 }

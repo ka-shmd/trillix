@@ -12,6 +12,30 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const bumpAIGenerations = `-- name: BumpAIGenerations :exec
+INSERT INTO workspace_usage (workspace_id, period, ai_generations)
+VALUES ($1, $2, 1)
+ON CONFLICT (workspace_id, period)
+DO UPDATE SET ai_generations = workspace_usage.ai_generations + 1
+`
+
+type BumpAIGenerationsParams struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+}
+
+// Списание одной генерации формы (фаза 26). Отдельным утверждением, а не внутри
+// создания формы: вызов модели может не состояться, и квоту тогда списывать не за
+// что. Период приходит из решения, принятого проверкой (Decision.Period), — иначе
+// на границе месяца проверка и списание разъезжаются по разным строкам.
+//
+// UPSERT по той же причине, что у ответов: строки периода может ещё не быть, и
+// «создать или увеличить» обязано быть одним утверждением, а не парой чтение-запись.
+func (q *Queries) BumpAIGenerations(ctx context.Context, arg BumpAIGenerationsParams) error {
+	_, err := q.db.Exec(ctx, bumpAIGenerations, arg.WorkspaceID, arg.Period)
+	return err
+}
+
 const claimSubmissionFile = `-- name: ClaimSubmissionFile :execrows
 UPDATE submission_files
 SET submission_id = $2, claimed_at = now()
@@ -1252,7 +1276,8 @@ const getEntitlements = `-- name: GetEntitlements :one
 SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
-       coalesce(u.submissions, 0)::bigint AS submissions_used
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       coalesce(u.ai_generations, 0)::bigint AS ai_generations_used
 FROM workspace_members o
 JOIN subscriptions s ON s.user_id = o.user_id
 JOIN plans p ON p.code = s.plan_code
@@ -1267,10 +1292,11 @@ type GetEntitlementsParams struct {
 }
 
 type GetEntitlementsRow struct {
-	PlanCode        string
-	PlanTitle       string
-	Limits          []byte
-	SubmissionsUsed int64
+	PlanCode          string
+	PlanTitle         string
+	Limits            []byte
+	SubmissionsUsed   int64
+	AiGenerationsUsed int64
 }
 
 // Запросы модуля entitlements. Схема — migrations/0014_billing и 0016.
@@ -1297,6 +1323,7 @@ func (q *Queries) GetEntitlements(ctx context.Context, arg GetEntitlementsParams
 		&i.PlanTitle,
 		&i.Limits,
 		&i.SubmissionsUsed,
+		&i.AiGenerationsUsed,
 	)
 	return i, err
 }
@@ -1306,6 +1333,7 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
+       coalesce(u.ai_generations, 0)::bigint AS ai_generations_used,
        (SELECT count(*) FROM workspace_members mm
           JOIN users mu ON mu.id = mm.user_id AND mu.deleted_at IS NULL
          WHERE mm.workspace_id = o.workspace_id)::bigint AS members_count,
@@ -1327,12 +1355,13 @@ type GetEntitlementsForUserParams struct {
 }
 
 type GetEntitlementsForUserRow struct {
-	PlanCode        string
-	PlanTitle       string
-	Limits          []byte
-	SubmissionsUsed int64
-	MembersCount    int64
-	StorageUsed     int64
+	PlanCode          string
+	PlanTitle         string
+	Limits            []byte
+	SubmissionsUsed   int64
+	AiGenerationsUsed int64
+	MembersCount      int64
+	StorageUsed       int64
 }
 
 // То же состояние, но для КАБИНЕТА: доступ обеспечивает сам запрос — JOIN по
@@ -1353,6 +1382,7 @@ func (q *Queries) GetEntitlementsForUser(ctx context.Context, arg GetEntitlement
 		&i.PlanTitle,
 		&i.Limits,
 		&i.SubmissionsUsed,
+		&i.AiGenerationsUsed,
 		&i.MembersCount,
 		&i.StorageUsed,
 	)
@@ -1364,6 +1394,7 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
+       coalesce(u.ai_generations, 0)::bigint AS ai_generations_used,
        (SELECT count(*) FROM workspace_members m
           JOIN users mu ON mu.id = m.user_id AND mu.deleted_at IS NULL
          WHERE m.workspace_id = o.workspace_id)::bigint AS members_count
@@ -1381,11 +1412,12 @@ type GetEntitlementsWithMembersParams struct {
 }
 
 type GetEntitlementsWithMembersRow struct {
-	PlanCode        string
-	PlanTitle       string
-	Limits          []byte
-	SubmissionsUsed int64
-	MembersCount    int64
+	PlanCode          string
+	PlanTitle         string
+	Limits            []byte
+	SubmissionsUsed   int64
+	AiGenerationsUsed int64
+	MembersCount      int64
 }
 
 // То же состояние плюс счётчик участников — для гейта мест. Отдельным запросом,
@@ -1400,6 +1432,7 @@ func (q *Queries) GetEntitlementsWithMembers(ctx context.Context, arg GetEntitle
 		&i.PlanTitle,
 		&i.Limits,
 		&i.SubmissionsUsed,
+		&i.AiGenerationsUsed,
 		&i.MembersCount,
 	)
 	return i, err
@@ -1410,6 +1443,7 @@ SELECT p.code AS plan_code,
        p.title AS plan_title,
        p.limits,
        coalesce(u.submissions, 0)::bigint AS submissions_used,
+       coalesce(u.ai_generations, 0)::bigint AS ai_generations_used,
        (SELECT coalesce(sum(f.size_bytes), 0) FROM submission_files f
          WHERE f.workspace_id = o.workspace_id)::bigint AS storage_used
 FROM workspace_members o
@@ -1426,11 +1460,12 @@ type GetEntitlementsWithStorageParams struct {
 }
 
 type GetEntitlementsWithStorageRow struct {
-	PlanCode        string
-	PlanTitle       string
-	Limits          []byte
-	SubmissionsUsed int64
-	StorageUsed     int64
+	PlanCode          string
+	PlanTitle         string
+	Limits            []byte
+	SubmissionsUsed   int64
+	AiGenerationsUsed int64
+	StorageUsed       int64
 }
 
 // То же состояние плюс расход хранилища — для гейта файлов (фаза 24). Отдельным
@@ -1451,6 +1486,7 @@ func (q *Queries) GetEntitlementsWithStorage(ctx context.Context, arg GetEntitle
 		&i.PlanTitle,
 		&i.Limits,
 		&i.SubmissionsUsed,
+		&i.AiGenerationsUsed,
 		&i.StorageUsed,
 	)
 	return i, err

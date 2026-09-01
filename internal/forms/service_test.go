@@ -308,6 +308,13 @@ func (a *fakeAccess) Can(_ context.Context, _, _ uuid.UUID, action domain.Action
 // запрещающий фейк красил бы их все.
 type fakePlans struct {
 	allowed bool
+	// period — расчётный период, который возвращает проверка. Списание обязано
+	// попасть в него же (фаза 26).
+	period time.Time
+	// consumed — периоды состоявшихся списаний генерации; consumeErr — отказ
+	// счётчика.
+	consumed   []time.Time
+	consumeErr error
 	// deny — точечный запрет по ключу поверх allowed: без него тест не может
 	// отличить два ключа друг от друга (разрешено всё, кроме одного).
 	deny    map[entitlements.Key]bool
@@ -317,7 +324,12 @@ type fakePlans struct {
 
 func (p *fakePlans) CheckWorkspace(_ context.Context, _ uuid.UUID, key entitlements.Key) (entitlements.Decision, error) {
 	p.gotKeys = append(p.gotKeys, key)
-	return entitlements.Decision{Allowed: p.allowed && !p.deny[key]}, p.err
+	return entitlements.Decision{Allowed: p.allowed && !p.deny[key], Period: p.period}, p.err
+}
+
+func (p *fakePlans) ConsumeAIGeneration(_ context.Context, _ uuid.UUID, period time.Time) error {
+	p.consumed = append(p.consumed, period)
+	return p.consumeErr
 }
 
 func newTestService(store *fakeStore) *Service {
@@ -1656,6 +1668,8 @@ func (p *countingPlans) CheckWorkspace(context.Context, uuid.UUID, entitlements.
 	p.calls++
 	return entitlements.Decision{Allowed: true}, nil
 }
+
+func (p *countingPlans) ConsumeAIGeneration(context.Context, uuid.UUID, time.Time) error { return nil }
 
 // --- Своя карточка ссылки: сохранение свободно, применение платно ---
 

@@ -32,6 +32,8 @@ type Middleware = func(http.Handler) http.Handler
 // formsService — интерфейс сервиса, нужный транспорту (реализация — *Service).
 type formsService interface {
 	Create(ctx context.Context, userID uuid.UUID, title string, workspaceID *uuid.UUID) (Form, error)
+	// Generate собирает черновик формы по описанию автора (фаза 26).
+	Generate(ctx context.Context, userID uuid.UUID, prompt string, workspaceID *uuid.UUID) (Form, error)
 	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -74,6 +76,25 @@ type Handler struct {
 	// с notifyMail: тема у писем разная, и бланк обязан показывать ту, которая
 	// действительно уйдёт. Адресата здесь нет вовсе — он приезжает ответом.
 	respondentMail notifyMailBody
+	// generateLimiter — ведро генерации формы. Ключ — АККАУНТ, а не адрес: вызов
+	// стоит денег, и защищать надо от своего же цикла в кабинете, а не только от
+	// чужого перебора. Не подключён (юнит-тесты) = ограничения нет: инвариант 6
+	// требует инжектировать пермиссивную реализацию, а не ослаблять боевую.
+	generateLimiter RateLimiter
+}
+
+// RateLimiter — ведро запросов, нужное транспорту форм. Реализация —
+// ratelimit.TokenBucket; в тестах инжектируется пермиссивная (инвариант 6).
+type RateLimiter interface {
+	Allow(key string) bool
+}
+
+// WithGenerateLimiter подключает ведро генерации. Отдельным сеттером, а не
+// аргументом конструктора: конструктор зовут из десятков тестов, которым ведро
+// безразлично.
+func (h *Handler) WithGenerateLimiter(l RateLimiter) *Handler {
+	h.generateLimiter = l
+	return h
 }
 
 // WithNotifyMail сообщает транспорту, как выглядит письмо о новом ответе без правок
@@ -99,6 +120,9 @@ func NewHandler(svc formsService, requireAuth, requireCSRF Middleware) *Handler 
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("POST /api/v1/forms", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.create))))
+	// Литеральный сегмент специфичнее /forms/{id}, коллизии в mux нет (тот же
+	// довод, что у /forms/lookup).
+	mux.Handle("POST /api/v1/forms/generate", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.generate))))
 	mux.Handle("GET /api/v1/forms/{id}", h.requireAuth(http.HandlerFunc(h.get)))
 	// Резолв формы по slug (кабинет адресует форму slug'ом в URL редактора/ответов/
 	// шаринга, как рендерер — /r/{slug}). slug — в query, а не в пути: путь
@@ -530,6 +554,33 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusCreated, toFormResponse(form))
 }
 
+// generate — форма по описанию автора (фаза 26). Ответ тот же, что у создания:
+// кабинет уходит в редактор по id, и знать, чем форма собрана, ему не нужно.
+func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	if h.generateLimiter != nil && !h.generateLimiter.Allow(userID.String()) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком часто, подождите немного", domain.ErrRateLimited))
+		return
+	}
+	req, ok := decodeGenerate(w, r)
+	if !ok {
+		return
+	}
+	wsID, ok := parseWorkspaceID(w, r, req.WorkspaceID)
+	if !ok {
+		return
+	}
+	form, err := h.svc.Generate(r.Context(), userID, req.Prompt, wsID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusCreated, toFormResponse(form))
+}
+
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	userID, ok := userID(w, r)
 	if !ok {
@@ -819,6 +870,25 @@ func parseWorkspaceID(w http.ResponseWriter, r *http.Request, raw *string) (*uui
 		return nil, false
 	}
 	return &id, true
+}
+
+// generateRequest — описание формы словами и (необязательно) пространство, в
+// котором её создать.
+type generateRequest struct {
+	Prompt      string  `json:"prompt"`
+	WorkspaceID *string `json:"workspaceId"`
+}
+
+func decodeGenerate(w http.ResponseWriter, r *http.Request) (generateRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req generateRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return generateRequest{}, false
+	}
+	return req, true
 }
 
 func decodeTitle(w http.ResponseWriter, r *http.Request) (titleRequest, bool) {

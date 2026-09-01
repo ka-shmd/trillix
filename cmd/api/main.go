@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/ka-shmd/trillix/internal/ai"
 	"github.com/ka-shmd/trillix/internal/answerfiles"
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/blob"
@@ -137,6 +138,14 @@ const (
 	inviteRatePerSec = 1.0 / 120.0
 	inviteBurst      = 5
 
+	// generateRatePerSec/generateBurst — сборка формы моделью. Ключ ведра —
+	// АККАУНТ: вызов стоит денег снаружи, и ограничивать надо того, кто платит, а
+	// не адрес, с которого пришли. Одна генерация в минуту при запасе на пять —
+	// месячная квота (10 на бесплатном плане) выбирается за пять минут, дальше
+	// отвечает она, а ведро держит цикл в кабинете и вкладку, залипшую на кнопке.
+	generateRatePerSec = 1.0 / 60.0
+	generateBurst      = 5
+
 	resendRatePerSec = 1.0 / 300.0
 	resendBurst      = 3
 
@@ -241,6 +250,24 @@ const (
 // senderAddress и senderName — адрес и имя из MAIL_FROM. Пустая строка, если
 // разобрать не вышло: обе строки нужны одной подписи в кабинете, и падать из-за неё
 // нельзя.
+// formGenerator — модель для сборки формы текстом. Выключенный контур получает
+// ai.Disabled: «генерации здесь нет» становится обычным ответом подсистемы, а не
+// проверкой на nil в каждой ручке.
+func formGenerator(cfg config.Config, log *slog.Logger) forms.Generator {
+	if !cfg.AIEnabled() {
+		log.Info("ai generation disabled (AI_TRANSPORT=off)")
+		return ai.Disabled{}
+	}
+	log.Info("ai generation enabled", slog.String("model", cfg.AIModel))
+	return ai.NewClient(ai.Options{
+		BaseURL: cfg.AIBaseURL,
+		APIKey:  cfg.AIAPIKey,
+		Model:   cfg.AIModel,
+		Project: cfg.AIProject,
+		Log:     log,
+	})
+}
+
 func senderAddress(from string) string {
 	addr, err := netmail.ParseAddress(from)
 	if err != nil {
@@ -400,9 +427,16 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// Секрет токена формы: из него выводятся ключ шифрования пароля формы и подпись
 	// токенов разблокировки (0047). Без него пароль поставить нельзя, а уже
 	// стоящий не пускает никого — отказ, а не работа без защиты.
+	//
+	// Модель: настроенный контур получает клиента провайдера, ненастроенный —
+	// ai.Disabled, и тогда ручка генерации отвечает 404 (контур без провайдера
+	// обязан работать целиком, фаза 26).
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc).
-		WithSecret(cfg.FormTokenSecret)
+		WithSecret(cfg.FormTokenSecret).
+		WithAI(formGenerator(cfg, log))
+	generateLimiter := ratelimit.NewTokenBucket(generateRatePerSec, generateBurst)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF).
+		WithGenerateLimiter(generateLimiter).
 		// Письмо о новом ответе без авторских правок — для бланка в настройках формы.
 		// Адрес и имя разбираются из MAIL_FROM («Trillix <no-reply@…>»), тема живёт
 		// в самом шаблоне письма. Разбор не удался — строки пустые, и кабинет

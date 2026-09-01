@@ -62,6 +62,9 @@ type Access interface {
 // такую возможность»; счётчики расхода и расчётный период их не касаются.
 type Plans interface {
 	CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
+	// ConsumeAIGeneration списывает одну генерацию формы (фаза 26) в периоде,
+	// который вернула проверка: два чтения часов расходятся на границе месяца.
+	ConsumeAIGeneration(ctx context.Context, workspaceID uuid.UUID, period time.Time) error
 }
 
 // Store — доступ к данным forms, объявленный на стороне потребителя (сервиса).
@@ -191,6 +194,10 @@ type Service struct {
 	// открывается. Молча пускать было бы ровно тем, от чего пароль ставили.
 	secret []byte
 	now    func() time.Time // срок токена разблокировки; подменяется в тестах
+	// ai — модель, собирающая план формы (фаза 26). Подключается сеттером по тому
+	// же доводу, что files и secret. nil = генерации на контуре нет: ручка
+	// отвечает 404, остальной модуль работает как раньше.
+	ai Generator
 }
 
 // AnswerFiles — коллаборатор из модуля answerfiles: снос файлов удаляемой формы.
