@@ -1,6 +1,7 @@
 import { type Uploader, type UploadedFile } from '@fields/fileUpload'
 
 import { holdUntilAccepted, type FormToken } from './formToken'
+import { unlockHeaders } from './unlock'
 
 // Загрузка файла респондентом (фаза 24, docs/design/answer-files.md §3).
 //
@@ -54,7 +55,7 @@ export function makeUploader(slug: string, token: FormToken): Uploader {
     await holdUntilAccepted(token)
     const res = await fetch(`/public/v1/forms/${encodeURIComponent(slug)}/uploads`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', ...unlockHeaders(slug) },
       body: JSON.stringify({
         token: token.value,
         block_id: blockId,
