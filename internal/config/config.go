@@ -166,6 +166,12 @@ type Config struct {
 	AIModel string
 	// AIProject — заголовок OpenAI-Project. Яндексу не нужен; пусто — не шлём.
 	AIProject string
+	// AIReasoningEffort — сколько модели позволено размышлять (`reasoning_effort`).
+	// Пусто — поле не отправляется, работает умолчание провайдера. Настройкой, а не
+	// константой: у рассуждающей модели умолчание «думать» замедляет сборку формы в
+	// разы, а вход, не знающий этого поля, отвечает 400 — и то и другое лечится
+	// строкой в .env, без выкатки. Замер и числа — в комментарии ai.Options.
+	AIReasoningEffort string
 }
 
 // AIEnabled — настроен ли провайдер модели на контуре.
@@ -273,6 +279,7 @@ func Load() (Config, error) {
 	cfg.AIAPIKey = os.Getenv("AI_API_KEY")
 	cfg.AIModel = os.Getenv("AI_MODEL")
 	cfg.AIProject = os.Getenv("AI_PROJECT")
+	cfg.AIReasoningEffort = os.Getenv("AI_REASONING_EFFORT")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))

@@ -44,12 +44,13 @@ const (
 
 // Client — клиент совместимого с OpenAI входа.
 type Client struct {
-	baseURL string
-	apiKey  string
-	model   string
-	project string
-	http    *http.Client
-	log     *slog.Logger
+	baseURL   string
+	apiKey    string
+	model     string
+	project   string
+	reasoning string
+	http      *http.Client
+	log       *slog.Logger
 }
 
 // Options — что нужно клиенту. Значения приезжают из конфига контура (AI_*).
@@ -63,9 +64,21 @@ type Options struct {
 	Model string
 	// Project — заголовок OpenAI-Project. Яндексу не нужен (права даёт ключ,
 	// каталог едет внутри Model); пусто — заголовок не отправляется.
-	Project    string
-	HTTPClient *http.Client
-	Log        *slog.Logger
+	Project string
+	// ReasoningEffort — сколько модели позволено размышлять перед ответом
+	// (`reasoning_effort` у совместимого входа). Пусто — поле не отправляется вовсе,
+	// то есть работает умолчание провайдера.
+	//
+	// ЗАЧЕМ ЭТО НАСТРОЙКА, А НЕ КОНСТАНТА: у рассуждающей модели умолчание —
+	// «думать», и это решает судьбу операции. Замер 2026-09-01 на боевой инструкции
+	// (qwen3.6-35b-a3b): с рассуждением 8,8 и 10,3 с при 2583 и 4035 токенах ответа,
+	// без него — 1,4 и 2,2 с при 338 и 837 токенах. Планы вышли того же качества
+	// (типы, варианты, разрыв страницы на месте), то есть за размышления мы платили
+	// и ждали впустую. Но поле понимает не всякий вход: модель без рассуждений
+	// вправе ответить 400, и тогда лечится это строкой в .env, а не выкаткой.
+	ReasoningEffort string
+	HTTPClient      *http.Client
+	Log             *slog.Logger
 }
 
 func NewClient(o Options) *Client {
@@ -82,12 +95,13 @@ func NewClient(o Options) *Client {
 		log = slog.Default()
 	}
 	return &Client{
-		baseURL: o.BaseURL,
-		apiKey:  o.APIKey,
-		model:   o.Model,
-		project: o.Project,
-		http:    httpClient,
-		log:     log,
+		baseURL:   o.BaseURL,
+		apiKey:    o.APIKey,
+		model:     o.Model,
+		project:   o.Project,
+		reasoning: o.ReasoningEffort,
+		http:      httpClient,
+		log:       log,
 	}
 }
 
@@ -117,6 +131,8 @@ type chatRequest struct {
 	MaxTokens      int             `json:"max_tokens"`
 	Temperature    float64         `json:"temperature"`
 	ResponseFormat *responseFormat `json:"response_format,omitempty"`
+	// ReasoningEffort едет только заданным: не всякий вход знает это поле.
+	ReasoningEffort string `json:"reasoning_effort,omitempty"`
 }
 
 type chatResponse struct {
@@ -179,9 +195,10 @@ func (c *Client) Generate(ctx context.Context, req Request) (json.RawMessage, er
 
 func (c *Client) chatRequest(req Request) chatRequest {
 	out := chatRequest{
-		Model:       c.model,
-		MaxTokens:   req.MaxTokens,
-		Temperature: temperature,
+		Model:           c.model,
+		MaxTokens:       req.MaxTokens,
+		Temperature:     temperature,
+		ReasoningEffort: c.reasoning,
 		ResponseFormat: &responseFormat{
 			Type: "json_object",
 		},

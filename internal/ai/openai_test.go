@@ -95,6 +95,41 @@ func TestGenerate(t *testing.T) {
 		}
 	})
 
+	// Умолчание рассуждающей модели — «думать», и это решает судьбу операции:
+	// с размышлениями сборка формы идёт в разы дольше при том же результате.
+	// Поле едет только заданным: вход, не знающий его, отвечает 400.
+	t.Run("усилие рассуждения едет только заданным", func(t *testing.T) {
+		var withEffort, withoutEffort map[string]any
+		client, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &withoutEffort)
+			_, _ = io.WriteString(w, answer(`{"ok":true}`))
+		})
+		if _, err := client.Generate(context.Background(), Request{User: "анкета"}); err != nil {
+			t.Fatalf("Generate() вернул ошибку: %v", err)
+		}
+		if _, ok := withoutEffort["reasoning_effort"]; ok {
+			t.Error("поле уехало, хотя усилие не задано — вход без его поддержки ответит 400")
+		}
+
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			raw, _ := io.ReadAll(r.Body)
+			_ = json.Unmarshal(raw, &withEffort)
+			_, _ = io.WriteString(w, answer(`{"ok":true}`))
+		}))
+		defer srv.Close()
+		tuned := NewClient(Options{
+			BaseURL: srv.URL, APIKey: testKey, Model: "модель",
+			ReasoningEffort: "none", HTTPClient: srv.Client(),
+		})
+		if _, err := tuned.Generate(context.Background(), Request{User: "анкета"}); err != nil {
+			t.Fatalf("Generate() вернул ошибку: %v", err)
+		}
+		if withEffort["reasoning_effort"] != "none" {
+			t.Errorf("reasoning_effort = %v, ожидалось none", withEffort["reasoning_effort"])
+		}
+	})
+
 	t.Run("без схемы просим произвольный JSON", func(t *testing.T) {
 		var got chatRequest
 		client, _ := testClient(t, func(w http.ResponseWriter, r *http.Request) {

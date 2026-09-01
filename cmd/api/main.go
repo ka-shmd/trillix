@@ -260,11 +260,12 @@ func formGenerator(cfg config.Config, log *slog.Logger) forms.Generator {
 	}
 	log.Info("ai generation enabled", slog.String("model", cfg.AIModel))
 	return ai.NewClient(ai.Options{
-		BaseURL: cfg.AIBaseURL,
-		APIKey:  cfg.AIAPIKey,
-		Model:   cfg.AIModel,
-		Project: cfg.AIProject,
-		Log:     log,
+		BaseURL:         cfg.AIBaseURL,
+		APIKey:          cfg.AIAPIKey,
+		Model:           cfg.AIModel,
+		Project:         cfg.AIProject,
+		ReasoningEffort: cfg.AIReasoningEffort,
+		Log:             log,
 	})
 }
 

@@ -76,6 +76,7 @@ x-app-env: &app-env
   AI_API_KEY: ${AI_API_KEY:-}
   AI_MODEL: ${AI_MODEL:-}
   AI_PROJECT: ${AI_PROJECT:-}
+  AI_REASONING_EFFORT: ${AI_REASONING_EFFORT:-}
 
 # Окружение сервиса печати. Свой якорь, а не общий с api: принтеру не положено
 # знать ни DSN базы, ни секретов — он умеет ровно одно, запускать браузер. Пустой
