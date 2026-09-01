@@ -4,9 +4,15 @@ import { fetchPublicForm, savePartial, submitAnswers } from './api'
 import { rememberUnlock, unlockForm, unlockHeaders, unlockToken } from './unlock'
 
 function stubFetch(response: Response) {
-  const spy = vi.fn(() => Promise.resolve(response))
+  const spy = vi.fn((url: string, init?: RequestInit) => {
+    void url
+    void init
+    return Promise.resolve(response)
+  })
   vi.stubGlobal('fetch', spy)
-  return spy
+  // initOf достаёт init первого вызова: типизировать мок как fetch целиком дороже,
+  // чем назвать здесь ровно то, что проверяют тесты, — заголовки и тело запроса.
+  return (call = 0): RequestInit => spy.mock.calls[call]?.[1] ?? {}
 }
 
 // Тесты рендерера идут на node (happy-dom тут нет — он в кабинете), поэтому
@@ -78,28 +84,25 @@ describe('токен едет со всеми запросами формы', ()
 
   it('загрузка формы предъявляет токен заголовком', async () => {
     rememberUnlock('abc', 'tok')
-    const spy = stubFetch(new Response(null, { status: 404 }))
+    const init = stubFetch(new Response(null, { status: 404 }))
     await fetchPublicForm('abc')
-    const init = spy.mock.calls[0][1] as RequestInit
-    expect((init.headers as Record<string, string>)['X-Form-Unlock']).toBe('tok')
+    expect((init().headers as Record<string, string>)['X-Form-Unlock']).toBe('tok')
   })
 
   it('отправка ответа предъявляет токен заголовком', async () => {
     rememberUnlock('abc', 'tok')
-    const spy = stubFetch(new Response(null, { status: 201 }))
+    const init = stubFetch(new Response(null, { status: 201 }))
     await submitAnswers('abc', { submissionId: 's', token: 't', answers: {}, visitId: 'v' })
-    const init = spy.mock.calls[0][1] as RequestInit
-    expect((init.headers as Record<string, string>)['X-Form-Unlock']).toBe('tok')
+    expect((init().headers as Record<string, string>)['X-Form-Unlock']).toBe('tok')
   })
 
   // У черновика токен едет В ТЕЛЕ: последнее сохранение уходит через sendBeacon,
   // который заголовков не умеет вовсе.
   it('автосохранение черновика кладёт токен в тело', () => {
     rememberUnlock('abc', 'tok')
-    const spy = stubFetch(new Response(null, { status: 204 }))
+    const init = stubFetch(new Response(null, { status: 204 }))
     savePartial('abc', { visit_id: 'v', token: 't', version: 1, answers: {}, last_block_id: null })
-    const init = spy.mock.calls[0][1] as RequestInit
-    expect(JSON.parse(init.body as string).unlock).toBe('tok')
+    expect(JSON.parse(init().body as string).unlock).toBe('tok')
   })
 
   // Форма заперлась, пока её заполняли: ответ отвергнут внятным текстом, а не

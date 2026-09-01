@@ -24,6 +24,7 @@ import {
   updateCollectPartial,
   updateLinkPreview,
   updateFormName,
+  updateFormPassword,
   updateNotifyOnSubmission,
 } from './api'
 import { saveDraftSchema } from './builder/api'
@@ -276,6 +277,21 @@ export function useUpdateNotifyRespondent() {
     onSuccess: (form, { enabled }) => {
       qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
         old ? { ...old, updatedAt: form.updatedAt, notifyRespondent: enabled } : old,
+      )
+    },
+  })
+}
+
+// Пароль на форму (0047). Живая колонка: и постановка, и снятие действуют без
+// перепубликации. Тарифа нет — упереться в 402 здесь не во что.
+export function useUpdateFormPassword() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, password }: { id: string; password: string | null }) =>
+      updateFormPassword(id, password),
+    onSuccess: (form, { password }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, password } : old,
       )
     },
   })
