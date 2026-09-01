@@ -67,6 +67,8 @@ type fakeStore struct {
 	lastBranding       bool
 	lastProgress       bool
 	lastNotifyEmail    *domain.NotifyEmail
+	lastRespondent     *domain.RespondentEmail
+	lastRespondentOn   bool
 	owner              Owner
 	ownerErr           error
 
@@ -146,6 +148,18 @@ func (f *fakeStore) UpdateFormNotifyEmail(_ context.Context, _ postgres.DBTX, id
 	f.updated = true
 	f.lastNotifyEmail = n
 	return Form{ID: id, WorkspaceID: workspaceID, NotifyEmail: n}, nil
+}
+
+func (f *fakeStore) UpdateFormNotifyRespondent(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error) {
+	f.updated = true
+	f.lastRespondentOn = enabled
+	return Form{ID: id, WorkspaceID: workspaceID, NotifyRespondent: enabled}, nil
+}
+
+func (f *fakeStore) UpdateFormRespondentEmail(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, r *domain.RespondentEmail) (Form, error) {
+	f.updated = true
+	f.lastRespondent = r
+	return Form{ID: id, WorkspaceID: workspaceID, RespondentEmail: r}, nil
 }
 
 func (f *fakeStore) UpdateProgress(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error) {
@@ -861,6 +875,83 @@ func TestNotifyEmailFor_GateAtSend(t *testing.T) {
 	}
 	if got == nil || domain.PlainText(got.Subject) != "Новая заявка" {
 		t.Fatalf("на платном тарифе обязана вернуться настройка автора: %+v", got)
+	}
+}
+
+// Письмо респонденту гейтится ЦЕЛИКОМ, а не своим текстом: включение тумблера уже
+// требует платного тарифа, потому что платной здесь является сама отправка на адрес,
+// который ввёл кто угодно (docs/design/respondent-email.md §6).
+func TestUpdateNotifyRespondent_NeedsPlan(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	_, err := svc.UpdateNotifyRespondent(context.Background(), uuid.New(), store.form.ID, true)
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("err = %v, want ErrPlanRequired", err)
+	}
+	if store.updated {
+		t.Fatal("тумблер ушёл в стор мимо гейта")
+	}
+}
+
+// ВЫКЛЮЧЕНИЕ тариф не спрашивает: даунгрейд не имеет права запирать автора в
+// рассылке, которую он уже не может остановить.
+func TestUpdateNotifyRespondent_OffNeedsNoPlan(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	if _, err := svc.UpdateNotifyRespondent(context.Background(), uuid.New(), store.form.ID, false); err != nil {
+		t.Fatalf("выключение тумблера: %v", err)
+	}
+	if !store.updated {
+		t.Fatal("выключение не доехало до стора")
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен на выключении: %v", plans.gotKeys)
+	}
+}
+
+// Бланк письма респонденту — тот же порядок, что у письма владельцу: настройка за
+// тарифом, сброс бесплатен.
+func TestUpdateRespondentEmail_GateAndReset(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	_, err := svc.UpdateRespondentEmail(context.Background(), uuid.New(), store.form.ID,
+		&domain.RespondentEmail{SourceBlockID: "b1"})
+	if !errors.Is(err, domain.ErrPlanRequired) {
+		t.Fatalf("err = %v, want ErrPlanRequired", err)
+	}
+	if store.updated {
+		t.Fatal("бланк ушёл в стор мимо гейта")
+	}
+
+	if _, err := svc.UpdateRespondentEmail(context.Background(), uuid.New(), store.form.ID,
+		&domain.RespondentEmail{}); err != nil {
+		t.Fatalf("сброс бланка: %v", err)
+	}
+	if !store.updated {
+		t.Fatal("сброс не доехал до стора")
+	}
+}
+
+// Негодный бланк отвергается ДО тарифа и до стора: 422 про формат не имеет права
+// превращаться в 402 про деньги.
+func TestUpdateRespondentEmail_ValidationBeforeGate(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans)
+
+	_, err := svc.UpdateRespondentEmail(context.Background(), uuid.New(), store.form.ID,
+		&domain.RespondentEmail{SourceBlockID: "b1", ReplyTo: "не адрес"})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, want ErrValidation", err)
+	}
+	if store.updated {
+		t.Fatal("негодный бланк доехал до стора")
 	}
 }
 

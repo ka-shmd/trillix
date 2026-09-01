@@ -71,5 +71,10 @@ export function newFormDetail(): FormDetail {
     // Письма у несозданной формы ещё нет: сервер не считал ни адресов, ни темы, —
     // бланк настроек отступит к описанию вместо пустых строк.
     notifyMail: { from: '', to: '', fromName: '', subject: '' },
+    // Письмо респонденту у новой формы выключено и не настроено — те же дефолты
+    // колонок (0046) и тот же довод, что у письма владельцу.
+    notifyRespondent: false,
+    respondentEmail: null,
+    respondentMail: { from: '', to: '', fromName: '', subject: '' },
   }
 }

@@ -5,7 +5,9 @@ import { plainText, textFromString } from '@entities/formSchema'
 import {
   closeSettingsValue,
   isDirty,
+  firstEmailQuestion,
   notifyEmailValue,
+  respondentEmailValue,
   settingsFromForm,
   redirectValue,
   isoToLocalInput,
@@ -16,6 +18,7 @@ import {
   type SettingsDraft,
 } from './draft'
 import { newFormDetail } from '../draft'
+import { type FormDetail } from '../../../entities/form'
 
 const saved: SettingsDraft = {
   thankYouText: 'Спасибо',
@@ -35,6 +38,13 @@ const saved: SettingsDraft = {
   notifySubject: [],
   notifyBody: [],
   notifyAttachPdf: false,
+  respondentOn: false,
+  respondentSource: '',
+  respondentFromName: '',
+  respondentReplyTo: '',
+  respondentSubject: [],
+  respondentBody: [],
+  respondentAttachPdf: false,
   partial: false,
   progress: false,
   branding: true,
@@ -59,6 +69,8 @@ describe('черновик страницы настроек', () => {
       closedNow: false,
       notify: false,
       notifyEmail: false,
+      respondent: false,
+      respondentEmail: false,
       partial: false,
       progress: false,
       branding: false,
@@ -269,5 +281,134 @@ describe('черновик страницы настроек', () => {
     expect(localInputToIso(local)).toBe('2026-08-29T10:30:00.000Z')
     expect(isoToLocalInput(null)).toBe('')
     expect(localInputToIso('')).toBeNull()
+  })
+})
+
+// Бланк письма респонденту: источник уезжает как есть, а имя отправителя и тема,
+// равные умолчанию письма, уезжают ПУСТЫМИ — иначе сегодняшний текст шаблона
+// заморозился бы в колонке и правка шаблона перестала бы доезжать до автора.
+describe('respondentEmailValue', () => {
+  const mail = {
+    from: 'no-reply@trillix.ru',
+    to: '',
+    fromName: 'Trillix',
+    subject: 'Ваш ответ получен',
+  }
+
+  it('нетронутый бланк уезжает пустым, кроме источника', () => {
+    const draft: SettingsDraft = {
+      ...saved,
+      respondentSource: 'blk_mail',
+      respondentFromName: 'Trillix',
+      respondentSubject: textFromString('Ваш ответ получен'),
+    }
+    expect(respondentEmailValue(draft, mail)).toEqual({
+      sourceBlockId: 'blk_mail',
+      fromName: '',
+      replyTo: '',
+      subject: [],
+      body: [],
+      attachPdf: false,
+    })
+  })
+
+  it('переписанные имя и тема уезжают своими', () => {
+    const draft: SettingsDraft = {
+      ...saved,
+      respondentSource: 'blk_mail',
+      respondentFromName: '  Анкета  ',
+      respondentSubject: textFromString('Спасибо!'),
+      respondentAttachPdf: true,
+    }
+    const value = respondentEmailValue(draft, mail)
+    expect(value.fromName).toBe('Анкета')
+    expect(plainText(value.subject)).toBe('Спасибо!')
+    expect(value.attachPdf).toBe(true)
+  })
+
+  // Чип подстановки в теме — правка автора, даже если его имя совпало с текстом
+  // шаблона по буквам: стереть её как «ничего не менял» нельзя.
+  it('чип в теме не считается умолчанием', () => {
+    const draft: SettingsDraft = {
+      ...saved,
+      respondentSubject: [{ t: 'Ваш ответ получен', ref: 'b1' }],
+    }
+    expect(respondentEmailValue(draft, mail).subject).toHaveLength(1)
+  })
+})
+
+// Бланк респондента проверяется теми же тремя правилами, что бланк владельца, и
+// СВОИМИ полями: перепутанные поля означали бы, что ошибка подсвечивается в чужой
+// коробке.
+describe('validateSettings письма респонденту', () => {
+  it('битый Reply-To и переборы длины', () => {
+    const invalid = validateSettings({
+      ...saved,
+      respondentReplyTo: 'не адрес',
+      respondentSubject: textFromString('т'.repeat(201)),
+      respondentBody: textFromString('т'.repeat(2001)),
+    })
+    expect(invalid.respondentReplyTo).toBe(true)
+    expect(invalid.respondentSubjectLong).toBe(true)
+    expect(invalid.respondentBodyLong).toBe(true)
+    // Поля письма ВЛАДЕЛЬЦУ при этом чисты: две коробки не делят подсветку.
+    expect(invalid.replyTo).toBe(false)
+    expect(invalid.notifySubjectLong).toBe(false)
+  })
+
+  it('пустой бланк валиден', () => {
+    const invalid = validateSettings(saved)
+    expect(invalid.respondentReplyTo).toBe(false)
+    expect(invalid.respondentSubjectLong).toBe(false)
+    expect(invalid.respondentBodyLong).toBe(false)
+  })
+})
+
+// Тумблер и бланк — два РАЗНЫХ запроса: тумблер упирается в тариф, бланк в
+// валидацию, и слитые в один они падали бы вместе.
+describe('pendingChanges письма респонденту', () => {
+  it('тумблер и бланк считаются порознь', () => {
+    expect(pendingChanges(saved, { ...saved, respondentOn: true })).toMatchObject({
+      respondent: true,
+      respondentEmail: false,
+    })
+    expect(pendingChanges(saved, { ...saved, respondentSource: 'blk_mail' })).toMatchObject({
+      respondent: false,
+      respondentEmail: true,
+    })
+  })
+
+  // Спаны сравниваются ПО ЗНАЧЕНИЮ: набор символа приносит свежий массив, и по
+  // ссылке страница осталась бы вечно несохранённой.
+  it('одинаковый текст письма не считается правкой', () => {
+    const a = { ...saved, respondentBody: textFromString('Спасибо') }
+    const b = { ...saved, respondentBody: textFromString('Спасибо') }
+    expect(pendingChanges(a, b).respondentEmail).toBe(false)
+  })
+})
+
+// Умолчание селекта — ПЕРВЫЙ вопрос типа email в документе (решение владельца
+// 2026-08-31). Считается по черновику формы, потому что автор правит письмо рядом
+// с формой, которую сейчас редактирует.
+describe('firstEmailQuestion', () => {
+  const withBlocks = (blocks: FormDetail['draftSchema']['blocks']): FormDetail => ({
+    ...newFormDetail(),
+    draftSchema: { ...newFormDetail().draftSchema, blocks },
+  })
+
+  it('берёт первый email по порядку документа, а не первый вопрос', () => {
+    const form = withBlocks([
+      { id: 'b1', groupId: 'g1', type: 'short_text', settings: {} },
+      { id: 'b2', groupId: 'g2', type: 'email', settings: {} },
+      { id: 'b3', groupId: 'g3', type: 'email', settings: {} },
+    ])
+    expect(firstEmailQuestion(form)).toBe('b2')
+  })
+
+  // Подставлять нечего — бланк скажет об этом красной строкой, а не молча
+  // притворится настроенным.
+  it('форма без вопроса-email даёт пустоту', () => {
+    const form = withBlocks([{ id: 'b1', groupId: 'g1', type: 'short_text', settings: {} }])
+    expect(firstEmailQuestion(form)).toBe('')
   })
 })

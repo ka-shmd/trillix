@@ -18,6 +18,8 @@ import {
   updateBehavior,
   reopenForm,
   updateNotifyEmail,
+  updateNotifyRespondent,
+  updateRespondentEmail,
   updateCloseSettings,
   updateCollectPartial,
   updateLinkPreview,
@@ -32,6 +34,7 @@ import {
   type BehaviorInput,
   type LinkPreview,
   type NotifyEmail,
+  type RespondentEmail,
 } from '../../entities/form'
 
 // Список форм — серверный стейт с курсорной пагинацией: страницы подгружаются
@@ -263,7 +266,46 @@ export function useUpdateProgress() {
   })
 }
 
-// Настройка письма о новом ответе (0042). Живое свойство формы: PATCH формы,
+// Тумблер письма респонденту (0046). Включение может упереться в тариф (402
+// plan_required): платной здесь является сама отправка, а не свой текст.
+export function useUpdateNotifyRespondent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, enabled }: { id: string; slug: string; enabled: boolean }) =>
+      updateNotifyRespondent(id, enabled),
+    onSuccess: (form, { enabled }) => {
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, notifyRespondent: enabled } : old,
+      )
+    },
+  })
+}
+
+// Бланк письма респонденту (0046). Как useUpdateNotifyEmail: живое свойство формы,
+// пустая настройка хранится как null.
+export function useUpdateRespondentEmail() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, value }: { id: string; value: RespondentEmail }) =>
+      updateRespondentEmail(id, value),
+    onSuccess: (form, { value }) => {
+      // Пустота считается ПО СМЫСЛУ полей, а не перебором значений: спаны — массивы,
+      // и пустой массив не равен пустой строке.
+      const empty =
+        value.sourceBlockId === '' &&
+        value.fromName === '' &&
+        value.replyTo === '' &&
+        value.subject.length === 0 &&
+        value.body.length === 0 &&
+        !value.attachPdf
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), (old) =>
+        old ? { ...old, updatedAt: form.updatedAt, respondentEmail: empty ? null : value } : old,
+      )
+    },
+  })
+}
+
+// Настройка письма о новом ответе (0042).// Настройка письма о новом ответе (0042). Живое свойство формы: PATCH формы,
 // применяется со следующего же ответа. Пустая настройка приходит с сервера как null
 // — кладём в кэш именно её, а не объект из пустых строк.
 export function useUpdateNotifyEmail() {

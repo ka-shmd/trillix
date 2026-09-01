@@ -92,6 +92,11 @@ type Form struct {
 	// уходит дефолтным шаблоном). Живая колонка (0042); заполняют только
 	// Get/GetBySlug — та же мина, что у Branding.
 	NotifyEmail *domain.NotifyEmail
+	// NotifyRespondent и RespondentEmail — тумблер и бланк письма респонденту
+	// (0046, docs/design/respondent-email.md). Живые колонки, зеркало пары выше;
+	// заполняют только Get/GetBySlug — та же мина, что у Branding.
+	NotifyRespondent bool
+	RespondentEmail  *domain.RespondentEmail
 	// LinkPreview — своя карточка ссылки (nil = не настраивали → дефолты публичной
 	// страницы). Живая колонка, как настройки закрытия; заполняют только
 	// Get/GetBySlug — её читает окно кастомизации на экране «Поделиться».
@@ -140,6 +145,10 @@ type PublicForm struct {
 	// на выключенных уведомлениях. Рендереру не отдаётся (не свойство формы для
 	// респондента).
 	NotifyOnSubmission bool
+	// NotifyRespondent — тот же гейт для письма РЕСПОНДЕНТУ (0046). Здесь едет
+	// только флаг: бланк письма приезжает с Owner, то есть лишь тогда, когда письмо
+	// действительно ставится, — публичная форма читается на каждом открытии.
+	NotifyRespondent bool
 	// CollectPartial — тумблер сбора незавершённых ответов (спека §10.0). Живая
 	// колонка: включается без перепубликации. Право тарифа спрашивает service — и
 	// при включении, и при отдаче публичной формы.
@@ -241,6 +250,24 @@ func notifyEmailFromJSON(raw []byte) *domain.NotifyEmail {
 		return nil
 	}
 	return &n
+}
+
+// respondentEmailFromJSON разбирает колонку forms.respondent_email тем же правилом,
+// что notifyEmailFromJSON: битая строка даёт nil, то есть дефолтное письмо, а не
+// потерянное. Своя функция, а не общая с ним, потому что типы разные: у бланка
+// респондента есть sourceBlockId, и через один тип они не проходят.
+func respondentEmailFromJSON(raw []byte) *domain.RespondentEmail {
+	if len(raw) == 0 {
+		return nil
+	}
+	var r domain.RespondentEmail
+	if err := json.Unmarshal(raw, &r); err != nil {
+		return nil
+	}
+	if r.Empty() {
+		return nil
+	}
+	return &r
 }
 
 func linkPreviewFromJSON(raw []byte) *domain.LinkPreview {
@@ -377,6 +404,8 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		SaveLocally:           row.SaveLocally,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
+		NotifyRespondent:      row.NotifyRespondent,
+		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -417,6 +446,8 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		SaveLocally:           row.SaveLocally,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
+		NotifyRespondent:      row.NotifyRespondent,
+		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -565,6 +596,14 @@ type Owner struct {
 	WorkspaceID uuid.UUID
 	// NotifyEmail — свой текст письма (nil = дефолтный шаблон).
 	NotifyEmail *domain.NotifyEmail
+	// PublicTitle — как форма называется ДЛЯ РЕСПОНДЕНТА (колонка title). Отдельно
+	// от Title: тот несёт внутреннее имя из кабинета («Анкета (копия 2)»), и в
+	// подвале письма респонденту оно читалось бы как чужая кухня.
+	PublicTitle string
+	// RespondentEmail — бланк письма респонденту (nil = дефолтный шаблон). Едет
+	// вместе с владельцем, потому что оба письма ставятся в один момент и по одному
+	// поводу; второй запрос за ним означал бы поход в базу на каждый ответ.
+	RespondentEmail *domain.RespondentEmail
 }
 
 // GetSubmissionOwner отдаёт владельца формы и её имя для письма-уведомления (слайс
@@ -576,10 +615,12 @@ func (Repo) GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uui
 		return Owner{}, fmt.Errorf("get submission owner: %w", err)
 	}
 	return Owner{
-		Email:       row.Email,
-		Title:       row.Title,
-		WorkspaceID: row.WorkspaceID,
-		NotifyEmail: notifyEmailFromJSON(row.NotifyEmail),
+		Email:           row.Email,
+		Title:           row.Title,
+		PublicTitle:     row.PublicTitle,
+		WorkspaceID:     row.WorkspaceID,
+		NotifyEmail:     notifyEmailFromJSON(row.NotifyEmail),
+		RespondentEmail: respondentEmailFromJSON(row.RespondentEmail),
 	}, nil
 }
 
@@ -664,6 +705,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		ClosedTitle:        ptrStr(row.ClosedTitle),
 		SubmissionCount:    row.SubmissionCount,
 		NotifyOnSubmission: row.NotifyOnSubmission,
+		NotifyRespondent:   row.NotifyRespondent,
 		CollectPartial:     row.CollectPartial,
 		Branding:           row.Branding,
 		Progress:           row.Progress,
@@ -862,6 +904,63 @@ func (Repo) UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, wor
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form notify_email: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateFormNotifyRespondent переключает тумблер письма респонденту (0046) в
+// пределах воркспейса. pgx.ErrNoRows (чужая/нет формы) пробрасывается — service
+// вернёт 404.
+func (Repo) UpdateFormNotifyRespondent(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error) {
+	row, err := postgres.New(db).UpdateFormNotifyRespondent(ctx, postgres.UpdateFormNotifyRespondentParams{
+		ID:               id,
+		WorkspaceID:      workspaceID,
+		NotifyRespondent: enabled,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form notify_respondent: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// UpdateFormRespondentEmail заменяет бланк письма респонденту (0046). Пустая
+// настройка пишется как NULL: у «не настраивали» одно представление.
+func (Repo) UpdateFormRespondentEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, r *domain.RespondentEmail) (Form, error) {
+	var raw []byte
+	if !r.Empty() {
+		var err error
+		raw, err = json.Marshal(r)
+		if err != nil {
+			return Form{}, fmt.Errorf("marshal respondent email: %w", err)
+		}
+	}
+	row, err := postgres.New(db).UpdateFormRespondentEmail(ctx, postgres.UpdateFormRespondentEmailParams{
+		ID:              id,
+		WorkspaceID:     workspaceID,
+		RespondentEmail: raw,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form respondent_email: %w", err)
 	}
 	return Form{
 		ID:                 row.ID,

@@ -103,3 +103,52 @@ func TestRender_SubjectOnlyKeepsTemplateBody(t *testing.T) {
 		t.Fatalf("тело перестало быть шаблонным: %q", body)
 	}
 }
+
+// Подвал письма респонденту переживает свой текст автора: получатель обязан узнать,
+// откуда письмо взялось, и это не оформление, а единственное отличие уведомления от
+// спама (docs/design/respondent-email.md §5). Свой текст при этом по-прежнему НЕ
+// проходит через шаблонизатор.
+func TestRenderRespondentReceipt_FooterSurvivesOverride(t *testing.T) {
+	data := map[string]any{"form_title": "Анкета", "form_link": "https://f.trillix.ru/anketa"}
+
+	_, body, err := Render(EmailMessage{Template: TemplateRespondentReceipt, Data: data})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	for _, want := range []string{"Анкета", "https://f.trillix.ru/anketa", "Вы получили это письмо"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("дефолтное письмо не содержит %q:\n%s", want, body)
+		}
+	}
+
+	own := "Спасибо! {{.form_link}} — ваш ответ у нас."
+	_, body, err = Render(EmailMessage{Template: TemplateRespondentReceipt, Data: data, Body: own})
+	if err != nil {
+		t.Fatalf("Render со своим текстом: %v", err)
+	}
+	if !strings.HasPrefix(body, own) {
+		t.Fatalf("текст автора изменён:\n%s", body)
+	}
+	if !strings.Contains(body, "Вы получили это письмо") {
+		t.Fatalf("свой текст съел подвал:\n%s", body)
+	}
+	if !strings.Contains(body, "https://f.trillix.ru/anketa") {
+		t.Fatalf("подвал не развернул адрес формы:\n%s", body)
+	}
+}
+
+// Подвал есть ровно у письма респондента: у остальных писем получатель известен
+// заранее, и служебная строка в них была бы шумом.
+func TestRender_FooterOnlyForRespondent(t *testing.T) {
+	_, body, err := Render(EmailMessage{
+		Template: TemplateSubmissionNew,
+		Data:     map[string]any{"form_title": "Анкета", "link": "https://x"},
+		Body:     "Свой текст.",
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if body != "Свой текст." {
+		t.Fatalf("к письму владельцу приписан подвал: %q", body)
+	}
+}

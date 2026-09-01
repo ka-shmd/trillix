@@ -33,6 +33,14 @@ const (
 	// TemplateEmailChangeNotice — уведомление на СТАРЫЙ адрес о запросе смены.
 	// Ссылки-токена не несёт. Data: {"new_email": "<адрес>"}.
 	TemplateEmailChangeNotice Template = "email_change_notice"
+	// TemplateRespondentReceipt — письмо РЕСПОНДЕНТУ о том, что его ответ принят
+	// (docs/design/respondent-email.md). Data: {"form_title": "<название>",
+	// "form_link": "<публичный адрес формы>"}.
+	//
+	// Единственный шаблон с ПОДВАЛОМ: письмо уходит на адрес, который респондент
+	// ввёл сам, и обязано объяснять получателю, откуда оно взялось, — даже когда
+	// весь остальной текст написал автор формы.
+	TemplateRespondentReceipt Template = "respondent_receipt"
 	// TemplatePasswordChanged — уведомление о смене пароля (фаза 23, слайс C).
 	// Data: {"link": "<url восстановления>"}. Ссылки-токена в нём нет: письмо не
 	// даёт никаких прав, а только сообщает о случившемся.
@@ -42,6 +50,13 @@ const (
 type mailTemplate struct {
 	subject string
 	body    *template.Template
+	// footer — хвост письма, который ПЕРЕЖИВАЕТ свой текст автора: он дописывается
+	// и к дефолтному телу, и к авторскому (Render). Нужен ровно одному письму —
+	// респонденту, — и природа у него не оформительская: получатель обязан узнать,
+	// откуда письмо взялось, иначе транзакционное письмо неотличимо от спама.
+	//
+	// Через template.Execute проходит ТОЛЬКО он, а не текст автора: подвал пишем мы.
+	footer *template.Template
 }
 
 // Письма — plain text: провайдеро-независимо и достаточно для сброса; HTML-вёрстка
@@ -124,6 +139,20 @@ var templates = map[Template]mailTemplate{
 				"— Trillix",
 		)),
 	},
+	TemplateRespondentReceipt: {
+		subject: "Ваш ответ получен",
+		body: template.Must(template.New("respondent_receipt").Parse(
+			"Здравствуйте!\n\n" +
+				"Спасибо, ваш ответ на форму «{{.form_title}}» получен.",
+		)),
+		// Подвал отбит чертой: авторский текст кончается там, где начинается наша
+		// служебная строка, и по письму это должно быть видно.
+		footer: template.Must(template.New("respondent_receipt_footer").Parse(
+			"--\n" +
+				"Вы получили это письмо, потому что заполнили форму «{{.form_title}}» " +
+				"в Trillix:\n{{.form_link}}",
+		)),
+	},
 	TemplatePasswordChanged: {
 		subject: "Пароль в Trillix изменён",
 		body: template.Must(template.New("password_changed").Parse(
@@ -166,12 +195,22 @@ func Render(msg EmailMessage) (subject, body string, err error) {
 	if msg.Subject != "" {
 		subject = msg.Subject
 	}
-	if msg.Body != "" {
-		return subject, msg.Body, nil
+	body = msg.Body
+	if body == "" {
+		var buf bytes.Buffer
+		if err := t.body.Execute(&buf, msg.Data); err != nil {
+			return "", "", fmt.Errorf("render email %q: %w", msg.Template, err)
+		}
+		body = buf.String()
 	}
-	var buf bytes.Buffer
-	if err := t.body.Execute(&buf, msg.Data); err != nil {
-		return "", "", fmt.Errorf("render email %q: %w", msg.Template, err)
+	// Подвал дописывается ПОСЛЕ развилки, то есть и к своему тексту тоже: перебивка
+	// автора сильнее шаблона, но не сильнее строки «почему вы это получили».
+	if t.footer != nil {
+		var buf bytes.Buffer
+		if err := t.footer.Execute(&buf, msg.Data); err != nil {
+			return "", "", fmt.Errorf("render email footer %q: %w", msg.Template, err)
+		}
+		body += "\n\n" + buf.String()
 	}
-	return subject, buf.String(), nil
+	return subject, body, nil
 }

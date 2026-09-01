@@ -57,6 +57,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
+    f.notify_respondent, f.respondent_email,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -85,6 +86,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
+    f.notify_respondent, f.respondent_email,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -221,6 +223,25 @@ SET notify_email = $3, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
 
+-- name: UpdateFormNotifyRespondent :one
+-- Тумблер письма респонденту (0046) — живая колонка, зеркало
+-- UpdateFormNotifyOnSubmission. Право тарифа (form_respondent_email) спрашивает
+-- service ДО этого запроса: письмо респонденту платно целиком, а не только своим
+-- текстом.
+UPDATE forms
+SET notify_respondent = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: UpdateFormRespondentEmail :one
+-- Бланк письма респонденту: вопрос-источник адреса, имя отправителя, Reply-To, тема,
+-- текст, PDF (0046). Замена значения целиком, как у UpdateFormNotifyEmail; пустая
+-- настройка нормализуется в NULL на стороне repo.
+UPDATE forms
+SET respondent_email = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
 -- name: UpdateFormBehavior :one
 -- Раздел «Поведение» (0044): автопереход и хранение ответов в браузере респондента.
 -- Две колонки одним запросом — это ОДИН экранный раздел, и кабинет шлёт его набором;
@@ -249,7 +270,14 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- внутреннее (name ?? title): письмо видит владелец, ему привычнее имя из кабинета.
 -- Вызывается приёмом ответа по form_id (форма уже резолвнута), членство тут не
 -- проверяется — это не доступ пользователя, а адресат уведомления.
-SELECT u.email, coalesce(f.name, f.title) AS title, f.workspace_id, f.notify_email
+-- respondent_email и публичный заголовок едут здесь же, а не на публичном пути
+-- (0046): бланк письма нужен ТОЛЬКО когда письмо ставится, а GetPublicFormBySlug
+-- отрабатывает на каждом открытии формы — лишний JSONB на самом горячем запросе
+-- продукта не бесплатен. Заголовков два и они разные: `title` — внутреннее имя
+-- (name ?? title), его видит владелец; `public_title` — то, как форма называется
+-- для респондента, и в подвале его письма стоит именно оно.
+SELECT u.email, coalesce(f.name, f.title) AS title, f.title AS public_title,
+    f.workspace_id, f.notify_email, f.respondent_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id
@@ -300,6 +328,10 @@ WHERE id = $1 AND workspace_id = $2;
 -- брать его отсюда дешевле, чем отдельным запросом на горячем пути.
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
+    -- notify_respondent: тумблер письма респонденту (0046). Здесь едет только ФЛАГ,
+    -- как и у письма владельцу; бланк приезжает с GetSubmissionOwner, то есть
+    -- только когда письмо действительно ставится в очередь.
+    f.notify_respondent,
     -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
     -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
     -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан

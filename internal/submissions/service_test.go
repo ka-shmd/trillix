@@ -16,6 +16,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
 
 // fakeForms — коллаборатор forms с подставной опубликованной формой и владельцем.
@@ -425,5 +426,139 @@ func TestSubmit_NotifyEmail_AttachPDF_GatedByPlan(t *testing.T) {
 	}
 	if len(mailer.calls[0].Attachments) != 0 {
 		t.Error("на закрытом тарифе вложение всё равно обещано письму")
+	}
+}
+
+// respondentForm — опубликованная форма с вопросом-email и включённым письмом
+// респонденту. Тумблер владельца выключен: письма разные, и тест про одно не
+// должен считать другое.
+func respondentForm() forms.PublicForm {
+	return forms.PublicForm{
+		FormID:           uuid.New(),
+		Status:           domain.FormStatusPublished,
+		Schema:           json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"mail","groupId":"g1","type":"email","settings":{}}]}`),
+		NotifyRespondent: true,
+	}
+}
+
+// respondentOwner — владелец с бланком письма респонденту, где источником адреса
+// выбран вопрос mail.
+func respondentOwner() forms.Owner {
+	return forms.Owner{
+		Email: "owner@example.com", Title: "Моя форма (копия 2)", PublicTitle: "Моя форма",
+		RespondentEmail: &domain.RespondentEmail{SourceBlockID: "mail"},
+	}
+}
+
+func answerTo(t *testing.T, value string) map[string]json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("ответ не сериализуется: %v", err)
+	}
+	return map[string]json.RawMessage{"mail": raw}
+}
+
+// Письмо респонденту уходит на адрес, который он САМ ввёл в форму, и несёт
+// публичный заголовок формы со ссылкой на неё — из них шаблон собирает подвал
+// «почему вы это получили».
+func TestSubmit_NotifyRespondent_EnqueuesLetterToAnswer(t *testing.T) {
+	pf := respondentForm()
+	mailer := &fakeMailer{}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: pf, owner: respondentOwner()},
+		nil, mailer, okPlans(), &fakeSubStore{insertN: 1}, "https://app.test").
+		WithRespondentMail("https://f.test", ratelimit.AllowAll{})
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), answerTo(t, "k@example.com"), Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 1 {
+		t.Fatalf("поставлено писем: %d, ожидалось 1", len(mailer.calls))
+	}
+	c := mailer.calls[0]
+	if c.To != "k@example.com" || c.Template != mail.TemplateRespondentReceipt {
+		t.Fatalf("письмо адресовано неверно: to=%q template=%q", c.To, c.Template)
+	}
+	if got := c.Data["form_title"]; got != "Моя форма" {
+		t.Errorf("в подвал уехал не публичный заголовок: %v", got)
+	}
+	if got := c.Data["form_link"]; got != "https://f.test/r/slug1" {
+		t.Errorf("ссылка на форму = %v", got)
+	}
+}
+
+// Адреса нет — письма нет, и ответ принят как обычно. Самый частый случай: почту
+// спрашивают необязательным вопросом.
+func TestSubmit_NotifyRespondent_NoAddress_NoLetter(t *testing.T) {
+	mailer := &fakeMailer{}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: respondentForm(), owner: respondentOwner()},
+		nil, mailer, okPlans(), &fakeSubStore{insertN: 1}, "https://app.test").
+		WithRespondentMail("https://f.test", ratelimit.AllowAll{})
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 0 {
+		t.Fatalf("письмо ушло без адресата: %+v", mailer.calls)
+	}
+}
+
+// Тариф не разрешает — письма нет, а письмо ВЛАДЕЛЬЦУ уходит своим путём: гейты у
+// них разные, и закрытый тариф респондента не имеет права глушить уведомление
+// владельцу.
+func TestSubmit_NotifyRespondent_GatedByPlan(t *testing.T) {
+	pf := respondentForm()
+	pf.NotifyOnSubmission = true
+	mailer := &fakeMailer{}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: pf, owner: respondentOwner()},
+		nil, mailer, fakePlans{allowed: false}, &fakeSubStore{insertN: 1}, "https://app.test").
+		WithRespondentMail("https://f.test", ratelimit.AllowAll{})
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), answerTo(t, "k@example.com"), Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 1 {
+		t.Fatalf("поставлено писем: %d, ожидалось 1 (владельцу)", len(mailer.calls))
+	}
+	if c := mailer.calls[0]; c.Template != mail.TemplateSubmissionNew {
+		t.Fatalf("на закрытом тарифе ушло письмо респонденту: %+v", c)
+	}
+}
+
+// Потолок писем на форму выбран — письма нет. Ответ при этом принят: рассылка
+// упирается в потолок, приём ответов не упирается ни во что.
+func TestSubmit_NotifyRespondent_Throttled(t *testing.T) {
+	mailer := &fakeMailer{}
+	store := &fakeSubStore{insertN: 1}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: respondentForm(), owner: respondentOwner()},
+		nil, mailer, okPlans(), store, "https://app.test").
+		WithRespondentMail("https://f.test", denyLimiter{})
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), answerTo(t, "k@example.com"), Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 0 {
+		t.Fatalf("письмо ушло сверх потолка: %+v", mailer.calls)
+	}
+	// Ответ при этом принят: Submit вернул nil, а строка доехала до стора —
+	// потолок рассылки не имеет права трогать приём.
+	if store.lastInsert.FormID == uuid.Nil {
+		t.Fatal("ответ не доехал до стора")
+	}
+}
+
+// Обвязка не настроена на контуре (нет адреса формы или потолка) — писем нет.
+// Письмо респонденту без подвала и без потолка отправлять нельзя: это ровно та
+// обвязка, ради которой оно вообще разрешено.
+func TestSubmit_NotifyRespondent_NotConfigured(t *testing.T) {
+	mailer := &fakeMailer{}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: respondentForm(), owner: respondentOwner()},
+		nil, mailer, okPlans(), &fakeSubStore{insertN: 1}, "https://app.test")
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), answerTo(t, "k@example.com"), Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	if len(mailer.calls) != 0 {
+		t.Fatalf("письмо ушло на ненастроенном контуре: %+v", mailer.calls)
 	}
 }

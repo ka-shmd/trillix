@@ -105,6 +105,23 @@ export const EMPTY_NOTIFY_EMAIL: NotifyEmail = {
   attachPdf: false,
 }
 
+// Письмо респонденту (0046, docs/design/respondent-email.md) — тот же бланк, что у
+// письма владельцу, плюс одно поле. Зеркалит domain.RespondentEmail.
+export const respondentEmailSchema = notifyEmailSchema.extend({
+  // sourceBlockId — вопрос типа email, из ответа на который берётся АДРЕС
+  // получателя. Пустая строка = источник не выбран: письмо не уйдёт, и экран
+  // говорит об этом красной строкой прямо в бланке.
+  //
+  // Адреса получателя в настройке нет и быть не может: он приезжает ответом.
+  sourceBlockId: z.string().default(''),
+})
+export type RespondentEmail = z.infer<typeof respondentEmailSchema>
+
+export const EMPTY_RESPONDENT_EMAIL: RespondentEmail = {
+  ...EMPTY_NOTIFY_EMAIL,
+  sourceBlockId: '',
+}
+
 // MENTION_ALL_ANSWERS — служебный источник подстановки «Все ответы»: весь ответ
 // строками «вопрос: ответ». Зеркалит domain.MentionAllAnswers; подчерк впереди
 // отделяет его от id блоков навсегда.
@@ -195,12 +212,30 @@ export const formDetailSchema = formSchema.extend({
   // дефолтным шаблоном. Отдаётся независимо от тарифа (как карточка ссылки), а
   // применяется отправкой письма.
   notifyEmail: notifyEmailSchema.nullable(),
+  // Письмо респонденту: тумблер и бланк (0046). Тумблер платный ЦЕЛИКОМ — платной
+  // здесь является сама отправка, а не свой текст, — но бланк, как и notifyEmail,
+  // отдаётся независимо от тарифа: кабинет показывает сохранённое всем.
+  //
+  // `default` у обоих: api, ещё не знающий полей, не обязан ронять разбор формы.
+  notifyRespondent: z.boolean().default(false),
+  respondentEmail: respondentEmailSchema.nullable().default(null),
   // Письмо о новом ответе БЕЗ авторских правок: как его отправит сервис, если
   // notifyEmail пуст. Бланк в настройках показывает эти строки настоящим текстом
   // полей, а не подсказкой. Считать их фронту не из чего: адреса живут в конфиге
   // контура, тема — в шаблоне письма на сервере, и своя копия темы здесь разошлась
   // бы с шаблоном молча. Пустая строка = значение неизвестно, бланк рисует описание.
   notifyMail: z
+    .object({
+      from: z.string(),
+      to: z.string(),
+      fromName: z.string(),
+      subject: z.string(),
+    })
+    .default({ from: '', to: '', fromName: '', subject: '' }),
+  // То же для письма респонденту (0046): адрес отправителя общий, тема своя.
+  // Поле `to` сервер оставляет пустым всегда — адресат приезжает ответом, и строку
+  // «Кому» бланк рисует описанием выбранного вопроса.
+  respondentMail: z
     .object({
       from: z.string(),
       to: z.string(),

@@ -1478,6 +1478,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
+    f.notify_respondent, f.respondent_email,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1510,6 +1511,8 @@ type GetFormRow struct {
 	NotifyEmail           []byte
 	AutoJump              bool
 	SaveLocally           bool
+	NotifyRespondent      bool
+	RespondentEmail       []byte
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1546,6 +1549,8 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.NotifyEmail,
 		&i.AutoJump,
 		&i.SaveLocally,
+		&i.NotifyRespondent,
+		&i.RespondentEmail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1570,6 +1575,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
+    f.notify_respondent, f.respondent_email,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1602,6 +1608,8 @@ type GetFormBySlugRow struct {
 	NotifyEmail           []byte
 	AutoJump              bool
 	SaveLocally           bool
+	NotifyRespondent      bool
+	RespondentEmail       []byte
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1640,6 +1648,8 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.NotifyEmail,
 		&i.AutoJump,
 		&i.SaveLocally,
+		&i.NotifyRespondent,
+		&i.RespondentEmail,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1859,6 +1869,10 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtyp
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
 SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
+    -- notify_respondent: тумблер письма респонденту (0046). Здесь едет только ФЛАГ,
+    -- как и у письма владельцу; бланк приезжает с GetSubmissionOwner, то есть
+    -- только когда письмо действительно ставится в очередь.
+    f.notify_respondent,
     -- collect_partial: тумблер сбора незавершённых. Едет на публичном пути вместе с
     -- формой — рендереру он нужен и чтобы автосохранять, и чтобы предупредить
     -- респондента. Право тарифа поверх него спрашивает сервис (даунгрейд обязан
@@ -1905,6 +1919,7 @@ type GetPublicFormBySlugRow struct {
 	ClosedMessage      pgtype.Text
 	ClosedTitle        pgtype.Text
 	NotifyOnSubmission bool
+	NotifyRespondent   bool
 	CollectPartial     bool
 	LinkPreview        []byte
 	Branding           bool
@@ -1946,6 +1961,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.ClosedMessage,
 		&i.ClosedTitle,
 		&i.NotifyOnSubmission,
+		&i.NotifyRespondent,
 		&i.CollectPartial,
 		&i.LinkPreview,
 		&i.Branding,
@@ -2138,7 +2154,8 @@ func (q *Queries) GetSubmissionForPrint(ctx context.Context, arg GetSubmissionFo
 }
 
 const getSubmissionOwner = `-- name: GetSubmissionOwner :one
-SELECT u.email, coalesce(f.name, f.title) AS title, f.workspace_id, f.notify_email
+SELECT u.email, coalesce(f.name, f.title) AS title, f.title AS public_title,
+    f.workspace_id, f.notify_email, f.respondent_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id
@@ -2146,10 +2163,12 @@ WHERE f.id = $1
 `
 
 type GetSubmissionOwnerRow struct {
-	Email       string
-	Title       string
-	WorkspaceID uuid.UUID
-	NotifyEmail []byte
+	Email           string
+	Title           string
+	PublicTitle     string
+	WorkspaceID     uuid.UUID
+	NotifyEmail     []byte
+	RespondentEmail []byte
 }
 
 // Владелец формы и её отображаемое имя — для письма-уведомления о новом ответе
@@ -2157,14 +2176,22 @@ type GetSubmissionOwnerRow struct {
 // внутреннее (name ?? title): письмо видит владелец, ему привычнее имя из кабинета.
 // Вызывается приёмом ответа по form_id (форма уже резолвнута), членство тут не
 // проверяется — это не доступ пользователя, а адресат уведомления.
+// respondent_email и публичный заголовок едут здесь же, а не на публичном пути
+// (0046): бланк письма нужен ТОЛЬКО когда письмо ставится, а GetPublicFormBySlug
+// отрабатывает на каждом открытии формы — лишний JSONB на самом горячем запросе
+// продукта не бесплатен. Заголовков два и они разные: `title` — внутреннее имя
+// (name ?? title), его видит владелец; `public_title` — то, как форма называется
+// для респондента, и в подвале его письма стоит именно оно.
 func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubmissionOwnerRow, error) {
 	row := q.db.QueryRow(ctx, getSubmissionOwner, id)
 	var i GetSubmissionOwnerRow
 	err := row.Scan(
 		&i.Email,
 		&i.Title,
+		&i.PublicTitle,
 		&i.WorkspaceID,
 		&i.NotifyEmail,
+		&i.RespondentEmail,
 	)
 	return i, err
 }
@@ -4871,6 +4898,52 @@ func (q *Queries) UpdateFormNotifyOnSubmission(ctx context.Context, arg UpdateFo
 	return i, err
 }
 
+const updateFormNotifyRespondent = `-- name: UpdateFormNotifyRespondent :one
+UPDATE forms
+SET notify_respondent = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormNotifyRespondentParams struct {
+	ID               uuid.UUID
+	WorkspaceID      uuid.UUID
+	NotifyRespondent bool
+}
+
+type UpdateFormNotifyRespondentRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Тумблер письма респонденту (0046) — живая колонка, зеркало
+// UpdateFormNotifyOnSubmission. Право тарифа (form_respondent_email) спрашивает
+// service ДО этого запроса: письмо респонденту платно целиком, а не только своим
+// текстом.
+func (q *Queries) UpdateFormNotifyRespondent(ctx context.Context, arg UpdateFormNotifyRespondentParams) (UpdateFormNotifyRespondentRow, error) {
+	row := q.db.QueryRow(ctx, updateFormNotifyRespondent, arg.ID, arg.WorkspaceID, arg.NotifyRespondent)
+	var i UpdateFormNotifyRespondentRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateFormProgress = `-- name: UpdateFormProgress :one
 UPDATE forms
 SET progress = $3, updated_at = now()
@@ -4903,6 +4976,51 @@ type UpdateFormProgressRow struct {
 func (q *Queries) UpdateFormProgress(ctx context.Context, arg UpdateFormProgressParams) (UpdateFormProgressRow, error) {
 	row := q.db.QueryRow(ctx, updateFormProgress, arg.ID, arg.WorkspaceID, arg.Progress)
 	var i UpdateFormProgressRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateFormRespondentEmail = `-- name: UpdateFormRespondentEmail :one
+UPDATE forms
+SET respondent_email = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormRespondentEmailParams struct {
+	ID              uuid.UUID
+	WorkspaceID     uuid.UUID
+	RespondentEmail []byte
+}
+
+type UpdateFormRespondentEmailRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Бланк письма респонденту: вопрос-источник адреса, имя отправителя, Reply-To, тема,
+// текст, PDF (0046). Замена значения целиком, как у UpdateFormNotifyEmail; пустая
+// настройка нормализуется в NULL на стороне repo.
+func (q *Queries) UpdateFormRespondentEmail(ctx context.Context, arg UpdateFormRespondentEmailParams) (UpdateFormRespondentEmailRow, error) {
+	row := q.db.QueryRow(ctx, updateFormRespondentEmail, arg.ID, arg.WorkspaceID, arg.RespondentEmail)
+	var i UpdateFormRespondentEmailRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

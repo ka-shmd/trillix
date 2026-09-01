@@ -68,7 +68,10 @@ func newServer(t *testing.T) *httptest.Server {
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, nil, nil)
 	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test")
+	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test").
+		// Потолок писем респондентам подменяется пермиссивным, а не ослабляется
+		// (инвариант 6): тесты проверяют путь письма, а не арифметику ведра.
+		WithRespondentMail("http://f.test", ratelimit.AllowAll{})
 	h := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
 
 	mux := http.NewServeMux()
@@ -789,5 +792,141 @@ func TestSubmit_JumpedPage_NotCollected(t *testing.T) {
 		`","answers":{"pet":"yes"}}`
 	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("статус %d, ожидалось 422", resp.StatusCode)
+	}
+}
+
+// Форма, у которой есть и обычный вопрос, и вопрос-email: письмо респонденту без
+// второго невозможно — адрес брать неоткуда.
+const respondentSchema = `{"blocks":[` +
+	`{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},` +
+	`{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}},` +
+	`{"id":"t_b2","groupId":"g_b2","type":"title","text":[{"t":"Ваш email"}]},` +
+	`{"id":"b2","groupId":"g_b2","type":"email","settings":{}}]}`
+
+// Бланк письма респонденту: источник адреса — вопрос b2, в теме чип на «Имя».
+const respondentBlank = `{"sourceBlockId":"b2","subject":[{"t":"Спасибо, "},{"t":"Имя","ref":"b1"}],` +
+	`"body":[{"t":"Ваш ответ получен."}]}`
+
+// respondentRow — как отличить письмо респонденту от письма владельцу в outbox:
+// оба лежат в одной таблице, различает их шаблон (mail.TemplateRespondentReceipt).
+const respondentRow = `payload->>'template' = 'respondent_receipt'`
+
+func enableRespondent(t *testing.T, slug, blank string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET notify_respondent = true, respondent_email = $1::jsonb WHERE slug = $2`,
+		blank, slug); err != nil {
+		t.Fatalf("enable respondent mail: %v", err)
+	}
+}
+
+func setRespondentGate(t *testing.T, allowed bool) {
+	t.Helper()
+	value := "false"
+	if allowed {
+		value = "true"
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{form_respondent_email}', $1::jsonb)`, value); err != nil {
+		t.Fatalf("set respondent email gate: %v", err)
+	}
+}
+
+func countRows(t *testing.T, where string) int {
+	t.Helper()
+	var n int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM outbox WHERE `+where).Scan(&n); err != nil {
+		t.Fatalf("count outbox: %v", err)
+	}
+	return n
+}
+
+// Сквозной путь письма респонденту: адрес берётся ИЗ ОТВЕТА, подстановки
+// разворачиваются при постановке, публичный заголовок и ссылка на форму уезжают в
+// payload — из них шаблон соберёт подвал «почему вы это получили».
+func TestSubmit_Respondent_LetterGoesToAnswerAddress(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, respondentSchema)
+	enableRespondent(t, slug, respondentBlank)
+	setRespondentGate(t, true)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"b1":"Кирилл","b2":"k@example.com"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var to, subject, text, title, link string
+	err := testPool.QueryRow(context.Background(),
+		`SELECT payload->>'to', coalesce(payload->>'subject',''), coalesce(payload->>'body',''),
+		        coalesce(payload->'data'->>'form_title',''), coalesce(payload->'data'->>'form_link','')
+		   FROM outbox WHERE `+respondentRow).Scan(&to, &subject, &text, &title, &link)
+	if err != nil {
+		t.Fatalf("read outbox: %v", err)
+	}
+	if to != "k@example.com" {
+		t.Fatalf("письмо ушло не на адрес респондента: %q", to)
+	}
+	if subject != "Спасибо, Кирилл" {
+		t.Fatalf("тема = %q, ожидалось «Спасибо, Кирилл»", subject)
+	}
+	if text != "Ваш ответ получен." {
+		t.Fatalf("текст = %q", text)
+	}
+	if title != "Анкета" || link != "http://f.test/r/"+slug {
+		t.Fatalf("подвалу не хватит данных: title=%q link=%q", title, link)
+	}
+}
+
+// Вопрос-источник остался без ответа — письма нет, а ответ принят. Самый частый
+// случай: адрес спрашивают необязательным вопросом.
+func TestSubmit_Respondent_NoAnswer_NoOutboxRow(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, respondentSchema)
+	enableRespondent(t, slug, respondentBlank)
+	setRespondentGate(t, true)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"b1":"Кирилл"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+	if n := countRows(t, respondentRow); n != 0 {
+		t.Fatalf("строк письма респонденту: %d, ожидалось 0", n)
+	}
+	if n := countSubmissions(t); n != 1 {
+		t.Fatalf("ответов в базе: %d, ожидался 1", n)
+	}
+}
+
+// Даунгрейд гасит ОТПРАВКУ, а не настройку: строки в outbox нет, бланк в колонке
+// цел и оживёт после апгрейда. Отличие от письма владельцу: там даунгрейд оставляет
+// письмо, отняв перебивки, здесь письма нет вовсе — платной является отправка.
+func TestSubmit_Respondent_DowngradeStopsSending(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, respondentSchema)
+	enableRespondent(t, slug, respondentBlank)
+	setRespondentGate(t, false)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() +
+		`","answers":{"b1":"Кирилл","b2":"k@example.com"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("статус %d, ожидалось 201", resp.StatusCode)
+	}
+	if n := countRows(t, respondentRow); n != 0 {
+		t.Fatalf("на закрытом тарифе письмо респонденту ушло (%d строк)", n)
+	}
+	var saved string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(respondent_email->>'sourceBlockId','') FROM forms WHERE slug = $1`, slug).
+		Scan(&saved); err != nil {
+		t.Fatalf("read form: %v", err)
+	}
+	if saved != "b2" {
+		t.Fatalf("даунгрейд стёр настройку автора: %q", saved)
 	}
 }

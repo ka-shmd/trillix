@@ -7,6 +7,7 @@ import {
   type CloseSettingsInput,
   type FormDetail,
   type NotifyEmail,
+  type RespondentEmail,
 } from '../../../entities/form'
 
 // Черновик страницы настроек: ВСЯ страница разом, а не раздел за разделом.
@@ -52,6 +53,17 @@ export interface SettingsDraft {
   notifySubject: Span[]
   notifyBody: Span[]
   notifyAttachPdf: boolean
+  // Письмо респонденту (0046): тумблер, вопрос-источник адреса и тот же бланк, что
+  // у письма владельцу. Поля отдельные, а не общая структура: у двух писем разные
+  // умолчания и разные адресаты, и слить их значило бы править одно письмо, меняя
+  // другое.
+  respondentOn: boolean
+  respondentSource: string
+  respondentFromName: string
+  respondentReplyTo: string
+  respondentSubject: Span[]
+  respondentBody: Span[]
+  respondentAttachPdf: boolean
   partial: boolean
   // Живые колонки формы: шкала прогресса (0040) и бейдж «Сделано в Trillix» (0038).
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
@@ -87,6 +99,13 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     notifySubject: defaultSubject(form),
     notifyBody: form.notifyEmail?.body ?? [],
     notifyAttachPdf: form.notifyEmail?.attachPdf ?? false,
+    respondentOn: form.notifyRespondent,
+    respondentSource: form.respondentEmail?.sourceBlockId ?? '',
+    respondentFromName: form.respondentEmail?.fromName || form.respondentMail.fromName,
+    respondentReplyTo: form.respondentEmail?.replyTo ?? '',
+    respondentSubject: defaultRespondentSubject(form),
+    respondentBody: form.respondentEmail?.body ?? [],
+    respondentAttachPdf: form.respondentEmail?.attachPdf ?? false,
     partial: form.collectPartial,
     progress: form.progress,
     branding: form.branding,
@@ -103,6 +122,29 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
 function defaultSubject(form: FormDetail): Span[] {
   const own = form.notifyEmail?.subject ?? []
   return own.length > 0 ? own : textFromString(form.notifyMail.subject)
+}
+
+// Тема бланка письма респонденту — своя, а не тема письма владельцу: письма
+// разные, и умолчание у каждого своё (mail.DefaultSubject по своему шаблону).
+function defaultRespondentSubject(form: FormDetail): Span[] {
+  const own = form.respondentEmail?.subject ?? []
+  return own.length > 0 ? own : textFromString(form.respondentMail.subject)
+}
+
+// Вопрос-источник адреса ПО УМОЛЧАНИЮ: первый вопрос типа email в документе
+// (решение владельца 2026-08-31). Это именно умолчание СЕЛЕКТА, а не серверный
+// автоподбор: подставленное значение уезжает в колонку обычным сохранением, и
+// хранимый источник всегда остаётся точным id.
+//
+// ⚠ Разница не косметическая. Сервер, трактующий пустой источник как «первый
+// email-вопрос», менял бы получателя писем на каждой правке полотна — молча и
+// задним числом; ровно поэтому автоподбор и был отвергнут (respondent-email.md §3).
+// Здесь же автор видит подставленный вопрос на экране и может его сменить.
+//
+// Пустая строка — форма без единого вопроса-email: подставлять нечего, и бланк
+// говорит об этом красной строкой.
+export function firstEmailQuestion(form: FormDetail): string {
+  return form.draftSchema.blocks.find((b) => b.type === 'email')?.id ?? ''
 }
 
 export function redirectValue(draft: SettingsDraft): string {
@@ -127,6 +169,27 @@ export function notifyEmailValue(
     subject: isDefaultSubject(draft.notifySubject, mail.subject) ? [] : draft.notifySubject,
     body: draft.notifyBody,
     attachPdf: draft.notifyAttachPdf,
+  }
+}
+
+// Бланк письма респонденту в виде, в котором его принимает API. Правило про
+// умолчания то же, что у notifyEmailValue: равное умолчанию уезжает пустым, иначе
+// сегодняшний текст шаблона заморозился бы в колонке.
+//
+// sourceBlockId уезжает КАК ЕСТЬ, в том числе указывающий на удалённый вопрос:
+// стереть его за автора значило бы молча решить за него, что письмо больше не нужно.
+export function respondentEmailValue(
+  draft: SettingsDraft,
+  mail: FormDetail['respondentMail'],
+): RespondentEmail {
+  const fromName = draft.respondentFromName.trim()
+  return {
+    sourceBlockId: draft.respondentSource,
+    fromName: fromName === mail.fromName ? '' : fromName,
+    replyTo: draft.respondentReplyTo.trim(),
+    subject: isDefaultSubject(draft.respondentSubject, mail.subject) ? [] : draft.respondentSubject,
+    body: draft.respondentBody,
+    attachPdf: draft.respondentAttachPdf,
   }
 }
 
@@ -170,6 +233,10 @@ export interface SettingsInvalid {
   // фразой «ошибка сохранения», не назвав ни поля, ни причины.
   notifySubjectLong: boolean
   notifyBodyLong: boolean
+  // Те же три проверки для бланка письма респонденту.
+  respondentReplyTo: boolean
+  respondentSubjectLong: boolean
+  respondentBodyLong: boolean
   // Включённое закрытие по дате без даты — незаконченная настройка, как включённая
   // переадресация без адреса.
   closeAt: boolean
@@ -178,6 +245,7 @@ export interface SettingsInvalid {
 export function validateSettings(draft: SettingsDraft): SettingsInvalid {
   const url = draft.redirectUrl.trim()
   const replyTo = draft.notifyReplyTo.trim()
+  const respondentReplyTo = draft.respondentReplyTo.trim()
   const limit = draft.limit.trim()
   const limitNum = Number(limit)
   const limitOn = draft.limitOn
@@ -191,6 +259,9 @@ export function validateSettings(draft: SettingsDraft): SettingsInvalid {
     replyTo: replyTo !== '' && !emailCheck.safeParse(replyTo).success,
     notifySubjectLong: plainText(draft.notifySubject).length > MAX_NOTIFY_SUBJECT_LEN,
     notifyBodyLong: plainText(draft.notifyBody).length > MAX_NOTIFY_BODY_LEN,
+    respondentReplyTo: respondentReplyTo !== '' && !emailCheck.safeParse(respondentReplyTo).success,
+    respondentSubjectLong: plainText(draft.respondentSubject).length > MAX_NOTIFY_SUBJECT_LEN,
+    respondentBodyLong: plainText(draft.respondentBody).length > MAX_NOTIFY_BODY_LEN,
   }
 }
 
@@ -205,6 +276,10 @@ export interface PendingChanges {
   closedNow: boolean
   notify: boolean
   notifyEmail: boolean
+  // Тумблер и бланк письма респонденту — два разных запроса, как у письма
+  // владельцу: тумблер может упереться в тариф, бланк — в валидацию.
+  respondent: boolean
+  respondentEmail: boolean
   partial: boolean
   // Живые колонки формы: шкала прогресса (0040) и бейдж «Сделано в Trillix» (0038).
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
@@ -226,6 +301,14 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
       !sameRichText(draft.notifySubject, saved.notifySubject) ||
       !sameRichText(draft.notifyBody, saved.notifyBody) ||
       draft.notifyAttachPdf !== saved.notifyAttachPdf,
+    respondent: draft.respondentOn !== saved.respondentOn,
+    respondentEmail:
+      draft.respondentSource !== saved.respondentSource ||
+      draft.respondentFromName.trim() !== saved.respondentFromName ||
+      draft.respondentReplyTo.trim() !== saved.respondentReplyTo ||
+      !sameRichText(draft.respondentSubject, saved.respondentSubject) ||
+      !sameRichText(draft.respondentBody, saved.respondentBody) ||
+      draft.respondentAttachPdf !== saved.respondentAttachPdf,
     partial: draft.partial !== saved.partial,
     progress: draft.progress !== saved.progress,
     branding: draft.branding !== saved.branding,
@@ -275,7 +358,12 @@ export function mergeServer(
 // изменилось» на каждом рендере — тот же класс мины, что sameRichText чинит в сторе
 // полотна.
 function sameField(key: keyof SettingsDraft, a: SettingsDraft, b: SettingsDraft): boolean {
-  if (key === 'notifySubject' || key === 'notifyBody') {
+  if (
+    key === 'notifySubject' ||
+    key === 'notifyBody' ||
+    key === 'respondentSubject' ||
+    key === 'respondentBody'
+  ) {
     return sameRichText(a[key], b[key])
   }
   return a[key] === b[key]

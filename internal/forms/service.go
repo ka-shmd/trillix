@@ -78,6 +78,8 @@ type Store interface {
 	UpdateBranding(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
 	UpdateProgress(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, show bool) (Form, error)
 	UpdateFormNotifyEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, n *domain.NotifyEmail) (Form, error)
+	UpdateFormNotifyRespondent(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
+	UpdateFormRespondentEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, r *domain.RespondentEmail) (Form, error)
 	SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
 	UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error)
 	UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
@@ -551,6 +553,72 @@ func (s *Service) NotifyEmailFor(ctx context.Context, workspaceID uuid.UUID, n *
 		return nil, nil
 	}
 	return n, nil
+}
+
+// UpdateNotifyRespondent переключает письмо респонденту (0046).
+//
+// ТАРИФ СПРАШИВАЕТСЯ ТОЛЬКО НА ВКЛЮЧЕНИИ, и гейт здесь тяжелее, чем у письма
+// владельцу: там платной является перебивка текста, здесь — сама отправка. Выключить
+// вправе любой план: даунгрейд не имеет права запирать автора в рассылке, которую он
+// уже не может остановить.
+//
+// Второй раз право спрашивается ПРИ ОТПРАВКЕ каждого письма (submissions): тумблер,
+// включённый на платном тарифе, обязан замолчать сам, ничего не стирая.
+func (s *Service) UpdateNotifyRespondent(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if enabled {
+		d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormRespondentEmail)
+		if err != nil {
+			return Form{}, err
+		}
+		if !d.Allowed {
+			return Form{}, domain.ErrPlanRequired
+		}
+	}
+	updated, err := s.repo.UpdateFormNotifyRespondent(ctx, s.db, form.ID, form.WorkspaceID, enabled)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
+// UpdateRespondentEmail заменяет бланк письма респонденту (0046). Порядок тот же,
+// что у UpdateNotifyEmail: валидация ввода, доступ, тариф, UPDATE.
+//
+// Существование вопроса-источника здесь НЕ проверяется (domain.RespondentEmail):
+// схему правят на другом экране, и 422 за удалённый вопрос ронял бы сохранение
+// настроек за чужую правку полотна.
+func (s *Service) UpdateRespondentEmail(ctx context.Context, userID, formID uuid.UUID, r *domain.RespondentEmail) (Form, error) {
+	if err := domain.ValidateRespondentEmail(r); err != nil {
+		return Form{}, err
+	}
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if !r.Empty() {
+		d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormRespondentEmail)
+		if err != nil {
+			return Form{}, err
+		}
+		if !d.Allowed {
+			return Form{}, domain.ErrPlanRequired
+		}
+	}
+	updated, err := s.repo.UpdateFormRespondentEmail(ctx, s.db, form.ID, form.WorkspaceID, r)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
 }
 
 // UpdateLinkPreview заменяет карточку ссылки формы (имя площадки, заголовок,

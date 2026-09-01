@@ -50,6 +50,18 @@ const (
 	submitRatePerSec = 1.0 / 3.0
 	submitBurst      = 20
 
+	// Потолок писем РЕСПОНДЕНТАМ на одну форму: запас 100, пополнение ~1 в 36 с
+	// (устойчиво 100/час). Ключ ведра — id формы, а не IP: адресатов много и они
+	// разные, ограничивается форма как источник рассылки
+	// (docs/design/respondent-email.md §5).
+	//
+	// Стоит потому, что квота отправки у провайдера ОБЩАЯ на весь сервис: одна
+	// виральная форма способна выесть её целиком, и тогда молчат и сбросы пароля.
+	// Ведро в памяти — та же реализация, что у прочих лимитов продукта, и та же
+	// цена: перезапуск процесса обнуляет окно.
+	respondentMailRatePerSec = 100.0 / 3600.0
+	respondentMailBurst      = 100
+
 	// Лимит на выдачу токена времени по IP (своё ведро, ARCHITECTURE §4.6). Токен
 	// сам по себе бесполезен — им можно только отправить ответ, а тот ограничен
 	// своим ведром, — поэтому пополнение взято такое же, как у приёма ответа: это
@@ -374,7 +386,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		// в самом шаблоне письма. Разбор не удался — строки пустые, и кабинет
 		// нарисует описание вместо значения.
 		WithNotifyMail(senderAddress(cfg.MailFrom), senderName(cfg.MailFrom),
-			mail.DefaultSubject(mail.TemplateSubmissionNew))
+			mail.DefaultSubject(mail.TemplateSubmissionNew)).
+		WithRespondentMail(senderAddress(cfg.MailFrom), senderName(cfg.MailFrom),
+			mail.DefaultSubject(mail.TemplateRespondentReceipt))
 
 	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
 	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис
@@ -463,8 +477,12 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
+	respondentMailLimiter := ratelimit.NewTokenBucket(respondentMailRatePerSec, respondentMailBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin).
-		WithFiles(filesSvc)
+		WithFiles(filesSvc).
+		// Адрес публичного рендерера нужен подвалу письма респонденту: в нём стоит
+		// ссылка на саму форму, а собрать её из origin кабинета нельзя.
+		WithRespondentMail(cfg.PublicRendererBaseURL, respondentMailLimiter)
 	// Доставка ответов в таблицы (слайс C): пара «submissions ↔ integrations»
 	// собирается сеттерами — каждый нужен другому, и в конструкторе такую пару
 	// не собрать. Транспорт канала подключается к диспетчеру outbox ДО старта
@@ -671,7 +689,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + emailChangeLimiter.GC() + confirmEmailLimiter.GC() +
-				twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC()
+				twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +
+				respondentMailLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}
