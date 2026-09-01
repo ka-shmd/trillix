@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { formSchemaSchema } from '@entities/formSchema'
 
 import { type Answers } from './answers'
+import { unlockHeaders, unlockToken } from './unlock'
 
 // Тело GET /public/v1/forms/{slug} (см. docs/API.md). schema валидируется тем же
 // контрактом, что и в кабинете, — непровалидированный any внутрь не проходит
@@ -57,7 +58,17 @@ const closedFormSchema = z.object({
 export type LoadResult =
   | { status: 'ok'; form: PublicForm }
   | { status: 'closed'; title: string; message: string; showBadge: boolean }
+  | { status: 'locked'; title: string; showBadge: boolean }
   | { status: 'notfound' }
+
+// Тело формы под паролем (HTTP 401 form_locked). Схемы здесь нет — до пароля её
+// видеть нечем. Название ЕСТЬ: экран ввода его показывает (решение владельца
+// 2026-09-01, design/form-password.md §2.3).
+const lockedFormSchema = z.object({
+  locked: z.literal(true),
+  title: z.string(),
+  showBadge: z.boolean().default(true),
+})
 
 // preview — предпросмотр автора (`?preview=1`, макет экрана «Встроить»). Он и только
 // он ходит МИМО КЭША: ответ публичной формы кэшируется на минуту, а бейдж и сбор
@@ -66,11 +77,17 @@ export type LoadResult =
 // прежним кэшем: платить временем загрузки формы за удобство автора незачем.
 export async function fetchPublicForm(slug: string, preview = false): Promise<LoadResult> {
   const res = await fetch(`/public/v1/forms/${encodeURIComponent(slug)}`, {
-    headers: { Accept: 'application/json' },
+    headers: { Accept: 'application/json', ...unlockHeaders(slug) },
     cache: preview ? 'no-store' : 'default',
   })
   if (res.status === 404) {
     return { status: 'notfound' }
+  }
+  // Форма под паролем: токена нет либо он протух (сутки). Сервер уже сказал всё, что
+  // можно сказать до пароля, — название и бейдж.
+  if (res.status === 401) {
+    const body = lockedFormSchema.parse(await res.json())
+    return { status: 'locked', title: body.title, showBadge: body.showBadge }
   }
   if (res.status === 410) {
     const body = closedFormSchema.parse(await res.json())
@@ -120,7 +137,7 @@ export interface SubmitBody {
 export async function submitAnswers(slug: string, body: SubmitBody): Promise<SubmitOutcome> {
   const res = await fetch(`/public/v1/forms/${encodeURIComponent(slug)}/submissions`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers: { 'Content-Type': 'application/json', ...unlockHeaders(slug) },
     body: JSON.stringify({
       submission_id: body.submissionId,
       token: body.token,
@@ -130,6 +147,12 @@ export async function submitAnswers(slug: string, body: SubmitBody): Promise<Sub
     }),
   })
   if (res.status === 201) return { status: 'ok' }
+  // Форма заперлась под нами: автор поставил пароль, пока её заполняли, либо истёк
+  // токен разблокировки. Перезагрузка покажет экран ввода пароля — набранное при
+  // этом останется в браузере (черновик).
+  if (res.status === 401) {
+    return { status: 'rejected', message: 'Форма закрыта паролем — обновите страницу и введите его.' }
+  }
   // 410 — форма закрылась (снята/дата/лимит); 404 — исчезла. И то, и другое →
   // принимать больше нельзя, показываем «приём закрыт».
   if (res.status === 410 || res.status === 404) return { status: 'closed' }
@@ -168,7 +191,7 @@ export async function submitAnswers(slug: string, body: SubmitBody): Promise<Sub
 // Ошибки ГЛОТАЮТСЯ намеренно: автосохранение — фон, и респондент не должен ни
 // видеть его сбой, ни спотыкаться о него при отправке настоящего ответа.
 export function savePartial(slug: string, body: PartialBody): void {
-  const payload = JSON.stringify(body)
+  const payload = JSON.stringify(withUnlock(slug, body))
   void fetch(`/public/v1/forms/${encodeURIComponent(slug)}/partial`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -181,7 +204,7 @@ export function savePartial(slug: string, body: PartialBody): void {
 // переживает закрытие вкладки; Blob задаёт Content-Type (заголовки этому API не
 // передать).
 export function savePartialOnLeave(slug: string, body: PartialBody): void {
-  const blob = new Blob([JSON.stringify(body)], { type: 'application/json' })
+  const blob = new Blob([JSON.stringify(withUnlock(slug, body))], { type: 'application/json' })
   navigator.sendBeacon(`/public/v1/forms/${encodeURIComponent(slug)}/partial`, blob)
 }
 
@@ -191,4 +214,12 @@ export interface PartialBody {
   version: number
   answers: Answers
   last_block_id: string | null
+}
+
+// withUnlock дописывает токен разблокировки В ТЕЛО — у этой ручки он едет так, а не
+// заголовком, как у остальных трёх: последнее сохранение уходит через sendBeacon, а
+// он заголовков не умеет вовсе (design/form-password.md §3.4). Оба пути одной ручки
+// шлют одинаково, чтобы у неё не было двух правил.
+function withUnlock(slug: string, body: PartialBody): PartialBody & { unlock: string } {
+  return { ...body, unlock: unlockToken(slug) }
 }

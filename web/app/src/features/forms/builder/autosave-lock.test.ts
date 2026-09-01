@@ -51,6 +51,7 @@ function seedDetail(qc: QueryClient) {
     linkPreview: null,
     notifyMail: { from: '', to: '', fromName: '', subject: '' },
     notifyRespondent: false,
+    password: null,
     respondentEmail: null,
     respondentMail: { from: '', to: '', fromName: '', subject: '' },
   })

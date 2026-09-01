@@ -97,6 +97,17 @@ type Form struct {
 	// заполняют только Get/GetBySlug — та же мина, что у Branding.
 	NotifyRespondent bool
 	RespondentEmail  *domain.RespondentEmail
+	// PasswordSealed — шифротекст пароля формы (nil = пароля нет; 0047). Живая
+	// колонка; заполняют только Get/GetBySlug — та же мина, что у Branding.
+	// Расшифровывает его service (Password ниже), repo байты не трогает.
+	PasswordSealed []byte
+	// Password — расшифрованный пароль формы (nil = пароля нет). Заполняет ТОЛЬКО
+	// service.Get/GetBySlug, то есть путь автора: он свой пароль видит и копирует
+	// (design/form-password.md §2.1).
+	//
+	// ⚠ МИНА: здесь лежит секрет открытым текстом. В логи форма целиком не пишется
+	// нигде, и не должна начать (internal/CLAUDE.md: пароли в логи не попадают).
+	Password *string
 	// LinkPreview — своя карточка ссылки (nil = не настраивали → дефолты публичной
 	// страницы). Живая колонка, как настройки закрытия; заполняют только
 	// Get/GetBySlug — её читает окно кастомизации на экране «Поделиться».
@@ -167,6 +178,17 @@ type PublicForm struct {
 	// чистое намерение автора: тарифа у них нет, и решать поверх нечего.
 	AutoJump    bool
 	SaveLocally bool
+	// PasswordSealed — шифротекст пароля формы (0047); nil = пароля нет. Наружу не
+	// отдаётся ни в одном ответе: он нужен только чтобы ПРОВЕРИТЬ токен
+	// разблокировки, в подпись которого подмешан, — оттого смена пароля и гасит
+	// выданные токены (Service.VerifyUnlock).
+	//
+	// ⚠ МИНА: спросить его обязан КАЖДЫЙ публичный вход по slug — отдача формы,
+	// приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
+	// не может: решение принимается по строке формы, а не по маршруту. Забытая
+	// проверка означает форму, которая спрашивает пароль на экране и пускает мимо
+	// него; список входов — design/form-password.md §3.3.
+	PasswordSealed []byte
 	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
@@ -406,6 +428,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		NotifyRespondent:      row.NotifyRespondent,
 		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
+		PasswordSealed:        row.Password,
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -448,6 +471,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		NotifyRespondent:      row.NotifyRespondent,
 		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
+		PasswordSealed:        row.Password,
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -711,6 +735,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		Progress:           row.Progress,
 		AutoJump:           row.AutoJump,
 		SaveLocally:        row.SaveLocally,
+		PasswordSealed:     row.Password,
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }
@@ -941,6 +966,42 @@ func (Repo) UpdateFormNotifyRespondent(ctx context.Context, db postgres.DBTX, id
 		CreatedAt:          row.CreatedAt.Time,
 		UpdatedAt:          row.UpdatedAt.Time,
 	}, nil
+}
+
+// UpdateFormPassword ставит или снимает пароль формы (0047): sealed — шифротекст,
+// nil — снять. Шифрует service; repo и БД видят только байты. В пределах воркспейса
+// (анти-IDOR); pgx.ErrNoRows (чужая/нет формы) пробрасывается — service вернёт 404.
+func (Repo) UpdateFormPassword(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, sealed []byte) (Form, error) {
+	row, err := postgres.New(db).UpdateFormPassword(ctx, postgres.UpdateFormPasswordParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		Password:    sealed,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form password: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
+// GetFormPasswordBySlug — id опубликованной формы и шифротекст её пароля. Только для
+// публичной ручки разблокировки: на горячем пути (отдача формы) шифротекст не нужен.
+// pgx.ErrNoRows (черновик, нет формы) пробрасывается — service вернёт 404.
+func (Repo) GetFormPasswordBySlug(ctx context.Context, db postgres.DBTX, slug string) (uuid.UUID, []byte, error) {
+	row, err := postgres.New(db).GetFormPasswordBySlug(ctx, slug)
+	if err != nil {
+		return uuid.Nil, nil, fmt.Errorf("get form password by slug: %w", err)
+	}
+	return row.FormID, row.Password, nil
 }
 
 // UpdateFormRespondentEmail заменяет бланк письма респонденту (0046). Пустая

@@ -130,6 +130,17 @@ export function updateRespondentEmail(id: string, value: RespondentEmail): Promi
   })
 }
 
+// Пароль на форму (фасет password). Обёртка вокруг value отличает «снять» (null) от
+// «не трогать» (фасета нет вовсе): у голого поля отсутствие и явный null были бы
+// неразличимы. Тарифа у пароля нет — 402 здесь не бывает.
+export function updateFormPassword(id: string, password: string | null): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { password: { value: password } },
+    schema: formSchema,
+  })
+}
+
 // Раздел «Поведение» (фасет behavior): автопереход и хранение ответов в браузере
 // респондента. Набором, а не по тумблеру: это один раздел экрана. Гейта нет.
 export function updateBehavior(id: string, behavior: BehaviorInput): Promise<Form> {

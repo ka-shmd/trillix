@@ -68,6 +68,10 @@ export const linkPreviewSchema = z.object({
 
 export type LinkPreview = z.infer<typeof linkPreviewSchema>
 
+// Потолок пароля на форму (рун) — ЗЕРКАЛИТ forms.MaxFormPasswordLen (0047).
+// Минимума нет намеренно: это не пароль аккаунта, а общий секрет для своих.
+export const MAX_FORM_PASSWORD_LEN = 128
+
 // Потолки настройки письма о новом ответе (рун) — зеркалят domain.MaxNotify*Len.
 export const MAX_NOTIFY_FROM_NAME_LEN = 100
 export const MAX_NOTIFY_SUBJECT_LEN = 200
@@ -219,6 +223,11 @@ export const formDetailSchema = formSchema.extend({
   // `default` у обоих: api, ещё не знающий полей, не обязан ронять разбор формы.
   notifyRespondent: z.boolean().default(false),
   respondentEmail: respondentEmailSchema.nullable().default(null),
+  // Пароль на форму (0047) — ОТКРЫТЫМ ТЕКСТОМ: автор свой пароль видит и копирует,
+  // потому что это не учётная запись, а общий секрет, который он рассылает
+  // участникам (решение владельца 2026-09-01, design/form-password.md §2.1).
+  // null = пароля нет. Гейта тарифа у него нет вовсе — бесплатен на всех планах.
+  password: z.string().nullable().default(null),
   // Письмо о новом ответе БЕЗ авторских правок: как его отправит сервис, если
   // notifyEmail пуст. Бланк в настройках показывает эти строки настоящим текстом
   // полей, а не подсказкой. Считать их фронту не из чего: адреса живут в конфиге

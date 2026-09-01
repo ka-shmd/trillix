@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/token"
 )
@@ -132,7 +133,7 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	meta := Meta{UserAgent: r.UserAgent(), Referer: r.Referer()}
+	meta := Meta{UserAgent: r.UserAgent(), Referer: r.Referer(), Unlock: r.Header.Get(forms.UnlockHeader)}
 	// Неразбираемый visit_id не отклоняет ответ: аналитика не повод потерять данные
 	// респондента. uuid.Nil = «визита нет», отметка конверсии просто не делается.
 	if req.VisitID != "" {
@@ -149,8 +150,13 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 
 // partialRequest — тело автосохранения. Лишние поля запрещены, как и у бикона.
 type partialRequest struct {
-	VisitID     string                     `json:"visit_id"`
-	Token       string                     `json:"token"`
+	VisitID string `json:"visit_id"`
+	Token   string `json:"token"`
+	// Unlock — токен разблокировки формы под паролем (0047). У ЭТОЙ ручки он едет в
+	// теле, а не заголовком, как у трёх остальных входов: последнее автосохранение
+	// уходит через sendBeacon, а он заголовков не умеет (design/form-password.md §3.4).
+	// Пусто у открытой формы — тогда проверять нечего.
+	Unlock      string                     `json:"unlock"`
 	Version     int32                      `json:"version"`
 	Answers     map[string]json.RawMessage `json:"answers"`
 	LastBlockID *string                    `json:"last_block_id"`
@@ -201,6 +207,7 @@ func (h *PublicHandler) savePartial(w http.ResponseWriter, r *http.Request) {
 		Version:     req.Version,
 		Answers:     req.Answers,
 		LastBlockID: req.LastBlockID,
+		Unlock:      req.Unlock,
 	})
 	if err != nil {
 		httpserver.WriteError(w, r, err)

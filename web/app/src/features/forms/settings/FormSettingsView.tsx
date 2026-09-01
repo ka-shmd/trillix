@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { CalendarIcon, TriangleAlert } from 'lucide-react'
+import { CalendarIcon, Copy, Eye, EyeOff, TriangleAlert } from 'lucide-react'
 import { useBlocker } from '@tanstack/react-router'
 import { toast } from 'sonner'
 
@@ -7,6 +7,7 @@ import { MAX_REDIRECT_URL_LEN } from '@entities/formSchema'
 import {
   MAX_CLOSED_MESSAGE_LEN,
   MAX_CLOSED_TITLE_LEN,
+  MAX_FORM_PASSWORD_LEN,
   MAX_NOTIFY_BODY_LEN,
   MAX_NOTIFY_FROM_NAME_LEN,
   MAX_NOTIFY_SUBJECT_LEN,
@@ -26,6 +27,7 @@ import {
   useUpdateBranding,
   useUpdateCloseSettings,
   useUpdateCollectPartial,
+  useUpdateFormPassword,
   useUpdateNotifyEmail,
   useUpdateNotifyOnSubmission,
   useUpdateNotifyRespondent,
@@ -41,6 +43,7 @@ import {
   firstEmailQuestion,
   isDirty,
   notifyEmailValue,
+  passwordValue,
   respondentEmailValue,
   mergeServer,
   pendingChanges,
@@ -126,6 +129,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   const updateBranding = useUpdateBranding()
   const updateNotifyRespondent = useUpdateNotifyRespondent()
   const updateRespondentEmail = useUpdateRespondentEmail()
+  const updatePassword = useUpdateFormPassword()
 
   // Гейты тарифа. Оба спрашиваются у снимка плана пространства, и оба ДЕРЖАТ САМ
   // КОНТРОЛ, а не отказывают после нажатия (тот же приём, что у бейджа на экране
@@ -158,7 +162,9 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
     invalid.notifyBodyLong ||
     invalid.respondentReplyTo ||
     invalid.respondentSubjectLong ||
-    invalid.respondentBodyLong
+    invalid.respondentBodyLong ||
+    invalid.passwordMissing ||
+    invalid.passwordLong
   const dirty = isDirty(saved, draft)
 
   // Уход с несохранёнными правками — осознанный. Блокируется НАВИГАЦИЯ роутера
@@ -279,6 +285,14 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
           id: form.id,
           behavior: { autoJump: draft.autoJump, saveLocally: draft.saveLocally },
         })
+      } catch {
+        broke = true
+      }
+    }
+
+    if (jobs.password) {
+      try {
+        await updatePassword.mutateAsync({ id: form.id, password: passwordValue(draft) })
       } catch {
         broke = true
       }
@@ -480,20 +494,24 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
 
       <Section title="Доступность">
         <div className="flex flex-col divide-y border-t">
-          {/* ЗАГЛУШКА (решение владельца 2026-08-29): пароля на форму нет нигде —
-              это сквозная работа (колонка, проверка на публичном пути, экран ввода в
-              рендерере, свой rate limit), и она идёт отдельным заходом. Строка стоит
-              здесь с красной меткой, чтобы дыра была видна на самом экране. Что
-              делать — `BACKLOG.md`, пункт «Пароль на форму». */}
+          {/* Тарифа у пароля НЕТ (решение владельца 2026-09-01): он про приватность,
+              а не про объём, и брать деньги за то, чтобы чужие не читали ответы, —
+              не то место, где стоит стоять кассе. Отсюда отсутствие метки «pro» и
+              гейта, в отличие от соседей по экрану. */}
           <SettingRow
             id="form-password"
             label="Пароль на форму"
             description="Респондент увидит вопросы, только когда введёт пароль."
-            checked={false}
-            onChange={() => undefined}
-            disabled
-            stub="Заглушка: пароля пока нет. Задача — в BACKLOG.md, «Пароль на форму»."
-          />
+            checked={draft.passwordOn}
+            onChange={(v) => set('passwordOn', v)}
+          >
+            <PasswordField
+              value={draft.password}
+              missing={invalid.passwordMissing}
+              tooLong={invalid.passwordLong}
+              onChange={(v) => set('password', v)}
+            />
+          </SettingRow>
 
           {/* Закрытие — это СТАТУС формы, а не колонка настроек: тумблер уезжает
               отдельными ручками (unpublish/reopen), а не фасетом closeSettings.
@@ -615,7 +633,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
               относится к полю, в которое человек ещё не печатал, и краснеть ему не за
               что — кнопка и так не даётся. */}
           <span
-            className={`text-sm ${failed || invalid.url || invalid.limit || invalid.replyTo || invalid.notifySubjectLong || invalid.notifyBodyLong ? 'text-destructive' : 'text-muted-foreground'}`}
+            className={`text-sm ${failed || invalid.url || invalid.limit || invalid.replyTo || invalid.passwordLong || invalid.notifySubjectLong || invalid.notifyBodyLong ? 'text-destructive' : 'text-muted-foreground'}`}
             role="status"
           >
             {invalid.url
@@ -626,13 +644,17 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
                   ? 'Проверьте адрес для ответов'
                   : invalid.limit
                     ? 'Проверьте лимит'
-                    : invalid.notifySubjectLong || invalid.notifyBodyLong
-                      ? 'Письмо длиннее допустимого'
-                      : failed
-                        ? 'Не удалось сохранить'
-                        : dirty
-                          ? 'Есть несохранённые изменения'
-                          : 'Всё сохранено'}
+                    : invalid.passwordMissing
+                      ? 'Укажите пароль формы'
+                      : invalid.passwordLong
+                        ? 'Пароль длиннее допустимого'
+                        : invalid.notifySubjectLong || invalid.notifyBodyLong
+                          ? 'Письмо длиннее допустимого'
+                          : failed
+                            ? 'Не удалось сохранить'
+                            : dirty
+                              ? 'Есть несохранённые изменения'
+                              : 'Всё сохранено'}
           </span>
           <Button onClick={() => void save()} disabled={!dirty || anyInvalid || saving}>
             {saving ? 'Сохраняем…' : 'Сохранить'}
@@ -670,6 +692,79 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
 // `datetime-local`, из него же собирается ISO для сервера) — два поля в черновике
 // означали бы два состояния «наполовину задано» и правило склейки в каждом читателе.
 //
+// Поле пароля формы. Два действия рядом с ним — ПОКАЗАТЬ и СКОПИРОВАТЬ — есть
+// ровно потому, что пароль хранится обратимо (решение владельца 2026-09-01,
+// design/form-password.md §2.1): автор рассылает его участникам, и «покажите, что я
+// разослал» — обычное действие, а не восстановление доступа. С хешем эти две кнопки
+// исчезли бы вместе с возможностью узнать свой пароль.
+function PasswordField({
+  value,
+  missing,
+  tooLong,
+  onChange,
+}: {
+  value: string
+  missing: boolean
+  tooLong: boolean
+  onChange: (value: string) => void
+}) {
+  const [shown, setShown] = useState(false)
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      <div className="flex items-center gap-2">
+        <Input
+          id="form-password-value"
+          // Тип переключается вместе с глазком: у скрытого пароля браузер прячет
+          // символы сам, и рисовать точки своими руками незачем.
+          type={shown ? 'text' : 'password'}
+          // Менеджеру паролей здесь подсказывать нечего: это секрет ФОРМЫ, а не
+          // учётная запись автора, и предлагать сохранить его в связке — засорять её.
+          autoComplete="off"
+          aria-label="Пароль формы"
+          aria-invalid={missing || tooLong}
+          className="max-w-xs"
+          value={value}
+          placeholder="Например, 2026"
+          onChange={(e) => onChange(e.target.value)}
+        />
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label={shown ? 'Скрыть пароль' : 'Показать пароль'}
+          onClick={() => setShown((v) => !v)}
+        >
+          {shown ? <EyeOff /> : <Eye />}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="icon"
+          aria-label="Скопировать пароль"
+          disabled={value === ''}
+          onClick={() => {
+            navigator.clipboard
+              .writeText(value)
+              .then(() => toast.success('Пароль скопирован'))
+              .catch(() => toast.error('Не удалось скопировать'))
+          }}
+        >
+          <Copy />
+        </Button>
+      </div>
+      {tooLong && (
+        <p className="text-sm text-destructive" role="alert">
+          Пароль — не длиннее {MAX_FORM_PASSWORD_LEN} символов.
+        </p>
+      )}
+      <p className="text-sm text-muted-foreground">
+        Пароль придётся передать участникам самим — письма с ним мы не шлём.
+      </p>
+    </div>
+  )
+}
+
 // Пояс НЕ выбирается: дата и время читаются в поясе браузера — том же, в котором
 // автор их набирает. Подпись об этом обязательна: без неё «в 23:59» у формы, которую
 // закрывают из другой страны, двусмысленно.

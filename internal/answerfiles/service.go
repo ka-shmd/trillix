@@ -21,6 +21,11 @@ import (
 // но черновик и несуществующая обязаны давать одинаковый 404 (инвариант 5).
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
+	// sealed — шифротекст пароля прямо сейчас (пустой = пароля нет). Спрашивается у
+	// forms, а не решается здесь: секрет подписи обязан лежать в одном месте
+	// (design/form-password.md §3.3).
+	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
 	// Get проверяет членство пользователя в воркспейсе формы; чужая или
 	// несуществующая → domain.ErrNotFound (анти-IDOR, приватное не раскрывается).
 	// Скачиванию нужен только факт доступа, не поля формы.
@@ -88,6 +93,8 @@ type SlotRequest struct {
 	FileName    string
 	SizeBytes   int64
 	ContentType string
+	// Unlock — токен разблокировки формы под паролем (0047); пусто у открытой формы.
+	Unlock string
 }
 
 // IssueSlot выдаёт право загрузить один файл. Порядок проверок — от самого дешёвого
@@ -96,6 +103,11 @@ type SlotRequest struct {
 func (s *Service) IssueSlot(ctx context.Context, req SlotRequest) (Slot, error) {
 	pf, err := s.forms.PublicForm(ctx, req.Slug)
 	if err != nil {
+		return Slot{}, err
+	}
+	// Пароль формы (0047) — до всего: право писать в наш бакет не выдаётся тому, кто
+	// формы не открывал. Без этой строки пароль обходился бы загрузкой файлов.
+	if err := s.forms.VerifyUnlock(pf.FormID, pf.PasswordSealed, req.Unlock); err != nil {
 		return Slot{}, err
 	}
 	// Закрытая форма файлов не принимает: приём ответа всё равно ответит 410, и

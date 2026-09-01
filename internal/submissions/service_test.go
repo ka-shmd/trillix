@@ -35,6 +35,19 @@ func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error)
 	return f.pf, nil
 }
 
+// testUnlockToken — «правильный» токен разблокировки в фейке; подпись проверяется
+// в своих тестах модуля forms, здесь важно лишь, что сервис отказывает без токена.
+const testUnlockToken = "unlocked"
+
+// VerifyUnlock повторяет правило сервиса форм: без пароля пускаем всегда, с паролем
+// — только по годному токену.
+func (f fakeForms) VerifyUnlock(_ uuid.UUID, sealed []byte, tok string) error {
+	if len(sealed) == 0 || tok == testUnlockToken {
+		return nil
+	}
+	return domain.ErrFormLocked
+}
+
 // CollectPartial повторяет правило сервиса: без тумблера сбора нет, с тумблером
 // решает тариф. partialAllowed=false — план, который сбор больше не разрешает.
 func (f fakeForms) CollectPartial(_ context.Context, _ uuid.UUID, intent bool) (bool, error) {
@@ -81,10 +94,13 @@ type fakeSubStore struct {
 	// lastInsert — что сервис отдал на вставку: тестам про квоту важна пометка
 	// over_quota и период, в который поехал инкремент расхода.
 	lastInsert NewSubmission
+	// inserted — дошёл ли ответ до вставки вообще (тесты барьеров: пароль).
+	inserted bool
 }
 
 func (f *fakeSubStore) InsertSubmission(_ context.Context, _ postgres.DBTX, in NewSubmission) (int64, error) {
 	f.lastInsert = in
+	f.inserted = true
 	return f.insertN, nil
 }
 
@@ -560,5 +576,45 @@ func TestSubmit_NotifyRespondent_NotConfigured(t *testing.T) {
 	}
 	if len(mailer.calls) != 0 {
 		t.Fatalf("письмо ушло на ненастроенном контуре: %+v", mailer.calls)
+	}
+}
+
+// --- Пароль на форму (0047) -------------------------------------------------
+
+// Ответ на форму под паролем не принимается без токена — и принимается с ним.
+// Экран ввода пароля в рендерере эту проверку не заменяет: сюда ходят curl'ом.
+func TestSubmit_LockedForm(t *testing.T) {
+	pf := validPublishedForm(false)
+	pf.PasswordSealed = []byte("шифротекст")
+	store := &fakeSubStore{insertN: 1}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: pf}, nil, &fakeMailer{}, okPlans(), store, "https://app.test")
+
+	err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{})
+	if !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("без токена: err = %v, want ErrFormLocked", err)
+	}
+	if store.inserted {
+		t.Fatal("ответ записан мимо пароля")
+	}
+
+	if err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{},
+		Meta{Unlock: testUnlockToken}); err != nil {
+		t.Fatalf("с токеном: %v", err)
+	}
+}
+
+// Черновик — те же ответы респондента: складывать их автору от того, кто формы не
+// открывал, незачем.
+func TestSavePartial_LockedForm(t *testing.T) {
+	pf := validPublishedForm(false)
+	pf.PasswordSealed = []byte("шифротекст")
+	pf.CollectPartial = true
+	store := &fakeSubStore{}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: pf, partialAllowed: true},
+		nil, &fakeMailer{}, okPlans(), store, "https://app.test")
+
+	err := svc.SavePartial(context.Background(), "slug1", PartialInput{VisitID: uuid.New()})
+	if !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("без токена: err = %v, want ErrFormLocked", err)
 	}
 }

@@ -13,6 +13,7 @@ import {
   isoToLocalInput,
   localInputToIso,
   mergeServer,
+  passwordValue,
   pendingChanges,
   validateSettings,
   type SettingsDraft,
@@ -38,6 +39,8 @@ const saved: SettingsDraft = {
   notifySubject: [],
   notifyBody: [],
   notifyAttachPdf: false,
+  passwordOn: false,
+  password: '',
   respondentOn: false,
   respondentSource: '',
   respondentFromName: '',
@@ -72,11 +75,43 @@ describe('черновик страницы настроек', () => {
       respondent: false,
       respondentEmail: false,
       partial: false,
+      password: false,
       progress: false,
       branding: false,
       behavior: false,
     })
     expect(isDirty(saved, { ...saved })).toBe(false)
+  })
+
+  // Пароль на форму (0047): тумблер плюс значение, как переадресация и лимит.
+  it('пароль: тумблер без значения не сохраняется, значение уезжает своим запросом', () => {
+    // Включённый тумблер с пустым полем — незаконченная настройка, а не «пароля нет».
+    expect(validateSettings({ ...saved, passwordOn: true }).passwordMissing).toBe(true)
+    expect(validateSettings({ ...saved, passwordOn: true, password: 'x' }).passwordMissing).toBe(
+      false,
+    )
+    expect(
+      validateSettings({ ...saved, passwordOn: true, password: 'я'.repeat(129) }).passwordLong,
+    ).toBe(true)
+
+    const withPassword = { ...saved, passwordOn: true, password: 'секрет' }
+    expect(pendingChanges(saved, withPassword).password).toBe(true)
+    // И только он: пароль не тянет за собой соседние запросы.
+    expect(pendingChanges(saved, withPassword).close).toBe(false)
+    expect(passwordValue(withPassword)).toBe('секрет')
+
+    // Выключенный тумблер = снять пароль (null), даже если поле не стёрли.
+    expect(passwordValue({ ...withPassword, passwordOn: false })).toBeNull()
+    // Пробелы по краям не режутся: это ровно та строка, которую автор разослал.
+    expect(passwordValue({ ...saved, passwordOn: true, password: ' два ' })).toBe(' два ')
+  })
+
+  // Выключенный тумблер и пустое поле дают ОДИН И ТОТ ЖЕ запрос — страница не имеет
+  // права считаться несохранённой из-за набранного и стёртого пароля.
+  it('пароль: пустое значение при выключенном тумблере — не правка', () => {
+    const savedWithoutPassword = { ...saved, passwordOn: false, password: '' }
+    const typedThenErased = { ...saved, passwordOn: false, password: 'набрал и стёр тумблер' }
+    expect(pendingChanges(savedWithoutPassword, typedThenErased).password).toBe(false)
   })
 
   it('каждый раздел едет своим запросом и только он', () => {

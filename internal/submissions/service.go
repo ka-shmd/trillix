@@ -43,6 +43,11 @@ const (
 // *forms.Service; общение через интерфейс сервиса (не чужой repo).
 type Forms interface {
 	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
+	// sealed — шифротекст пароля прямо сейчас (пустой = пароля нет). Спрашивается у
+	// forms, а не решается здесь: секрет подписи обязан лежать в одном месте
+	// (design/form-password.md §3.3).
+	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
 	// CollectPartial — собирать ли черновики у этой формы прямо сейчас: тумблер
 	// автора плюс разрешение тарифа (даунгрейд останавливает сбор).
 	CollectPartial(ctx context.Context, workspaceID uuid.UUID, intent bool) (bool, error)
@@ -145,6 +150,11 @@ type PartialInput struct {
 	Version     int32
 	Answers     map[string]json.RawMessage
 	LastBlockID *string
+	// Unlock — токен разблокировки формы под паролем (0047); пусто у открытой формы.
+	// У ЭТОЙ ручки он приезжает в ТЕЛЕ, а не заголовком, как у остальных трёх входов:
+	// последнее автосохранение уходит через sendBeacon, который заголовков не умеет
+	// вовсе (design/form-password.md §3.4).
+	Unlock string
 }
 
 // Store — доступ к данным submissions, объявленный на стороне потребителя.
@@ -219,6 +229,11 @@ type Meta struct {
 	// дошёл или страница из кэша прежней версии рендерера). Отсюда точная конверсия
 	// вместо деления двух независимых счётчиков.
 	VisitID uuid.UUID
+	// Unlock — токен разблокировки формы, закрытой паролем (0047); пусто, если
+	// форма открытая. Приехал с запросом, как UserAgent, но в ОТЛИЧИЕ от остальных
+	// полей в базу не пишется и писаться не должен: это доказательство права
+	// отправить ответ, а не свойство самого ответа.
+	Unlock string
 }
 
 // Service — приём ответов. Валидация идёт против ОПУБЛИКОВАННОЙ версии формы, а
@@ -306,6 +321,13 @@ func (s *Service) WithFiles(f AnswerFiles) *Service {
 func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers map[string]json.RawMessage, meta Meta) error {
 	pf, err := s.forms.PublicForm(ctx, slug)
 	if err != nil {
+		return err
+	}
+
+	// Пароль формы (0047) — раньше всего остального: ответ на форму, которую этот
+	// браузер не открывал, принимать нечем. Экран ввода пароля в рендерере эту
+	// проверку НЕ заменяет: сюда приходят curl'ом, а не только со страницы.
+	if err := s.forms.VerifyUnlock(pf.FormID, pf.PasswordSealed, meta.Unlock); err != nil {
 		return err
 	}
 
@@ -886,6 +908,11 @@ func (s *Service) dropPartial(ctx context.Context, formID, visitID uuid.UUID) {
 func (s *Service) SavePartial(ctx context.Context, slug string, p PartialInput) error {
 	pf, err := s.forms.PublicForm(ctx, slug)
 	if err != nil {
+		return err
+	}
+	// Пароль формы (0047): черновик — это те же ответы респондента, и складывать их
+	// автору от того, кто формы не открывал, незачем.
+	if err := s.forms.VerifyUnlock(pf.FormID, pf.PasswordSealed, p.Unlock); err != nil {
 		return err
 	}
 	if domain.FormClosed(pf.Status, pf.CloseAt, pf.ResponseLimit, pf.SubmissionCount, s.now().UTC()) {

@@ -74,6 +74,7 @@ export function newFormDetail(): FormDetail {
     // Письмо респонденту у новой формы выключено и не настроено — те же дефолты
     // колонок (0046) и тот же довод, что у письма владельцу.
     notifyRespondent: false,
+    password: null,
     respondentEmail: null,
     respondentMail: { from: '', to: '', fromName: '', subject: '' },
   }

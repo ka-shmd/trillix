@@ -120,6 +120,8 @@ func statusForError(err error) (int, string) {
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, domain.ErrNotFound):
 		return http.StatusNotFound, "not_found"
+	case errors.Is(err, domain.ErrFormLocked):
+		return http.StatusUnauthorized, "form_locked"
 	case errors.Is(err, domain.ErrFormClosed):
 		return http.StatusGone, "form_closed"
 	case errors.Is(err, domain.ErrLinkExpired):

@@ -3,6 +3,7 @@ import { useEffect } from 'react'
 import { Badge } from '@fields/Badge'
 import { type EmbedOptions, type HostBridge } from './features/form/embed'
 import { FormView } from './features/form/FormView'
+import { PasswordGate } from './features/form/PasswordGate'
 import { slugFromPath } from './features/form/slug'
 import { usePublicForm } from './features/form/usePublicForm'
 
@@ -20,7 +21,7 @@ export function App({
   const slug = slugFromPath(window.location.pathname)
   // Предпросмотр автора решается здесь, а не в FormView: от него зависит, запрашивать
   // ли токен формы, а это делает загрузчик.
-  const state = usePublicForm(slug, embed?.preview ?? false)
+  const [state, reload] = usePublicForm(slug, embed?.preview ?? false)
 
   switch (state.status) {
     case 'loading':
@@ -39,6 +40,17 @@ export function App({
       // Форма была публичной, но приём закрыт (снята/дата/лимит): показываем её
       // название и текст владельца, а не безликое «недоступна» (шаг 4).
       return <StatusScreen title={state.title} detail={state.message} badge={state.showBadge} />
+    case 'locked':
+      // Форма под паролем: вопросов нет ни на экране, ни в браузере — сервер их не
+      // прислал. Название видно (решение владельца, спека §2.3).
+      return (
+        <PasswordGate
+          slug={slug}
+          title={state.title}
+          badge={state.showBadge}
+          onUnlocked={reload}
+        />
+      )
     case 'notfound':
       // Черновик и несуществующая форма неотличимы (404, инвариант 5) — один экран.
       return (

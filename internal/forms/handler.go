@@ -44,6 +44,8 @@ type formsService interface {
 	UpdateCloseSettings(ctx context.Context, userID, formID uuid.UUID, settings domain.CloseSettings) (Form, error)
 	UpdateNotifyOnSubmission(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateNotifyRespondent(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
+	// UpdatePassword ставит пароль на форму или снимает его (nil = снять, 0047).
+	UpdatePassword(ctx context.Context, userID, formID uuid.UUID, password *string) (Form, error)
 	UpdateRespondentEmail(ctx context.Context, userID, formID uuid.UUID, r *domain.RespondentEmail) (Form, error)
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
@@ -188,6 +190,15 @@ type formDetailResponse struct {
 	// письма владельцу. Поле To здесь всегда пустое: адресат приезжает ответом, и
 	// строку «Кому» бланк рисует описанием выбранного вопроса.
 	RespondentMail notifyMailBody `json:"respondentMail"`
+	// Password — пароль на форму (null = пароля нет). Отдаётся ОТКРЫТЫМ ТЕКСТОМ и
+	// только в детали формы: автор свой пароль видит и копирует, потому что это не
+	// учётная запись, а общий секрет, который он рассылает участникам (решение
+	// владельца 2026-09-01, design/form-password.md §2.1). Право читать деталь формы
+	// уже проверено (членство в воркспейсе), новой утечки нет.
+	//
+	// null при включённом пароле возможен и означает ровно одно: секрет приложения
+	// сменили, и старый шифротекст больше не читается (service.withPassword).
+	Password *string `json:"password"`
 	// NotifyMail — письмо о новом ответе БЕЗ авторских правок: как его отправит
 	// сервис, если в notifyEmail пусто. Нужно бланку письма в настройках формы: он
 	// показывает автору настоящие адреса и настоящий текст, а не описание того, чем
@@ -272,6 +283,16 @@ type patchRequest struct {
 	NotifyRespondent   *bool                `json:"notifyRespondent"`
 	RespondentEmail    *respondentEmailBody `json:"respondentEmail"`
 	LinkPreview        *linkPreviewBody     `json:"linkPreview"`
+	Password           *passwordBody        `json:"password"`
+}
+
+// passwordBody — фасет пароля на форму. Обёртка вокруг одного поля, а не голый
+// *string, ровно затем, чтобы «снять пароль» отличалось от «не трогать»: у *string
+// отсутствующее поле и явный null дают один и тот же nil, и фасет было бы не
+// отличить от его отсутствия. {"password":{"value":null}} — снять,
+// {"password":{"value":"…"}} — поставить.
+type passwordBody struct {
+	Value *string `json:"value"`
 }
 
 // notifyMailBody — письмо по умолчанию: два адреса, которые автору не принадлежат,
@@ -421,6 +442,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		SaveLocally:        f.SaveLocally,
 		NotifyEmail:        toNotifyEmailBody(f.NotifyEmail),
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
+		Password:           f.Password,
 	}
 }
 
@@ -575,6 +597,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.NotifyRespondent != nil,
 		req.RespondentEmail != nil,
 		req.LinkPreview != nil,
+		req.Password != nil,
 	}
 	for _, present := range facets {
 		if present {
@@ -582,7 +605,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/behavior/notifyEmail/notifyRespondent/respondentEmail/linkPreview", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/behavior/notifyEmail/notifyRespondent/respondentEmail/linkPreview/password", domain.ErrValidation))
 		return
 	}
 
@@ -611,6 +634,8 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateNotifyOnSubmission(r.Context(), userID, formID, *req.NotifyOnSubmission)
 	case req.NotifyRespondent != nil:
 		form, err = h.svc.UpdateNotifyRespondent(r.Context(), userID, formID, *req.NotifyRespondent)
+	case req.Password != nil:
+		form, err = h.svc.UpdatePassword(r.Context(), userID, formID, req.Password.Value)
 	case req.RespondentEmail != nil:
 		re := *req.RespondentEmail
 		form, err = h.svc.UpdateRespondentEmail(r.Context(), userID, formID, &domain.RespondentEmail{

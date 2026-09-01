@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { isHttpUrl, plainText, sameRichText, textFromString, type Span } from '@entities/formSchema'
 import {
+  MAX_FORM_PASSWORD_LEN,
   MAX_NOTIFY_BODY_LEN,
   MAX_NOTIFY_SUBJECT_LEN,
   type CloseSettingsInput,
@@ -65,6 +66,12 @@ export interface SettingsDraft {
   respondentBody: Span[]
   respondentAttachPdf: boolean
   partial: boolean
+  // Пароль на форму (0047) — ТУМБЛЕР ПЛЮС ЗНАЧЕНИЕ, как переадресация и лимит:
+  // включённый тумблер с пустым полем не «пароля нет», а недозаполненная настройка,
+  // и сохранение её не пропускает. Выключенный уезжает снятием пароля (null), но
+  // набранное остаётся в черновике до сохранения.
+  passwordOn: boolean
+  password: string
   // Живые колонки формы: шкала прогресса (0040) и бейдж «Сделано в Trillix» (0038).
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
   progress: boolean
@@ -107,6 +114,8 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     respondentBody: form.respondentEmail?.body ?? [],
     respondentAttachPdf: form.respondentEmail?.attachPdf ?? false,
     partial: form.collectPartial,
+    passwordOn: form.password !== null,
+    password: form.password ?? '',
     progress: form.progress,
     branding: form.branding,
     autoJump: form.autoJump,
@@ -149,6 +158,13 @@ export function firstEmailQuestion(form: FormDetail): string {
 
 export function redirectValue(draft: SettingsDraft): string {
   return draft.redirectOn ? draft.redirectUrl.trim() : ''
+}
+
+// Что уедет в колонку пароля: null = снять. Пробелы по краям НЕ режутся — пароль
+// это ровно та строка, которую автор разослал участникам, и обрезать её значило бы,
+// что скопированный из настроек пароль не подходит к собственной форме.
+export function passwordValue(draft: SettingsDraft): string | null {
+  return draft.passwordOn && draft.password !== '' ? draft.password : null
 }
 
 // Настройка письма в виде, в котором её принимает API: обрезанные поля, кроме
@@ -240,6 +256,10 @@ export interface SettingsInvalid {
   // Включённое закрытие по дате без даты — незаконченная настройка, как включённая
   // переадресация без адреса.
   closeAt: boolean
+  // Включённый пароль без пароля — та же незаконченная настройка. Форма, у которой
+  // тумблер стоит, а пароля нет, была бы открытой при выключателе «закрыта».
+  passwordMissing: boolean
+  passwordLong: boolean
 }
 
 export function validateSettings(draft: SettingsDraft): SettingsInvalid {
@@ -262,6 +282,8 @@ export function validateSettings(draft: SettingsDraft): SettingsInvalid {
     respondentReplyTo: respondentReplyTo !== '' && !emailCheck.safeParse(respondentReplyTo).success,
     respondentSubjectLong: plainText(draft.respondentSubject).length > MAX_NOTIFY_SUBJECT_LEN,
     respondentBodyLong: plainText(draft.respondentBody).length > MAX_NOTIFY_BODY_LEN,
+    passwordMissing: draft.passwordOn && draft.password === '',
+    passwordLong: draft.password.length > MAX_FORM_PASSWORD_LEN,
   }
 }
 
@@ -281,6 +303,8 @@ export interface PendingChanges {
   respondent: boolean
   respondentEmail: boolean
   partial: boolean
+  // Пароль на форму (0047): свой запрос — у него ни тарифа, ни соседей по фасету.
+  password: boolean
   // Живые колонки формы: шкала прогресса (0040) и бейдж «Сделано в Trillix» (0038).
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
   progress: boolean
@@ -310,6 +334,10 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
       !sameRichText(draft.respondentBody, saved.respondentBody) ||
       draft.respondentAttachPdf !== saved.respondentAttachPdf,
     partial: draft.partial !== saved.partial,
+    // Сравнение ПО ЗНАЧЕНИЮ, как у настроек закрытия: выключенный тумблер и пустое
+    // поле под ним дают один и тот же запрос (снять пароль), и считать это правкой
+    // значило бы держать страницу вечно несохранённой.
+    password: passwordValue(draft) !== passwordValue(saved),
     progress: draft.progress !== saved.progress,
     branding: draft.branding !== saved.branding,
     behavior: draft.autoJump !== saved.autoJump || draft.saveLocally !== saved.saveLocally,

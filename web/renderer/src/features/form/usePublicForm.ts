@@ -15,6 +15,9 @@ export type FormState =
   | { status: 'loading' }
   | { status: 'ok'; form: PublicForm; token: FormToken | null }
   | { status: 'closed'; title: string; message: string; showBadge: boolean }
+  // Форма закрыта паролем. Схемы нет вовсе — не «есть, но спрятана»: вопросы не
+  // приезжают в браузер до пароля, и в DOM их искать негде.
+  | { status: 'locked'; title: string; showBadge: boolean }
   | { status: 'notfound' }
   | { status: 'error'; message: string }
 
@@ -24,7 +27,11 @@ export type FormState =
 // preview — предпросмотр автора (`?preview=1`): токен не запрашивается вовсе, потому
 // что отправка в этом режиме останавливается до сети, а сама форма читается мимо
 // кэша — живые настройки автор обязан видеть сразу (fetchPublicForm).
-export function usePublicForm(slug: string, preview: boolean): FormState {
+export function usePublicForm(slug: string, preview: boolean): [FormState, () => void] {
+  // reloads — счётчик перезапросов. Не флаг: сбросить его некому, а форму после
+  // верного пароля надо загрузить ровно так же, как при первом заходе, — тем же
+  // эффектом, а не второй веткой загрузки.
+  const [reloads, setReloads] = useState(0)
   // Пустой slug решается на рендере (не ходим в сеть) — без синхронного setState
   // в эффекте. Непустой начинает с loading, эффект догрузит.
   const [state, setState] = useState<FormState>(() =>
@@ -34,7 +41,8 @@ export function usePublicForm(slug: string, preview: boolean): FormState {
   useEffect(() => {
     if (slug === '') return
     // Начальное loading уже выставил инициализатор useState; повторно
-    // синхронно его не ставим (slug из pathname постоянен на всё время жизни).
+    // синхронно его не ставим (slug из pathname постоянен на всё время жизни, а
+    // перезапрос после пароля идёт из экрана, который сам показывает «проверяем»).
     let active = true
     // Параллельно, а не цепочкой: запросы независимы (токен не знает про форму), и
     // ждать один другого значило бы сложить их задержки на пути к первому экрану.
@@ -58,7 +66,9 @@ export function usePublicForm(slug: string, preview: boolean): FormState {
     return () => {
       active = false
     }
-  }, [slug, preview])
+  }, [slug, preview, reloads])
 
-  return state
+  // Второй элемент — перезапрос формы. Его зовёт экран ввода пароля после верного
+  // пароля: токен уже лежит в sessionStorage, и fetchPublicForm предъявит его сам.
+  return [state, () => setReloads((n) => n + 1)]
 }
