@@ -330,12 +330,19 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// прежним телом — то есть бейдж оставался бы у всех, кто уже открывал форму,
 	// пока не сменится версия.
 	showBadge := h.showBadge(r, pf.WorkspaceID, pf.Branding)
-	etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally) + `"`
-	w.Header().Set("Cache-Control", "public, max-age=60")
-	w.Header().Set("ETag", etag)
-	if etagMatches(r.Header.Get("If-None-Match"), etag) {
-		w.WriteHeader(http.StatusNotModified)
-		return
+	// Форма под паролем кэша не получает ВОВСЕ — ни публичного, ни ETag'а: no-store
+	// поставлен выше, и перебивать его здесь нельзя. Публичный max-age у тела с
+	// вопросами означал бы, что общий прокси раздаёт содержимое закрытой формы
+	// кому угодно, а сама выдача зависит от заголовка запроса, которого нет в ключе
+	// кэша. Минута кэша разблокированной формы того не стоит.
+	if !pf.HasPassword {
+		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally) + `"`
+		w.Header().Set("Cache-Control", "public, max-age=60")
+		w.Header().Set("ETag", etag)
+		if etagMatches(r.Header.Get("If-None-Match"), etag) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
 	}
 
 	// Рендерер знает только текущий формат — старая опубликованная версия

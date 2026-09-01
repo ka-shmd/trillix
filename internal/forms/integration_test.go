@@ -95,7 +95,8 @@ func newStack(t *testing.T) *httptest.Server {
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
-		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
+		WithSecret(testTokenSecret)
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF).
 		WithNotifyMail("no-reply@trillix.test", "Trillix", "Новый ответ в Trillix")
 	formsPublic, err := forms.NewPublicHandler(formsSvc, testTokenSecret,
@@ -108,7 +109,7 @@ func newStack(t *testing.T) *httptest.Server {
 	mux := http.NewServeMux()
 	authH.Routes(mux)
 	formsH.Routes(mux)
-	formsPublic.Routes(mux)
+	formsPublic.WithUnlockLimiter(allowLimiter{}).Routes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 	return srv
@@ -1447,6 +1448,7 @@ type formDetailDTO struct {
 	SaveLocally   bool            `json:"saveLocally"`
 	Branding      bool            `json:"branding"`
 	Progress      bool            `json:"progress"`
+	Password      *string         `json:"password"`
 	NotifyMail    struct {
 		From     string `json:"from"`
 		To       string `json:"to"`
@@ -1976,4 +1978,181 @@ func TestForms_PublicFetch_DeletedOwnerIs404(t *testing.T) {
 	// бы о форме удалённого аккаунта больше, чем нужно. 404 — тот же ответ, что
 	// у черновика (инвариант 5).
 	getPublic(t, anon, srv, form.Slug, http.StatusNotFound)
+}
+
+// --- Пароль на форму (0047) -------------------------------------------------
+
+// Сквозной путь пароля: постановка, отказ публичной выдаче, разблокировка,
+// повторное чтение автором и снятие. Проверяется снаружи, тем же путём, каким
+// пойдёт респондент.
+func TestForms_Password_LocksPublicFormAndUnlocks(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-password@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, alice, srv, "Опрос про доставку")
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+
+	// До пароля форма открыта всем и кэшируется как обычно.
+	if _, etag := getPublicOK(t, anon, srv, form.Slug); etag == "" {
+		t.Fatal("у формы без пароля обязан быть ETag")
+	}
+
+	const password = "секрет для коллег"
+	patchPassword(t, alice, srv, form.ID, `"`+password+`"`, http.StatusOK)
+
+	// Публичная выдача закрыта: 401, схемы в теле нет, кэша нет.
+	r := do(t, anon, http.MethodGet, srv.URL+"/public/v1/forms/"+form.Slug, "", "")
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("GET под паролем: статус %d, ожидалось 401", r.StatusCode)
+	}
+	if cc := r.Header.Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, ожидалось no-store", cc)
+	}
+	var locked struct {
+		Locked bool            `json:"locked"`
+		Title  string          `json:"title"`
+		Schema json.RawMessage `json:"schema"`
+	}
+	decode(t, r, &locked)
+	if !locked.Locked || len(locked.Schema) != 0 {
+		t.Fatalf("тело отказа выдало схему: %+v", locked)
+	}
+	// Название на экране ввода видно (решение владельца, спека §2.3).
+	if locked.Title != "Опрос про доставку" {
+		t.Fatalf("название = %q", locked.Title)
+	}
+
+	// Неверный пароль токена не даёт.
+	r = do(t, anon, http.MethodPost, srv.URL+"/public/v1/forms/"+form.Slug+"/unlock",
+		`{"password":"не тот"}`, "")
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("неверный пароль: статус %d, ожидалось 401", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Верный — даёт, и с ним форма отдаётся целиком.
+	tok := unlockForm(t, anon, srv, form.Slug, password)
+	r = doWithHeader(t, anon, http.MethodGet, srv.URL+"/public/v1/forms/"+form.Slug, "X-Form-Unlock", tok)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("GET с токеном: статус %d, ожидалось 200; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+
+	// Автор видит свой пароль на экране настроек и может его скопировать.
+	d := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	if d.Password == nil || *d.Password != password {
+		t.Fatalf("пароль не вернулся автору: %v", d.Password)
+	}
+
+	// Снятие открывает форму снова — без перепубликации.
+	patchPassword(t, alice, srv, form.ID, "null", http.StatusOK)
+	if _, etag := getPublicOK(t, anon, srv, form.Slug); etag == "" {
+		t.Fatal("после снятия пароля форма обязана отдаваться как обычная")
+	}
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.Password != nil {
+		t.Fatalf("пароль остался после снятия: %q", *d.Password)
+	}
+}
+
+// Токен одной формы не открывает другую: иначе один известный пароль открывал бы
+// все формы сервиса разом.
+func TestForms_Password_TokenIsPerForm(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-password2@example.com")
+	anon := newClient(t)
+
+	first := createForm(t, alice, srv, "Первая")
+	publishForm(t, alice, srv, first.ID, http.StatusOK)
+	patchPassword(t, alice, srv, first.ID, `"общий"`, http.StatusOK)
+
+	second := createForm(t, alice, srv, "Вторая")
+	publishForm(t, alice, srv, second.ID, http.StatusOK)
+	patchPassword(t, alice, srv, second.ID, `"другой"`, http.StatusOK)
+
+	tok := unlockForm(t, anon, srv, first.Slug, "общий")
+	r := doWithHeader(t, anon, http.MethodGet, srv.URL+"/public/v1/forms/"+second.Slug, "X-Form-Unlock", tok)
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("чужой токен открыл вторую форму: статус %d", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Пароль не спрашивает тарифа: он бесплатен на всех планах (решение владельца
+// 2026-09-01). Проверяем на free — плане нового пользователя.
+func TestForms_Password_FreePlanAllowed(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-password3@example.com")
+
+	form := createForm(t, alice, srv, "Анкета")
+	patchPassword(t, alice, srv, form.ID, `"пароль"`, http.StatusOK)
+}
+
+func TestForms_Password_Validation(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-password4@example.com")
+	form := createForm(t, alice, srv, "Анкета")
+
+	patchPassword(t, alice, srv, form.ID, `""`, http.StatusUnprocessableEntity)
+	patchPassword(t, alice, srv, form.ID, `"`+strings.Repeat("я", 129)+`"`, http.StatusUnprocessableEntity)
+
+	// Пароль — отдельный фасет: вместе с другим за один запрос не едет.
+	r := do(t, alice, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID,
+		`{"password":{"value":"a"},"branding":false}`, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("два фасета разом: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Чужая форма паролем не закрывается: id из URL правом доступа не является.
+func TestForms_Password_ForeignFormIsNotFound(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-password5@example.com")
+	bob := registerUser(t, srv, "bob-password5@example.com")
+
+	form := createForm(t, alice, srv, "Анкета")
+	patchPassword(t, bob, srv, form.ID, `"пароль"`, http.StatusNotFound)
+
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.Password != nil {
+		t.Fatal("чужой поставил пароль на форму")
+	}
+}
+
+// patchPassword шлёт PATCH {password:{value: <valueJSON>}}: строка — поставить,
+// null — снять. Обёртка вокруг value отличает «снять» от «не трогать».
+func patchPassword(t *testing.T, c *http.Client, srv *httptest.Server, id, valueJSON string, wantStatus int) {
+	t.Helper()
+	body := `{"password":{"value":` + valueJSON + `}}`
+	r := do(t, c, http.MethodPatch, srv.URL+"/api/v1/forms/"+id, body, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("PATCH password: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
+// unlockForm называет пароль и возвращает токен разблокировки.
+func unlockForm(t *testing.T, c *http.Client, srv *httptest.Server, slug, password string) string {
+	t.Helper()
+	body, err := json.Marshal(map[string]string{"password": password})
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	r := do(t, c, http.MethodPost, srv.URL+"/public/v1/forms/"+slug+"/unlock", string(body), "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("unlock: статус %d, ожидалось 200; тело=%s", r.StatusCode, body2(t, r))
+	}
+	var out struct {
+		Token string `json:"token"`
+	}
+	decode(t, r, &out)
+	if out.Token == "" {
+		t.Fatal("токен разблокировки пуст")
+	}
+	return out.Token
 }

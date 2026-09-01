@@ -65,7 +65,8 @@ func newServer(t *testing.T) *httptest.Server {
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
-		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
+		WithSecret(testSecret)
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, nil, nil)
 	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test").
@@ -91,7 +92,8 @@ func publishedForm(t *testing.T, schema string) (slug string, versionID uuid.UUI
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
 			pgtest.MailService(testPool), "http://localhost:5173"),
-		entitlements.NewService(testPool, entitlements.Repo{}, time.Now))
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
+		WithSecret(testSecret)
 
 	user, _, err := authSvc.Register(ctx, "resp-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
 	if err != nil {
@@ -929,4 +931,75 @@ func TestSubmit_Respondent_DowngradeStopsSending(t *testing.T) {
 	if saved != "b2" {
 		t.Fatalf("даунгрейд стёр настройку автора: %q", saved)
 	}
+}
+
+// --- Пароль на форму (0047) -------------------------------------------------
+
+// Приём ответа обязан отказывать форме под паролем, даже когда токен формы валиден:
+// экран ввода пароля в рендерере — это не барьер, барьер здесь. Ответ при этом не
+// записывается.
+func TestSubmit_LockedForm_RejectedAndNotStored(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	unlockTok := lockForm(t, slug, "секрет")
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Анна"}}`
+	resp := postSubmission(t, srv, slug, body)
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("статус %d, ожидалось 401", resp.StatusCode)
+	}
+	if n := countSubmissions(t); n != 0 {
+		t.Fatalf("ответов в базе %d, ожидалось 0 — пароль обойдён", n)
+	}
+
+	// С токеном разблокировки тот же запрос проходит.
+	req, err := http.NewRequest(http.MethodPost, srv.URL+"/public/v1/forms/"+slug+"/submissions",
+		strings.NewReader(`{"submission_id":"`+uuid.NewString()+`","token":"`+freshToken()+`","answers":{"b1":"Анна"}}`))
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set(forms.UnlockHeader, unlockTok)
+	resp2, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("post: %v", err)
+	}
+	defer func() { _ = resp2.Body.Close() }()
+	if resp2.StatusCode != http.StatusCreated {
+		t.Fatalf("с токеном: статус %d, ожидалось 201", resp2.StatusCode)
+	}
+	if n := countSubmissions(t); n != 1 {
+		t.Fatalf("ответов в базе %d, ожидался 1", n)
+	}
+}
+
+// lockForm ставит пароль на уже опубликованную форму и возвращает годный токен
+// разблокировки. Пароль ставится сервисом форм — тем же путём, что и из кабинета.
+func lockForm(t *testing.T, slug, password string) string {
+	t.Helper()
+	ctx := context.Background()
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
+		WithSecret(testSecret)
+
+	var formID, ownerID uuid.UUID
+	err := testPool.QueryRow(ctx, `
+		SELECT f.id, wm.user_id FROM forms f
+		JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+		WHERE f.slug = $1`, slug).Scan(&formID, &ownerID)
+	if err != nil {
+		t.Fatalf("resolve form owner: %v", err)
+	}
+	if _, err := formsSvc.UpdatePassword(ctx, ownerID, formID, &password); err != nil {
+		t.Fatalf("UpdatePassword: %v", err)
+	}
+	tok, _, err := formsSvc.Unlock(ctx, slug, password)
+	if err != nil {
+		t.Fatalf("Unlock: %v", err)
+	}
+	return tok
 }

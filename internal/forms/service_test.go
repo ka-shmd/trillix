@@ -1720,3 +1720,191 @@ func TestLinkPreviewFor_GateAtDelivery(t *testing.T) {
 		t.Fatalf("после даунгрейда карточка обязана перестать действовать: got=%+v err=%v", got, err)
 	}
 }
+
+// --- Пароль на форму (0047) -------------------------------------------------
+
+// passwordSecret — секрет приложения в тестах пароля формы (у публичного
+// транспорта свой, testSecret).
+const passwordSecret = "form-token-secret-long-enough-32b"
+
+// ptr — адрес значения: фасет пароля различает «не трогать» (nil) и «поставить».
+func ptr[T any](v T) *T { return &v }
+
+func passwordService(store *fakeStore) *Service {
+	return NewService(nil, fakeTx{}, store, &fakeAccess{}, &fakePlans{allowed: true}).
+		WithSecret([]byte(passwordSecret))
+}
+
+// Пароль ложится в колонку ШИФРОТЕКСТОМ и читается обратно на экране настроек:
+// автор свой пароль видит и копирует (design/form-password.md §2.1).
+func TestUpdatePassword_SealsAndReadsBack(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := passwordService(store)
+	const plain = "секрет для коллег"
+
+	if _, err := svc.UpdatePassword(context.Background(), uuid.New(), store.form.ID, ptr(plain)); err != nil {
+		t.Fatalf("UpdatePassword: %v", err)
+	}
+	if len(store.lastSealed) == 0 {
+		t.Fatal("в стор не ушло ничего")
+	}
+	if strings.Contains(string(store.lastSealed), plain) {
+		t.Fatal("пароль ушёл в колонку открытым текстом")
+	}
+
+	store.form.PasswordSealed = store.lastSealed
+	got, err := svc.Get(context.Background(), uuid.New(), store.form.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Password == nil || *got.Password != plain {
+		t.Fatalf("пароль не вернулся автору: %v", got.Password)
+	}
+}
+
+// Снятие пишет в колонку NULL, а не пустую строку: у «пароля нет» одно представление.
+func TestUpdatePassword_Clears(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := passwordService(store)
+
+	if _, err := svc.UpdatePassword(context.Background(), uuid.New(), store.form.ID, nil); err != nil {
+		t.Fatalf("снятие пароля: %v", err)
+	}
+	if !store.passwordSet {
+		t.Fatal("снятие не доехало до стора")
+	}
+	if store.lastSealed != nil {
+		t.Fatalf("в колонку ушло %q вместо NULL", store.lastSealed)
+	}
+}
+
+func TestUpdatePassword_Validation(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := passwordService(store)
+
+	for _, tt := range []struct {
+		name  string
+		value string
+	}{
+		{"пустой", ""},
+		{"длиннее потолка", strings.Repeat("я", MaxFormPasswordLen+1)},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := svc.UpdatePassword(context.Background(), uuid.New(), store.form.ID, ptr(tt.value))
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("err = %v, want ErrValidation", err)
+			}
+			if store.passwordSet {
+				t.Fatal("мусор доехал до стора")
+			}
+		})
+	}
+}
+
+// Пробелы по краям НЕ режутся: пароль — ровно та строка, которую автор разослал.
+func TestUpdatePassword_KeepsSpaces(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := passwordService(store)
+	const plain = "  два пробела  "
+
+	if _, err := svc.UpdatePassword(context.Background(), uuid.New(), store.form.ID, ptr(plain)); err != nil {
+		t.Fatalf("UpdatePassword: %v", err)
+	}
+	store.form.PasswordSealed = store.lastSealed
+	got, err := svc.Get(context.Background(), uuid.New(), store.form.ID)
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if got.Password == nil || *got.Password != plain {
+		t.Fatalf("пароль изменён при сохранении: %q", *got.Password)
+	}
+}
+
+// Тариф на пароле не спрашивается вовсе: он бесплатен на всех планах
+// (решение владельца 2026-09-01, design/form-password.md §2.2).
+func TestUpdatePassword_NoPlanGate(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	plans := &fakePlans{allowed: false}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, plans).WithSecret([]byte(passwordSecret))
+
+	if _, err := svc.UpdatePassword(context.Background(), uuid.New(), store.form.ID, ptr("пароль")); err != nil {
+		t.Fatalf("пароль на бесплатном тарифе: %v", err)
+	}
+	if len(plans.gotKeys) != 0 {
+		t.Fatalf("тариф спрошен: %v", plans.gotKeys)
+	}
+}
+
+func TestUnlock_VerifiesPassword(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := passwordService(store)
+	sealed, err := sealPassword([]byte(passwordSecret), "правильный")
+	if err != nil {
+		t.Fatalf("sealPassword: %v", err)
+	}
+	store.sealedPassword = sealed
+
+	if _, _, err := svc.Unlock(context.Background(), "slug", "неправильный"); !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("неверный пароль: err = %v, want ErrFormLocked", err)
+	}
+
+	tok, expiry, err := svc.Unlock(context.Background(), "slug", "правильный")
+	if err != nil {
+		t.Fatalf("верный пароль: %v", err)
+	}
+	if !expiry.After(time.Now()) {
+		t.Fatalf("срок токена уже вышел: %v", expiry)
+	}
+	if err := svc.VerifyUnlock(store.form.ID, true, tok); err != nil {
+		t.Fatalf("свой же токен не принят: %v", err)
+	}
+}
+
+// У формы БЕЗ пароля разблокировка ничего не открывает: токен «ни от чего»
+// пришлось бы потом отличать от настоящего.
+func TestUnlock_NoPassword(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := passwordService(store)
+
+	if _, _, err := svc.Unlock(context.Background(), "slug", ""); !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("err = %v, want ErrFormLocked", err)
+	}
+}
+
+func TestVerifyUnlock(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := passwordService(store)
+	formID := domain.NewID()
+	tok := issueUnlockToken(deriveUnlockSecret([]byte(passwordSecret)), formID, time.Now().Add(time.Hour))
+
+	// Форма без пароля пропускается всегда — в том числе без токена вовсе.
+	if err := svc.VerifyUnlock(formID, false, ""); err != nil {
+		t.Fatalf("форма без пароля: %v", err)
+	}
+	if err := svc.VerifyUnlock(formID, true, ""); !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("без токена: err = %v, want ErrFormLocked", err)
+	}
+	if err := svc.VerifyUnlock(domain.NewID(), true, tok); !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("токен чужой формы принят: %v", err)
+	}
+	if err := svc.VerifyUnlock(formID, true, tok); err != nil {
+		t.Fatalf("годный токен: %v", err)
+	}
+}
+
+// Ненастроенный секрет — ОТКАЗ, а не работа без защиты: поставить пароль нельзя,
+// а уже стоящий не пускает никого.
+func TestPasswordWithoutSecret(t *testing.T) {
+	store := &fakeStore{form: Form{ID: domain.NewID(), WorkspaceID: domain.NewID()}}
+	svc := NewService(nil, fakeTx{}, store, &fakeAccess{}, &fakePlans{allowed: true})
+
+	if _, err := svc.UpdatePassword(context.Background(), uuid.New(), store.form.ID, ptr("пароль")); err == nil {
+		t.Fatal("без секрета пароль поставлен")
+	}
+	if store.passwordSet {
+		t.Fatal("без секрета в колонку что-то записано")
+	}
+	if err := svc.VerifyUnlock(store.form.ID, true, "любой токен"); !errors.Is(err, domain.ErrFormLocked) {
+		t.Fatalf("без секрета форма под паролем открылась: %v", err)
+	}
+}

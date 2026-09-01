@@ -157,12 +157,20 @@ func writeFixtureIndex(t *testing.T) string {
 // регистрируется, обслуживается только JSON-ручка /public/v1.
 func newPublicMux(t *testing.T, svc publicFormService) *http.ServeMux {
 	t.Helper()
+	return newPublicMuxWithUnlock(t, svc, allowLimiter{})
+}
+
+// newPublicMuxWithUnlock — тот же mux, но с заданным ведром попыток пароля: только
+// с ним регистрируется ручка разблокировки. Пермиссивное ведро в тестах —
+// инвариант 6 (лимитер подменяется, а не ослабляется).
+func newPublicMuxWithUnlock(t *testing.T, svc publicFormService, unlock UnlockLimiter) *http.ServeMux {
+	t.Helper()
 	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, "", allowLimiter{}, false)
 	if err != nil {
 		t.Fatalf("NewPublicHandler: %v", err)
 	}
 	mux := http.NewServeMux()
-	h.Routes(mux)
+	h.WithUnlockLimiter(unlock).Routes(mux)
 	return mux
 }
 
@@ -558,5 +566,145 @@ func TestFormToken_RateLimited_Returns429(t *testing.T) {
 	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/form-token", nil))
 	if rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("статус %d, ожидалось 429", rec.Code)
+	}
+}
+
+// --- Пароль на форму (0047) -------------------------------------------------
+
+// Форма под паролем не отдаёт схему: в теле 401 только название и бейдж.
+func TestPublicGet_Locked_HidesSchema(t *testing.T) {
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:       "Опрос про доставку",
+		Version:     1,
+		VersionID:   uuid.New(),
+		Schema:      json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Секретный вопрос"}]}]}`),
+		Status:      "published",
+		HasPassword: true,
+	}}
+	rec := httptest.NewRecorder()
+	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("статус = %d, want 401", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "Секретный вопрос") {
+		t.Fatalf("схема утекла в тело отказа: %s", rec.Body.String())
+	}
+	var body struct {
+		Locked bool   `json:"locked"`
+		Title  string `json:"title"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("разбор тела: %v", err)
+	}
+	if !body.Locked {
+		t.Fatal("тело не помечено как «под паролем»")
+	}
+	// Название формы на экране ввода ВИДНО (решение владельца, спека §2.3).
+	if body.Title != "Опрос про доставку" {
+		t.Fatalf("название = %q, want «Опрос про доставку»", body.Title)
+	}
+	// Тело формы под паролем не имеет права попасть в общий кэш.
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+}
+
+// С годным токеном форма отдаётся как обычно — но по-прежнему без публичного кэша.
+func TestPublicGet_Unlocked_ReturnsSchemaUncached(t *testing.T) {
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:       "Опрос",
+		Version:     1,
+		VersionID:   uuid.New(),
+		Schema:      json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Вопрос"}]}]}`),
+		Status:      "published",
+		HasPassword: true,
+	}}
+	req := httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil)
+	req.Header.Set(UnlockHeader, testUnlockToken)
+	rec := httptest.NewRecorder()
+	newPublicMux(t, svc).ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статус = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "Вопрос") {
+		t.Fatalf("схема не отдана: %s", rec.Body.String())
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store: содержимое формы под паролем не кэшируется", cc)
+	}
+}
+
+// Пароль — ПЕРВЫЙ барьер: текст экрана «приём закрыт» тоже написал автор, и до
+// пароля его показывать не за что.
+func TestPublicGet_LockedBeatsClosed(t *testing.T) {
+	svc := fakePublicSvc{pf: PublicForm{
+		Title:         "Опрос",
+		Version:       1,
+		VersionID:     uuid.New(),
+		Schema:        json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		Status:        "closed",
+		ClosedMessage: ptr("Мы набрали участников, спасибо"),
+		HasPassword:   true,
+	}}
+	rec := httptest.NewRecorder()
+	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("статус = %d, want 401", rec.Code)
+	}
+	if strings.Contains(rec.Body.String(), "Мы набрали участников") {
+		t.Fatalf("текст автора утёк до пароля: %s", rec.Body.String())
+	}
+}
+
+func TestPublicUnlock(t *testing.T) {
+	svc := fakePublicSvc{password: "правильный", pf: PublicForm{HasPassword: true}}
+	mux := newPublicMux(t, svc)
+
+	post := func(body string) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/public/v1/forms/s/unlock", strings.NewReader(body))
+		rec := httptest.NewRecorder()
+		mux.ServeHTTP(rec, req)
+		return rec
+	}
+
+	rec := post(`{"password":"неправильный"}`)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("неверный пароль: статус = %d, want 401", rec.Code)
+	}
+
+	rec = post(`{"password":"правильный"}`)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("верный пароль: статус = %d, want 200: %s", rec.Code, rec.Body.String())
+	}
+	var body struct {
+		Token     string `json:"token"`
+		ExpiresIn int    `json:"expiresIn"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("разбор тела: %v", err)
+	}
+	if body.Token == "" || body.ExpiresIn <= 0 {
+		t.Fatalf("токен не выдан: %+v", body)
+	}
+	if cc := rec.Header().Get("Cache-Control"); cc != "no-store" {
+		t.Fatalf("Cache-Control = %q, want no-store", cc)
+	}
+}
+
+// ГЛАВНОЕ у лимита: ведро списывается ДО сравнения, поэтому исчерпавший его не
+// проходит и с ВЕРНЫМ паролем. Иначе подбор стоил бы ровно столько же.
+func TestPublicUnlock_LimitBeatsCorrectPassword(t *testing.T) {
+	svc := fakePublicSvc{password: "правильный", pf: PublicForm{HasPassword: true}}
+	mux := newPublicMuxWithUnlock(t, svc, denyLimiter{})
+
+	req := httptest.NewRequest(http.MethodPost, "/public/v1/forms/s/unlock", strings.NewReader(`{"password":"правильный"}`))
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusTooManyRequests {
+		t.Fatalf("статус = %d, want 429", rec.Code)
 	}
 }

@@ -14,6 +14,7 @@ import (
 	"bytes"
 	"context"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"strings"
 	"testing"
@@ -203,4 +204,36 @@ func TestSubmit_RejectsSlotWithoutBytes(t *testing.T) {
 	})
 	submitAnswer(t, srv, slug, freshToken(),
 		map[string]any{"cv": []string{slot.UploadID}}, http.StatusUnprocessableEntity)
+}
+
+// Форма под паролем слотов не выдаёт: без этой проверки пароль обходился бы
+// загрузкой файлов — правом писать в наш бакет для того, кто формы не открывал.
+func TestUpload_LockedForm_NoSlot(t *testing.T) {
+	resetDB(t)
+	srv, _ := newStack(t)
+	author := registerUser(t, srv, "author@example.com")
+	slug := publishFileForm(t, author, srv)
+	patchFormPassword(t, author, srv, slug, "секрет")
+
+	r := issueSlotRaw(t, srv, slug, slotBody{
+		Token: freshToken(), BlockID: "cv",
+		FileName: "cv.pdf", SizeBytes: 100, ContentType: "application/pdf",
+	})
+	defer func() { _ = r.Body.Close() }()
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("статус %d, ожидался 401", r.StatusCode)
+	}
+}
+
+// patchFormPassword ставит пароль на форму тем же путём, каким это делает кабинет.
+func patchFormPassword(t *testing.T, c *http.Client, srv *httptest.Server, slug, password string) {
+	t.Helper()
+	var formID string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT id::text FROM forms WHERE slug = $1`, slug).Scan(&formID); err != nil {
+		t.Fatalf("resolve form: %v", err)
+	}
+	body := `{"password":{"value":"` + password + `"}}`
+	r := doJSON(t, c, srv, http.MethodPatch, "/api/v1/forms/"+formID, body)
+	decodeInto(t, r, http.StatusOK, &struct{}{})
 }
