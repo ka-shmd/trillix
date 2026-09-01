@@ -715,7 +715,8 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + emailChangeLimiter.GC() + confirmEmailLimiter.GC() +
 				twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +
-				respondentMailLimiter.GC() + unlockLimiter.GC() + unlockIPLimiter.GC()
+				respondentMailLimiter.GC() + unlockLimiter.GC() + unlockIPLimiter.GC() +
+				uploadLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}
