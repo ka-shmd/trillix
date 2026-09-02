@@ -48,11 +48,3 @@ export function saveHistory(formId: string, turns: ChatTurn[]): void {
     // Хранилище недоступно или полно — разговор останется только в памяти вкладки.
   }
 }
-
-export function clearHistory(formId: string): void {
-  try {
-    localStorage.removeItem(key(formId))
-  } catch {
-    // Нечего чистить — и ладно.
-  }
-}

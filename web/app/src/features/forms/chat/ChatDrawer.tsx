@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Send, Trash2 } from 'lucide-react'
+import { ArrowUp } from 'lucide-react'
 
 import { useAppDrawerOffset } from '../../../shared/appDrawer'
 import { ApiError } from '../../../shared/api/errors'
@@ -8,7 +8,7 @@ import { usePlanQuota } from '../../plan/useFeature'
 import { chords } from '../builder/shortcuts'
 import { useBuilderStore, useBuilderStoreApi } from '../builder/storeContext'
 import { MAX_CHAT_MESSAGE_LEN, sendChatMessage, type ChatTurn } from './api'
-import { clearHistory, loadHistory, saveHistory } from './history'
+import { loadHistory, saveHistory } from './history'
 import { Button } from '@/components/ui/button'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
@@ -136,12 +136,6 @@ export function ChatDrawer({
     }
   }
 
-  function reset() {
-    setTurns([])
-    setError(null)
-    if (formId) clearHistory(formId)
-  }
-
   const failure = error === null ? null : failureText(error)
 
   return (
@@ -215,47 +209,51 @@ export function ChatDrawer({
           )}
         </div>
 
+        {/* Ввод БЕЗ ЛИНИИ СВЕРХУ (решение владельца 2026-09-02): разделитель делил
+            шторку на два блока, хотя лента и поле — одно место работы. Границы поля
+            хватает, чтобы отделить набираемое от сказанного. */}
         <form
-          className="border-t p-4"
+          className="p-4"
           onSubmit={(e) => {
             e.preventDefault()
             void send(trimmed)
           }}
         >
-          <Textarea
-            ref={input}
-            value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            onKeyDown={(e) => {
-              // Enter отправляет, Shift+Enter переносит строку — как в любом чате.
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault()
-                void send(trimmed)
-              }
-            }}
-            placeholder="Опишите форму или скажите, что поправить"
-            maxLength={MAX_CHAT_MESSAGE_LEN}
-            rows={3}
-            // ПОЛЕ НЕ ГАСИТСЯ НА ВРЕМЯ ОТВЕТА: disabled снимает фокус с элемента, и
-            // каретка уходила из поля на каждой отправке. Набирать следующую реплику,
-            // пока едет ответ, можно — отправку держит кнопка (она и объясняет
-            // ожидание словом «Отправляю…») и проверка pending в send.
-            aria-label="Сообщение ассистенту"
-          />
-          <div className="mt-2 flex items-center justify-between gap-2">
+          {/* КНОПКА ОТПРАВКИ ВНУТРИ ПОЛЯ, кружком со стрелкой: отправляют то, что
+              набрано, и кнопка стоит там же, где текст. Поле под неё оставляет место
+              справа снизу (`pb-12`), иначе последняя строка уезжала бы под кружок. */}
+          <div className="relative">
+            <Textarea
+              ref={input}
+              value={draft}
+              onChange={(e) => setDraft(e.target.value)}
+              onKeyDown={(e) => {
+                // Enter отправляет, Shift+Enter переносит строку — как в любом чате.
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault()
+                  void send(trimmed)
+                }
+              }}
+              placeholder="Опишите форму или скажите, что поправить"
+              maxLength={MAX_CHAT_MESSAGE_LEN}
+              rows={4}
+              // resize-none — таскалка снята: поле растёт само по содержимому
+              // (`field-sizing-content` у примитива), а ручка в углу спорила бы с
+              // кружком отправки за то же место.
+              className="min-h-28 resize-none rounded-xl pb-12"
+              // ПОЛЕ НЕ ГАСИТСЯ НА ВРЕМЯ ОТВЕТА: disabled снимает фокус с элемента, и
+              // каретка уходила из поля на каждой отправке. Набирать следующую реплику,
+              // пока едет ответ, можно — отправку держит кнопка и проверка pending.
+              aria-label="Сообщение ассистенту"
+            />
             <Button
-              type="button"
-              variant="ghost"
-              size="sm"
-              onClick={reset}
-              disabled={pending || turns.length === 0}
+              type="submit"
+              size="icon"
+              className="absolute right-2 bottom-2 size-9 rounded-full"
+              disabled={trimmed === '' || pending}
+              aria-label={pending ? 'Отправляю' : 'Отправить'}
             >
-              <Trash2 className="size-4" aria-hidden="true" />
-              Очистить
-            </Button>
-            <Button type="submit" size="sm" disabled={trimmed === '' || pending}>
-              <Send className="size-4" aria-hidden="true" />
-              {pending ? 'Отправляю…' : 'Отправить'}
+              <ArrowUp className="size-4" aria-hidden="true" />
             </Button>
           </div>
         </form>
