@@ -7,6 +7,7 @@ import {
   commonFor,
   formatLabel,
   GLOBAL,
+  labelFor,
   SHORTCUTS,
   shortcutsFor,
   type KeyLike,
@@ -32,6 +33,18 @@ describe('chords — биндинги по e.code (§3.1)', () => {
     // Без командного модификатора — ни то ни другое.
     expect(chords.undo(key({ code: 'KeyZ' }))).toBe(false)
     expect(chords.redo(key({ code: 'KeyY' }))).toBe(false)
+  })
+
+  // Alt+J — шторка помощи ИИ. Голая Alt-комбинация: она не должна ловить ни
+  // Mod+Alt+J (там половина комбинаций принадлежит окну), ни Alt+Shift+J.
+  it('Alt+J открывает помощь ИИ и не путается с соседями', () => {
+    expect(chords.openChat(key({ code: 'KeyJ', altKey: true }))).toBe(true)
+    expect(chords.openChat(key({ code: 'KeyJ' }))).toBe(false)
+    expect(chords.openChat(key({ code: 'KeyJ', altKey: true, shiftKey: true }))).toBe(false)
+    expect(chords.openChat(key({ code: 'KeyJ', altKey: true, metaKey: true }))).toBe(false)
+    expect(chords.openChat(key({ code: 'KeyJ', altKey: true, ctrlKey: true }))).toBe(false)
+    // Ярлык на кнопке берётся из карты — вторая копия строки разошлась бы с ней.
+    expect(labelFor(chords.openChat)).toBe('Alt+J')
   })
 
   it('командные комбо требуют Cmd или Ctrl и не путаются с голыми клавишами', () => {

@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useStore } from 'zustand'
-import { Eye, Palette, Redo2, Settings, Sparkles, Undo2 } from 'lucide-react'
+import { Eye, Palette, Redo2, Settings, Undo2 } from 'lucide-react'
 
 import { showFormBadge } from '@fields/design'
 
@@ -9,6 +9,7 @@ import { displayFormName, type FormDetail } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import { useWorkspaceCrumb } from '../../workspaces/crumb'
 import { PageActions, PageCrumbs } from '../../../shared/page/headerPortals'
+import { ChordChips } from './ChordChips'
 import { DesignDrawer } from './DesignDrawer'
 import { PreviewOverlay } from './PreviewOverlay'
 import { PublishControls } from './PublishControls'
@@ -21,7 +22,7 @@ import { BuilderStoreContext } from './storeContext'
 import { ChatDrawer } from '../chat/ChatDrawer'
 import { useAutosave, type DraftCreation } from './useAutosave'
 import { useGlobalChord } from './useGlobalChord'
-import { chords } from './shortcuts'
+import { chords, labelFor } from './shortcuts'
 import { Button } from '@/components/ui/button'
 
 // Режимов у редактора больше нет: полотно — единственное, что он показывает.
@@ -91,6 +92,9 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
     setDesignOpen(v)
     if (v) setChatOpen(false)
   }
+  // Клавиши на кнопке помощи — из карты шорткатов, а не строкой рядом с ней: подпись
+  // на кнопке и обещание шпаргалки обязаны совпадать.
+  const chatChord = labelFor(chords.openChat)
 
   // Отмена/повтор + каретка на первый затронутый откатом блок (§2.4). id приходит из
   // стора; блок мог ещё не смонтироваться (только что восстановлен) — движок поставит
@@ -122,6 +126,14 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
     // Матчеры по e.code (§3.1, shortcuts.ts): при кириллической (и любой не-латинской)
     // раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался — срабатывал нативный
     // undo контролируемого textarea (откат по одному символу).
+    // Alt+J — шторка помощи ИИ. Здесь же, где история: жест документ-уровня, работает
+    // из любой строки полотна. preventDefault обязателен — на маке Option+J печатает
+    // символ, и без него он уехал бы в текст блока вместе с открытием шторки.
+    if (chords.openChat(e)) {
+      e.preventDefault()
+      openChat(true)
+      return
+    }
     const isUndo = chords.undo(e)
     const isRedo = chords.redo(e)
     if (!isUndo && !isRedo) return
@@ -231,15 +243,25 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
       {/* Кнопка ЕДЕТ ВМЕСТЕ СО ШТОРКОЙ: она fixed, то есть привязана к окну, а не к
           съезжающей оболочке — без сдвига открытая панель накрыла бы её, и вход в
           разговор пропадал бы ровно тогда, когда разговор идёт. Та же длительность,
-          что у оболочки и панели: три элемента обязаны ехать одним движением. */}
+          что у оболочки и панели: три элемента обязаны ехать одним движением.
+
+          БЕЛАЯ (`outline`), а не акцентная (решение владельца 2026-09-02): синим в
+          кабинете покрашено главное действие экрана, а главное здесь — «Опубликовать»
+          в верхнем баре, и две синие кнопки спорили бы за внимание. Значка нет по той
+          же причине — надпись называет действие, а глиф добавлял бы к ней вес.
+
+          КЛАВИШИ НАПЕЧАТАНЫ НА КНОПКЕ и берутся из карты (`SHORTCUTS`), а не пишутся
+          рядом второй раз: подпись на кнопке и обещание шпаргалки Mod+/ обязаны
+          совпадать, а совпадают они только у общего источника. */}
       <Button
         type="button"
+        variant="outline"
         size="lg"
-        className="fixed right-[calc(1.5rem+var(--app-drawer))] bottom-6 z-30 rounded-full shadow-lg transition-[right] duration-300 ease-in-out"
+        className="fixed right-[calc(1.5rem+var(--app-drawer))] bottom-6 z-30 gap-2 rounded-full shadow-lg transition-[right] duration-300 ease-in-out"
         onClick={() => openChat(true)}
       >
-        <Sparkles className="size-4" aria-hidden="true" />
-        Ассистент
+        Помощь ИИ
+        {chatChord !== undefined && <ChordChips label={chatChord} />}
       </Button>
       <ChatDrawer
         open={chatOpen}

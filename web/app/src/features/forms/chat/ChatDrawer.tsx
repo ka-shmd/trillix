@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Send, Sparkles, Trash2 } from 'lucide-react'
+import { Send, Trash2 } from 'lucide-react'
 
 import { useAppDrawerOffset } from '../../../shared/appDrawer'
 import { ApiError } from '../../../shared/api/errors'
@@ -9,7 +9,7 @@ import { useBuilderStore, useBuilderStoreApi } from '../builder/storeContext'
 import { MAX_CHAT_MESSAGE_LEN, sendChatMessage, type ChatTurn } from './api'
 import { clearHistory, loadHistory, saveHistory } from './history'
 import { Button } from '@/components/ui/button'
-import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '@/components/ui/sheet'
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 import { Textarea } from '@/components/ui/textarea'
 
 // Шторка разговора с ассистентом (фаза 26, слайс E). Соседка шторки оформления и
@@ -163,15 +163,13 @@ export function ChatDrawer({
         // 500/300): панель и шапка обязаны ехать одним движением, иначе видно, что
         // это два разных элемента.
         className="flex w-104 flex-col gap-0 p-0 sm:max-w-104 data-[state=closed]:duration-300 data-[state=open]:duration-300"
+        // Подзаголовка у шторки нет (решение владельца 2026-09-02), поэтому Radix
+        // нужно сказать об этом явно — иначе он пишет в консоль предупреждение об
+        // отсутствующем Description (тот же гард, что у шторки оформления).
+        aria-describedby={undefined}
       >
         <SheetHeader className="border-b p-4">
-          <SheetTitle className="flex items-center gap-2">
-            <Sparkles className="size-4" aria-hidden="true" />
-            Ассистент
-          </SheetTitle>
-          <SheetDescription>
-            Соберёт форму по описанию, поправит вопросы и расскажет, что в ней сейчас есть.
-          </SheetDescription>
+          <SheetTitle>Помощь ИИ</SheetTitle>
           {quota !== undefined && quota.limit !== null && (
             <QuotaLine used={quota.used} limit={quota.limit} onPlan={() => setUpsell(true)} />
           )}

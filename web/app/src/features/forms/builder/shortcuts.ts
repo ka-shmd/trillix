@@ -76,6 +76,11 @@ export const chords = {
   arrowUp: (e: KeyLike) => e.code === 'ArrowUp',
   arrowDown: (e: KeyLike) => e.code === 'ArrowDown',
   escape: (e: KeyLike) => e.code === 'Escape',
+  // Alt+J — шторка помощи ИИ (решение владельца 2026-09-02). Голый Alt, а не Mod+Alt:
+  // Alt+буква в браузере ничем не занят (в отличие от Mod+буква, где половина комбинаций
+  // принадлежит окну), а на маке Option+J печатает символ — его гасит preventDefault
+  // обработчика. Буква J свободна во всей карте полотна.
+  openChat: (e: KeyLike) => e.altKey && !e.shiftKey && !mod(e) && e.code === 'KeyJ',
   // Cmd/Ctrl+/ — шпаргалка по клавишам текущего контекста (§7). Slash по e.code:
   // в кириллической раскладке та же физическая клавиша даёт «.», а не «/».
   cheatSheet: (e: KeyLike) => mod(e) && e.code === 'Slash',
@@ -187,6 +192,7 @@ export const GLOBAL: Shortcut[] = [
   sc(chords.undo, 'Mod+Z', 'Отменить'),
   sc(chords.redo, 'Mod+Shift+Z', 'Вернуть'),
   sc(chords.cheatSheet, 'Mod+/', 'Все горячие клавиши'),
+  sc(chords.openChat, 'Alt+J', 'Помощь ИИ'),
 ]
 
 // BLOCK_COMMON — общий ярус блочных контекстов: клавиши с ОДНИМ смыслом на всех
@@ -439,4 +445,17 @@ export function modLabel(): string {
 // formatLabel — подстановка модификатора в `label` карты перед показом.
 export function formatLabel(label: string): string {
   return label.replaceAll(MOD_TOKEN, modLabel())
+}
+
+// labelFor — ярлык аккорда ПО ЕГО МАТЧЕРУ, из той же карты, что читает шпаргалка.
+// Нужен там, где клавиши напечатаны на самом контроле (кнопка помощи ИИ): вторая
+// копия строки «Alt+J» рядом с кнопкой разошлась бы с картой в тот день, когда жест
+// переназначат, — и подсказка начала бы врать (демо-критерий 13.5).
+export function labelFor(match: (e: KeyLike) => boolean): string | undefined {
+  const all = [GLOBAL, ...Object.values(SHORTCUTS)]
+  for (const list of all) {
+    const found = list.find((s) => s.match === match)
+    if (found) return found.label
+  }
+  return undefined
 }
