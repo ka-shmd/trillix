@@ -5,6 +5,7 @@ import { useAppDrawerOffset } from '../../../shared/appDrawer'
 import { ApiError } from '../../../shared/api/errors'
 import { PlanUpsell } from '../../plan/PlanUpsell'
 import { usePlanQuota } from '../../plan/useFeature'
+import { chords } from '../builder/shortcuts'
 import { useBuilderStore, useBuilderStoreApi } from '../builder/storeContext'
 import { MAX_CHAT_MESSAGE_LEN, sendChatMessage, type ChatTurn } from './api'
 import { clearHistory, loadHistory, saveHistory } from './history'
@@ -25,9 +26,13 @@ import { Textarea } from '@/components/ui/textarea'
 //
 // Своё состояние у неё остаётся: разговор про форму продолжается между открытиями.
 //
-// ЛЕНТА СООБЩЕНИЙ С НАПОЛНЯЕМЫМ ПУЗЫРЁМ — это не украшение, а условие, при котором
-// стриминг ответа (он отложен, `DEV-PLAN` фаза 26) добавится потом дёшево: менять
-// придётся только источник текста внутри пузыря, а не устройство экрана.
+// ВИДА ЧАТА У ЛЕНТЫ НЕТ (решение владельца 2026-09-02): реплика автора — рамка, ответ
+// ассистента — просто текст, обе во всю ширину. Пузыри с заливкой, прижатые к разным
+// краям, делают из панели мессенджер, а здесь идёт работа над документом: ответ читают
+// как текст, а не как сообщение собеседника.
+//
+// Место ответа при этом занято отдельной строкой намеренно — стриминг (он отложен,
+// `DEV-PLAN` фаза 26) заменит в ней источник текста, а не устройство ленты.
 
 const EXAMPLES = [
   'Собери анкету записи в барбершоп: имя, телефон, мастер, дата',
@@ -159,6 +164,15 @@ export function ChatDrawer({
         // Клик по полотну — обычный клик по полотну, а не «закрыть чат»: иначе любая
         // правка формы посреди разговора захлопывала бы его.
         onInteractOutside={(e) => e.preventDefault()}
+        // Alt+J ЗАКРЫВАЕТ ШТОРКУ ИЗНУТРИ. Оконный слушатель экрана (useGlobalChord)
+        // сюда не дотягивается намеренно: он молчит в полях всплывающих слоёв, чтобы
+        // не съедать ввод, — а фокус здесь как раз в поле. Тогл поэтому дублируется
+        // на самой шторке; событие из поля всплывает по дереву React и приходит сюда.
+        onKeyDown={(e) => {
+          if (!chords.openChat(e)) return
+          e.preventDefault()
+          onOpenChange(false)
+        }}
         // Длительность выровнена с оболочкой (300 мс в обе стороны против штатных
         // 500/300): панель и шапка обязаны ехать одним движением, иначе видно, что
         // это два разных элемента.
@@ -192,28 +206,26 @@ export function ChatDrawer({
             </div>
           )}
 
+          {/* ЛЕНТА БЕЗ ВИДА ЧАТА (решение владельца 2026-09-02): реплика автора — рамка,
+              ответ — просто текст, обе во всю ширину. Пузыри с заливкой и прижатые к
+              краям делают из панели мессенджер; здесь же идёт работа над документом, и
+              ответ ассистента читается как текст, а не как сообщение собеседника.
+              Рамка у своей реплики нужна, чтобы взгляд находил, с чего начался ответ. */}
           {turns.map((t, i) => (
-            <div key={i} className={t.role === 'user' ? 'flex flex-col items-end' : 'space-y-1'}>
-              <div
-                className={
-                  t.role === 'user'
-                    ? 'w-fit max-w-[85%] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground'
-                    : 'w-fit max-w-[85%] rounded-lg bg-muted px-3 py-2 text-sm'
-                }
-              >
-                {t.text}
-              </div>
+            <div key={i} className="space-y-1">
+              {t.role === 'user' ? (
+                <p className="rounded-lg border px-3 py-2 text-sm">{t.text}</p>
+              ) : (
+                <p className="text-sm whitespace-pre-line">{t.text}</p>
+              )}
               {t.plan && <PlanButton onClick={() => setUpsell(true)} />}
             </div>
           ))}
 
-          {/* Пузырь ответа: сейчас в нём многоточие, со стримингом — текст по мере
-              прихода. Место под него занято с первого дня намеренно. */}
-          {pending && (
-            <div className="w-fit rounded-lg bg-muted px-3 py-2 text-sm text-muted-foreground">
-              Думаю…
-            </div>
-          )}
+          {/* Место ответа занято с первого дня намеренно: со стримингом (он отложен,
+              `DEV-PLAN` фаза 26) здесь появится текст по мере прихода, и менять
+              придётся источник строки, а не устройство ленты. */}
+          {pending && <p className="text-sm text-muted-foreground">Думаю…</p>}
 
           {failure && (
             <div className="space-y-1">

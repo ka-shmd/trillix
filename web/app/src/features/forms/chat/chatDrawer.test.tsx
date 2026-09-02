@@ -75,7 +75,7 @@ function seedPlan(qc: QueryClient, used: number, limit: number | null = 30) {
   })
 }
 
-async function setup(formId = 'form-1', used = 2) {
+async function setup(formId = 'form-1', used = 2, onOpenChange: (v: boolean) => void = () => {}) {
   const store = createBuilderStore()
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: START })
   const ensureFormId = vi.fn().mockResolvedValue('created-1')
@@ -88,7 +88,12 @@ async function setup(formId = 'form-1', used = 2) {
     component: () => (
       <QueryClientProvider client={qc}>
         <BuilderStoreContext.Provider value={store}>
-          <ChatDrawer open onOpenChange={() => {}} formId={formId} ensureFormId={ensureFormId} />
+          <ChatDrawer
+            open
+            onOpenChange={onOpenChange}
+            formId={formId}
+            ensureFormId={ensureFormId}
+          />
         </BuilderStoreContext.Provider>
       </QueryClientProvider>
     ),
@@ -267,6 +272,40 @@ describe('шторка ассистента', () => {
     expect(await screen.findByText('Думаю…')).toBeTruthy()
     expect(field.disabled).toBe(false)
     await act(async () => answer({ reply: 'Готово.' }))
+  })
+
+  // Alt+J — тогл: жест, которым шторку открыли, закрывает её. Оконный слушатель экрана
+  // в поле всплывающего слоя молчит (иначе съедал бы ввод), поэтому закрытие изнутри
+  // держит сама шторка — проверяем именно из поля ввода, где стоит каретка.
+  it('Alt+J из поля ввода закрывает шторку', async () => {
+    const onOpenChange = vi.fn()
+    await setup('form-1', 2, onOpenChange)
+
+    fireEvent.keyDown(screen.getByLabelText('Сообщение ассистенту'), {
+      key: 'j',
+      code: 'KeyJ',
+      altKey: true,
+    })
+
+    expect(onOpenChange).toHaveBeenCalledWith(false)
+  })
+
+  // Лента без вида чата: реплика автора — рамка, ответ — просто текст. Пузырей с
+  // заливкой нет ни у той ни у другой стороны.
+  it('реплика автора в рамке, ответ — простым текстом', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'Добавил телефон.' })
+    await setup()
+
+    await act(async () => ask('добавь телефон'))
+
+    const asked = await screen.findByText('добавь телефон')
+    const answered = await screen.findByText('Добавил телефон.')
+    expect(asked.className).toContain('border')
+    expect(answered.className).not.toContain('border')
+    for (const el of [asked, answered]) {
+      expect(el.className).not.toContain('bg-primary')
+      expect(el.className).not.toContain('bg-muted')
+    }
   })
 
   it('отказ модели показывается словами бэка', async () => {
