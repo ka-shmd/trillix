@@ -177,13 +177,20 @@ func ApplyChatOps(s FormSchema, ops []ChatOp) (FormSchema, error) {
 	units := formUnits(s)
 	title := titleBlock(s)
 
+	// added — куда легло последнее добавление ПОСЛЕ каждого ключа. Без этой памяти
+	// несколько добавлений с одним «after» встают в обратном порядке: каждое лезет
+	// сразу за названный пункт, отталкивая предыдущее. Сборка формы с нуля —
+	// это как раз десяток добавлений с пустым «after», то есть весь список
+	// переворачивался бы.
+	added := map[string]int{}
+
 	for i, op := range ops {
 		var err error
 		switch op.Op {
 		case OpTitle:
 			title, err = applyTitle(title, op)
 		case OpAdd:
-			units, err = applyAdd(units, op)
+			units, err = applyAdd(units, op, added)
 		case OpUpdate:
 			units, err = applyUpdate(units, op)
 		case OpRemove:
@@ -239,12 +246,18 @@ func applyTitle(title *Block, op ChatOp) (*Block, error) {
 		id := newBlockID()
 		return &Block{ID: id, GroupID: groupIDOf(id), Type: BlockFormTitle, Text: TextFromString(text)}, nil
 	}
+	// Тот же заголовок — не правка: модель охотно присылает его эхом при любой
+	// просьбе, и переписывать документ ради неизменившейся строки значит гонять
+	// автосейв и историю впустую.
+	if PlainText(title.Text) == text {
+		return title, nil
+	}
 	updated := *title
 	updated.Text = TextFromString(text)
 	return &updated, nil
 }
 
-func applyAdd(units []unit, op ChatOp) ([]unit, error) {
+func applyAdd(units []unit, op ChatOp, added map[string]int) ([]unit, error) {
 	if op.Item == nil {
 		return units, opErr("нечего добавлять: пункт не назван")
 	}
@@ -255,6 +268,14 @@ func applyAdd(units []unit, op ChatOp) ([]unit, error) {
 	if err != nil {
 		return units, err
 	}
+	// Второе и следующие добавления с тем же «after» встают ЗА предыдущим, а не
+	// перед ним: перечисленные подряд пункты обязаны сохранить порядок, в котором
+	// их назвали.
+	if prev, ok := added[op.After]; ok && prev+1 > at {
+		at = prev + 1
+	}
+	added[op.After] = at
+
 	fresh := unit{blocks: expandPlanItem(op.Item.PlanItem)}
 	return append(units[:at:at], append([]unit{fresh}, units[at:]...)...), nil
 }

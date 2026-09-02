@@ -279,3 +279,64 @@ func TestApplyChatOps_LeavesInputAlone(t *testing.T) {
 		t.Errorf("исходный документ изменился: подпись стала %q вместо %q", got, captionWas)
 	}
 }
+
+// Сборка формы с нуля — это десяток добавлений с пустым «after». Без памяти о
+// предыдущей вставке каждое лезло бы сразу за названный пункт, и список
+// переворачивался: автор просил имя, телефон, дату, а получал дату, телефон, имя.
+func TestApplyChatOps_AddsKeepOrder(t *testing.T) {
+	empty := FormSchema{SchemaVersion: SchemaVersion}
+	add := func(t BlockType, text string) ChatAdd {
+		return ChatAdd{Item: ChatItem{PlanItem: PlanItem{Type: t, Text: text}}}
+	}
+
+	out, err := ApplyChatEdit(empty, ChatEdit{
+		Title: "Запись",
+		Add:   []ChatAdd{add(BlockShortText, "Имя"), add(BlockPhone, "Телефон"), add(BlockDate, "Дата")},
+	})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+
+	got := ProjectForm(out)
+	want := []string{"Имя", "Телефон", "Дата"}
+	if len(got.Items) != len(want) {
+		t.Fatalf("пунктов = %d: %+v", len(got.Items), got.Items)
+	}
+	for i, w := range want {
+		if got.Items[i].Text != w {
+			t.Errorf("пункт %d = %q, ожидался %q — порядок добавлений перевернулся", i+1, got.Items[i].Text, w)
+		}
+	}
+
+	// То же посреди существующей формы: три добавления после одного пункта.
+	base := sampleForm()
+	out, err = ApplyChatEdit(base, ChatEdit{Add: []ChatAdd{
+		{After: "q1", Item: ChatItem{PlanItem: PlanItem{Type: BlockEmail, Text: "Почта"}}},
+		{After: "q1", Item: ChatItem{PlanItem: PlanItem{Type: BlockNumber, Text: "Возраст"}}},
+	}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	items := ProjectForm(out).Items
+	if items[1].Text != "Почта" || items[2].Text != "Возраст" {
+		t.Errorf("после q1 встали %q, %q — ожидались Почта, Возраст", items[1].Text, items[2].Text)
+	}
+}
+
+// Модель охотно присылает заголовок эхом при любой просьбе. Тот же текст — не
+// правка: переписывать документ ради неизменившейся строки значит гонять автосейв
+// и историю впустую.
+func TestApplyChatOps_SameTitleIsNoChange(t *testing.T) {
+	before := sampleForm()
+	out, err := ApplyChatEdit(before, ChatEdit{
+		Title: "Запись в барбершоп",
+		Add:   []ChatAdd{{After: "q1", Item: ChatItem{PlanItem: PlanItem{Type: BlockEmail, Text: "Почта"}}}},
+	})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	got := blockOf(t, out, "blk_title")
+	if len(got.Text) != 1 || got.Text[0].T != "Запись в барбершоп" {
+		t.Errorf("заголовок = %+v", got.Text)
+	}
+}
