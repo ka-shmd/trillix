@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useStore } from 'zustand'
-import { Eye, Palette, Redo2, Settings, Undo2 } from 'lucide-react'
+import { Eye, Palette, Redo2, Settings, Sparkles, Undo2 } from 'lucide-react'
 
 import { showFormBadge } from '@fields/design'
 
@@ -18,6 +18,7 @@ import { type FormIdSource } from './mediaUpload'
 import { createFocusEngine } from './focusEngine'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
+import { ChatDrawer } from '../chat/ChatDrawer'
 import { useAutosave, type DraftCreation } from './useAutosave'
 import { useGlobalChord } from './useGlobalChord'
 import { chords } from './shortcuts'
@@ -37,17 +38,7 @@ import { Button } from '@/components/ui/button'
 // draft задан, пока формы НЕТ на сервере (ленивое создание, features/forms/draft.ts):
 // detail тогда синтетическая, detail.id пуст, и всё, что адресует форму по id,
 // спрашивает ensureForm — она заводит форму по первой надобности.
-export function BuilderScreen({
-  detail,
-  draft,
-  onGenerate,
-}: {
-  detail: FormDetail
-  draft?: DraftCreation
-  // Сборка формы по описанию (фаза 26): приезжает из маршрута, потому что знает про
-  // пространство и переход в редактор новой формы. Полотно её только предлагает.
-  onGenerate?: (prompt: string) => Promise<void>
-}) {
+export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: DraftCreation }) {
   // Бейдж решается ЗДЕСЬ, а не в превью: экран уже живёт внутри провайдера Query и
   // уже ходит в чужие фичи, а превью остаётся чистым видом стора — иначе провайдер
   // потребовался бы каждому, кто его рисует, включая тесты раскладки. Намерение
@@ -85,6 +76,8 @@ export function BuilderScreen({
   // панель, и тема обязана меняться у него на глазах. Режим (как у настроек) закрыл
   // бы полотно и превратил подбор темы в угадывание.
   const [designOpen, setDesignOpen] = useState(false)
+  // Шторка ассистента (фаза 26). Своё состояние, как у шторки оформления.
+  const [chatOpen, setChatOpen] = useState(false)
 
   // Отмена/повтор + каретка на первый затронутый откатом блок (§2.4). id приходит из
   // стора; блок мог ещё не смонтироваться (только что восстановлен) — движок поставит
@@ -216,7 +209,26 @@ export function BuilderScreen({
         formId={uploadTo}
         engine={engine}
         onOpenDesign={() => setDesignOpen(true)}
-        onGenerate={onGenerate}
+        onOpenChat={() => setChatOpen(true)}
+      />
+      {/* Кнопка ассистента — в правом нижнем углу (решение владельца 2026-09-01).
+          Позиция fixed, а не absolute: полотно длинное и прокручивается, а вход в
+          разговор обязан быть под рукой на любой его высоте. Угол свободен —
+          кластеры значков строки и рейлы групп живут внутри колонки. */}
+      <Button
+        type="button"
+        size="lg"
+        className="fixed right-6 bottom-6 z-30 rounded-full shadow-lg"
+        onClick={() => setChatOpen(true)}
+      >
+        <Sparkles className="size-4" aria-hidden="true" />
+        Ассистент
+      </Button>
+      <ChatDrawer
+        open={chatOpen}
+        onOpenChange={setChatOpen}
+        formId={detail.id}
+        ensureFormId={() => ensureForm().then((f) => f.id)}
       />
       {/* Просмотр — слой поверх окна (PreviewOverlay), а внутри слоя — СВОЙ документ
           (TD-60): свой CSS автора обязан быть здесь виден и обязан не покидать фрейм,

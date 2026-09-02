@@ -57,7 +57,6 @@ import { inviteRowId } from './rowZones'
 import { rowSpace, rowSpaceBelow, spaceMt } from './space'
 import { type Box, type DropTarget, pickDropTarget, pickHoverGroup } from './dropTarget'
 import { useCaptionGuard } from './captionGuard'
-import { GenerateFormDialog } from '../generate/GenerateFormDialog'
 import { type MenuItem } from './blockTypes'
 import { type FormIdSource } from './mediaUpload'
 import {
@@ -116,11 +115,12 @@ export function SlashEditor({
   formId,
   engine,
   onOpenDesign,
-  onGenerate,
+  onOpenChat,
 }: {
   formId: FormIdSource
-  // Сборка формы по описанию — приезжает из маршрута через BuilderScreen (фаза 26).
-  onGenerate?: (prompt: string) => Promise<void>
+  // Открыть шторку ассистента (фаза 26). Пропом, как onOpenDesign: состояние шторки
+  // — UI экрана, а не документа, и живёт в BuilderScreen рядом с кнопкой.
+  onOpenChat?: () => void
   // Фокус-движок создаётся в BuilderScreen (переживает смену режима и нужен undo/redo,
   // §2.4) и раздаётся полотну через контекст.
   engine: FocusEngine
@@ -1064,7 +1064,7 @@ export function SlashEditor({
               </div>
 
               {blocks.length === 0 ? (
-                <EmptyStarter onStart={(opts) => startBlock(null, opts)} onGenerate={onGenerate} />
+                <EmptyStarter onStart={(opts) => startBlock(null, opts)} onOpenChat={onOpenChat} />
               ) : (
                 <DndContext
                   sensors={sensors}
@@ -1922,14 +1922,12 @@ function SubmitButtonEditor() {
 // блок (создать и открыть меню типов), печатный символ — начать текст с него.
 function EmptyStarter({
   onStart,
-  onGenerate,
+  onOpenChat,
 }: {
   onStart: (opts?: { openMenu?: boolean; seed?: string }) => void
-  // Собрать форму по описанию (фаза 26). Не задан — строки нет: сборкой занимается
-  // маршрут (он знает пространство и куда уходить), а полотно её только предлагает.
-  onGenerate?: (prompt: string) => Promise<void>
+  // Открыть разговор с ассистентом (фаза 26). Не задан — строки нет.
+  onOpenChat?: () => void
 }) {
-  const [generating, setGenerating] = useState(false)
   // Пустое полотно — тоже поверхность карты (§7): Enter/«/»/печатный символ. Блочных
   // клавиш нет — блока ещё не существует.
   const rowFocus = useRowFocus(CANVAS_ROW, 'canvas')
@@ -1974,18 +1972,11 @@ function EmptyStarter({
         <LayoutTemplate className="size-4 shrink-0" aria-hidden="true" />
         <span>Использовать шаблон</span>
       </Link>
-      {onGenerate && (
-        <>
-          <button type="button" onClick={() => setGenerating(true)} className={HINT_ROW}>
-            <Sparkles className="size-4 shrink-0" aria-hidden="true" />
-            <span>Собрать по описанию</span>
-          </button>
-          {/* Диалог рождается только открытым: он тянет за собой поле ввода и
-              состояние запроса, а пустое полотно — самый частый экран продукта. */}
-          {generating && (
-            <GenerateFormDialog open onOpenChange={setGenerating} onGenerate={onGenerate} />
-          )}
-        </>
+      {onOpenChat && (
+        <button type="button" onClick={onOpenChat} className={HINT_ROW}>
+          <Sparkles className="size-4 shrink-0" aria-hidden="true" />
+          <span>Собрать по описанию</span>
+        </button>
       )}
       {/* Абзац написан цветом и кеглем ТЕЛА ФОРМЫ (.rf-text, тот же класс, что у блока
           «текст»): это не подсказка редактора, а строка о продукте, и приглушать её

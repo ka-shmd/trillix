@@ -128,6 +128,11 @@ export type BuilderState = {
 export type BuilderActions = {
   // hydrate загружает форму, пришедшую через Query, в стор (чистое состояние).
   hydrate: (schema: FormSchema) => void
+  // applyExternal кладёт документ, пришедший ИЗВНЕ (правка ассистента, фаза 26),
+  // ОДНИМ шагом истории — в отличие от hydrate, который историю обнуляет. Так
+  // Ctrl+Z возвращает полотно к тому, что было до реплики: подтверждать правку
+  // отдельной кнопкой посреди разговора незачем, откат и есть подтверждение.
+  applyExternal: (schema: FormSchema) => void
   addBlock: (type: BlockType) => void
   // addBlockAfter вставляет блок сразу после afterId (или в конец при null) и
   // возвращает его id — slash-редактору нужен id, чтобы поставить фокус на новую
@@ -1460,6 +1465,19 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       past: [],
       future: [],
       lastTag: null,
+
+      applyExternal: (schema) =>
+        commit(null, () =>
+          structural({
+            blocks: schema.blocks.map(cloneBlock),
+            submitLabel: schema.submitLabel ?? '',
+            thankYouText: schema.thankYouText ?? '',
+            redirectUrl: schema.redirectUrl ?? '',
+            cover: schema.cover,
+            logo: schema.logo,
+            design: schema.design,
+          }),
+        ),
 
       hydrate: (schema) =>
         set({

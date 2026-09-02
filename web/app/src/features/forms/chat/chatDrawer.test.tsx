@@ -1,0 +1,167 @@
+// @vitest-environment happy-dom
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
+import {
+  createMemoryHistory,
+  createRootRoute,
+  createRoute,
+  createRouter,
+  RouterProvider,
+} from '@tanstack/react-router'
+
+import { SCHEMA_VERSION, textFromString, type FormSchema } from '@entities/formSchema'
+import { ApiError } from '../../../shared/api/errors'
+import { createBuilderStore } from '../builder/store'
+import { BuilderStoreContext } from '../builder/storeContext'
+import { ChatDrawer } from './ChatDrawer'
+import * as api from './api'
+
+// Шторка проверяется целиком, с настоящим стором полотна: главное, что она делает, —
+// кладёт присланный документ на полотно ОДНИМ шагом истории, и проверить это можно
+// только через стор.
+
+vi.mock('./api', async (orig) => ({
+  ...(await orig<typeof api>()),
+  sendChatMessage: vi.fn(),
+}))
+
+const sendChatMessage = vi.mocked(api.sendChatMessage)
+
+const START: FormSchema['blocks'] = [
+  { id: 'blk_c', groupId: 'g1', type: 'title', text: textFromString('Ваше имя') },
+  { id: 'blk_n', groupId: 'g1', type: 'short_text' },
+]
+
+const EDITED: FormSchema = {
+  schemaVersion: SCHEMA_VERSION,
+  blocks: [
+    ...START,
+    { id: 'blk_c2', groupId: 'g2', type: 'title', text: textFromString('Телефон') },
+    { id: 'blk_p', groupId: 'g2', type: 'phone' },
+  ],
+}
+
+afterEach(cleanup)
+beforeEach(() => {
+  sendChatMessage.mockReset()
+  localStorage.clear()
+})
+
+// Маршрутизатор рендерит дерево асинхронно, поэтому setup ждёт поле ввода: без
+// ожидания тело документа ещё пусто.
+async function setup(formId = 'form-1') {
+  const store = createBuilderStore()
+  store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: START })
+  const ensureFormId = vi.fn().mockResolvedValue('created-1')
+
+  const rootRoute = createRootRoute({
+    component: () => (
+      <BuilderStoreContext.Provider value={store}>
+        <ChatDrawer open onOpenChange={() => {}} formId={formId} ensureFormId={ensureFormId} />
+      </BuilderStoreContext.Provider>
+    ),
+  })
+  const planRoute = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/settings/plan',
+    component: () => null,
+  })
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([planRoute]),
+    history: createMemoryHistory({ initialEntries: ['/'] }),
+  })
+  render(<RouterProvider router={router as never} />)
+  await screen.findByLabelText('Сообщение ассистенту')
+  return { store, ensureFormId }
+}
+
+function ask(text: string) {
+  fireEvent.change(screen.getByLabelText('Сообщение ассистенту'), { target: { value: text } })
+  fireEvent.click(screen.getByRole('button', { name: /Отправить/ }))
+}
+
+describe('шторка ассистента', () => {
+  it('правка ложится на полотно одним шагом истории', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'Добавил телефон.', schema: EDITED })
+    const { store } = await setup()
+
+    await act(async () => ask('добавь телефон'))
+
+    expect(await screen.findByText('Добавил телефон.')).toBeTruthy()
+    expect(store.getState().blocks).toHaveLength(4)
+    // Ctrl+Z возвращает как было: подтверждать правку отдельной кнопкой незачем.
+    act(() => void store.getState().undo())
+    expect(store.getState().blocks).toHaveLength(2)
+  })
+
+  it('ответ словами полотно не трогает', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'В форме один вопрос: имя.' })
+    const { store } = await setup()
+
+    await act(async () => ask('что тут спрашивается?'))
+
+    expect(await screen.findByText('В форме один вопрос: имя.')).toBeTruthy()
+    expect(store.getState().blocks).toHaveLength(2)
+  })
+
+  it('форма заводится по первой реплике, если её ещё нет', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'Собрал.', schema: EDITED })
+    const { ensureFormId } = await setup('')
+
+    await act(async () => ask('собери анкету'))
+
+    expect(ensureFormId).toHaveBeenCalled()
+    expect(sendChatMessage.mock.calls[0]?.[0]).toBe('created-1')
+  })
+
+  it('исчерпанная квота ведёт на тариф, а реплика автора остаётся в ленте', async () => {
+    sendChatMessage.mockRejectedValue(new ApiError(402, 'plan_required', 'нет'))
+    await setup()
+
+    await act(async () => ask('добавь телефон'))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('кончились')
+    expect(screen.getByRole('link', { name: 'Посмотреть тариф' }).getAttribute('href')).toBe(
+      '/settings/plan',
+    )
+    expect(screen.getByText('добавь телефон')).toBeTruthy()
+  })
+
+  it('отказ модели показывается словами бэка', async () => {
+    sendChatMessage.mockRejectedValue(new ApiError(503, 'unavailable', 'модель сейчас не отвечает'))
+    await setup()
+
+    await act(async () => ask('добавь телефон'))
+
+    expect((await screen.findByRole('alert')).textContent).toContain('модель сейчас не отвечает')
+  })
+
+  it('разговор переживает переоткрытие шторки', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'Готово.' })
+    await setup()
+    await act(async () => ask('привет'))
+    await screen.findByText('Готово.')
+
+    cleanup()
+    await setup()
+
+    expect(await screen.findByText('Готово.')).toBeTruthy()
+    expect(screen.getByText('привет')).toBeTruthy()
+  })
+
+  it('Enter отправляет, Shift+Enter — нет', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'Ага.' })
+    await setup()
+    const input = screen.getByLabelText('Сообщение ассистенту')
+
+    fireEvent.change(input, { target: { value: 'первое' } })
+    fireEvent.keyDown(input, { key: 'Enter', shiftKey: true })
+    expect(sendChatMessage).not.toHaveBeenCalled()
+
+    await act(async () => {
+      fireEvent.keyDown(input, { key: 'Enter' })
+    })
+    await waitFor(() => expect(sendChatMessage).toHaveBeenCalledTimes(1))
+  })
+})

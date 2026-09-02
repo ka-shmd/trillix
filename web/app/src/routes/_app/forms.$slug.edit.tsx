@@ -3,7 +3,7 @@ import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { type Form, type FormDetail } from '../../entities/form'
-import { createForm, generateForm } from '../../features/forms/api'
+import { createForm } from '../../features/forms/api'
 import { NEW_FORM_SLUG, newFormDetail } from '../../features/forms/draft'
 import { formKeys } from '../../features/forms/keys'
 import { formDetailQueryOptions } from '../../features/forms/queries'
@@ -91,37 +91,6 @@ function FormEditor() {
       }
     : undefined
 
-  // Сборка формы по описанию (фаза 26). Живёт в маршруте по той же причине, что и
-  // ленивое создание: он знает пространство (?w=<slug>) и умеет уводить в редактор, а
-  // импорт фичи пространств из фичи форм запрещён (web/CLAUDE.md).
-  //
-  // МИНА: после удачи экран обязан ВЫЙТИ из режима черновика (setDraftDetail(null)).
-  // Иначе запрос детали остаётся выключенным, а detail продолжает указывать на пустую
-  // синтетическую карточку — и автор увидел бы пустое полотно вместо собранной формы.
-  // Ключ BuilderScreen меняется вместе со slug, поэтому стор перегидратируется схемой
-  // с сервера.
-  async function generate(prompt: string) {
-    const form = await generateForm(prompt, await resolveWorkspaceId(qc, workspaceSlug))
-    // Деталь собранной формы кладётся в кэш ДО перехода: иначе редактор откроется
-    // пустым и мигнёт загрузкой на схеме, которая уже есть на сервере.
-    await qc.fetchQuery(formDetailQueryOptions(form.slug))
-    void qc.invalidateQueries({ queryKey: formKeys.list() })
-    if (!alive.current) return
-
-    // ПОРЯДОК: сперва адрес, потом выход из режима черновика. Наоборот — значит
-    // один кадр с включённым запросом на старом slug (`new`), то есть лишний 404.
-    await navigate({
-      to: '/forms/$slug/edit',
-      params: { slug: form.slug },
-      search: (prev) => prev,
-      // Черновик несозданной формы в истории не оставляем: «Назад» обязан вести
-      // туда, откуда человек пришёл, а не на пустой /forms/new. У существующей
-      // формы — обычный переход: к ней возвращаться есть зачем.
-      replace: isDraft,
-    })
-    if (alive.current) setDraftDetail(null)
-  }
-
   if (!detail) {
     if (query.isError) {
       return (
@@ -140,11 +109,6 @@ function FormEditor() {
   // сентинеле: создание формы меняет slug, и ключ по нему ремаунтил бы полотно прямо
   // под кареткой автора, дописывающего первое слово.
   return (
-    <BuilderScreen
-      key={isDraft ? NEW_FORM_SLUG : slug}
-      detail={detail}
-      draft={draft}
-      onGenerate={generate}
-    />
+    <BuilderScreen key={isDraft ? NEW_FORM_SLUG : slug} detail={detail} draft={draft} />
   )
 }
