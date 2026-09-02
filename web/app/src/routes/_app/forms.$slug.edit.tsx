@@ -1,10 +1,10 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useRef } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { type Form, type FormDetail } from '../../entities/form'
 import { createForm } from '../../features/forms/api'
-import { NEW_FORM_SLUG, newFormDetail } from '../../features/forms/draft'
+import { newFormDetail, useFormEditorTarget } from '../../features/forms/draft'
 import { formKeys } from '../../features/forms/keys'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { type DraftCreation } from '../../features/forms/builder/useAutosave'
@@ -35,14 +35,13 @@ function FormEditor() {
   // момент создания (resolveWorkspaceId), а не на рендере — см. мину там.
   const workspaceSlug = useCurrentWorkspaceSlug()
 
-  // Черновик несозданной формы. Решение «это черновик» принимается ОДИН раз, на
-  // монтировании: создание меняет slug в адресе, и перечитанный параметр увёл бы
-  // экран в ветку обычной формы. Дальше состояние живёт только вперёд — деталь
-  // заменяется настоящей карточкой, но экран остаётся тем же.
-  const [draftDetail, setDraftDetail] = useState<FormDetail | null>(() =>
-    slug === NEW_FORM_SLUG ? newFormDetail() : null,
+  // Черновик несозданной формы, ключ полотна и приём созданной карточки — всё в
+  // features/forms/draft.ts: маршрут у черновика и у настоящей формы один, и правило
+  // «когда экран начинается заново» там же и проверяется тестом.
+  const { draftDetail, isDraft, canvasKey, adoptCreated } = useFormEditorTarget(
+    slug,
+    workspaceSlug,
   )
-  const isDraft = draftDetail !== null
 
   // Запрос черновику не нужен: спрашивать нечего, пока формы нет. После создания он
   // остаётся выключенным, но данные отдаёт — их кладёт в кэш onCreated, а дальше
@@ -74,11 +73,12 @@ function FormEditor() {
           // PATCH ушёл бы с устаревшим updatedAt — 409 на ровном месте.
           const created: FormDetail = { ...newFormDetail(), ...form }
           qc.setQueryData(formKeys.detail(form.slug), created)
-          setDraftDetail(created)
+          adoptCreated(created)
           qc.invalidateQueries({ queryKey: formKeys.list() })
           // Адрес догоняет форму, ЗАМЕНЯЯ запись истории: «Назад» обязан вести туда,
           // откуда человек пришёл, а не на пустой /forms/new. Полотно при этом не
-          // перемонтируется — маршрут тот же, ключ стора заморожен (ниже).
+          // перемонтируется: маршрут тот же, а созданную форму мишень экрана уже
+          // приняла своей (useFormEditorTarget) — ключ стора не дрогнет.
           if (alive.current) {
             void navigate({
               to: '/forms/$slug/edit',
@@ -105,10 +105,6 @@ function FormEditor() {
     return <p className="p-6 text-sm text-muted-foreground">Загрузка…</p>
   }
 
-  // key={slug} — свежий стор билдера на каждую форму. У черновика ключ ЗАМОРОЖЕН на
-  // сентинеле: создание формы меняет slug, и ключ по нему ремаунтил бы полотно прямо
-  // под кареткой автора, дописывающего первое слово.
-  return (
-    <BuilderScreen key={isDraft ? NEW_FORM_SLUG : slug} detail={detail} draft={draft} />
-  )
+  // Свежий стор билдера на каждую форму; у черновика ключ заморожен (см. хук).
+  return <BuilderScreen key={canvasKey} detail={detail} draft={draft} />
 }

@@ -1,3 +1,5 @@
+import { useCallback, useState } from 'react'
+
 import { type FormSchema } from '@entities/formSchema'
 
 import { DEFAULT_FORM_TITLE, type FormDetail } from '../../entities/form'
@@ -77,5 +79,74 @@ export function newFormDetail(): FormDetail {
     password: null,
     respondentEmail: null,
     respondentMail: { from: '', to: '', fromName: '', subject: '' },
+  }
+}
+
+// Мишень экрана редактора: какую форму просит адрес и не пора ли начать заново.
+//
+// Маршрут у настоящей формы и у несозданного черновика ОДИН (/forms/$slug/edit), так
+// что React переиспользует компонент между ними, а сентинел в адресе живёт только до
+// первой правки. Отсюда два требования, которые тянут друг друга в разные стороны:
+//
+//   • создание МЕНЯЕТ slug в адресе, и экран обязан этого не заметить — иначе полотно
+//     ремаунтится под кареткой автора, дописывающего первое слово;
+//   • «+» у пространства в сайдбаре меняет slug на сентинел, и экран обязан заметить —
+//     иначе, придя из редактора готовой формы, он останется в ветке обычной и спросит
+//     у сервера форму `new`: 404 и «Форма не найдена» вместо чистого полотна.
+//
+// Поэтому хук помнит АДРЕС, который обслуживает, и сверяется с ним на каждом рендере;
+// созданную форму он берёт себе (adoptCreated) и на время, пока адрес её догоняет,
+// обслуживает оба написания.
+//
+// Пространство входит в мишень черновика: «+» у другого пространства — просьба о
+// ДРУГОЙ новой форме, хотя slug в адресе не меняется.
+export function useFormEditorTarget(slug: string, workspaceSlug: string) {
+  const target = slug === NEW_FORM_SLUG ? `${NEW_FORM_SLUG}?${workspaceSlug}` : slug
+
+  const [state, setState] = useState(() => ({
+    target,
+    // Slug формы, которую этот экран сам и завёл. Пока не null, адрес может стоять
+    // как на сентинеле, так и на нём: `replace` в пути.
+    created: null as string | null,
+    // Номер черновика в жизни экрана. Нужен ключу полотна: у двух черновиков подряд
+    // адрес один и тот же, а полотно разное.
+    epoch: 0,
+    draft: slug === NEW_FORM_SLUG ? newFormDetail() : null,
+  }))
+
+  // Правка состояния прямо в рендере (React, «adjusting state when props change»):
+  // экран обязан спрашивать не ту форму, которой в адресе больше нет, уже В ЭТОМ
+  // рендере — отложенный до эффекта сброс успел бы отправить лишний запрос.
+  let s = state
+  const serving = s.created === null ? [s.target] : [s.target, s.created]
+  if (!serving.includes(target)) {
+    // Адрес зовёт туда, где экран ещё не был: другая форма или новый черновик.
+    s = {
+      target,
+      created: null,
+      epoch: s.epoch + 1,
+      draft: slug === NEW_FORM_SLUG ? newFormDetail() : null,
+    }
+    setState(s)
+  } else if (target === s.created) {
+    // Адрес догнал созданную форму. Сентинел с этого момента забыт — иначе следующее
+    // «+» в том же пространстве экран принял бы за свой же адрес и черновик не завёл.
+    s = { ...s, target, created: null }
+    setState(s)
+  }
+
+  const adoptCreated = useCallback((detail: FormDetail) => {
+    setState((prev) => ({ ...prev, created: detail.slug, draft: detail }))
+  }, [])
+
+  return {
+    // Синтетическая деталь черновика, а после создания — настоящая карточка формы.
+    // null у обычной формы: её деталь приезжает запросом.
+    draftDetail: s.draft,
+    isDraft: s.draft !== null,
+    // Ключ стора билдера. У черновика он ЗАМОРОЖЕН на сентинеле с номером: создание
+    // меняет slug, и ключ по нему ремаунтил бы полотно (см. выше).
+    canvasKey: s.draft !== null ? `${NEW_FORM_SLUG}:${s.epoch}` : slug,
+    adoptCreated,
   }
 }
