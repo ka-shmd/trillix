@@ -1,6 +1,8 @@
-import { useQuery } from '@tanstack/react-query'
+import { useCallback } from 'react'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 
 import { useCurrentWorkspace } from '../workspaces/current'
+import { planKeys } from './keys'
 import { planSnapshotQueryOptions } from './queries'
 
 // «Можно ли этому пространству такую возможность» — один вопрос вместо трёх
@@ -22,4 +24,36 @@ export function useFeatureAllowed(key: string): boolean {
   })
   const feature = plan.data?.features.find((f) => f.key === key)
   return feature?.allowed ?? true
+}
+
+// Квота тарифа числами: сколько израсходовано и сколько разрешено. Соседка
+// useFeatureAllowed для ключей вида `quota`, у которых вопрос не «можно ли», а
+// «сколько осталось».
+//
+// `undefined` означает «ПОКА НЕ ЗНАЮ» — снимок ещё едет, не приехал или пространство
+// не разрезолвилось. Рисовать в этом состоянии «0 из 0» нельзя: число, которого нет,
+// пугает сильнее, чем его отсутствие. `limit: null` — безлимит.
+//
+// refresh обязателен рядом со значением: расход меняется действиями самого автора на
+// том же экране (каждая реплика ассистенту — минус одна), и без обновления индикатор
+// показывал бы число, верное на момент открытия.
+export function usePlanQuota(key: string): {
+  used: number
+  limit: number | null
+  refresh: () => void
+} | undefined {
+  const workspace = useCurrentWorkspace()
+  const qc = useQueryClient()
+  const workspaceId = workspace?.id ?? ''
+  const plan = useQuery({
+    ...planSnapshotQueryOptions(workspaceId),
+    enabled: workspace !== undefined,
+  })
+  const refresh = useCallback(() => {
+    void qc.invalidateQueries({ queryKey: planKeys.snapshot(workspaceId) })
+  }, [qc, workspaceId])
+
+  const feature = plan.data?.features.find((f) => f.key === key)
+  if (feature === undefined || feature.kind !== 'quota') return undefined
+  return { used: feature.used, limit: feature.limit, refresh }
 }

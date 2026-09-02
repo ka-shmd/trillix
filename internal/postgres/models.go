@@ -248,7 +248,8 @@ type WorkspaceMember struct {
 }
 
 type WorkspaceUsage struct {
-	WorkspaceID uuid.UUID
-	Period      pgtype.Date
-	Submissions int64
+	WorkspaceID   uuid.UUID
+	Period        pgtype.Date
+	Submissions   int64
+	AiGenerations int64
 }

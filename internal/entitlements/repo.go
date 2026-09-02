@@ -25,10 +25,11 @@ func (Repo) Entitlements(ctx context.Context, db postgres.DBTX, workspaceID uuid
 		return Row{}, fmt.Errorf("get entitlements of workspace %s: %w", workspaceID, err)
 	}
 	return Row{
-		PlanCode:        row.PlanCode,
-		PlanTitle:       row.PlanTitle,
-		Limits:          row.Limits,
-		SubmissionsUsed: row.SubmissionsUsed,
+		PlanCode:          row.PlanCode,
+		PlanTitle:         row.PlanTitle,
+		Limits:            row.Limits,
+		SubmissionsUsed:   row.SubmissionsUsed,
+		AIGenerationsUsed: row.AiGenerationsUsed,
 	}, nil
 }
 
@@ -44,12 +45,13 @@ func (Repo) EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspace
 		return Row{}, fmt.Errorf("get entitlements of workspace %s for user %s: %w", workspaceID, userID, err)
 	}
 	return Row{
-		PlanCode:        row.PlanCode,
-		PlanTitle:       row.PlanTitle,
-		Limits:          row.Limits,
-		SubmissionsUsed: row.SubmissionsUsed,
-		MembersCount:    row.MembersCount,
-		StorageUsed:     row.StorageUsed,
+		PlanCode:          row.PlanCode,
+		PlanTitle:         row.PlanTitle,
+		Limits:            row.Limits,
+		SubmissionsUsed:   row.SubmissionsUsed,
+		AIGenerationsUsed: row.AiGenerationsUsed,
+		MembersCount:      row.MembersCount,
+		StorageUsed:       row.StorageUsed,
 	}, nil
 }
 
@@ -79,11 +81,12 @@ func (Repo) EntitlementsWithMembers(ctx context.Context, db postgres.DBTX, works
 		return Row{}, fmt.Errorf("get entitlements with members of workspace %s: %w", workspaceID, err)
 	}
 	return Row{
-		PlanCode:        row.PlanCode,
-		PlanTitle:       row.PlanTitle,
-		Limits:          row.Limits,
-		SubmissionsUsed: row.SubmissionsUsed,
-		MembersCount:    row.MembersCount,
+		PlanCode:          row.PlanCode,
+		PlanTitle:         row.PlanTitle,
+		Limits:            row.Limits,
+		SubmissionsUsed:   row.SubmissionsUsed,
+		AIGenerationsUsed: row.AiGenerationsUsed,
+		MembersCount:      row.MembersCount,
 	}, nil
 }
 
@@ -97,10 +100,24 @@ func (Repo) EntitlementsWithStorage(ctx context.Context, db postgres.DBTX, works
 		return Row{}, fmt.Errorf("get entitlements with storage of workspace %s: %w", workspaceID, err)
 	}
 	return Row{
-		PlanCode:        row.PlanCode,
-		PlanTitle:       row.PlanTitle,
-		Limits:          row.Limits,
-		SubmissionsUsed: row.SubmissionsUsed,
-		StorageUsed:     row.StorageUsed,
+		PlanCode:          row.PlanCode,
+		PlanTitle:         row.PlanTitle,
+		Limits:            row.Limits,
+		SubmissionsUsed:   row.SubmissionsUsed,
+		AIGenerationsUsed: row.AiGenerationsUsed,
+		StorageUsed:       row.StorageUsed,
 	}, nil
+}
+
+// BumpAIGenerations списывает одну генерацию формы в периоде (фаза 26). UPSERT:
+// строки периода может ещё не быть.
+func (Repo) BumpAIGenerations(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) error {
+	err := postgres.New(db).BumpAIGenerations(ctx, postgres.BumpAIGenerationsParams{
+		WorkspaceID: workspaceID,
+		Period:      pgtype.Date{Time: period, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("bump ai generations of workspace %s: %w", workspaceID, err)
+	}
+	return nil
 }

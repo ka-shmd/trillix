@@ -9,6 +9,8 @@ import { displayFormName, type FormDetail } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import { useWorkspaceCrumb } from '../../workspaces/crumb'
 import { PageActions, PageCrumbs } from '../../../shared/page/headerPortals'
+import { ChordChips } from './ChordChips'
+import { useEditorDrawers } from './editorDrawers'
 import { DesignDrawer } from './DesignDrawer'
 import { PreviewOverlay } from './PreviewOverlay'
 import { PublishControls } from './PublishControls'
@@ -18,9 +20,10 @@ import { type FormIdSource } from './mediaUpload'
 import { createFocusEngine } from './focusEngine'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
+import { ChatDrawer } from '../chat/ChatDrawer'
 import { useAutosave, type DraftCreation } from './useAutosave'
 import { useGlobalChord } from './useGlobalChord'
-import { chords } from './shortcuts'
+import { chords, labelFor } from './shortcuts'
 import { Button } from '@/components/ui/button'
 
 // Режимов у редактора больше нет: полотно — единственное, что он показывает.
@@ -73,8 +76,12 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
   const navigate = useNavigate()
   // Оформление — НЕ режим, а шторка поверх полотна: автор смотрит на форму, а не на
   // панель, и тема обязана меняться у него на глазах. Режим (как у настроек) закрыл
-  // бы полотно и превратил подбор темы в угадывание.
-  const [designOpen, setDesignOpen] = useState(false)
+  // бы полотно и превратил подбор темы в угадывание. Шторка ассистента (фаза 26)
+  // устроена так же и делит с ней одно место у правого края — отсюда общее состояние.
+  const drawers = useEditorDrawers()
+  // Клавиши на кнопке помощи — из карты шорткатов, а не строкой рядом с ней: подпись
+  // на кнопке и обещание шпаргалки обязаны совпадать.
+  const chatChord = labelFor(chords.openChat)
 
   // Отмена/повтор + каретка на первый затронутый откатом блок (§2.4). id приходит из
   // стора; блок мог ещё не смонтироваться (только что восстановлен) — движок поставит
@@ -106,6 +113,16 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
     // Матчеры по e.code (§3.1, shortcuts.ts): при кириллической (и любой не-латинской)
     // раскладке Ctrl+Z даёт e.key='я', и хоткей молча ломался — срабатывал нативный
     // undo контролируемого textarea (откат по одному символу).
+    // Alt+J — шторка помощи ИИ. Здесь же, где история: жест документ-уровня, работает
+    // из любой строки полотна. preventDefault обязателен — на маке Option+J печатает
+    // символ, и без него он уехал бы в текст блока вместе с открытием шторки.
+    if (chords.openChat(e)) {
+      e.preventDefault()
+      // ТОГЛ, как у шпаргалки Mod+/: жест, которым шторку открыли, обязан её и
+      // закрывать — иначе руку с клавиатуры приходится снимать ради крестика.
+      drawers.openChat(!drawers.chatOpen)
+      return
+    }
     const isUndo = chords.undo(e)
     const isRedo = chords.redo(e)
     if (!isUndo && !isRedo) return
@@ -165,9 +182,9 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         <Button
           variant="ghost"
           size="sm"
-          className={designOpen ? 'gap-1.5' : 'gap-1.5 text-muted-foreground'}
-          aria-pressed={designOpen}
-          onClick={() => setDesignOpen((v) => !v)}
+          className={drawers.designOpen ? 'gap-1.5' : 'gap-1.5 text-muted-foreground'}
+          aria-pressed={drawers.designOpen}
+          onClick={() => drawers.openDesign(!drawers.designOpen)}
         >
           <Palette className="size-4" /> Оформление
         </Button>
@@ -202,7 +219,45 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
 
       {status === 'conflict' && <ConflictBanner />}
 
-      <SlashEditor formId={uploadTo} engine={engine} onOpenDesign={() => setDesignOpen(true)} />
+      <SlashEditor
+        formId={uploadTo}
+        engine={engine}
+        onOpenDesign={() => drawers.openDesign(true)}
+        onOpenChat={() => drawers.openChat(true)}
+      />
+      {/* Кнопка ассистента — в правом нижнем углу (решение владельца 2026-09-01).
+          Позиция fixed, а не absolute: полотно длинное и прокручивается, а вход в
+          разговор обязан быть под рукой на любой его высоте. Угол свободен —
+          кластеры значков строки и рейлы групп живут внутри колонки. */}
+      {/* Кнопка СТОИТ НА МЕСТЕ и при открытой шторке (решение владельца 2026-09-02):
+          она fixed, привязана к окну, и открытая панель её накрывает. Вход в разговор
+          при этом не теряется — разговор уже открыт, а закрывают его тем же Alt+J,
+          крестиком шторки или Esc.
+
+          БЕЛАЯ (`outline`), а не акцентная: синим в кабинете покрашено главное действие
+          экрана, а главное здесь — «Опубликовать» в верхнем баре, и две синие кнопки
+          спорили бы за внимание. Значка нет по той же причине — надпись называет
+          действие, а глиф добавлял бы к ней вес.
+
+          КЛАВИШИ НАПЕЧАТАНЫ НА КНОПКЕ и берутся из карты (`SHORTCUTS`), а не пишутся
+          рядом второй раз: подпись на кнопке и обещание шпаргалки Mod+/ обязаны
+          совпадать, а совпадают они только у общего источника. */}
+      <Button
+        type="button"
+        variant="outline"
+        size="lg"
+        className="fixed right-6 bottom-6 z-30 gap-2 rounded-lg px-4 shadow-lg"
+        onClick={() => drawers.openChat(true)}
+      >
+        Помощь ИИ
+        {chatChord !== undefined && <ChordChips label={chatChord} />}
+      </Button>
+      <ChatDrawer
+        open={drawers.chatOpen}
+        onOpenChange={drawers.openChat}
+        formId={detail.id}
+        ensureFormId={() => ensureForm().then((f) => f.id)}
+      />
       {/* Просмотр — слой поверх окна (PreviewOverlay), а внутри слоя — СВОЙ документ
           (TD-60): свой CSS автора обязан быть здесь виден и обязан не покидать фрейм,
           иначе `.rf-input{display:none}` из формы погасил бы поля самого кабинета.
@@ -224,7 +279,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
           монтировать») тут не работает против нас: он про диалоги, подписанные на
           s.blocks и потому перерисовывающиеся на каждый символ, а эта панель
           подписана на s.design — он при вводе не меняется. */}
-      <DesignDrawer formId={uploadTo} open={designOpen} onOpenChange={setDesignOpen} />
+      <DesignDrawer formId={uploadTo} open={drawers.designOpen} onOpenChange={drawers.openDesign} />
     </BuilderStoreContext.Provider>
   )
 }

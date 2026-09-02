@@ -150,7 +150,32 @@ type Config struct {
 	MailSMTPUsername string
 	MailSMTPPassword string
 	MailSMTPTLS      string // starttls | implicit | none (см. MailSMTPTLS* ниже)
+
+	// AI* — генерация и правка формы текстом (фаза 26). Транспорт — смысловой флаг
+	// контура, как у почты: off — подсистема выключена целиком (ручки 404, поля
+	// генерации в кабинете нет), openai — обращение к любому совместимому с OpenAI
+	// входу. Контур без провайдера обязан работать, поэтому все пять опциональны.
+	AITransport string // off | openai
+	// AIBaseURL — база входа без хвостового слэша: сегодня Яндекс AI Studio, дальше
+	// свой сервер. Переезд провайдера меняет ЭТО, а не код (ADR §10).
+	AIBaseURL string
+	// AIAPIKey — СЕКРЕТ: живёт в .env контура, не логируется (инвариант 7).
+	AIAPIKey string
+	// AIModel — идентификатор ровно как у провайдера. У Яндекса это URI с каталогом
+	// внутри (gpt://<каталог>/<модель>/latest), поэтому отдельного «каталога» нет.
+	AIModel string
+	// AIProject — заголовок OpenAI-Project. Яндексу не нужен; пусто — не шлём.
+	AIProject string
+	// AIReasoningEffort — сколько модели позволено размышлять (`reasoning_effort`).
+	// Пусто — поле не отправляется, работает умолчание провайдера. Настройкой, а не
+	// константой: у рассуждающей модели умолчание «думать» замедляет сборку формы в
+	// разы, а вход, не знающий этого поля, отвечает 400 — и то и другое лечится
+	// строкой в .env, без выкатки. Замер и числа — в комментарии ai.Options.
+	AIReasoningEffort string
 }
+
+// AIEnabled — настроен ли провайдер модели на контуре.
+func (c Config) AIEnabled() bool { return c.AITransport == AITransportOpenAI }
 
 // GoogleOAuthEnabled — задано ли приложение Google для интеграций.
 func (c Config) GoogleOAuthEnabled() bool {
@@ -170,6 +195,14 @@ const minFormTokenSecretLen = 16
 // провайдер не нужен, письмо читается из debug-лога). MailTransportSMTP — боевой
 // транспорт: один SMTP-клиент, которым прод бьёт в Yandex Postbox, а prod-local — в
 // Mailpit; различие контуров — в значениях MailSMTP*, а не в отдельных транспортах.
+// AITransportOff — контур без провайдера модели (значение по умолчанию: переменная
+// не задана = подсистема выключена). AITransportOpenAI — вход, совместимый с OpenAI;
+// какой именно, решают AI_BASE_URL и AI_MODEL, а не отдельный транспорт на провайдера.
+const (
+	AITransportOff    = "off"
+	AITransportOpenAI = "openai"
+)
+
 const (
 	MailTransportLog  = "log"
 	MailTransportSMTP = "smtp"
@@ -240,6 +273,13 @@ func Load() (Config, error) {
 	cfg.GoogleOAuthClientID = os.Getenv("GOOGLE_OAUTH_CLIENT_ID")
 	cfg.GoogleOAuthClientSecret = os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 	cfg.GooglePickerAPIKey = os.Getenv("GOOGLE_PICKER_API_KEY")
+	// Опциональные (нет провайдера модели — генерация форм просто выключена).
+	cfg.AITransport = os.Getenv("AI_TRANSPORT")
+	cfg.AIBaseURL = strings.TrimRight(os.Getenv("AI_BASE_URL"), "/")
+	cfg.AIAPIKey = os.Getenv("AI_API_KEY")
+	cfg.AIModel = os.Getenv("AI_MODEL")
+	cfg.AIProject = os.Getenv("AI_PROJECT")
+	cfg.AIReasoningEffort = os.Getenv("AI_REASONING_EFFORT")
 
 	if len(missing) > 0 {
 		return Config{}, fmt.Errorf("missing required env: %s", strings.Join(missing, ", "))
@@ -337,6 +377,27 @@ func Load() (Config, error) {
 	default:
 		return Config{}, fmt.Errorf("invalid MAIL_TRANSPORT %q: want %q or %q",
 			cfg.MailTransport, MailTransportLog, MailTransportSMTP)
+	}
+
+	// Транспорт модели: пусто = выключено (переменной может не быть вовсе — контуры
+	// старше фазы 26 поднимаются без правки .env). Заданный openai требует всех
+	// трёх параметров: клиент без них молча отдавал бы ErrDisabled, и «почему не
+	// работает генерация» искали бы в консоли провайдера, где всё в порядке.
+	if cfg.AITransport == "" {
+		cfg.AITransport = AITransportOff
+	}
+	switch cfg.AITransport {
+	case AITransportOff:
+	case AITransportOpenAI:
+		if cfg.AIBaseURL == "" || cfg.AIAPIKey == "" || cfg.AIModel == "" {
+			return Config{}, fmt.Errorf("AI_BASE_URL, AI_API_KEY and AI_MODEL required when AI_TRANSPORT=%s", AITransportOpenAI)
+		}
+		if !strings.HasPrefix(cfg.AIBaseURL, "http://") && !strings.HasPrefix(cfg.AIBaseURL, "https://") {
+			return Config{}, fmt.Errorf("invalid AI_BASE_URL %q: want http(s):// URL", cfg.AIBaseURL)
+		}
+	default:
+		return Config{}, fmt.Errorf("invalid AI_TRANSPORT %q: want %q or %q",
+			cfg.AITransport, AITransportOff, AITransportOpenAI)
 	}
 
 	level, err := parseLogLevel(logLevelRaw)

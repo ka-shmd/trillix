@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactNode } from 'react'
+import { useState, type ReactNode } from 'react'
 import {
   AlignCenter,
   AlignLeft,
@@ -75,6 +75,7 @@ import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from '@/components/ui/sheet'
 
+import { useAppDrawerOffset } from '../../../shared/appDrawer'
 import { CodeField } from '../../../shared/CodeField'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import { ProTag } from '../../../shared/ProTag'
@@ -180,18 +181,9 @@ export function DesignDrawer({
     else setDesign(withTheme(design, base))
   }
 
-  // Ширина открытой шторки уезжает на корень документа: открывают её глубоко в
-  // фиче, а съезжает оболочка маршрута, и тащить проп через три слоя ради этого
-  // незачем. Снимается в cleanup — иначе закрытая панель оставила бы страницу с
-  // вечным отступом справа.
-  useEffect(() => {
-    if (!open) return
-    const root = document.documentElement
-    root.style.setProperty('--app-drawer', DRAWER_WIDTH)
-    return () => {
-      root.style.removeProperty('--app-drawer')
-    }
-  }, [open])
+  // Сдвиг оболочки под открытую шторку — общий хук на все шторки редактора
+  // (`shared/appDrawer.ts`): ширина панели и отступ страницы там одним числом.
+  useAppDrawerOffset(open)
 
   const set = (
     group: 'palette' | 'layout' | 'controls' | 'button',
@@ -954,10 +946,6 @@ export function DesignDrawer({
     </Sheet>
   )
 }
-
-// Ширина шторки — одним числом на два места: класс w-80 у панели и отступ оболочки.
-// 20rem = w-80; расхождение этих двух чисел означало бы щель или нахлёст.
-const DRAWER_WIDTH = '26rem'
 
 // Две колонки (решение владельца 2026-08-09): контролов в панели полтора десятка, и
 // в один столбец они уезжают за пределы экрана — до кнопки приходилось скроллить,

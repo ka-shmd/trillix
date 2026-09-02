@@ -245,6 +245,19 @@ func (t BlockType) carriesText() bool {
 		t == BlockConsent || t == BlockFormTitle
 }
 
+// showsPlaceholder — поле показывает подсказку внутри себя (`settings.placeholder`).
+// Зеркалит `supportsPlaceholder` реестра типов на фронте (web/shared/entities/blocks),
+// сверка — TestBlockKindsParity: у даты подсказку гасит сам контрол, у выбора и файла
+// показывать её негде, и записанная им строка не появилась бы нигде, кроме документа.
+//
+// Схема её НЕ проверяет (лишний placeholder документ не ломает) — предикат нужен там,
+// где строку сочиняют не глядя на форму: словарь ассистента (formplan.go) отказывает
+// в подсказке типу, который её не покажет, вместо тихого «записал, но не видно».
+func (t BlockType) showsPlaceholder() bool {
+	return t == BlockShortText || t == BlockLongText || t == BlockEmail ||
+		t == BlockPhone || t == BlockNumber
+}
+
 // canShareRow — типу разрешено делить ряд (ADR §10). Разрешено ВСЕМ, кроме заголовка
 // формы: решение владельца 2026-07-29 отменило прежний whitelist коротких контролов
 // (short_text/email/phone/number/date/dropdown, фаза 13.6). Довод whitelist'а был про

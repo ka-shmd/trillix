@@ -25,6 +25,13 @@ import (
 // документа стережёт ValidateSchema; MaxBytesReader — грубый внешний предел.
 const maxFormBodyBytes = 64 << 10
 
+// maxChatBodyBytes — потолок тела ручки чата. Больше общего, потому что тело здесь
+// СОСТАВНОЕ: тот же документ формы плюс до десяти реплик разговора плюс сообщение
+// автора. На форме у потолка блоков десятая реплика переваливала за 64 КБ, и ручка
+// отвечала «неверное тело запроса» — то есть указывала на формат там, где дело в
+// размере, и чат на большой форме просто переставал работать.
+const maxChatBodyBytes = 256 << 10
+
 // Middleware — HTTP-обёртка (RequireAuth/RequireCSRF из auth), инжектируемая в
 // composition root: forms не завязан на конкретный тип auth.Handler.
 type Middleware = func(http.Handler) http.Handler
@@ -32,6 +39,10 @@ type Middleware = func(http.Handler) http.Handler
 // formsService — интерфейс сервиса, нужный транспорту (реализация — *Service).
 type formsService interface {
 	Create(ctx context.Context, userID uuid.UUID, title string, workspaceID *uuid.UUID) (Form, error)
+	// Generate собирает черновик формы по описанию автора (фаза 26).
+	Generate(ctx context.Context, userID uuid.UUID, prompt string, workspaceID *uuid.UUID) (Form, error)
+	// Chat — одна реплика разговора с ассистентом над формой (фаза 26, слайс E).
+	Chat(ctx context.Context, userID, formID uuid.UUID, message string, history []ChatTurn, schema json.RawMessage) (ChatResult, error)
 	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -74,6 +85,27 @@ type Handler struct {
 	// с notifyMail: тема у писем разная, и бланк обязан показывать ту, которая
 	// действительно уйдёт. Адресата здесь нет вовсе — он приезжает ответом.
 	respondentMail notifyMailBody
+	// aiLimiter — ведро обращений к модели, общее у сборки формы и чата. Ключ —
+	// АККАУНТ, а не адрес: вызов стоит денег, и защищать надо от своего же цикла в
+	// кабинете, а не только от чужого перебора. Одно ведро на обе ручки, потому что
+	// защищает оно один и тот же кошелёк. Не подключено (юнит-тесты) = ограничения
+	// нет: инвариант 6 требует инжектировать пермиссивную реализацию, а не ослаблять
+	// боевую.
+	aiLimiter RateLimiter
+}
+
+// RateLimiter — ведро запросов, нужное транспорту форм. Реализация —
+// ratelimit.TokenBucket; в тестах инжектируется пермиссивная (инвариант 6).
+type RateLimiter interface {
+	Allow(key string) bool
+}
+
+// WithAILimiter подключает ведро обращений к модели. Отдельным сеттером, а не
+// аргументом конструктора: конструктор зовут из десятков тестов, которым ведро
+// безразлично.
+func (h *Handler) WithAILimiter(l RateLimiter) *Handler {
+	h.aiLimiter = l
+	return h
 }
 
 // WithNotifyMail сообщает транспорту, как выглядит письмо о новом ответе без правок
@@ -99,6 +131,10 @@ func NewHandler(svc formsService, requireAuth, requireCSRF Middleware) *Handler 
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("POST /api/v1/forms", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.create))))
+	// Литеральный сегмент специфичнее /forms/{id}, коллизии в mux нет (тот же
+	// довод, что у /forms/lookup).
+	mux.Handle("POST /api/v1/forms/generate", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.generate))))
+	mux.Handle("POST /api/v1/forms/{id}/ai/chat", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.chat))))
 	mux.Handle("GET /api/v1/forms/{id}", h.requireAuth(http.HandlerFunc(h.get)))
 	// Резолв формы по slug (кабинет адресует форму slug'ом в URL редактора/ответов/
 	// шаринга, как рендерер — /r/{slug}). slug — в query, а не в пути: путь
@@ -530,6 +566,90 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusCreated, toFormResponse(form))
 }
 
+// allowAI — пускает ли ведро ещё один вызов модели этим аккаунтом.
+func (h *Handler) allowAI(userID uuid.UUID) bool {
+	return h.aiLimiter == nil || h.aiLimiter.Allow(userID.String())
+}
+
+// chat — реплика разговора с ассистентом над формой (фаза 26, слайс E).
+//
+// Документ приходит В ТЕЛЕ и возвращается правленым, но в базу здесь не пишется:
+// черновик сохраняет автосейв полотна своим путём с оптимистичной блокировкой, и
+// второй писатель означал бы гонку с ним на ровном месте.
+func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	if !h.allowAI(userID) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком часто, подождите немного", domain.ErrRateLimited))
+		return
+	}
+	req, ok := decodeChat(w, r)
+	if !ok {
+		return
+	}
+
+	// Дедлайн записи продлевается по тому же поводу, что у сборки формы: общий
+	// WriteTimeout сервера короче, чем модель вправе думать.
+	ctx, cancel := context.WithTimeout(r.Context(), generateTimeout)
+	defer cancel()
+	httpserver.ExtendWriteDeadline(w, httpserver.LoggerFrom(r.Context()), generateTimeout+5*time.Second)
+
+	res, err := h.svc.Chat(ctx, userID, formID, req.Message, req.turns(), req.Schema)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	// Преобразованием, а не сборкой по полям: состав у результата сервиса и у DTO
+	// сегодня совпадает, и в день, когда разойдётся, эта строка перестанет
+	// компилироваться — то есть заметит расхождение за нас.
+	httpserver.WriteJSON(w, r, http.StatusOK, chatResponse(res))
+}
+
+// generate — форма по описанию автора (фаза 26). Ответ тот же, что у создания:
+// кабинет уходит в редактор по id, и знать, чем форма собрана, ему не нужно.
+func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	if !h.allowAI(userID) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком часто, подождите немного", domain.ErrRateLimited))
+		return
+	}
+	req, ok := decodeGenerate(w, r)
+	if !ok {
+		return
+	}
+	wsID, ok := parseWorkspaceID(w, r, req.WorkspaceID)
+	if !ok {
+		return
+	}
+	// ДЕДЛАЙН ЗАПИСИ ПРОДЛЕВАЕТСЯ, иначе ручка не работает вовсе: общий WriteTimeout
+	// сервера — 10 секунд, а модель отвечает единицами секунд и вправе задержаться.
+	// Соединение рвалось бы посреди ожидания, и кабинет (через прокси vite) видел
+	// бы 502 вместо ответа. Тот же приём и та же причина, что у печати PDF и
+	// стриминга CSV (TD-4).
+	//
+	// Потолок на всю операцию — generateTimeout: он же ограничивает и клиента
+	// модели вместе с его повтором, потому что контекст запроса едет в него насквозь.
+	ctx, cancel := context.WithTimeout(r.Context(), generateTimeout)
+	defer cancel()
+	httpserver.ExtendWriteDeadline(w, httpserver.LoggerFrom(r.Context()), generateTimeout+5*time.Second)
+
+	form, err := h.svc.Generate(ctx, userID, req.Prompt, wsID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusCreated, toFormResponse(form))
+}
+
 func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 	userID, ok := userID(w, r)
 	if !ok {
@@ -819,6 +939,85 @@ func parseWorkspaceID(w http.ResponseWriter, r *http.Request, raw *string) (*uui
 		return nil, false
 	}
 	return &id, true
+}
+
+// generateTimeout — потолок на всю сборку формы: два вызова модели (второй —
+// починка) с запасом. Человек ждёт ответа на экране, и минута ожидания отказа —
+// предел терпимого; типичный ответ приходит за единицы секунд.
+const generateTimeout = 60 * time.Second
+
+// chatRequest — реплика автора, история разговора и документ, который он сейчас
+// видит. История приезжает с клиента (ADR §10): сервер чата состояния не держит.
+type chatRequest struct {
+	Message string          `json:"message"`
+	History []chatTurnDTO   `json:"history"`
+	Schema  json.RawMessage `json:"schema"`
+}
+
+// chatTurnDTO — реплика разговора. Роль строкой, как у совместимого входа: «кто
+// сказал» на клиенте и на сервере обязано называться одинаково.
+type chatTurnDTO struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
+const chatRoleAssistant = "assistant"
+
+func (r chatRequest) turns() []ChatTurn {
+	out := make([]ChatTurn, 0, len(r.History))
+	for _, t := range r.History {
+		out = append(out, ChatTurn{Assistant: t.Role == chatRoleAssistant, Text: t.Text})
+	}
+	return out
+}
+
+// chatResponse — что ассистент сказал и, если правил, новый документ формы.
+// Пустая схема означает «ничего не менял»: класть в ответ нетронутый документ
+// значило бы заставлять кабинет сравнивать его с тем, что у него уже есть.
+type chatResponse struct {
+	Reply  string          `json:"reply"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+	// PlanRequired — часть просьбы не выполнена из-за тарифа: кабинет предлагает
+	// разговор о тарифе тем же оверлеем, что и остальные платные возможности.
+	PlanRequired bool `json:"planRequired,omitempty"`
+}
+
+func decodeChat(w http.ResponseWriter, r *http.Request) (chatRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxChatBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req chatRequest
+	if err := dec.Decode(&req); err != nil {
+		// Размер отделён от формата: «неверное тело» на слишком большом теле — отказ,
+		// который нечем починить, потому что он называет не ту причину.
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpserver.WriteError(w, r, fmt.Errorf("%w: тело больше %d байт", domain.ErrTooLarge, maxChatBodyBytes))
+			return chatRequest{}, false
+		}
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return chatRequest{}, false
+	}
+	return req, true
+}
+
+// generateRequest — описание формы словами и (необязательно) пространство, в
+// котором её создать.
+type generateRequest struct {
+	Prompt      string  `json:"prompt"`
+	WorkspaceID *string `json:"workspaceId"`
+}
+
+func decodeGenerate(w http.ResponseWriter, r *http.Request) (generateRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req generateRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return generateRequest{}, false
+	}
+	return req, true
 }
 
 func decodeTitle(w http.ResponseWriter, r *http.Request) (titleRequest, bool) {

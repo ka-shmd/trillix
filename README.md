@@ -133,6 +133,7 @@ npm test
 и опциональные `YANDEX_OAUTH_CLIENT_ID`/`_SECRET` (вход через Яндекс ID; не заданы — провайдер
 выключен, кнопка не рисуется), `GOOGLE_OAUTH_CLIENT_ID`/`_SECRET` и `GOOGLE_PICKER_API_KEY`
 (интеграция формы с Google Таблицами; не заданы — таб «Интеграции» живёт, но говорит, что на
-этом контуре она не настроена).
+этом контуре она не настроена) и `AI_TRANSPORT`/`AI_BASE_URL`/`AI_API_KEY`/`AI_MODEL`/`AI_PROJECT`
+(генерация и правка формы текстом; `off` или пусто — подсистема выключена, ручки отвечают 404).
 Различия контуров живут только в значениях: `.env.dev` (http, localhost) vs `.env.prod-local`
 (https, `*.localhost`, `COOKIE_SECURE=true`) — приложение одно, ветвления по контуру в коде нет.

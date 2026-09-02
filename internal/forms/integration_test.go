@@ -22,6 +22,7 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ka-shmd/trillix/internal/ai"
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
@@ -86,7 +87,11 @@ func fixtureIndexPath(t *testing.T) string {
 }
 
 // Лимитер auth — пермиссивный (инвариант 6).
-func newStack(t *testing.T) *httptest.Server {
+func newStack(t *testing.T) *httptest.Server { return newStackWithAI(t, nil) }
+
+// newStackWithAI — та же вертикаль с подключённой моделью. nil = модели на контуре
+// нет, и ручка генерации отвечает 404 (фаза 26).
+func newStackWithAI(t *testing.T, gen forms.Generator) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
@@ -97,8 +102,12 @@ func newStack(t *testing.T) *httptest.Server {
 			pgtest.MailService(testPool), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
 		WithSecret(testTokenSecret)
+	if gen != nil {
+		formsSvc.WithAI(gen)
+	}
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF).
-		WithNotifyMail("no-reply@trillix.test", "Trillix", "Новый ответ в Trillix")
+		WithNotifyMail("no-reply@trillix.test", "Trillix", "Новый ответ в Trillix").
+		WithAILimiter(allowLimiter{})
 	formsPublic, err := forms.NewPublicHandler(formsSvc, testTokenSecret,
 		"http://localhost:5174", "http://localhost:5174/og-preview.png", fixtureIndexPath(t),
 		allowLimiter{}, false)
@@ -202,6 +211,241 @@ func TestForms_Detail_NotifyAddresses(t *testing.T) {
 
 	if bySlug := getFormDetailBySlug(t, c, srv, created.Slug, http.StatusOK).NotifyMail; bySlug != byID {
 		t.Errorf("резолв по slug отдал другое письмо: %+v", bySlug)
+	}
+}
+
+// Генерация формы текстом (фаза 26): вертикаль «ручка → квота → модель → черновик»
+// против настоящей базы. Модель — ai.Fake: сети в тестах не бывает, а проверяется
+// здесь не она, а связка вокруг неё.
+func TestForms_Generate(t *testing.T) {
+	resetDB(t)
+	const plan = `{"title":"Запись в барбершоп","items":[` +
+		`{"type":"short_text","text":"Ваше имя","required":true,"options":[],"scaleMin":0,"scaleMax":0},` +
+		`{"type":"single_choice","text":"Мастер","required":false,"options":["Иван","Пётр"],"scaleMin":0,"scaleMax":0}]}`
+	srv := newStackWithAI(t, ai.NewFake(plan))
+	alice := registerUser(t, srv, "alice@example.com")
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/generate",
+		`{"prompt":"анкета записи в барбершоп"}`, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("генерация: статус %d, ожидалось 201", r.StatusCode)
+	}
+	var created formDTO
+	decode(t, r, &created)
+	if created.Title != "Запись в барбершоп" {
+		t.Errorf("заголовок формы = %q, ожидался из плана модели", created.Title)
+	}
+
+	// Черновик доехал до базы целым: деталь отдаёт схему, которую собрал сервер.
+	detail := getFormDetail(t, alice, srv, created.ID, http.StatusOK)
+	schema, err := domain.ValidateSchema(detail.DraftSchema)
+	if err != nil {
+		t.Fatalf("черновик из базы не проходит ValidateSchema: %v", err)
+	}
+	if len(schema.Blocks) != 1+2+2 {
+		t.Fatalf("блоков в черновике = %d, ожидалось 5", len(schema.Blocks))
+	}
+
+	// Расход списан ровно один раз и в текущем периоде.
+	var used int64
+	err = testPool.QueryRow(context.Background(),
+		`SELECT ai_generations FROM workspace_usage
+		  WHERE period = date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date`).Scan(&used)
+	if err != nil {
+		t.Fatalf("чтение расхода: %v", err)
+	}
+	if used != 1 {
+		t.Errorf("расход генераций = %d, ожидался 1", used)
+	}
+}
+
+// Исчерпанная квота отвечает 402 и НЕ доходит до модели: за отказ не платят.
+func TestForms_Generate_QuotaExhausted(t *testing.T) {
+	resetDB(t)
+	fake := ai.NewFake(`{"title":"А","items":[{"type":"email","text":"Почта","required":true,"options":[],"scaleMin":0,"scaleMax":0}]}`)
+	srv := newStackWithAI(t, fake)
+	alice := registerUser(t, srv, "alice@example.com")
+
+	// Лимиты живут в plans и TRUNCATE их не сбрасывает — возвращаем на место, иначе
+	// обнулённая квота протечёт в соседние тесты пакета.
+	restore := func() {
+		if _, err := testPool.Exec(context.Background(),
+			`UPDATE plans SET limits = jsonb_set(limits, '{ai_generations}', '10'::jsonb)`); err != nil {
+			t.Fatalf("возврат квоты: %v", err)
+		}
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, '{ai_generations}', '0'::jsonb)`); err != nil {
+		t.Fatalf("обнуление квоты: %v", err)
+	}
+	t.Cleanup(restore)
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/generate",
+		`{"prompt":"анкета"}`, csrf(t, alice, srv.URL))
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("статус %d, ожидалось 402", r.StatusCode)
+	}
+	if n := len(fake.Requests()); n != 0 {
+		t.Errorf("вызовов модели = %d, ожидалось ноль: за отказ по квоте платить нечем", n)
+	}
+}
+
+// Контур без провайдера: ручки нет вовсе — 404, как у непрописанного OAuth.
+func TestForms_Generate_ProviderNotConfigured(t *testing.T) {
+	resetDB(t)
+	srv := newStackWithAI(t, ai.Disabled{})
+	alice := registerUser(t, srv, "alice@example.com")
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/generate",
+		`{"prompt":"анкета"}`, csrf(t, alice, srv.URL))
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("статус %d, ожидалось 404", r.StatusCode)
+	}
+}
+
+// Чужое пространство в теле — 404 (анти-IDOR: id из запроса правом не является),
+// и модель об этом не спрашивают.
+func TestForms_Generate_ForeignWorkspace(t *testing.T) {
+	resetDB(t)
+	fake := ai.NewFake(`{"title":"А","items":[{"type":"email","text":"Почта","required":true,"options":[],"scaleMin":0,"scaleMax":0}]}`)
+	srv := newStackWithAI(t, fake)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	// Пространство боба берём из базы: тест про доступ, а не про формат листинга.
+	bobForm := createForm(t, bob, srv, "Форма боба")
+	var bobWS string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT workspace_id::text FROM forms WHERE id = $1`, bobForm.ID).Scan(&bobWS); err != nil {
+		t.Fatalf("чтение пространства боба: %v", err)
+	}
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/generate",
+		`{"prompt":"анкета","workspaceId":"`+bobWS+`"}`, csrf(t, alice, srv.URL))
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("статус %d, ожидалось 404", r.StatusCode)
+	}
+	if n := len(fake.Requests()); n != 0 {
+		t.Errorf("вызовов модели = %d, ожидалось ноль", n)
+	}
+}
+
+// Провайдер не ответил — 503 и ни формы, ни расхода.
+func TestForms_Generate_ProviderDown(t *testing.T) {
+	resetDB(t)
+	srv := newStackWithAI(t, ai.NewFakeReplies(ai.FakeReply{Err: ai.ErrProvider}))
+	alice := registerUser(t, srv, "alice@example.com")
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/generate",
+		`{"prompt":"анкета"}`, csrf(t, alice, srv.URL))
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusServiceUnavailable {
+		t.Fatalf("статус %d, ожидалось 503", r.StatusCode)
+	}
+
+	var forms64 int64
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM forms`).Scan(&forms64); err != nil {
+		t.Fatalf("счёт форм: %v", err)
+	}
+	if forms64 != 0 {
+		t.Errorf("форм в базе = %d, ожидалось ноль", forms64)
+	}
+	var usage int64
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM workspace_usage`).Scan(&usage); err != nil {
+		t.Fatalf("счёт расхода: %v", err)
+	}
+	if usage != 0 {
+		t.Errorf("строк расхода = %d, ожидалось ноль: несостоявшийся вызов не списывается", usage)
+	}
+}
+
+// Разговор с ассистентом над формой (фаза 26, слайс E): вертикаль «ручка → право →
+// квота → модель → правка» против настоящей базы. Модель — ai.Fake.
+func TestForms_Chat(t *testing.T) {
+	resetDB(t)
+	const reply = `{"action":"edit_form","reply":"Добавил телефон.","title":{"text":"","bold":false,"color":"","bg":""},` +
+		`"add":[{"after":"q1","item":{"type":"phone","text":"Телефон","required":true,"options":[],"scaleMin":0,"scaleMax":0}}],` +
+		`"update":[],"remove":[],"move":[]}`
+	srv := newStackWithAI(t, ai.NewFake(reply))
+	alice := registerUser(t, srv, "alice@example.com")
+	form := createForm(t, alice, srv, "Запись")
+
+	// Документ приходит В ТЕЛЕ: правится то, что автор видит сейчас.
+	schema := `{"schemaVersion":1,"blocks":[` +
+		`{"id":"blk_c","groupId":"g_blk_n","type":"title","text":[{"t":"Ваше имя"}],"settings":{}},` +
+		`{"id":"blk_n","groupId":"g_blk_n","type":"short_text","required":true,"settings":{}}]}`
+	body := `{"message":"добавь телефон","history":[],"schema":` + schema + `}`
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/"+form.ID+"/ai/chat", body, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("чат: статус %d, ожидалось 200; тело=%s", r.StatusCode, body2(t, r))
+	}
+	var got struct {
+		Reply  string          `json:"reply"`
+		Schema json.RawMessage `json:"schema"`
+	}
+	decode(t, r, &got)
+	if got.Reply != "Добавил телефон." {
+		t.Errorf("ответ ассистента = %q", got.Reply)
+	}
+	parsed, err := domain.ValidateSchema(got.Schema)
+	if err != nil {
+		t.Fatalf("правленый документ не проходит ValidateSchema: %v", err)
+	}
+	if len(parsed.Blocks) != 4 {
+		t.Fatalf("блоков после правки = %d, ожидалось 4", len(parsed.Blocks))
+	}
+	if parsed.Blocks[0].ID != "blk_c" || parsed.Blocks[1].ID != "blk_n" {
+		t.Errorf("правка не сохранила id прежних блоков: %s, %s", parsed.Blocks[0].ID, parsed.Blocks[1].ID)
+	}
+
+	// Ручка чата в базу не пишет: черновик остаётся тем, что сохранил автосейв.
+	// Пустым он при этом не бывает — заголовок формы синтезируется на чтении
+	// (EnsureFormTitle), поэтому смотрим на отсутствие того, что добавил ассистент.
+	detail := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	stored, err := domain.ValidateSchema(detail.DraftSchema)
+	if err != nil {
+		t.Fatalf("черновик из базы не разобрался: %v", err)
+	}
+	for _, b := range stored.Blocks {
+		if b.Type == domain.BlockPhone {
+			t.Fatalf("чат записал правку в базу — этого он делать не должен: %s", detail.DraftSchema)
+		}
+	}
+
+	// Сообщение списано ровно одно.
+	var used int64
+	err = testPool.QueryRow(context.Background(),
+		`SELECT ai_generations FROM workspace_usage
+		  WHERE period = date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date`).Scan(&used)
+	if err != nil {
+		t.Fatalf("чтение расхода: %v", err)
+	}
+	if used != 1 {
+		t.Errorf("расход = %d, ожидалось 1", used)
+	}
+}
+
+// Чужая форма — 404, и модель об этом не спрашивают (инвариант 1).
+func TestForms_Chat_ForeignForm(t *testing.T) {
+	resetDB(t)
+	fake := ai.NewFake(`{"action":"answer","reply":"ок","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[]}`)
+	srv := newStackWithAI(t, fake)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+	bobForm := createForm(t, bob, srv, "Форма боба")
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/"+bobForm.ID+"/ai/chat",
+		`{"message":"что тут спрашивается?","history":[],"schema":null}`, csrf(t, alice, srv.URL))
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("статус %d, ожидалось 404", r.StatusCode)
+	}
+	if n := len(fake.Requests()); n != 0 {
+		t.Errorf("вызовов модели = %d, ожидалось ноль", n)
 	}
 }
 

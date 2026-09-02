@@ -16,7 +16,8 @@ import {
   useActiveRowState,
 } from './activeRow'
 import { BlockRow } from './BlockRow'
-import { BLOCK_COMMON, GLOBAL } from './shortcuts'
+import { ChordChips } from './ChordChips'
+import { BLOCK_COMMON, chords, GLOBAL, labelFor } from './shortcuts'
 import { ShortcutSheet } from './ShortcutSheet'
 
 // Подсказки полотна. С 2026-07-29 (решение владельца) у строки не остаётся ни одного
@@ -256,5 +257,17 @@ describe('шпаргалка Mod+/ — единственная поверхно
     // Заголовок предлагается только голой строке ответа: у собранной его не бывает.
     expect(sheetText('field', { needsCaption: true })).toContain('Добавить заголовок')
     expect(sheetText('field')).not.toContain('Добавить заголовок')
+  })
+})
+
+// Клавиши, напечатанные на самом контроле (кнопка помощи ИИ). Чипы РАЗДЕЛЬНЫЕ: клавиш
+// в аккорде столько, сколько нажимать, а слитная плашка «Alt+J» читалась бы названием
+// команды. Ярлык при этом берётся из карты — второй копии строки в разметке нет.
+describe('аккорд на контроле', () => {
+  it('печатается клавишами по отдельности и берёт ярлык из карты', () => {
+    const label = labelFor(chords.openChat)
+    expect(label).toBe('Alt+J')
+    render(<ChordChips label={label ?? ''} />)
+    expect([...document.querySelectorAll('kbd')].map((k) => k.textContent)).toEqual(['Alt', 'J'])
   })
 })

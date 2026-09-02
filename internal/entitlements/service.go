@@ -40,6 +40,10 @@ type Row struct {
 	// MembersCount, считается только там, где спрашивают: приём ответа и выдача
 	// картинок за этим не ходят.
 	StorageUsed int64
+	// AIGenerationsUsed — сколько раз за период форму собирали или правили текстом.
+	// Читается из той же строки usage, что и SubmissionsUsed, поэтому отдельного
+	// запроса (как у мест и хранилища) ему не нужно: колонка соседняя.
+	AIGenerationsUsed int64
 }
 
 // Store — доступ к данным, объявленный на стороне потребителя. Реализация — Repo.
@@ -61,6 +65,10 @@ type Store interface {
 	// приёма ответа, и подсчёт участников там был бы платой за то, что нужно
 	// одному редкому действию — приглашению.
 	EntitlementsWithMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error)
+	// BumpAIGenerations списывает одну генерацию формы в периоде. Отдельным
+	// утверждением после удачи, а не внутри создания формы: вызов модели может не
+	// состояться, и списывать за него нечего.
+	BumpAIGenerations(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) error
 }
 
 var _ Store = Repo{}
@@ -152,6 +160,19 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 	}
 	d.Period = period
 	return d, nil
+}
+
+// ConsumeAIGeneration списывает одну генерацию формы в ТОМ ЖЕ периоде, в котором
+// её разрешила проверка. Период приходит параметром, а не читается часами заново:
+// два независимых чтения часов расходятся на границе месяца, и списание уехало бы
+// в месяц, которого проверка не видела, — тот же довод, что у Decision.Period.
+//
+// Гонка двух одновременных генераций на последнем месте квоты даёт перерасход в
+// одну штуку: проверка и списание — не одна транзакция. Это осознанно и дёшево
+// (мягкая квота у ответов ведёт себя так же); блокировка строки usage ради одного
+// лишнего вызова в месяц стоила бы дороже самого вызова.
+func (s *Service) ConsumeAIGeneration(ctx context.Context, workspaceID uuid.UUID, period time.Time) error {
+	return s.repo.BumpAIGenerations(ctx, s.db, workspaceID, period)
 }
 
 // CheckAccount отвечает, разрешена ли возможность подписке самого аккаунта.
@@ -259,6 +280,8 @@ func decide(f Feature, row Row, key Key) (Decision, error) {
 		used = row.MembersCount
 	case StorageMeter:
 		used = row.StorageUsed
+	case AIGenerationsMeter:
+		used = row.AIGenerationsUsed
 	case NoMeter:
 		// Расход не считается: у Toggle его нет по смыслу.
 	}

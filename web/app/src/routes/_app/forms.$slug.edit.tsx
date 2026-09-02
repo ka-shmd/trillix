@@ -53,8 +53,16 @@ function FormEditor() {
   // Живость экрана: сохранение досылается на размонтировании (useAutosave), и форма
   // может родиться уже после ухода автора с полотна. Кэш обновить в этот момент
   // правильно, а вот утащить человека в редактор — нет.
+  //
+  // МИНА: живость обязана ВЗВОДИТЬСЯ в теле эффекта, а не только гаситься в уборке.
+  // React в StrictMode прогоняет эффект дважды (монтирование → уборка → монтирование),
+  // и без первой строки флаг оставался бы false навсегда — то есть в dev-сборке
+  // переход после создания формы не случался бы вовсе.
   const alive = useRef(true)
-  useEffect(() => () => void (alive.current = false), [])
+  useEffect(() => {
+    alive.current = true
+    return () => void (alive.current = false)
+  }, [])
 
   const draft: DraftCreation | undefined = isDraft
     ? {
@@ -100,5 +108,7 @@ function FormEditor() {
   // key={slug} — свежий стор билдера на каждую форму. У черновика ключ ЗАМОРОЖЕН на
   // сентинеле: создание формы меняет slug, и ключ по нему ремаунтил бы полотно прямо
   // под кареткой автора, дописывающего первое слово.
-  return <BuilderScreen key={isDraft ? NEW_FORM_SLUG : slug} detail={detail} draft={draft} />
+  return (
+    <BuilderScreen key={isDraft ? NEW_FORM_SLUG : slug} detail={detail} draft={draft} />
+  )
 }

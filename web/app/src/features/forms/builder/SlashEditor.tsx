@@ -23,7 +23,7 @@ import {
 import { SortableContext, sortableKeyboardCoordinates, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
 import { Link } from '@tanstack/react-router'
-import { LayoutTemplate, Settings, SquarePen } from 'lucide-react'
+import { LayoutTemplate, Settings, Sparkles, SquarePen } from 'lucide-react'
 import { toast } from 'sonner'
 import {
   type Block,
@@ -115,8 +115,12 @@ export function SlashEditor({
   formId,
   engine,
   onOpenDesign,
+  onOpenChat,
 }: {
   formId: FormIdSource
+  // Открыть шторку ассистента (фаза 26). Пропом, как onOpenDesign: состояние шторки
+  // — UI экрана, а не документа, и живёт в BuilderScreen рядом с кнопкой.
+  onOpenChat?: () => void
   // Фокус-движок создаётся в BuilderScreen (переживает смену режима и нужен undo/redo,
   // §2.4) и раздаётся полотну через контекст.
   engine: FocusEngine
@@ -1060,7 +1064,7 @@ export function SlashEditor({
               </div>
 
               {blocks.length === 0 ? (
-                <EmptyStarter onStart={(opts) => startBlock(null, opts)} />
+                <EmptyStarter onStart={(opts) => startBlock(null, opts)} onOpenChat={onOpenChat} />
               ) : (
                 <DndContext
                   sensors={sensors}
@@ -1918,8 +1922,11 @@ function SubmitButtonEditor() {
 // блок (создать и открыть меню типов), печатный символ — начать текст с него.
 function EmptyStarter({
   onStart,
+  onOpenChat,
 }: {
   onStart: (opts?: { openMenu?: boolean; seed?: string }) => void
+  // Открыть разговор с ассистентом (фаза 26). Не задан — строки нет.
+  onOpenChat?: () => void
 }) {
   // Пустое полотно — тоже поверхность карты (§7): Enter/«/»/печатный символ. Блочных
   // клавиш нет — блока ещё не существует.
@@ -1965,6 +1972,12 @@ function EmptyStarter({
         <LayoutTemplate className="size-4 shrink-0" aria-hidden="true" />
         <span>Использовать шаблон</span>
       </Link>
+      {onOpenChat && (
+        <button type="button" onClick={onOpenChat} className={HINT_ROW}>
+          <Sparkles className="size-4 shrink-0" aria-hidden="true" />
+          <span>Собрать по описанию</span>
+        </button>
+      )}
       {/* Абзац написан цветом и кеглем ТЕЛА ФОРМЫ (.rf-text, тот же класс, что у блока
           «текст»): это не подсказка редактора, а строка о продукте, и приглушать её
           заодно с подсказками незачем.
