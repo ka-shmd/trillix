@@ -407,3 +407,20 @@ func TestChatItemStyle(t *testing.T) {
 		}
 	})
 }
+
+// «Выдели заголовок фоном» приходит стилем БЕЗ текста: считать такую правку пустой
+// значило бы молча её потерять, а применять с пустым текстом — стереть заголовок.
+func TestApplyChatOps_TitleStyleWithoutText(t *testing.T) {
+	out, err := ApplyChatEdit(sampleForm(), ChatEdit{Title: ChatTitle{BG: "#E8F0FE", Bold: true}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	title := blockOf(t, out, "blk_title")
+	if PlainText(title.Text) != "Запись в барбершоп" {
+		t.Errorf("заголовок = %q — текст обязан был остаться прежним", PlainText(title.Text))
+	}
+	bold, _, bg := styleOf(title.Text)
+	if !bold || bg != "#e8f0fe" {
+		t.Errorf("оформление заголовка = %+v", title.Text)
+	}
+}

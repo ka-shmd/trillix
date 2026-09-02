@@ -246,6 +246,11 @@ func applyTitle(title *Block, op ChatOp) (*Block, error) {
 	if err := checkTextLen(styled.Text, MaxFormTitleLen); err != nil {
 		return title, err
 	}
+	// Пустой текст при заданном оформлении — «покрась, не переименовывая»: берём
+	// нынешний заголовок. Иначе просьба «выдели заголовок фоном» стирала бы его.
+	if styled.Text == "" && title != nil {
+		styled.Text = PlainText(title.Text)
+	}
 	if title == nil {
 		id := newBlockID()
 		return &Block{ID: id, GroupID: groupIDOf(id), Type: BlockFormTitle, Text: styledText(styled.PlanItem)}, nil
@@ -477,6 +482,13 @@ type ChatTitle struct {
 	BG    string `json:"bg"`
 }
 
+// Empty — заголовок не трогаем. Пустого ТЕКСТА для этого мало: «выдели заголовок
+// фоном» приходит стилем без текста, и считать такую правку пустой значило бы
+// молча её потерять.
+func (t ChatTitle) Empty() bool {
+	return strings.TrimSpace(t.Text) == "" && !t.Bold && t.Color == "" && t.BG == ""
+}
+
 func (t ChatTitle) item() ChatItem {
 	return ChatItem{PlanItem: PlanItem{Text: t.Text, Bold: t.Bold, Color: t.Color, BG: t.BG}}
 }
@@ -499,7 +511,7 @@ type ChatMove struct {
 // Empty — правка ничего не меняет. Пустая правка при заявленной правке формы —
 // ошибка модели, а не безобидный ответ: она сказала, что что-то сделает.
 func (e ChatEdit) Empty() bool {
-	return strings.TrimSpace(e.Title.Text) == "" && len(e.Add) == 0 && len(e.Update) == 0 &&
+	return e.Title.Empty() && len(e.Add) == 0 && len(e.Update) == 0 &&
 		len(e.Remove) == 0 && len(e.Move) == 0
 }
 
@@ -509,7 +521,7 @@ func (e ChatEdit) Empty() bool {
 // любом порядке списков в ответе модели.
 func (e ChatEdit) ops() []ChatOp {
 	var ops []ChatOp
-	if strings.TrimSpace(e.Title.Text) != "" {
+	if !e.Title.Empty() {
 		item := e.Title.item()
 		ops = append(ops, ChatOp{Op: OpTitle, Item: &item})
 	}
