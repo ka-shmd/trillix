@@ -114,14 +114,18 @@ describe('шторка ассистента', () => {
     expect(sendChatMessage.mock.calls[0]?.[0]).toBe('created-1')
   })
 
-  it('исчерпанная квота ведёт на тариф, а реплика автора остаётся в ленте', async () => {
-    sendChatMessage.mockRejectedValue(new ApiError(402, 'plan_required', 'нет'))
+  // Причину отказа по тарифу называет СЕРВЕР: их два рода (кончились сообщения,
+  // упёрлись в платное оформление), и своя фраза врала бы на одном из них.
+  it('отказ по тарифу ведёт на тариф своим текстом, а реплика автора остаётся в ленте', async () => {
+    sendChatMessage.mockRejectedValue(
+      new ApiError(402, 'plan_required', 'цвета — платная возможность, на этом тарифе она недоступна'),
+    )
     await setup()
 
     await act(async () => ask('добавь телефон'))
 
     const alert = await screen.findByRole('alert')
-    expect(alert.textContent).toContain('кончились')
+    expect(alert.textContent).toContain('цвета — платная возможность')
     expect(screen.getByRole('link', { name: 'Посмотреть тариф' }).getAttribute('href')).toBe(
       '/settings/plan',
     )

@@ -324,6 +324,44 @@ func TestApplyChatOps_AddsKeepOrder(t *testing.T) {
 	}
 }
 
+// Собирая форму с нуля, модель нумерует пункты на ходу и ссылается на только что
+// добавленный («after»: «q1»), которого в форме ещё нет. Такой якорь — промах по
+// месту, а не по адресату: пункт нужен автору, и он встаёт в конец, в том порядке, в
+// каком названы. Строгий отказ здесь стоил второй попытки модели, а когда она
+// приходила такой же — терял весь ответ, и автор получал отказ вместо формы.
+func TestApplyChatOps_UnknownAddAnchorGoesLast(t *testing.T) {
+	empty := FormSchema{SchemaVersion: SchemaVersion}
+	item := func(t BlockType, text string) ChatItem {
+		return ChatItem{PlanItem: PlanItem{Type: t, Text: text}}
+	}
+
+	out, err := ApplyChatEdit(empty, ChatEdit{Add: []ChatAdd{
+		{Item: item(BlockShortText, "Имя")},
+		{After: "q1", Item: item(BlockPhone, "Телефон")},
+		{After: "q2", Item: item(BlockDate, "Дата")},
+	}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	got := ProjectForm(out).Items
+	want := []string{"Имя", "Телефон", "Дата"}
+	if len(got) != len(want) {
+		t.Fatalf("пунктов = %d: %+v", len(got), got)
+	}
+	for i, w := range want {
+		if got[i].Text != w {
+			t.Errorf("пункт %d = %q, ожидался %q", i+1, got[i].Text, w)
+		}
+	}
+
+	// У update якорь остаётся строгим: там названный пункт и есть предмет правки.
+	if _, err := ApplyChatEdit(sampleForm(), ChatEdit{
+		Update: []ChatUpdate{{Target: "q9", Item: item(BlockShortText, "Ничей")}},
+	}); err == nil {
+		t.Error("правка несуществующего пункта прошла молча")
+	}
+}
+
 // Модель охотно присылает заголовок эхом при любой просьбе. Тот же текст — не
 // правка: переписывать документ ради неизменившейся строки значит гонять автосейв
 // и историю впустую.

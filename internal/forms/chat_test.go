@@ -153,6 +153,11 @@ func TestChat(t *testing.T) {
 		if !errors.Is(err, domain.ErrPlanRequired) {
 			t.Fatalf("ошибка = %v, ожидалась ErrPlanRequired", err)
 		}
+		// Отказ по квоте ОБЯЗАН называть себя словами: тем же кодом отвечает отказ по
+		// платному оформлению, и кабинет различает их только по тексту.
+		if !strings.Contains(err.Error(), "сообщения") {
+			t.Errorf("отказ по квоте не назвал причину: %v", err)
+		}
 		if n := len(fake.Requests()); n != 0 {
 			t.Errorf("вызовов модели = %d, ожидалось ноль", n)
 		}
@@ -562,5 +567,27 @@ func TestChat_EditAndDesignTogether(t *testing.T) {
 	if schema.Design == nil || schema.Design.Controls == nil || schema.Design.Controls.Radius == nil ||
 		*schema.Design.Controls.Radius != 8 {
 		t.Errorf("скругление не встало: %+v", schema.Design)
+	}
+}
+
+// Инструкция бесплатному тарифу НАЗЫВАЕТ бесплатные поля оформления поимённо, и этот
+// тест держит список в согласии с доменом: сдвинется граница платного в design.go —
+// покраснеет здесь и напомнит поправить фразу. Иначе модель либо откажет в том, что
+// автору положено, либо предложит то, что сервер всё равно отрежет.
+func TestChatInstructions_FreeDesignFields(t *testing.T) {
+	full := domain.ChatDesign{
+		Theme: "dark", Font: "inter",
+		Accent: "#16a34a", Canvas: "#ffffff", TextColor: "#111111", ButtonColor: "#000000",
+		Width: 800, FontSize: 18, Density: "cozy", Align: "center",
+		Radius: 8, BorderWidth: 2, Outline: "full",
+		ButtonVariant: "solid", ButtonWidth: "full", ButtonAlign: "center", ButtonRadius: 8,
+	}
+	free := domain.ChatDesignFree(full)
+	if free.Theme != "dark" || free.BorderWidth != 2 || free.ButtonRadius != 8 {
+		t.Errorf("бесплатное поле стало платным: %+v", free)
+	}
+	free.Theme, free.BorderWidth, free.ButtonRadius = "", domain.ChatDesignKeep, domain.ChatDesignKeep
+	if !free.Empty() {
+		t.Errorf("бесплатных полей стало больше (%+v) — поправь фразу про тариф в chatInstructions", free)
 	}
 }

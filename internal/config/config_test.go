@@ -31,6 +31,15 @@ func setValidEnv(t *testing.T) {
 	t.Setenv("TRUSTED_PROXY", "false")
 	t.Setenv("MAIL_TRANSPORT", "log")
 	t.Setenv("MAIL_FROM", "Trillix <no-reply@localhost>")
+	// МИНА: Makefile подгружает .env в окружение рецептов (`include .env` + `export`),
+	// поэтому под `make test` у разработчика с живым ключом модели переменные AI_* уже
+	// стоят. Пока их не гасили, проверка «openai без ключа — ошибка» проходила у одних
+	// и краснела у других, а причина выглядела как поломка конфига.
+	for _, k := range []string{
+		"AI_TRANSPORT", "AI_BASE_URL", "AI_API_KEY", "AI_MODEL", "AI_PROJECT", "AI_REASONING_EFFORT",
+	} {
+		t.Setenv(k, "")
+	}
 }
 
 func TestLoad(t *testing.T) {
