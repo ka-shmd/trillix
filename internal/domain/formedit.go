@@ -531,8 +531,17 @@ const (
 // отсутствием ключей.
 func ChatJSONSchema() json.RawMessage {
 	item := planItemJSONSchema()
-	themes, _ := json.Marshal(append([]string{""}, designThemes...))
-	fonts, _ := json.Marshal(append([]string{""}, designFonts...))
+	// Каждое перечисление получает пустую строку: в строгом режиме поле обязано
+	// присутствовать, и «не трогать» выражается ею.
+	withEmpty := func(vals []string) string {
+		out, _ := json.Marshal(append([]string{""}, vals...))
+		return string(out)
+	}
+	themes, fonts := withEmpty(designThemes), withEmpty(designFonts)
+	densities, aligns := withEmpty(designDensities), withEmpty(designAligns)
+	outlines := withEmpty(designOutlines)
+	btnVariants, btnWidths := withEmpty(designButtonVariant), withEmpty(designButtonWidth)
+	btnAligns := withEmpty(designButtonAligns)
 	return json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {
@@ -574,15 +583,30 @@ func ChatJSONSchema() json.RawMessage {
         "font": {"type": "string", "enum": %s},
         "accent": {"type": "string"},
         "canvas": {"type": "string"},
-        "width": {"type": "integer"}
+        "textColor": {"type": "string"},
+        "buttonColor": {"type": "string"},
+        "width": {"type": "integer"},
+        "fontSize": {"type": "integer"},
+        "density": {"type": "string", "enum": %s},
+        "align": {"type": "string", "enum": %s},
+        "radius": {"type": "integer"},
+        "borderWidth": {"type": "integer"},
+        "outline": {"type": "string", "enum": %s},
+        "buttonVariant": {"type": "string", "enum": %s},
+        "buttonWidth": {"type": "string", "enum": %s},
+        "buttonAlign": {"type": "string", "enum": %s},
+        "buttonRadius": {"type": "integer"}
       },
-      "required": ["theme", "font", "accent", "canvas", "width"],
+      "required": ["theme", "font", "accent", "canvas", "textColor", "buttonColor",
+        "width", "fontSize", "density", "align", "radius", "borderWidth", "outline",
+        "buttonVariant", "buttonWidth", "buttonAlign", "buttonRadius"],
       "additionalProperties": false
     }
   },
   "required": ["action", "reply", "title", "add", "update", "remove", "move", "design"],
   "additionalProperties": false
-}`, ActionEdit, ActionAnswer, ActionDesign, item, item, themes, fonts))
+}`, ActionEdit, ActionAnswer, ActionDesign, item, item, themes, fonts,
+		densities, aligns, outlines, btnVariants, btnWidths, btnAligns))
 }
 
 // ActionDesign — третье намерение: оформление страницы формы (фаза 26, слайс F).
@@ -600,22 +624,105 @@ const ActionDesign = "design"
 // кнопкой в панели, и путать «поставь светлую тему» со «сними всё оформление»
 // нельзя.
 type ChatDesign struct {
+	// Строки: пусто — не трогать. Числа: -1 — не трогать. Сентинел у чисел
+	// обязателен, а не выбран для симметрии: у скругления и толщины края НОЛЬ —
+	// осмысленное значение («без скруглений», «без края»), и совпади он с «не
+	// задано», просьбу «убери скругления» стало бы нечем выразить.
 	Theme string `json:"theme"`
 	Font  string `json:"font"`
-	// Accent и Canvas — цвета в формате #rrggbb. Регистр НЕ важен: модель пишет
-	// #FFFF00 так же охотно, как #ffff00, а схема принимает только нижний — приводим
-	// сами, вместо того чтобы гонять вторую попытку из-за регистра букв.
-	Accent string `json:"accent"`
-	Canvas string `json:"canvas"`
-	// Width — ширина колонки формы в px; 0 — не трогать. Единственная настройка
-	// раскладки, доступная разговору: её просят словами («сделай пошире»), а
-	// плотность и выравнивание — вкусовые, их правят панелью, где видно результат.
-	Width int `json:"width"`
+
+	// Цвета в формате #rrggbb; регистр приводим сами (normalizeHex).
+	Accent      string `json:"accent"`
+	Canvas      string `json:"canvas"`
+	TextColor   string `json:"textColor"`
+	ButtonColor string `json:"buttonColor"`
+
+	// Раскладка.
+	Width    int    `json:"width"`
+	FontSize int    `json:"fontSize"`
+	Density  string `json:"density"`
+	Align    string `json:"align"`
+
+	// Поля ввода.
+	Radius      int    `json:"radius"`
+	BorderWidth int    `json:"borderWidth"`
+	Outline     string `json:"outline"`
+
+	// Кнопка отправки.
+	ButtonVariant string `json:"buttonVariant"`
+	ButtonWidth   string `json:"buttonWidth"`
+	ButtonAlign   string `json:"buttonAlign"`
+	ButtonRadius  int    `json:"buttonRadius"`
+}
+
+// ChatDesignEmpty — правка оформления, которая ничего не меняет.
+//
+// Нужна ПЕРЕД разбором ответа модели: нулевое значение структуры означало бы
+// «поставить ширину 0 и скругление 0», то есть ответ, где блока design нет вовсе
+// (обычный edit_form), читался бы как правка оформления. Разбор кладёт это
+// значение в поле и позволяет JSON перебить его.
+func ChatDesignEmpty() ChatDesign {
+	return ChatDesign{
+		Width: ChatDesignKeep, FontSize: ChatDesignKeep, Radius: ChatDesignKeep,
+		BorderWidth: ChatDesignKeep, ButtonRadius: ChatDesignKeep,
+	}
+}
+
+// ChatDesignKeep — значение числового поля, означающее «не трогать».
+const ChatDesignKeep = -1
+
+// chatDesignForm собирает из правки кусок FormDesign — ровно те ключи, которые
+// правка называет. Один код на три задачи: наложение, счёт платного и счёт
+// бесплатного, — иначе три места разъедутся на первом же новом поле.
+func (d ChatDesign) chatDesignForm() FormDesign {
+	out := FormDesign{Theme: d.Theme, Font: d.Font}
+
+	if d.Accent != "" || d.Canvas != "" || d.TextColor != "" || d.ButtonColor != "" {
+		out.Palette = &DesignPalette{
+			Accent: normalizeHex(d.Accent), Canvas: normalizeHex(d.Canvas),
+			Text: normalizeHex(d.TextColor), Button: normalizeHex(d.ButtonColor),
+		}
+	}
+	if d.Width != ChatDesignKeep || d.FontSize != ChatDesignKeep || d.Density != "" || d.Align != "" {
+		layout := DesignLayout{Density: d.Density, Align: d.Align}
+		if d.Width != ChatDesignKeep {
+			width := d.Width
+			layout.Width = &width
+		}
+		if d.FontSize != ChatDesignKeep {
+			size := d.FontSize
+			layout.FontSize = &size
+		}
+		out.Layout = &layout
+	}
+	if d.Radius != ChatDesignKeep || d.BorderWidth != ChatDesignKeep || d.Outline != "" {
+		controls := DesignControls{Outline: d.Outline}
+		if d.Radius != ChatDesignKeep {
+			radius := d.Radius
+			controls.Radius = &radius
+		}
+		if d.BorderWidth != ChatDesignKeep {
+			border := d.BorderWidth
+			controls.BorderWidth = &border
+		}
+		out.Controls = &controls
+	}
+	if d.ButtonVariant != "" || d.ButtonWidth != "" || d.ButtonAlign != "" || d.ButtonRadius != ChatDesignKeep {
+		button := DesignButton{Variant: d.ButtonVariant, Width: d.ButtonWidth, Align: d.ButtonAlign}
+		if d.ButtonRadius != ChatDesignKeep {
+			radius := d.ButtonRadius
+			button.Radius = &radius
+		}
+		out.Button = &button
+	}
+	return out
 }
 
 // Empty — правка оформления ничего не меняет.
 func (d ChatDesign) Empty() bool {
-	return d.Theme == "" && d.Font == "" && d.Accent == "" && d.Canvas == "" && d.Width == 0
+	form := d.chatDesignForm()
+	return form.Theme == "" && form.Font == "" && form.Palette == nil &&
+		form.Layout == nil && form.Controls == nil && form.Button == nil
 }
 
 // ApplyChatDesign накладывает правку оформления на документ.
@@ -631,34 +738,7 @@ func ApplyChatDesign(s FormSchema, patch ChatDesign) (FormSchema, error) {
 	if s.Design != nil {
 		design = *s.Design
 	}
-	if patch.Theme != "" {
-		design.Theme = patch.Theme
-	}
-	if patch.Font != "" {
-		design.Font = patch.Font
-	}
-	if patch.Accent != "" || patch.Canvas != "" {
-		palette := DesignPalette{}
-		if design.Palette != nil {
-			palette = *design.Palette
-		}
-		if patch.Accent != "" {
-			palette.Accent = normalizeHex(patch.Accent)
-		}
-		if patch.Canvas != "" {
-			palette.Canvas = normalizeHex(patch.Canvas)
-		}
-		design.Palette = &palette
-	}
-	if patch.Width != 0 {
-		layout := DesignLayout{}
-		if design.Layout != nil {
-			layout = *design.Layout
-		}
-		width := patch.Width
-		layout.Width = &width
-		design.Layout = &layout
-	}
+	mergeDesign(&design, patch.chatDesignForm())
 
 	if err := validateDesign(&design); err != nil {
 		return FormSchema{}, fmt.Errorf("%w: %v", ErrValidation, err)
@@ -668,18 +748,58 @@ func ApplyChatDesign(s FormSchema, patch ChatDesign) (FormSchema, error) {
 	return out, nil
 }
 
-// ChatDesignPaid — что из ПРАВКИ платно (перечень для человека; пусто — правка
-// бесплатна на любом тарифе).
-//
-// Считается по самой правке, а не по документу после наложения: иначе автор
-// бесплатного тарифа, у которого цвет уже стоит с прежних времён, не смог бы
-// переключить даже тему.
-func ChatDesignPaid(patch ChatDesign) []string {
-	return DesignPaidFeatures(&FormDesign{
-		Font:    patch.Font,
-		Palette: chatPalette(patch),
-		Layout:  chatLayout(patch),
-	})
+// mergeDesign накладывает названное правкой на то, что у формы уже есть. Ключ, о
+// котором правка молчит, остаётся прежним: «убери скругления» не трогает цвета.
+func mergeDesign(dst *FormDesign, patch FormDesign) {
+	setString(&dst.Theme, patch.Theme)
+	setString(&dst.Font, patch.Font)
+	if p := patch.Palette; p != nil {
+		if dst.Palette == nil {
+			dst.Palette = &DesignPalette{}
+		}
+		setString(&dst.Palette.Accent, p.Accent)
+		setString(&dst.Palette.Canvas, p.Canvas)
+		setString(&dst.Palette.Text, p.Text)
+		setString(&dst.Palette.Button, p.Button)
+	}
+	if l := patch.Layout; l != nil {
+		if dst.Layout == nil {
+			dst.Layout = &DesignLayout{}
+		}
+		setString(&dst.Layout.Density, l.Density)
+		setString(&dst.Layout.Align, l.Align)
+		setInt(&dst.Layout.Width, l.Width)
+		setInt(&dst.Layout.FontSize, l.FontSize)
+	}
+	if c := patch.Controls; c != nil {
+		if dst.Controls == nil {
+			dst.Controls = &DesignControls{}
+		}
+		setString(&dst.Controls.Outline, c.Outline)
+		setInt(&dst.Controls.Radius, c.Radius)
+		setInt(&dst.Controls.BorderWidth, c.BorderWidth)
+	}
+	if b := patch.Button; b != nil {
+		if dst.Button == nil {
+			dst.Button = &DesignButton{}
+		}
+		setString(&dst.Button.Variant, b.Variant)
+		setString(&dst.Button.Width, b.Width)
+		setString(&dst.Button.Align, b.Align)
+		setInt(&dst.Button.Radius, b.Radius)
+	}
+}
+
+func setString(dst *string, v string) {
+	if v != "" {
+		*dst = v
+	}
+}
+
+func setInt(dst **int, v *int) {
+	if v != nil {
+		*dst = v
+	}
 }
 
 // normalizeHex приводит цвет к тому виду, который принимает схема. Регистр —
@@ -687,35 +807,79 @@ func ChatDesignPaid(patch ChatDesign) []string {
 // стоил бы автору лишнего ожидания.
 func normalizeHex(c string) string { return strings.ToLower(strings.TrimSpace(c)) }
 
-func chatLayout(patch ChatDesign) *DesignLayout {
-	if patch.Width == 0 {
-		return nil
-	}
-	width := patch.Width
-	return &DesignLayout{Width: &width}
+// ChatDesignPaid — что из ПРАВКИ платно (перечень для человека; пусто — правка
+// бесплатна на любом тарифе).
+//
+// Считается по самой правке, а не по документу после наложения: иначе автор
+// бесплатного тарифа, у которого цвет уже стоит с прежних времён, не смог бы
+// переключить даже тему.
+func ChatDesignPaid(patch ChatDesign) []string {
+	form := patch.chatDesignForm()
+	form.Theme = "" // тема бесплатна на любом тарифе
+	return DesignPaidFeatures(&form)
 }
 
-// ChatDesignFree — та часть правки, которая бесплатна на любом тарифе (сегодня это
-// тема). Знание о платном живёт здесь, рядом с DesignPaidFeatures, а не у
-// вызывающего: иначе продукт, открывший завтра шрифты бесплатным, забыл бы про
-// вторую копию правила.
+// ChatDesignFree — та часть правки, которая бесплатна на любом тарифе.
+//
+// Что бесплатно, решает не список здесь, а DesignPaidFeatures: каждое поле пробуется
+// оставить, и остаётся то, из-за которого правка не становится платной. Поэтому
+// открытие завтра любой настройки бесплатному тарифу не потребует второй копии
+// правила — достаточно одной строки там.
 func ChatDesignFree(patch ChatDesign) ChatDesign {
-	free := ChatDesign{}
-	if len(DesignPaidFeatures(&FormDesign{Theme: patch.Theme})) == 0 {
-		free.Theme = patch.Theme
+	free := ChatDesignEmpty()
+	keepString := []struct{ dst, src *string }{
+		{&free.Theme, &patch.Theme},
+		{&free.Font, &patch.Font},
+		{&free.Accent, &patch.Accent},
+		{&free.Canvas, &patch.Canvas},
+		{&free.TextColor, &patch.TextColor},
+		{&free.ButtonColor, &patch.ButtonColor},
+		{&free.Density, &patch.Density},
+		{&free.Align, &patch.Align},
+		{&free.Outline, &patch.Outline},
+		{&free.ButtonVariant, &patch.ButtonVariant},
+		{&free.ButtonWidth, &patch.ButtonWidth},
+		{&free.ButtonAlign, &patch.ButtonAlign},
+	}
+	for _, k := range keepString {
+		if *k.src == "" {
+			continue
+		}
+		*k.dst = *k.src
+		if len(ChatDesignPaid(free)) > 0 {
+			*k.dst = ""
+		}
+	}
+	keepInt := []struct {
+		dst *int
+		src int
+	}{
+		{&free.Width, patch.Width},
+		{&free.FontSize, patch.FontSize},
+		{&free.Radius, patch.Radius},
+		{&free.BorderWidth, patch.BorderWidth},
+		{&free.ButtonRadius, patch.ButtonRadius},
+	}
+	for _, k := range keepInt {
+		if k.src == ChatDesignKeep {
+			continue
+		}
+		*k.dst = k.src
+		if len(ChatDesignPaid(free)) > 0 {
+			*k.dst = ChatDesignKeep
+		}
 	}
 	return free
-}
-
-func chatPalette(patch ChatDesign) *DesignPalette {
-	if patch.Accent == "" && patch.Canvas == "" {
-		return nil
-	}
-	return &DesignPalette{Accent: patch.Accent, Canvas: patch.Canvas}
 }
 
 // DesignThemes и DesignFonts — что модель вправе назвать. Отдаются списками, потому
 // что уезжают перечислением в схему ответа: второй копии этих значений в проекте не
 // заводится.
-func DesignThemes() []string { return append([]string(nil), designThemes...) }
-func DesignFonts() []string  { return append([]string(nil), designFonts...) }
+func DesignThemes() []string         { return append([]string(nil), designThemes...) }
+func DesignFonts() []string          { return append([]string(nil), designFonts...) }
+func DesignDensities() []string      { return append([]string(nil), designDensities...) }
+func DesignAligns() []string         { return append([]string(nil), designAligns...) }
+func DesignOutlines() []string       { return append([]string(nil), designOutlines...) }
+func DesignButtonVariants() []string { return append([]string(nil), designButtonVariant...) }
+func DesignButtonWidths() []string   { return append([]string(nil), designButtonWidth...) }
+func DesignButtonAligns() []string   { return append([]string(nil), designButtonAligns...) }

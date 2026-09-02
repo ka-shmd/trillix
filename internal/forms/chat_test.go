@@ -261,9 +261,9 @@ func TestChat(t *testing.T) {
 // форму, чтобы автор упёрся в 402 при попытке её опубликовать, — худший из вариантов.
 func TestChat_Design(t *testing.T) {
 	const dark = `{"action":"design","reply":"Сделал тёмную тему.","title":"","add":[],"update":[],"remove":[],"move":[],
-	 "design":{"theme":"dark","font":"","accent":"","canvas":""}}`
+	 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 	const blue = `{"action":"design","reply":"Покрасил в синий.","title":"","add":[],"update":[],"remove":[],"move":[],
-	 "design":{"theme":"","font":"","accent":"#2563eb","canvas":""}}`
+	 "design":{"theme":"","font":"","accent":"#2563eb","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 
 	t.Run("тема ложится на документ", func(t *testing.T) {
 		plans := &fakePlans{allowed: true}
@@ -313,7 +313,7 @@ func TestChat_Design(t *testing.T) {
 	// свой он написал про обе правки сразу.
 	t.Run("тема с цветом на закрытом тарифе: тема встаёт, цвет объясняется", func(t *testing.T) {
 		const both = `{"action":"design","reply":"Сделал тёмной и покрасил в синий.","title":"","add":[],"update":[],"remove":[],"move":[],
-		 "design":{"theme":"dark","font":"","accent":"#2563eb","canvas":""}}`
+		 "design":{"theme":"dark","font":"","accent":"#2563eb","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
 		svc, store := chatService(ai.NewFake(both), plans)
 
@@ -374,11 +374,11 @@ func TestChat_Design(t *testing.T) {
 	t.Run("несогласованные ответы про оформление отвергаются", func(t *testing.T) {
 		cases := map[string]string{
 			"оформление без настроек": `{"action":"design","reply":"покрасил","title":"","add":[],"update":[],"remove":[],"move":[],
-			 "design":{"theme":"","font":"","accent":"","canvas":""}}`,
+			 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
 			"оформление с вопросами": `{"action":"design","reply":"и то и то","title":"Другое","add":[],"update":[],"remove":[],"move":[],
-			 "design":{"theme":"dark","font":"","accent":"","canvas":""}}`,
+			 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
 			"правка с оформлением": `{"action":"edit_form","reply":"добавил","title":"","add":[],"update":[],"remove":["q1"],"move":[],
-			 "design":{"theme":"dark","font":"","accent":"","canvas":""}}`,
+			 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
 		}
 		for name, answer := range cases {
 			t.Run(name, func(t *testing.T) {
@@ -399,7 +399,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// ожидания автора и денег.
 	t.Run("цвет заглавными принимается", func(t *testing.T) {
 		const upper = `{"action":"design","reply":"Сделал фон жёлтым.","title":"","add":[],"update":[],"remove":[],"move":[],
-		 "design":{"theme":"","font":"","accent":"","canvas":"#FFFF00","width":0}}`
+		 "design":{"theme":"","font":"","accent":"","canvas":"#FFFF00","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		fake := ai.NewFake(upper)
 		svc, store := chatService(fake, &fakePlans{allowed: true})
 
@@ -422,7 +422,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// Ширина колонки просится словами («сделай пошире»), поэтому она в словаре чата.
 	t.Run("ширина колонки применяется", func(t *testing.T) {
 		const wide = `{"action":"design","reply":"Сделал колонку шире.","title":"","add":[],"update":[],"remove":[],"move":[],
-		 "design":{"theme":"","font":"","accent":"","canvas":"","width":1200}}`
+		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":1200,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		svc, store := chatService(ai.NewFake(wide), &fakePlans{allowed: true})
 
 		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай ширину 1200", nil, nil)
@@ -443,9 +443,9 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// цвет доживал до применения и показывался автору внутренностями валидатора.
 	t.Run("негодное оформление чинится второй попыткой", func(t *testing.T) {
 		const bad = `{"action":"design","reply":"покрасил","title":"","add":[],"update":[],"remove":[],"move":[],
-		 "design":{"theme":"","font":"","accent":"зелёный","canvas":"","width":0}}`
+		 "design":{"theme":"","font":"","accent":"зелёный","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		const good = `{"action":"design","reply":"Покрасил акцент в зелёный.","title":"","add":[],"update":[],"remove":[],"move":[],
-		 "design":{"theme":"","font":"","accent":"#16a34a","canvas":"","width":0}}`
+		 "design":{"theme":"","font":"","accent":"#16a34a","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		fake := ai.NewFake(bad, good)
 		svc, store := chatService(fake, &fakePlans{allowed: true})
 
@@ -469,7 +469,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// отсекается так же, как цвет.
 	t.Run("ширина на закрытом тарифе — платная", func(t *testing.T) {
 		const wide = `{"action":"design","reply":"Сделал шире.","title":"","add":[],"update":[],"remove":[],"move":[],
-		 "design":{"theme":"","font":"","accent":"","canvas":"","width":1200}}`
+		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":1200,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
 		svc, store := chatService(ai.NewFake(wide), plans)
 
@@ -481,4 +481,55 @@ func TestChat_DesignRegressions(t *testing.T) {
 			t.Errorf("отказ не называет платную настройку: %v", err)
 		}
 	})
+}
+
+// Оформление правится не четырьмя ключами, а всем, что просят словами: скругление,
+// толщина края, плотность, выравнивание, вид кнопки. Заодно проверяется сентинел:
+// ноль у скругления значит «убрать скругления», а не «не трогать».
+func TestChat_DesignVocabulary(t *testing.T) {
+	const rich = `{"action":"design","reply":"Убрал скругления и сделал форму просторнее.","title":"",
+	 "add":[],"update":[],"remove":[],"move":[],
+	 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"",
+	  "width":-1,"fontSize":-1,"density":"roomy","align":"","radius":0,"borderWidth":2,
+	  "outline":"border","buttonVariant":"outline","buttonWidth":"full","buttonAlign":"center","buttonRadius":0}}`
+	svc, store := chatService(ai.NewFake(rich), &fakePlans{allowed: true})
+
+	res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID,
+		"убери скругления, сделай просторнее и кнопку во всю ширину", nil, nil)
+	if err != nil {
+		t.Fatalf("Chat() вернул ошибку: %v", err)
+	}
+	schema, err := domain.ValidateSchema(res.Schema)
+	if err != nil {
+		t.Fatalf("документ не проходит ValidateSchema: %v", err)
+	}
+	d := schema.Design
+	if d == nil || d.Controls == nil || d.Layout == nil || d.Button == nil {
+		t.Fatalf("оформление собралось не целиком: %+v", d)
+	}
+	if d.Controls.Radius == nil || *d.Controls.Radius != 0 {
+		t.Errorf("скругление = %v — ноль обязан значить «без скруглений», а не «не трогать»", d.Controls.Radius)
+	}
+	if d.Controls.BorderWidth == nil || *d.Controls.BorderWidth != 2 || d.Controls.Outline != "border" {
+		t.Errorf("контур поля = %+v", d.Controls)
+	}
+	if d.Layout.Density != "roomy" || d.Layout.Width != nil {
+		t.Errorf("раскладка = %+v — ширину не просили, она не должна была появиться", d.Layout)
+	}
+	if d.Button.Variant != "outline" || d.Button.Width != "full" || d.Button.Align != "center" {
+		t.Errorf("кнопка = %+v", d.Button)
+	}
+}
+
+// Ответ без блока design — обычная правка вопросов, а не «поставь ширину 0».
+func TestChat_MissingDesignIsNotAnEdit(t *testing.T) {
+	svc, store := chatService(ai.NewFake(answerOnly), &fakePlans{allowed: true})
+
+	res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "что тут спрашивается?", nil, nil)
+	if err != nil {
+		t.Fatalf("Chat() вернул ошибку: %v", err)
+	}
+	if res.Schema != nil {
+		t.Errorf("ответ словами вернул документ: %s", res.Schema)
+	}
 }

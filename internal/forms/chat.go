@@ -220,7 +220,10 @@ func parseIntent(raw json.RawMessage) (chatIntent, error) {
 	dec := json.NewDecoder(strings.NewReader(string(raw)))
 	dec.DisallowUnknownFields()
 
-	var intent chatIntent
+	// Пустое оформление ЗАРАНЕЕ: у числовых полей «не трогать» это -1, а нулевое
+	// значение структуры означало бы «поставить ширину 0». Без этой строки любой
+	// ответ без блока design читался бы как правка оформления.
+	intent := chatIntent{Design: domain.ChatDesignEmpty()}
 	if err := dec.Decode(&intent); err != nil {
 		return chatIntent{}, fmt.Errorf("%w: не удалось разобрать ответ: %v", domain.ErrValidation, err)
 	}
@@ -331,13 +334,27 @@ reply — это то, что автор прочитает в чате. Ник�
 	if err == nil {
 		b.Write(doc)
 	}
-	fmt.Fprintf(&b, "\n\nОформление (действие %s): в поле design заполняй только то, что просят, остальное — пустая строка (width — ноль). "+
-		"theme — %s; font — один из: %s; accent и canvas — цвет в формате #rrggbb (акцент и фон страницы); "+
-		"width — ширина колонки формы в px, от %d до %d.",
-		domain.ActionDesign, strings.Join(domain.DesignThemes(), " или "),
-		strings.Join(domain.DesignFonts(), ", "), domain.MinColumn, domain.MaxColumn)
-	b.WriteString(" Больше в оформлении ты не умеешь ничего: скругления, отступы, плотность, вид кнопки и свой CSS правятся панелью оформления. " +
-		"Просят такое — отвечай действием " + domain.ActionAnswer + " и скажи, где это меняется; повторять прошлую правку вместо ответа нельзя.")
+	fmt.Fprintf(&b, `
+
+Оформление (действие %s). В поле design заполняй ТОЛЬКО то, о чём просят: остальные строки — пустые, остальные числа — %d («не трогать»). Ноль у числа значит ноль, а не «не трогать».
+- theme: %s
+- font: %s
+- цвета в формате #rrggbb: accent (акцент), canvas (фон страницы), textColor (текст), buttonColor (кнопка)
+- width — ширина колонки формы в px (%d–%d); fontSize — базовый кегль (%d–%d)
+- density — плотность (%s); align — выравнивание текста (%s)
+- radius — скругление полей в px (%d–%d); borderWidth — толщина края поля в px (%d–%d); outline — чем нарисован контур поля (%s)
+- buttonVariant (%s), buttonWidth (%s), buttonAlign (%s), buttonRadius — скругление кнопки в px (%d–%d)
+
+Чего в оформлении нет: свой CSS, отступы, размеры кнопки в деталях, картинка обложки — это правится панелью оформления. Просят такое — отвечай действием %s и скажи, где это меняется; повторять прошлую правку вместо ответа нельзя.`,
+		domain.ActionDesign, domain.ChatDesignKeep,
+		strings.Join(domain.DesignThemes(), " или "), strings.Join(domain.DesignFonts(), ", "),
+		domain.MinColumn, domain.MaxColumn, domain.MinFontSize, domain.MaxFontSize,
+		strings.Join(domain.DesignDensities(), ", "), strings.Join(domain.DesignAligns(), ", "),
+		domain.MinRadius, domain.MaxRadius, domain.MinBorderWidth, domain.MaxBorderWidth,
+		strings.Join(domain.DesignOutlines(), ", "),
+		strings.Join(domain.DesignButtonVariants(), ", "), strings.Join(domain.DesignButtonWidths(), ", "),
+		strings.Join(domain.DesignButtonAligns(), ", "), domain.MinRadius, domain.MaxRadius,
+		domain.ActionAnswer)
 	if paidDesign {
 		b.WriteString(" Тариф автора позволяет всё перечисленное.")
 	} else {
