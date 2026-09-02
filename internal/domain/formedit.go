@@ -35,7 +35,13 @@ type ChatItem struct {
 
 // ChatForm — вся форма в контексте разговора.
 type ChatForm struct {
-	Title string     `json:"title"`
+	// Title — заголовок формы ВМЕСТЕ С ОФОРМЛЕНИЕМ (той же формы, что правка `title`).
+	//
+	// Оформление показывается не для симметрии: правка заголовка описывает его ЖЕЛАЕМОЕ
+	// состояние целиком, и модель, не видя нынешнего, отвечала эхом с `bold: false` —
+	// посторонняя просьба («сделай телефон необязательным») снимала жирность заголовка
+	// формы. Замер 2026-09-02: один прогон из трёх.
+	Title ChatTitle  `json:"title"`
 	Items []ChatItem `json:"items"`
 }
 
@@ -78,7 +84,11 @@ type unit struct {
 // знать, что между вопросами что-то есть. Пункт без собственного текста
 // (разрыв страницы, картинка) приходит с пустым text.
 func ProjectForm(s FormSchema) ChatForm {
-	title, _ := FormTitle(s)
+	text, _ := FormTitle(s)
+	title := ChatTitle{Text: text}
+	if b := titleBlock(s); b != nil {
+		title.Bold, title.Color, title.BG = styleOf(b.Text)
+	}
 	units := formUnits(s)
 	items := make([]ChatItem, 0, len(units))
 	for _, u := range units {

@@ -51,8 +51,8 @@ func blockOf(t *testing.T, s FormSchema, id string) Block {
 func TestProjectForm(t *testing.T) {
 	got := ProjectForm(sampleForm())
 
-	if got.Title != "Запись в барбершоп" {
-		t.Errorf("заголовок = %q", got.Title)
+	if got.Title.Text != "Запись в барбершоп" {
+		t.Errorf("заголовок = %q", got.Title.Text)
 	}
 	want := []struct {
 		key  string
@@ -523,5 +523,21 @@ func TestApplyChatOps_TitleBoldOnCreate(t *testing.T) {
 	}
 	if bold, _, _ := styleOf(blockOf(t, out, "blk_title").Text); bold {
 		t.Error("переименование само сделало заголовок жирным — автор снимал жирность не для этого")
+	}
+}
+
+// Модель правит ТО, ЧТО ВИДИТ: оформление заголовка формы обязано приезжать в
+// проекции. Пока его там не было, ответ на постороннюю просьбу нёс `bold: false`
+// эхом и снимал жирность с заголовка (замер 2026-09-02 — один прогон из трёх).
+func TestProjectFormShowsTitleStyle(t *testing.T) {
+	form := sampleForm()
+	for i := range form.Blocks {
+		if form.Blocks[i].Type == BlockFormTitle {
+			form.Blocks[i].Text = []Span{{T: "Запись в барбершоп", M: []Mark{MarkBold}, BG: "#ffff00"}}
+		}
+	}
+	got := ProjectForm(form).Title
+	if !got.Bold || got.BG != "#ffff00" || got.Text != "Запись в барбершоп" {
+		t.Errorf("заголовок в проекции = %+v — модель не видит его оформления", got)
 	}
 }
