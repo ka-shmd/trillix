@@ -34,12 +34,6 @@ import { Textarea } from '@/components/ui/textarea'
 // Место ответа при этом занято отдельной строкой намеренно — стриминг (он отложен,
 // `DEV-PLAN` фаза 26) заменит в ней источник текста, а не устройство ленты.
 
-const EXAMPLES = [
-  'Собери анкету записи в барбершоп: имя, телефон, мастер, дата',
-  'Добавь вопрос, откуда узнали о нас',
-  'Что тут спрашивается?',
-]
-
 // Отказы разбираются по КОДУ конверта, а не по тексту: текст меняется, код — контракт.
 function failureText(error: unknown): { text: string; plan: boolean } {
   if (!(error instanceof ApiError)) {
@@ -114,9 +108,9 @@ export function ChatDrawer({
     const asked: ChatTurn[] = [...turns, { role: 'user', text }]
     setTurns(asked)
     setDraft('')
-    // КАРЕТКА ОСТАЁТСЯ В ПОЛЕ: отправляют и мышью по кнопке, и подсказкой-примером,
-    // а обе забирают фокус себе — следующую реплику пришлось бы начинать с клика по
-    // полю. Разговор ведут с клавиатуры, и поле ввода — его место по умолчанию.
+    // КАРЕТКА ОСТАЁТСЯ В ПОЛЕ: жмут кнопку мышью — фокус уходит на неё, и следующую
+    // реплику пришлось бы начинать с клика по полю. Разговор ведут с клавиатуры, и
+    // поле ввода — его место по умолчанию.
     input.current?.focus()
 
     try {
@@ -190,22 +184,6 @@ export function ChatDrawer({
         </SheetHeader>
 
         <div ref={feed} className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
-          {turns.length === 0 && !pending && (
-            <div className="space-y-2">
-              <p className="text-sm text-muted-foreground">С чего начнём:</p>
-              {EXAMPLES.map((e) => (
-                <button
-                  key={e}
-                  type="button"
-                  onClick={() => void send(e)}
-                  className="block w-full rounded-lg border px-3 py-2 text-left text-sm hover:bg-muted"
-                >
-                  {e}
-                </button>
-              ))}
-            </div>
-          )}
-
           {/* ЛЕНТА БЕЗ ВИДА ЧАТА (решение владельца 2026-09-02): реплика автора — рамка,
               ответ — просто текст, обе во всю ширину. Пузыри с заливкой и прижатые к
               краям делают из панели мессенджер; здесь же идёт работа над документом, и
