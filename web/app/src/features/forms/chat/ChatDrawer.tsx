@@ -109,6 +109,10 @@ export function ChatDrawer({
     const asked: ChatTurn[] = [...turns, { role: 'user', text }]
     setTurns(asked)
     setDraft('')
+    // КАРЕТКА ОСТАЁТСЯ В ПОЛЕ: отправляют и мышью по кнопке, и подсказкой-примером,
+    // а обе забирают фокус себе — следующую реплику пришлось бы начинать с клика по
+    // полю. Разговор ведут с клавиатуры, и поле ввода — его место по умолчанию.
+    input.current?.focus()
 
     try {
       const id = formId || (await ensureFormId())
@@ -244,7 +248,10 @@ export function ChatDrawer({
             placeholder="Опишите форму или скажите, что поправить"
             maxLength={MAX_CHAT_MESSAGE_LEN}
             rows={3}
-            disabled={pending}
+            // ПОЛЕ НЕ ГАСИТСЯ НА ВРЕМЯ ОТВЕТА: disabled снимает фокус с элемента, и
+            // каретка уходила из поля на каждой отправке. Набирать следующую реплику,
+            // пока едет ответ, можно — отправку держит кнопка (она и объясняет
+            // ожидание словом «Отправляю…») и проверка pending в send.
             aria-label="Сообщение ассистенту"
           />
           <div className="mt-2 flex items-center justify-between gap-2">

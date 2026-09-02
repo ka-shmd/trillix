@@ -233,6 +233,42 @@ describe('шторка ассистента', () => {
     expect(document.documentElement.style.getPropertyValue('--app-drawer')).toBe('')
   })
 
+  // Каретка остаётся в поле: отправляют мышью по кнопке или подсказкой-примером — обе
+  // забирают фокус себе, а следующую реплику набирают сразу.
+  //
+  // Клик в happy-dom фокус не двигает, поэтому уход каретки на кнопку изображается
+  // явным focus() — иначе тест проходил бы и без починки.
+  it('после отправки каретка возвращается в поле ввода', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'Готово.' })
+    await setup()
+    const field = screen.getByLabelText('Сообщение ассистенту')
+
+    await act(async () => {
+      fireEvent.change(field, { target: { value: 'добавь телефон' } })
+      const submit = screen.getByRole('button', { name: /Отправить/ })
+      submit.focus()
+      fireEvent.click(submit)
+    })
+
+    await screen.findByText('Готово.')
+    expect(document.activeElement).toBe(field)
+  })
+
+  // Поле НЕ ГАСИТСЯ на время ответа: disabled снимает фокус с элемента, и каретка
+  // уходила из поля на каждой отправке. Ожидание объясняет кнопка, а не мёртвое поле.
+  it('поле ввода не гаснет, пока едет ответ', async () => {
+    let answer: (r: { reply: string }) => void = () => {}
+    sendChatMessage.mockReturnValue(new Promise((res) => (answer = res)))
+    await setup()
+    const field = screen.getByLabelText('Сообщение ассистенту') as HTMLTextAreaElement
+
+    await act(async () => ask('добавь телефон'))
+
+    expect(await screen.findByText('Думаю…')).toBeTruthy()
+    expect(field.disabled).toBe(false)
+    await act(async () => answer({ reply: 'Готово.' }))
+  })
+
   it('отказ модели показывается словами бэка', async () => {
     sendChatMessage.mockRejectedValue(new ApiError(503, 'unavailable', 'модель сейчас не отвечает'))
     await setup()
