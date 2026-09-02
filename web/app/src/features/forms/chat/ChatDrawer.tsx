@@ -3,6 +3,7 @@ import { Send, Sparkles, Trash2 } from 'lucide-react'
 
 import { ApiError } from '../../../shared/api/errors'
 import { PlanUpsell } from '../../plan/PlanUpsell'
+import { usePlanQuota } from '../../plan/useFeature'
 import { useBuilderStore, useBuilderStoreApi } from '../builder/storeContext'
 import { MAX_CHAT_MESSAGE_LEN, sendChatMessage, type ChatTurn } from './api'
 import { clearHistory, loadHistory, saveHistory } from './history'
@@ -64,6 +65,9 @@ export function ChatDrawer({
 }) {
   const storeApi = useBuilderStoreApi()
   const applyExternal = useBuilderStore((s) => s.applyExternal)
+  // Остаток сообщений — серверный стейт (снимок тарифа), а не счётчик в шторке:
+  // квота живёт на пространстве, и вторая вкладка расходует ту же тридцатку.
+  const quota = usePlanQuota('ai_generations')
 
   // Разговор поднимается из хранилища ОДИН раз, на монтировании: экран редактора
   // пересоздаётся при смене формы (ключ маршрута), поэтому подписываться на formId
@@ -105,6 +109,8 @@ export function ChatDrawer({
       ]
       setTurns(answered)
       saveHistory(id, answered)
+      // Списание произошло на сервере — снимок тарифа устарел ровно сейчас.
+      quota?.refresh()
     } catch (err) {
       // Реплика автора остаётся в ленте: она уже сказана, и стирать её вместе с
       // отказом значило бы заставить набирать заново.
@@ -133,6 +139,9 @@ export function ChatDrawer({
           <SheetDescription>
             Соберёт форму по описанию, поправит вопросы и расскажет, что в ней сейчас есть.
           </SheetDescription>
+          {quota !== undefined && quota.limit !== null && (
+            <QuotaLine used={quota.used} limit={quota.limit} onPlan={() => setUpsell(true)} />
+          )}
         </SheetHeader>
 
         <div ref={feed} className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
@@ -228,6 +237,33 @@ export function ChatDrawer({
       </SheetContent>
       <PlanUpsell open={upsell} onOpenChange={setUpsell} />
     </Sheet>
+  )
+}
+
+// Остаток сообщений в шапке: автор видит цену разговора ДО того, как упрётся в
+// отказ. Считается вычитанием (расход из лимита), потому что снимок тарифа отдаёт
+// израсходованное, а человека занимает оставшееся.
+//
+// Кончившиеся сообщения зовут к тарифу тем же оверлеем, что и остальное платное:
+// это единственное состояние индикатора, в котором автору есть что сделать.
+function QuotaLine({ used, limit, onPlan }: { used: number; limit: number; onPlan: () => void }) {
+  // Расход может обогнать лимит (тариф понизили с уже потраченным) — ниже нуля не
+  // показываем: «осталось −7» это отчёт о нашей бухгалтерии, а не ответ автору.
+  const left = Math.max(limit - used, 0)
+  if (left === 0) {
+    return (
+      <p className="text-xs text-muted-foreground">
+        Сообщения на этом тарифе кончились.{' '}
+        <button type="button" onClick={onPlan} className="underline underline-offset-2">
+          Посмотреть тарифы
+        </button>
+      </p>
+    )
+  }
+  return (
+    <p className="text-xs text-muted-foreground">
+      Осталось {left} из {limit} сообщений в этом месяце
+    </p>
   )
 }
 

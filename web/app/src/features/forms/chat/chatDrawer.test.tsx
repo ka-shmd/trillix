@@ -1,5 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import {
   createMemoryHistory,
@@ -11,6 +12,8 @@ import {
 
 import { SCHEMA_VERSION, textFromString, type FormSchema } from '@entities/formSchema'
 import { ApiError } from '../../../shared/api/errors'
+import { planKeys } from '../../plan/keys'
+import { workspaceKeys } from '../../workspaces/keys'
 import { createBuilderStore } from '../builder/store'
 import { BuilderStoreContext } from '../builder/storeContext'
 import { ChatDrawer } from './ChatDrawer'
@@ -49,16 +52,43 @@ beforeEach(() => {
 
 // Маршрутизатор рендерит дерево асинхронно, поэтому setup ждёт поле ввода: без
 // ожидания тело документа ещё пусто.
-async function setup(formId = 'form-1') {
+// Снимок тарифа кладётся в кэш ГОТОВЫМ: шторка показывает остаток сообщений, а
+// сетевых запросов в тестах нет. used задаётся тестом — им и проверяется индикатор.
+function seedPlan(qc: QueryClient, used: number, limit: number | null = 30) {
+  qc.setQueryData(workspaceKeys.list(), [
+    { id: 'ws-1', slug: 'personal', name: 'Личное', isPersonal: true, formCount: 1 },
+  ])
+  qc.setQueryData(planKeys.snapshot('ws-1'), {
+    planCode: 'free',
+    planTitle: 'Бесплатный',
+    periodEnd: '2026-10-01T00:00:00Z',
+    features: [
+      {
+        key: 'ai_generations',
+        title: 'Сообщений ассистенту в месяц',
+        kind: 'quota',
+        allowed: true,
+        used,
+        limit,
+      },
+    ],
+  })
+}
+
+async function setup(formId = 'form-1', used = 2) {
   const store = createBuilderStore()
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: START })
   const ensureFormId = vi.fn().mockResolvedValue('created-1')
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  seedPlan(qc, used)
 
   const rootRoute = createRootRoute({
     component: () => (
-      <BuilderStoreContext.Provider value={store}>
-        <ChatDrawer open onOpenChange={() => {}} formId={formId} ensureFormId={ensureFormId} />
-      </BuilderStoreContext.Provider>
+      <QueryClientProvider client={qc}>
+        <BuilderStoreContext.Provider value={store}>
+          <ChatDrawer open onOpenChange={() => {}} formId={formId} ensureFormId={ensureFormId} />
+        </BuilderStoreContext.Provider>
+      </QueryClientProvider>
     ),
   })
   const planRoute = createRoute({
@@ -72,7 +102,7 @@ async function setup(formId = 'form-1') {
   })
   render(<RouterProvider router={router as never} />)
   await screen.findByLabelText('Сообщение ассистенту')
-  return { store, ensureFormId }
+  return { store, ensureFormId, qc }
 }
 
 function ask(text: string) {
@@ -159,6 +189,34 @@ describe('шторка ассистента', () => {
 
     await screen.findByText('Добавил телефон.')
     expect(screen.queryByRole('button', { name: 'Посмотреть тарифы' })).toBeNull()
+  })
+
+  // Остаток сообщений автор видит ДО того, как упрётся в отказ. Число берётся из
+  // снимка тарифа (расход живёт на пространстве, а не в шторке) и пересчитывается
+  // после каждой реплики: списание произошло на сервере, кэш устарел ровно тогда.
+  it('остаток сообщений виден и обновляется после реплики', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'Готово.' })
+    const { qc } = await setup('form-1', 2)
+
+    expect(screen.getByText('Осталось 28 из 30 сообщений в этом месяце')).toBeTruthy()
+
+    const invalidate = vi.spyOn(qc, 'invalidateQueries')
+    await act(async () => ask('добавь телефон'))
+
+    await screen.findByText('Готово.')
+    expect(
+      invalidate.mock.calls.some(
+        (c) => JSON.stringify(c[0]?.queryKey) === JSON.stringify(planKeys.snapshot('ws-1')),
+      ),
+    ).toBe(true)
+  })
+
+  it('исчерпанный остаток зовёт к тарифу оверлеем', async () => {
+    await setup('form-1', 30)
+
+    expect(screen.getByText(/Сообщения на этом тарифе кончились/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Посмотреть тарифы' }))
+    expect(await screen.findByText('Это на платном тарифе')).toBeTruthy()
   })
 
   it('отказ модели показывается словами бэка', async () => {

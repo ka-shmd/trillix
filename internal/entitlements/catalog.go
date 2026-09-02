@@ -111,9 +111,13 @@ const (
 	// каждого письма — даунгрейд гасит отправку, ничего не стирая.
 	FormRespondentEmail Key = "form_respondent_email"
 
-	// AIGenerations — сколько раз за месяц можно собрать или поправить форму
-	// текстом (фаза 26, миграция 0048). Квота, а не тумблер: каждый вызов стоит
-	// денег снаружи, и вопрос здесь «сколько», а не «можно ли».
+	// AIGenerations — сколько раз за месяц можно обратиться к ассистенту (фаза 26,
+	// миграции 0048 и 0049). Квота, а не тумблер: каждый вызов стоит денег снаружи,
+	// и вопрос здесь «сколько», а не «можно ли».
+	//
+	// Единица расхода — СООБЩЕНИЕ автора (0049), поэтому и заголовок про сообщения:
+	// автор видит его дважды — на странице тарифа и в шапке шторки ассистента.
+	// Имя ключа осталось прежним: переименование стоило бы миграции ради красоты.
 	//
 	// Безлимита у этого ключа не бывает ни на одном плане — null означал бы
 	// открытый счёт у провайдера, оплачиваемый нами.
@@ -219,5 +223,5 @@ var Catalog = map[Key]Feature{
 	FormLinkPreview:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своя карточка ссылки"},
 	FormNotifyEmail:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё письмо о новом ответе"},
 	FormRespondentEmail: {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Письмо респонденту"},
-	AIGenerations:       {Kind: Quota, Scope: WorkspaceScope, Meter: AIGenerationsMeter, Title: "Генераций формы в месяц"},
+	AIGenerations:       {Kind: Quota, Scope: WorkspaceScope, Meter: AIGenerationsMeter, Title: "Сообщений ассистенту в месяц"},
 }
