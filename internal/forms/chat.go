@@ -154,6 +154,12 @@ func (s *Service) Chat(
 		if err != nil {
 			return ChatResult{}, fmt.Errorf("marshal edited schema: %w", err)
 		}
+		// Страховка на выходе: кабинету не отдаётся документ, который отверг бы наш
+		// же валидатор. Сохранит его автосейв, и там проверка стоит своя, но узнать
+		// о расхождении в момент сохранения — значит узнать поздно.
+		if _, err := domain.ValidateSchema(doc); err != nil {
+			return ChatResult{}, fmt.Errorf("собранный документ не проходит проверку: %w", err)
+		}
 		result.Schema = doc
 	}
 
