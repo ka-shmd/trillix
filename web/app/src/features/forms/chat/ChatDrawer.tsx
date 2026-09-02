@@ -172,9 +172,6 @@ export function ChatDrawer({
       >
         <SheetHeader className="border-b p-4">
           <SheetTitle>Помощь ИИ</SheetTitle>
-          {quota !== undefined && quota.limit !== null && (
-            <QuotaLine used={quota.used} limit={quota.limit} onPlan={() => setUpsell(true)} />
-          )}
         </SheetHeader>
 
         <div ref={feed} className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
@@ -256,6 +253,11 @@ export function ChatDrawer({
               <ArrowUp className="size-4" aria-hidden="true" />
             </Button>
           </div>
+          {/* Остаток — ПОД ВВОДОМ (решение владельца 2026-09-02), а не в шапке: цена
+              следующей реплики читается там, где её набирают. */}
+          {quota !== undefined && quota.limit !== null && (
+            <QuotaLine used={quota.used} limit={quota.limit} onPlan={() => setUpsell(true)} />
+          )}
         </form>
       </SheetContent>
       <PlanUpsell open={upsell} onOpenChange={setUpsell} />
@@ -263,9 +265,10 @@ export function ChatDrawer({
   )
 }
 
-// Остаток сообщений в шапке: автор видит цену разговора ДО того, как упрётся в
-// отказ. Считается вычитанием (расход из лимита), потому что снимок тарифа отдаёт
-// израсходованное, а человека занимает оставшееся.
+// Остаток сообщений под полем ввода: автор видит цену разговора ДО того, как упрётся
+// в отказ, и там же, где набирает следующую реплику. Считается вычитанием (расход из
+// лимита), потому что снимок тарифа отдаёт израсходованное, а человека занимает
+// оставшееся.
 //
 // Кончившиеся сообщения зовут к тарифу тем же оверлеем, что и остальное платное:
 // это единственное состояние индикатора, в котором автору есть что сделать.
@@ -275,7 +278,7 @@ function QuotaLine({ used, limit, onPlan }: { used: number; limit: number; onPla
   const left = Math.max(limit - used, 0)
   if (left === 0) {
     return (
-      <p className="text-xs text-muted-foreground">
+      <p className="mt-2 text-xs text-muted-foreground">
         Сообщения на этом тарифе кончились.{' '}
         <button type="button" onClick={onPlan} className="underline underline-offset-2">
           Посмотреть тарифы
@@ -284,7 +287,7 @@ function QuotaLine({ used, limit, onPlan }: { used: number; limit: number; onPla
     )
   }
   return (
-    <p className="text-xs text-muted-foreground">
+    <p className="mt-2 text-xs text-muted-foreground">
       Осталось {left} из {limit} сообщений в этом месяце
     </p>
   )
