@@ -284,7 +284,7 @@ func applyTitle(title *Block, op ChatOp) (*Block, error) {
 		return title, nil
 	}
 	updated := *title
-	updated.Text = styledText(styled.PlanItem)
+	updated.Text = restyledText(title.Text, styled.PlanItem)
 	return &updated, nil
 }
 
@@ -387,35 +387,44 @@ func insertAt(units []unit, after string) (int, error) {
 // биты колонок. Это и есть причина, по которой правка идёт операциями: пересборка
 // документа из плана потеряла бы каждую из этих вещей молча.
 func rebuildUnit(old []Block, item PlanItem) []Block {
-	out := make([]Block, 0, len(old)+1)
-	var field *Block
-	var caption *Block
-	for i := range old {
-		b := old[i]
+	// ПОРЯДОК БЛОКОВ ВНУТРИ ПУНКТА СОХРАНЯЕТСЯ. Между подписью и полем автор мог
+	// поставить картинку или пояснение — regroup держит их в той же группе, — и
+	// прежняя сборка «подпись, поле, всё остальное» уводила их ПОД поле. При
+	// следующем regroup они вываливались из вопроса в одиночки, и автосейв сохранял
+	// перестановку, о которой никто не просил.
+	out := make([]Block, len(old))
+	copy(out, old)
+
+	capIdx, fieldIdx, leadIdx := -1, -1, -1
+	for i := range out {
 		switch {
-		case b.Type.isCaption() && caption == nil:
-			caption = &old[i]
-		case b.Type.isAnswerable() && field == nil:
-			field = &old[i]
-		default:
-			out = append(out, b)
+		case out[i].Type.isCaption():
+			if capIdx == -1 {
+				capIdx = i
+			}
+		case out[i].Type.isAnswerable():
+			if fieldIdx == -1 {
+				fieldIdx = i
+			}
+		}
+		if !out[i].Type.isCaption() && leadIdx == -1 {
+			leadIdx = i
 		}
 	}
 
 	// Пункт без отвечаемого блока (пояснение, раздел, разрыв, картинка): правится
 	// только текст, и только если он у типа есть.
-	if field == nil {
-		if len(out) > 0 && out[0].Type != BlockPageBreak && out[0].Type != BlockImage {
-			out[0].Text = styledText(item)
+	if fieldIdx == -1 {
+		if capIdx != -1 {
+			out[capIdx].Text = restyledText(out[capIdx].Text, item)
 		}
-		if caption != nil {
-			caption.Text = styledText(item)
-			return append([]Block{*caption}, out...)
+		if leadIdx != -1 && out[leadIdx].Type != BlockPageBreak && out[leadIdx].Type != BlockImage {
+			out[leadIdx].Text = restyledText(out[leadIdx].Text, item)
 		}
 		return out
 	}
 
-	updated := *field
+	updated := out[fieldIdx]
 	updated.Type = item.Type
 	updated.Required = item.Required
 	// МИНА: пустая подсказка означает «не трогать», а не «стереть». Схема ответа
@@ -431,9 +440,17 @@ func rebuildUnit(old []Block, item PlanItem) []Block {
 		updated.Settings.Placeholder = item.Placeholder
 	}
 	if item.Type.isChoice() {
-		updated.Settings.Options = mergeOptions(field.Settings.Options, item.Options)
+		updated.Settings.Options = mergeOptions(out[fieldIdx].Settings.Options, item.Options)
 	} else {
 		updated.Settings.Options = nil
+	}
+	// НАСТРОЙКИ ФАЙЛА УХОДЯТ ВМЕСТЕ С ТИПОМ, как варианты и шкала: ValidateSchema
+	// требует их отсутствия у нефайлового типа, и «замени вопрос про фото на короткий
+	// ответ» собирало документ, который отвергал наш же валидатор, — автор видел в
+	// чате текст валидатора вместо ответа, а деньги провайдеру были уплачены.
+	if item.Type != BlockFile {
+		updated.Settings.MaxFiles, updated.Settings.MaxFileSize = 0, 0
+		updated.Settings.Accept = nil
 	}
 	if item.Type == BlockScale {
 		lo, hi := item.ScaleMin, item.ScaleMax
@@ -445,19 +462,30 @@ func rebuildUnit(old []Block, item PlanItem) []Block {
 		updated.Settings.ScaleMin, updated.Settings.ScaleMax = nil, nil
 	}
 
-	// Текст согласия живёт в самом блоке, у остальных — в подписи.
+	// Текст согласия живёт в САМОМ блоке, поэтому отдельная подпись ему не нужна и
+	// снимается: две строки об одном — это не вопрос с заголовком, а дубль.
 	if item.Type.carriesText() {
-		updated.Text = styledText(item)
-		return append([]Block{updated}, out...)
+		updated.Text = restyledText(updated.Text, item)
+		out[fieldIdx] = updated
+		if capIdx == -1 {
+			return out
+		}
+		return append(out[:capIdx:capIdx], out[capIdx+1:]...)
 	}
 	updated.Text = nil
+	out[fieldIdx] = updated
 
-	if caption == nil {
-		// Голое поле получило подпись: заводим блок в той же группе.
-		caption = &Block{ID: newBlockID(), GroupID: updated.GroupID, Type: BlockTitle}
+	if capIdx != -1 {
+		out[capIdx].Text = restyledText(out[capIdx].Text, item)
+		return out
 	}
-	caption.Text = styledText(item)
-	return append([]Block{*caption, updated}, out...)
+	// Голое поле получило подпись: заводим блок в той же группе и ставим ПЕРЕД полем,
+	// а не в начало пункта — между ними мог оказаться чужой блок.
+	caption := Block{ID: newBlockID(), GroupID: updated.GroupID, Type: BlockTitle, Text: styledText(item)}
+	out = append(out, Block{})
+	copy(out[fieldIdx+1:], out[fieldIdx:])
+	out[fieldIdx] = caption
+	return out
 }
 
 // mergeOptions сохраняет id вариантов, чьи подписи модель не тронула: на id опции
@@ -699,9 +727,11 @@ const ActionDesign = "design"
 //
 // Срез, потому что оформление — двадцать с лишним ключей (палитра из девяти цветов,
 // раскладка, контролы, кнопка, свой CSS), и просить у модели документ целиком значит
-// получать обратно то, чего автор не просил. Разговор оперирует четырьмя понятиями:
-// тема, шрифт, цвет акцента, цвет страницы. Остальное правится панелью оформления,
-// где у каждой настройки свой контрол и видно, что меняется.
+// получать обратно то, чего автор не просил. Разговор оперирует семнадцатью
+// настройками (слайс F): тема, шрифт, четыре цвета, ширина и кегль, плотность и
+// выравнивание, скругление и край поля, вид контура, четыре свойства кнопки. Свой CSS,
+// обложка и тонкая настройка размеров остаются панели оформления, где у каждой
+// настройки свой контрол и видно, что меняется.
 //
 // Пустая строка значит «не трогать»: своего «сбросить» у чата нет — сброс живёт
 // кнопкой в панели, и путать «поставь светлую тему» со «сними всё оформление»
@@ -817,9 +847,18 @@ func ApplyChatDesign(s FormSchema, patch ChatDesign) (FormSchema, error) {
 		return FormSchema{}, opErr("оформление не названо")
 	}
 
-	design := FormDesign{}
-	if s.Design != nil {
-		design = *s.Design
+	// КОПИЯ ГЛУБОКАЯ, а не присваивание структуры: у оформления пять полей-указателей
+	// (палитра, лэйаут, контролы, кнопка), и `design = *s.Design` оставил бы их общими
+	// со входом — mergeDesign писал бы прямо в документ автора.
+	//
+	// МИНА: цена этой строки — обход гейта тарифа. Проверка цикла починки применяет
+	// правку ДО того, как сервер отсечёт платное, и без копии платная настройка уже
+	// лежала бы в схеме, которую кабинет сохранит автосейвом. Тот же довод, что у
+	// копии блоков в ApplyChatOps, и та же цена ошибки: отвергнутая первая попытка
+	// модели отравляла бы вторую.
+	design, err := cloneDesign(s.Design)
+	if err != nil {
+		return FormSchema{}, err
 	}
 	mergeDesign(&design, patch.chatDesignForm())
 
@@ -828,6 +867,29 @@ func ApplyChatDesign(s FormSchema, patch ChatDesign) (FormSchema, error) {
 	}
 	out := s
 	out.Design = &design
+	return out, nil
+}
+
+// cloneDesign — глубокая копия оформления, ЧЕРЕЗ JSON, а не по полям.
+//
+// По полям было бы быстрее и молча ломалось бы: у оформления два десятка указателей
+// (палитра, лэйаут, контролы, кнопка и числа внутри них), и поле, добавленное завтра,
+// снова оказалось бы общим со входом — ровно тот дефект, ради которого копия и
+// заводится. Правка оформления приходит разговором, то есть раз в несколько секунд:
+// цена сериализации здесь не измерима, а цена пропущенного поля — правка чужого
+// документа.
+func cloneDesign(src *FormDesign) (FormDesign, error) {
+	if src == nil {
+		return FormDesign{}, nil
+	}
+	raw, err := json.Marshal(src)
+	if err != nil {
+		return FormDesign{}, fmt.Errorf("clone design: %w", err)
+	}
+	var out FormDesign
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return FormDesign{}, fmt.Errorf("clone design: %w", err)
+	}
 	return out, nil
 }
 

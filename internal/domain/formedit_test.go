@@ -541,3 +541,124 @@ func TestProjectFormShowsTitleStyle(t *testing.T) {
 		t.Errorf("заголовок в проекции = %+v — модель не видит его оформления", got)
 	}
 }
+
+// ЦЕНА ЭТОГО ТЕСТА — ОБХОД ГЕЙТА ТАРИФА. Правка оформления применяется дважды:
+// проверкой цикла починки и начисто, — и первое применение идёт ДО того, как сервер
+// отсечёт платное. Пока копия документа была поверхностной, платная настройка успевала
+// лечь в схему автора, и кабинет сохранял её автосейвом, хотя ассистент отвечал, что
+// это платно (ревью ветки 2026-09-02).
+func TestApplyChatDesign_LeavesInputAlone(t *testing.T) {
+	radius := 4
+	form := FormSchema{SchemaVersion: SchemaVersion, Design: &FormDesign{
+		Theme:    "light",
+		Controls: &DesignControls{Radius: &radius},
+	}}
+
+	patch := ChatDesignEmpty()
+	patch.Theme = "dark"
+	patch.Radius = 12
+	if _, err := ApplyChatDesign(form, patch); err != nil {
+		t.Fatalf("ApplyChatDesign() вернул ошибку: %v", err)
+	}
+
+	if form.Design.Theme != "light" {
+		t.Errorf("тема входа = %q — правка написала в чужой документ", form.Design.Theme)
+	}
+	if *form.Design.Controls.Radius != 4 {
+		t.Errorf("скругление входа = %d — правка написала в чужой документ сквозь указатель",
+			*form.Design.Controls.Radius)
+	}
+}
+
+// Правка вопроса не тасует его блоки и не оставляет в документе настройки, которых у
+// нового типа быть не может (обе находки ревью ветки 2026-09-02).
+func TestApplyChatOps_UpdateKeepsShape(t *testing.T) {
+	form := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{
+		{ID: "blk_cap", GroupID: "g_blk_f", Type: BlockTitle, Text: TextFromString("Ваше фото")},
+		{ID: "blk_pic", GroupID: "g_blk_f", Type: BlockImage, Settings: BlockSettings{ImageKey: "ws/x.png"}},
+		{ID: "blk_f", GroupID: "g_blk_f", Type: BlockFile, Settings: BlockSettings{MaxFiles: 3}},
+	}}
+
+	out, err := ApplyChatEdit(form, ChatEdit{Update: []ChatUpdate{{
+		Target: "q1",
+		Item:   ChatItem{PlanItem: PlanItem{Type: BlockShortText, Text: "Ссылка на портфолио"}},
+	}}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+
+	// Картинка стояла между подписью и полем — там и осталась.
+	var order []string
+	for _, b := range out.Blocks {
+		order = append(order, b.ID)
+	}
+	if strings.Join(order, ",") != "blk_cap,blk_pic,blk_f" {
+		t.Errorf("порядок блоков = %v — правка перетасовала пункт", order)
+	}
+	// Настройки файла ушли вместе с типом: иначе документ не проходит наш же
+	// валидатор, и автор читает в чате его текст.
+	if f := blockOf(t, out, "blk_f"); f.Settings.MaxFiles != 0 {
+		t.Errorf("настройки файла остались у типа %s: %+v", f.Type, f.Settings)
+	}
+	doc, err := json.Marshal(out)
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if _, err := ValidateSchema(doc); err != nil {
+		t.Errorf("собранный документ не проходит ValidateSchema: %v", err)
+	}
+}
+
+// Разметка, которой у модели нет в словаре, переживает правку пункта: ссылка, курсив,
+// подстановка ответа. Проекция отдаёт модели плоский текст, поэтому на посторонней
+// просьбе она возвращает его же — и пересборка подписи одним куском стирала работу
+// автора (ревью ветки 2026-09-02).
+func TestApplyChatOps_KeepsRichCaption(t *testing.T) {
+	rich := []Span{
+		{T: "Телефон "},
+		{T: "(обязательно)", M: []Mark{MarkItalic}},
+	}
+	form := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{
+		{ID: "blk_cap", GroupID: "g_blk_p", Type: BlockTitle, Text: rich},
+		{ID: "blk_p", GroupID: "g_blk_p", Type: BlockPhone},
+	}}
+
+	// Посторонняя правка: тот же текст, оформление подписи не названо.
+	out, err := ApplyChatEdit(form, ChatEdit{Update: []ChatUpdate{{
+		Target: "q1",
+		Item:   ChatItem{PlanItem: PlanItem{Type: BlockPhone, Text: "Телефон (обязательно)", Required: true}},
+	}}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	got := blockOf(t, out, "blk_cap").Text
+	if len(got) != 2 || len(got[1].M) != 1 || got[1].M[0] != MarkItalic {
+		t.Errorf("подпись = %+v — правка стёрла курсив", got)
+	}
+	if !blockOf(t, out, "blk_p").Required {
+		t.Error("обязательность не встала")
+	}
+
+	// Названное оформление ложится на ВСЕ куски: просили перекрасить подпись целиком.
+	out, err = ApplyChatEdit(form, ChatEdit{Update: []ChatUpdate{{
+		Target: "q1",
+		Item: ChatItem{PlanItem: PlanItem{
+			Type: BlockPhone, Text: "Телефон (обязательно)", Bold: true,
+		}},
+	}}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	got = blockOf(t, out, "blk_cap").Text
+	if len(got) != 2 {
+		t.Fatalf("подпись = %+v — куски схлопнулись", got)
+	}
+	for i, sp := range got {
+		if !slices.Contains(sp.M, MarkBold) {
+			t.Errorf("кусок %d не пожирнел: %+v", i, sp)
+		}
+	}
+	if !slices.Contains(got[1].M, MarkItalic) {
+		t.Errorf("курсив потерялся при перекраске: %+v", got[1])
+	}
+}

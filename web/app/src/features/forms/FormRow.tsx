@@ -73,6 +73,11 @@ export function FormRow({ form }: { form: Form }) {
         // в редактор, розданную форму на «Ответы».
         to={form.status === 'draft' ? '/forms/$slug/edit' : '/forms/$slug/responses'}
         params={{ slug: form.slug }}
+        // ПРОСТРАНСТВО ЕДЕТ С АДРЕСОМ (`search={(prev) => prev}`): текущее пространство
+        // живёт в `?w=`, и ссылка без него уводит в редактор «личного» — а там гейты
+        // тарифа и остаток сообщений ассистента спрашивают план не того пространства,
+        // в котором лежит форма. Тот же приём у соседней ссылки на «Ответы».
+        search={(prev) => prev}
         className={`min-w-0 flex-1 truncate text-sm font-medium hover:text-primary ${
           isPlaceholder ? 'text-muted-foreground' : ''
         }`}

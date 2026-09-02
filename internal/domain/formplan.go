@@ -160,6 +160,48 @@ func styledText(item PlanItem) []Span {
 	return spans
 }
 
+// restyledText — подпись ПОСЛЕ ПРАВКИ ПУНКТА, а не собранная заново.
+//
+// МИНА: styledText строит ОДИН кусок из плоской строки, и всё, чего в словаре модели
+// нет, исчезает — ссылка, курсив, подстановка ответа («Здравствуйте, {Имя}»).
+// Проекция отдаёт модели PlainText, поэтому на просьбу «сделай телефон обязательным»
+// она возвращает тот же текст, а правка стирала разметку, которую автор ставил руками
+// (ревью ветки 2026-09-02).
+//
+// Три случая. Текст и оформление те же — куски остаются как есть. Текст тот же,
+// оформление названо другое — новое ложится на ВСЕ куски: автор просил перекрасить
+// подпись целиком, и кусочная разметка цвета этой просьбе и уступает. Текст другой —
+// собираем заново одним куском: воспроизвести чужую разметку под новым текстом нечем.
+func restyledText(old []Span, item PlanItem) []Span {
+	if len(old) == 0 || PlainText(old) != item.Text {
+		return styledText(item)
+	}
+	bold, color, bg := styleOf(old)
+	if bold == item.Bold && color == normalizeHex(item.Color) && bg == normalizeHex(item.BG) {
+		return old
+	}
+	out := make([]Span, len(old))
+	copy(out, old)
+	for i := range out {
+		marks := make([]Mark, 0, len(out[i].M)+1)
+		for _, m := range out[i].M {
+			if m != MarkBold {
+				marks = append(marks, m)
+			}
+		}
+		if item.Bold {
+			marks = append(marks, MarkBold)
+		}
+		if len(marks) == 0 {
+			marks = nil
+		}
+		out[i].M = marks
+		out[i].Color = normalizeHex(item.Color)
+		out[i].BG = normalizeHex(item.BG)
+	}
+	return out
+}
+
 // styleOf — обратный ход: марки первого куска подписи. Разметка, сделанная на
 // полотне по кускам, схлопывается до «жирная/не жирная» — модель видит то, что
 // умеет назвать, и не пытается пересобрать чужую разметку.

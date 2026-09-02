@@ -75,7 +75,12 @@ function seedPlan(qc: QueryClient, used: number, limit: number | null = 30) {
   })
 }
 
-async function setup(formId = 'form-1', used = 2, onOpenChange: (v: boolean) => void = () => {}) {
+async function setup(
+  formId = 'form-1',
+  used = 2,
+  onOpenChange: (v: boolean) => void = () => {},
+  open = true,
+) {
   const store = createBuilderStore()
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: START })
   const ensureFormId = vi.fn().mockResolvedValue('created-1')
@@ -89,7 +94,7 @@ async function setup(formId = 'form-1', used = 2, onOpenChange: (v: boolean) => 
       <QueryClientProvider client={qc}>
         <BuilderStoreContext.Provider value={store}>
           <ChatDrawer
-            open
+            open={open}
             onOpenChange={onOpenChange}
             formId={formId}
             ensureFormId={ensureFormId}
@@ -108,7 +113,10 @@ async function setup(formId = 'form-1', used = 2, onOpenChange: (v: boolean) => 
     history: createMemoryHistory({ initialEntries: ['/'] }),
   })
   render(<RouterProvider router={router as never} />)
-  await screen.findByLabelText('Сообщение ассистенту')
+  // Закрытая шторка содержимого не рисует — ждать в ней нечего; маршрутизатору всё
+  // равно нужен такт, он строит дерево асинхронно.
+  if (open) await screen.findByLabelText('Сообщение ассистенту')
+  else await act(async () => {})
   return { store, ensureFormId, qc }
 }
 
@@ -238,6 +246,15 @@ describe('шторка ассистента', () => {
     expect(document.documentElement.style.getPropertyValue('--app-drawer')).toBe('')
   })
 
+  // ЗАКРЫТАЯ ШТОРКА ОТСТУПА НЕ СТАВИТ, и проверять это надо отдельно: обе шторки
+  // редактора смонтированы всегда, поэтому эффект без проверки `open` поставил бы
+  // отступ на первом же рендере редактора и никогда не снял — полотно и шапка уехали
+  // бы с вечной полосой справа при закрытых панелях (ревью ветки 2026-09-02).
+  it('закрытая шторка оболочку не двигает', async () => {
+    await setup('form-1', 2, () => {}, false)
+    expect(document.documentElement.style.getPropertyValue('--app-drawer')).toBe('')
+  })
+
   // Каретка остаётся в поле: отправляют мышью по кнопке или подсказкой-примером — обе
   // забирают фокус себе, а следующую реплику набирают сразу.
   //
@@ -343,5 +360,38 @@ describe('шторка ассистента', () => {
       fireEvent.keyDown(input, { key: 'Enter' })
     })
     await waitFor(() => expect(sendChatMessage).toHaveBeenCalledTimes(1))
+  })
+})
+
+// Хранилище разговоров переполнимо: ключи копятся по форме и остаются после её
+// удаления. Тихий отказ записи гасил сохранение разом у ВСЕХ форм — теперь свежий
+// разговор роняет старые и записывается со второй попытки.
+describe('хранилище разговоров', () => {
+  it('переполнение чистит чужие разговоры, а не теряет свой', async () => {
+    const { saveHistory, loadHistory } = await import('./history')
+    localStorage.setItem('trillix.chat.old-1', JSON.stringify([{ role: 'user', text: 'старое' }]))
+    localStorage.setItem('trillix.chat.old-2', JSON.stringify([{ role: 'user', text: 'старое' }]))
+    localStorage.setItem('посторонний.ключ', 'не наш')
+
+    // Спай — на самом объекте, а не на Storage.prototype: happy-dom держит setItem
+    // собственным свойством localStorage, и подмена прототипа не срабатывает вовсе
+    // (тест тогда проходит, ничего не проверив).
+    const real = localStorage.setItem.bind(localStorage)
+    let full = true
+    vi.spyOn(localStorage, 'setItem').mockImplementation((k: string, v: string) => {
+      if (full && k === 'trillix.chat.form-1') {
+        full = false
+        throw new DOMException('quota', 'QuotaExceededError')
+      }
+      real(k, v)
+    })
+
+    saveHistory('form-1', [{ role: 'user', text: 'свежее' }])
+    vi.restoreAllMocks()
+
+    expect(loadHistory('form-1')).toEqual([{ role: 'user', text: 'свежее' }])
+    expect(localStorage.getItem('trillix.chat.old-1')).toBeNull()
+    expect(localStorage.getItem('trillix.chat.old-2')).toBeNull()
+    expect(localStorage.getItem('посторонний.ключ')).toBe('не наш')
   })
 })

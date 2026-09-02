@@ -42,9 +42,36 @@ export function loadHistory(formId: string): ChatTurn[] {
 }
 
 export function saveHistory(formId: string, turns: ChatTurn[]): void {
+  const value = JSON.stringify(turns.slice(-KEEP))
   try {
-    localStorage.setItem(key(formId), JSON.stringify(turns.slice(-KEEP)))
+    localStorage.setItem(key(formId), value)
   } catch {
-    // Хранилище недоступно или полно — разговор останется только в памяти вкладки.
+    // ПЕРЕПОЛНЕНИЕ ЧИСТИТ ЧУЖИЕ РАЗГОВОРЫ И ПРОБУЕТ ЕЩЁ РАЗ. Потолок стоял только на
+    // длине одного разговора, а не на их числе: ключи копятся по форме и остаются
+    // после её удаления, поэтому квота хранилища однажды выбирается — и тихий отказ
+    // записи гасил сохранение разом у ВСЕХ форм, без единого признака в интерфейсе.
+    // Свежий разговор дороже старых: их и роняем.
+    dropOtherChats(key(formId))
+    try {
+      localStorage.setItem(key(formId), value)
+    } catch {
+      // Место не освободилось (переполнил не чат) — разговор живёт до перезагрузки.
+      // Это хуже сохранённого и несравнимо лучше неработающей шторки.
+    }
+  }
+}
+
+// dropOtherChats — снести все сохранённые разговоры, кроме названного. Ключи
+// перечисляются заранее: удаление на ходу сдвигает индексы localStorage.
+function dropOtherChats(keep: string): void {
+  try {
+    const doomed: string[] = []
+    for (let i = 0; i < localStorage.length; i++) {
+      const k = localStorage.key(i)
+      if (k !== null && k !== keep && k.startsWith(PREFIX)) doomed.push(k)
+    }
+    for (const k of doomed) localStorage.removeItem(k)
+  } catch {
+    // Хранилище недоступно целиком — чистить нечего.
   }
 }

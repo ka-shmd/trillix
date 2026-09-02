@@ -79,6 +79,11 @@ export function FormCard({ form }: { form: Form }) {
             // редактор: показывать ему три пустых таба вместо недоделанной формы незачем.
             to={form.status === 'draft' ? '/forms/$slug/edit' : '/forms/$slug/responses'}
             params={{ slug: form.slug }}
+            // ПРОСТРАНСТВО ЕДЕТ С АДРЕСОМ (`search={(prev) => prev}`): текущее пространство
+            // живёт в `?w=`, и ссылка без него уводит в редактор «личного» — а там гейты
+            // тарифа и остаток сообщений ассистента спрашивают план не того пространства,
+            // в котором лежит форма. Тот же приём у соседней ссылки на «Ответы».
+            search={(prev) => prev}
             className={`break-words text-base font-semibold hover:text-primary ${
               isPlaceholder ? 'text-muted-foreground' : ''
             }`}

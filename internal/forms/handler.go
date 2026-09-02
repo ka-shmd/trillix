@@ -25,6 +25,13 @@ import (
 // документа стережёт ValidateSchema; MaxBytesReader — грубый внешний предел.
 const maxFormBodyBytes = 64 << 10
 
+// maxChatBodyBytes — потолок тела ручки чата. Больше общего, потому что тело здесь
+// СОСТАВНОЕ: тот же документ формы плюс до десяти реплик разговора плюс сообщение
+// автора. На форме у потолка блоков десятая реплика переваливала за 64 КБ, и ручка
+// отвечала «неверное тело запроса» — то есть указывала на формат там, где дело в
+// размере, и чат на большой форме просто переставал работать.
+const maxChatBodyBytes = 256 << 10
+
 // Middleware — HTTP-обёртка (RequireAuth/RequireCSRF из auth), инжектируемая в
 // composition root: forms не завязан на конкретный тип auth.Handler.
 type Middleware = func(http.Handler) http.Handler
@@ -976,11 +983,18 @@ type chatResponse struct {
 }
 
 func decodeChat(w http.ResponseWriter, r *http.Request) (chatRequest, bool) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
+	r.Body = http.MaxBytesReader(w, r.Body, maxChatBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	var req chatRequest
 	if err := dec.Decode(&req); err != nil {
+		// Размер отделён от формата: «неверное тело» на слишком большом теле — отказ,
+		// который нечем починить, потому что он называет не ту причину.
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpserver.WriteError(w, r, fmt.Errorf("%w: тело больше %d байт", domain.ErrTooLarge, maxChatBodyBytes))
+			return chatRequest{}, false
+		}
 		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
 		return chatRequest{}, false
 	}
