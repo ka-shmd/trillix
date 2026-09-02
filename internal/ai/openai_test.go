@@ -189,6 +189,68 @@ func TestGenerate(t *testing.T) {
 		}
 	})
 
+	// Обрыв по потолку: текст ЕСТЬ, и на вид он обычный ответ. Отличить его можно
+	// только по finish_reason, и без этого обрубок JSON уезжал потребителю как
+	// годный ответ (замер 2026-09-02 — 503 автору вместо формы).
+	truncated := `{"choices":[{"finish_reason":"length","message":{"content":"{\"action\":\"edit\",\"add\":[{\"after\":\"\",\"it"}}],` +
+		`"usage":{"completion_tokens":4000}}`
+
+	// Вырождение недетерминированное (около 17% попыток по замеру), поэтому повтор —
+	// рабочее лекарство, а не надежда: до автора доходит ~3% отказов вместо 17%.
+	t.Run("оборванный ответ ретраится один раз", func(t *testing.T) {
+		var calls atomic.Int32
+		client, _ := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			if calls.Add(1) == 1 {
+				_, _ = io.WriteString(w, truncated)
+				return
+			}
+			_, _ = io.WriteString(w, answer(`{"questions":[{"type":"email"}]}`))
+		})
+
+		out, err := client.Generate(context.Background(), Request{User: "собери форму записи на маникюр"})
+		if err != nil {
+			t.Fatalf("Generate() вернул ошибку: %v", err)
+		}
+		if !strings.Contains(string(out), "email") {
+			t.Errorf("ответ = %s, ожидался ответ второй попытки", out)
+		}
+	})
+
+	// Попыток у обрыва на одну больше, чем у остальных отказов: вырождение — бросок
+	// монеты на каждой попытке, а не состояние провайдера.
+	t.Run("оборванный ответ трижды — ErrTruncated", func(t *testing.T) {
+		var calls atomic.Int32
+		client, _ := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			_, _ = io.WriteString(w, truncated)
+		})
+
+		_, err := client.Generate(context.Background(), Request{User: "собери форму записи на маникюр"})
+		if !errors.Is(err, ErrTruncated) {
+			t.Fatalf("ошибка = %v, ожидалась ErrTruncated", err)
+		}
+		if calls.Load() != 3 {
+			t.Errorf("вызовов провайдера = %d, ожидалось 3", calls.Load())
+		}
+	})
+
+	// А у отказа провайдера — по-прежнему две: третья попытка достучаться до
+	// молчащего входа это только ожидание автора.
+	t.Run("обрыв не поднимает лимит попыток другим отказам", func(t *testing.T) {
+		var calls atomic.Int32
+		client, _ := testClient(t, func(w http.ResponseWriter, _ *http.Request) {
+			calls.Add(1)
+			w.WriteHeader(http.StatusBadGateway)
+		})
+
+		if _, err := client.Generate(context.Background(), Request{User: "анкета"}); !errors.Is(err, ErrProvider) {
+			t.Fatalf("ошибка = %v, ожидалась ErrProvider", err)
+		}
+		if calls.Load() != 2 {
+			t.Errorf("вызовов провайдера = %d, ожидалось 2", calls.Load())
+		}
+	})
+
 	t.Run("5xx ретраится, 4xx нет", func(t *testing.T) {
 		for _, tc := range []struct {
 			name      string

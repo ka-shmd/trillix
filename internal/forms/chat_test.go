@@ -243,6 +243,30 @@ func TestChat(t *testing.T) {
 		}
 	})
 
+	// Вырождение модели (пробельный забег до потолка токенов) — не «просьба велика» и
+	// не «описание неудачное»: тот же текст со второй попытки проходит. Значит и совет
+	// автору свой — повторить, а не переписывать.
+	t.Run("оборванный ответ — 503 с советом повторить, квота цела", func(t *testing.T) {
+		plans := &fakePlans{allowed: true}
+		fake := ai.NewFakeReplies(ai.FakeReply{Err: ai.ErrTruncated})
+		svc, store := chatService(fake, plans)
+
+		_, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID,
+			"собери форму записи на маникюр и покрась её", nil, nil)
+		if !errors.Is(err, domain.ErrUnavailable) {
+			t.Fatalf("ошибка = %v, ожидалась ErrUnavailable", err)
+		}
+		if !strings.Contains(err.Error(), "попробуйте ещё раз") {
+			t.Errorf("текст = %q, ожидался совет повторить, а не переформулировать просьбу", err)
+		}
+		if n := len(fake.Requests()); n != 1 {
+			t.Errorf("вызовов модели = %d, ожидался один (обрыв не чинится)", n)
+		}
+		if len(plans.consumed) != 0 {
+			t.Error("квота списана за несостоявшийся ответ")
+		}
+	})
+
 	t.Run("несогласованный ответ модели отвергается", func(t *testing.T) {
 		cases := map[string]string{
 			"неизвестное действие": `{"action":"delete_form","reply":"ок","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[]}`,
