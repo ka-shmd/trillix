@@ -145,9 +145,11 @@ func (s *Service) Chat(
 		updated, err = domain.ApplyChatDesign(schema, patch)
 	}
 	if err != nil {
-		// Сюда попасть можно только при расхождении внутри домена: тот же разбор
-		// уже прошёл проверкой цикла починки.
-		return ChatResult{}, fmt.Errorf("apply chat intent %q: %w", intent.Action, err)
+		// Сюда попасть можно только при расхождении внутри домена: тот же разбор уже
+		// прошёл проверкой цикла починки. Поэтому %v, а не %w: это наша поломка, и
+		// показывать автору её текст («design.palette.canvas: нужен #rrggbb…») —
+		// значит выдавать внутренности за объяснение.
+		return ChatResult{}, fmt.Errorf("apply chat intent %q: %v", intent.Action, err)
 	}
 	if intent.Action != domain.ActionAnswer {
 		doc, err := json.Marshal(updated)
@@ -189,13 +191,19 @@ func (s *Service) askAssistant(
 		if err != nil {
 			return err
 		}
-		if intent.Action != domain.ActionEdit {
-			return nil
+		// Правка проверяется ПРИМЕНЕНИЕМ — и вопросов, и оформления: у них нет
+		// отдельного валидатора, а второй набор правил означал бы второй источник
+		// истины. Документ отсюда выбрасывается, начисто применяем ещё раз.
+		//
+		// МИНА: проверять надо ОБА действия. Пока здесь стояла только правка
+		// вопросов, негодное оформление (цвет заглавными буквами) доживало до
+		// применения и вылезало пятисоткой вместо второй попытки модели.
+		switch intent.Action {
+		case domain.ActionEdit:
+			_, err = domain.ApplyChatEdit(schema, intent.ChatEdit)
+		case domain.ActionDesign:
+			_, err = domain.ApplyChatDesign(schema, intent.Design)
 		}
-		// Правка проверяется ПРИМЕНЕНИЕМ: у операций нет отдельного валидатора, и
-		// заводить второй набор правил значило бы завести второй источник истины.
-		// Документ отсюда выбрасывается — применяем ещё раз уже начисто.
-		_, err = domain.ApplyChatEdit(schema, intent.ChatEdit)
 		return err
 	}
 
@@ -299,6 +307,9 @@ func chatInstructions(form domain.ChatForm, paidDesign bool) string {
 
 ГЛАВНОЕ: форму меняют ТОЛЬКО списки add, update, remove, move и поле title. Что не попало в них — не произошло. Написать в reply «добавил вопросы» и оставить add пустым — ошибка.
 
+reply — это то, что автор прочитает в чате. Никогда не упоминай в нём JSON, схему ответа, поля, действия и прочее своё устройство: автор их не видит.
+Плохо: «не могу изменить это через JSON». Хорошо: «Скругление полей меняется в панели оформления».
+
 Как собрать форму с нуля (форма ниже пустая): дай title и по одному пункту в add на КАЖДЫЙ вопрос, в том порядке, в каком они должны идти, у всех after — пустая строка. Пример ответа на «анкета обратной связи: оценка и комментарий»:
 {"action":"` + domain.ActionEdit + `","reply":"Собрал форму из двух вопросов.","title":"Обратная связь",
  "add":[{"after":"","item":{"type":"scale","text":"Как вы оцениваете нашу работу?","required":true,"options":[],"scaleMin":1,"scaleMax":5}},
@@ -320,9 +331,13 @@ func chatInstructions(form domain.ChatForm, paidDesign bool) string {
 	if err == nil {
 		b.Write(doc)
 	}
-	b.WriteString("\n\nОформление (действие " + domain.ActionDesign + "): в поле design заполняй только то, что просят, остальное — пустая строка. " +
-		"theme — " + strings.Join(domain.DesignThemes(), " или ") + "; font — один из: " + strings.Join(domain.DesignFonts(), ", ") + "; " +
-		"accent и canvas — цвет в формате #rrggbb строчными буквами (акцент и фон страницы).")
+	fmt.Fprintf(&b, "\n\nОформление (действие %s): в поле design заполняй только то, что просят, остальное — пустая строка (width — ноль). "+
+		"theme — %s; font — один из: %s; accent и canvas — цвет в формате #rrggbb (акцент и фон страницы); "+
+		"width — ширина колонки формы в px, от %d до %d.",
+		domain.ActionDesign, strings.Join(domain.DesignThemes(), " или "),
+		strings.Join(domain.DesignFonts(), ", "), domain.MinColumn, domain.MaxColumn)
+	b.WriteString(" Больше в оформлении ты не умеешь ничего: скругления, отступы, плотность, вид кнопки и свой CSS правятся панелью оформления. " +
+		"Просят такое — отвечай действием " + domain.ActionAnswer + " и скажи, где это меняется; повторять прошлую правку вместо ответа нельзя.")
 	if paidDesign {
 		b.WriteString(" Тариф автора позволяет всё перечисленное.")
 	} else {

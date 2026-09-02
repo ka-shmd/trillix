@@ -391,3 +391,94 @@ func TestChat_Design(t *testing.T) {
 		}
 	})
 }
+
+// Диалог владельца 2026-09-02 вскрыл три дефекта оформления разом. Тесты на каждый.
+func TestChat_DesignRegressions(t *testing.T) {
+	// Модель пишет #FFFF00 так же охотно, как #ffff00, а схема принимает только
+	// нижний регистр. Приводим сами: вторая попытка из-за регистра букв — трата
+	// ожидания автора и денег.
+	t.Run("цвет заглавными принимается", func(t *testing.T) {
+		const upper = `{"action":"design","reply":"Сделал фон жёлтым.","title":"","add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"","canvas":"#FFFF00","width":0}}`
+		fake := ai.NewFake(upper)
+		svc, store := chatService(fake, &fakePlans{allowed: true})
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай фон жёлтым", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		schema, err := domain.ValidateSchema(res.Schema)
+		if err != nil {
+			t.Fatalf("документ не проходит ValidateSchema: %v", err)
+		}
+		if schema.Design.Palette.Canvas != "#ffff00" {
+			t.Errorf("цвет = %q, ожидался приведённым к нижнему регистру", schema.Design.Palette.Canvas)
+		}
+		if n := len(fake.Requests()); n != 1 {
+			t.Errorf("вызовов модели = %d — регистр цвета не должен стоить второй попытки", n)
+		}
+	})
+
+	// Ширина колонки просится словами («сделай пошире»), поэтому она в словаре чата.
+	t.Run("ширина колонки применяется", func(t *testing.T) {
+		const wide = `{"action":"design","reply":"Сделал колонку шире.","title":"","add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"","canvas":"","width":1200}}`
+		svc, store := chatService(ai.NewFake(wide), &fakePlans{allowed: true})
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай ширину 1200", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		schema, _ := domain.ValidateSchema(res.Schema)
+		if schema.Design == nil || schema.Design.Layout == nil || schema.Design.Layout.Width == nil {
+			t.Fatalf("ширина не встала: %+v", schema.Design)
+		}
+		if *schema.Design.Layout.Width != 1200 {
+			t.Errorf("ширина = %d", *schema.Design.Layout.Width)
+		}
+	})
+
+	// Негодное оформление обязано уехать МОДЕЛИ на починку, а не вылезти отказом
+	// применения: пока проверка цикла смотрела только на правку вопросов, кривой
+	// цвет доживал до применения и показывался автору внутренностями валидатора.
+	t.Run("негодное оформление чинится второй попыткой", func(t *testing.T) {
+		const bad = `{"action":"design","reply":"покрасил","title":"","add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"зелёный","canvas":"","width":0}}`
+		const good = `{"action":"design","reply":"Покрасил акцент в зелёный.","title":"","add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"#16a34a","canvas":"","width":0}}`
+		fake := ai.NewFake(bad, good)
+		svc, store := chatService(fake, &fakePlans{allowed: true})
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "покрась в зелёный", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		if len(fake.Requests()) != 2 {
+			t.Fatalf("вызовов модели = %d, ожидалось два", len(fake.Requests()))
+		}
+		if !strings.Contains(fake.Requests()[1].User, "palette") {
+			t.Errorf("во второй запрос не уехало замечание валидатора: %q", fake.Requests()[1].User)
+		}
+		schema, _ := domain.ValidateSchema(res.Schema)
+		if schema.Design.Palette.Accent != "#16a34a" {
+			t.Errorf("цвет = %q", schema.Design.Palette.Accent)
+		}
+	})
+
+	// Ширина — платная настройка (ширина колонки), значит на закрытом тарифе она
+	// отсекается так же, как цвет.
+	t.Run("ширина на закрытом тарифе — платная", func(t *testing.T) {
+		const wide = `{"action":"design","reply":"Сделал шире.","title":"","add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"","canvas":"","width":1200}}`
+		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
+		svc, store := chatService(ai.NewFake(wide), plans)
+
+		_, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай шире", nil, nil)
+		if !errors.Is(err, domain.ErrPlanRequired) {
+			t.Fatalf("ошибка = %v, ожидалась ErrPlanRequired", err)
+		}
+		if !strings.Contains(err.Error(), "ширина колонки") {
+			t.Errorf("отказ не называет платную настройку: %v", err)
+		}
+	})
+}

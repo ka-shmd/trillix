@@ -573,9 +573,10 @@ func ChatJSONSchema() json.RawMessage {
         "theme": {"type": "string", "enum": %s},
         "font": {"type": "string", "enum": %s},
         "accent": {"type": "string"},
-        "canvas": {"type": "string"}
+        "canvas": {"type": "string"},
+        "width": {"type": "integer"}
       },
-      "required": ["theme", "font", "accent", "canvas"],
+      "required": ["theme", "font", "accent", "canvas", "width"],
       "additionalProperties": false
     }
   },
@@ -599,15 +600,22 @@ const ActionDesign = "design"
 // кнопкой в панели, и путать «поставь светлую тему» со «сними всё оформление»
 // нельзя.
 type ChatDesign struct {
-	Theme  string `json:"theme"`
-	Font   string `json:"font"`
+	Theme string `json:"theme"`
+	Font  string `json:"font"`
+	// Accent и Canvas — цвета в формате #rrggbb. Регистр НЕ важен: модель пишет
+	// #FFFF00 так же охотно, как #ffff00, а схема принимает только нижний — приводим
+	// сами, вместо того чтобы гонять вторую попытку из-за регистра букв.
 	Accent string `json:"accent"`
 	Canvas string `json:"canvas"`
+	// Width — ширина колонки формы в px; 0 — не трогать. Единственная настройка
+	// раскладки, доступная разговору: её просят словами («сделай пошире»), а
+	// плотность и выравнивание — вкусовые, их правят панелью, где видно результат.
+	Width int `json:"width"`
 }
 
 // Empty — правка оформления ничего не меняет.
 func (d ChatDesign) Empty() bool {
-	return d.Theme == "" && d.Font == "" && d.Accent == "" && d.Canvas == ""
+	return d.Theme == "" && d.Font == "" && d.Accent == "" && d.Canvas == "" && d.Width == 0
 }
 
 // ApplyChatDesign накладывает правку оформления на документ.
@@ -635,12 +643,21 @@ func ApplyChatDesign(s FormSchema, patch ChatDesign) (FormSchema, error) {
 			palette = *design.Palette
 		}
 		if patch.Accent != "" {
-			palette.Accent = patch.Accent
+			palette.Accent = normalizeHex(patch.Accent)
 		}
 		if patch.Canvas != "" {
-			palette.Canvas = patch.Canvas
+			palette.Canvas = normalizeHex(patch.Canvas)
 		}
 		design.Palette = &palette
+	}
+	if patch.Width != 0 {
+		layout := DesignLayout{}
+		if design.Layout != nil {
+			layout = *design.Layout
+		}
+		width := patch.Width
+		layout.Width = &width
+		design.Layout = &layout
 	}
 
 	if err := validateDesign(&design); err != nil {
@@ -661,7 +678,21 @@ func ChatDesignPaid(patch ChatDesign) []string {
 	return DesignPaidFeatures(&FormDesign{
 		Font:    patch.Font,
 		Palette: chatPalette(patch),
+		Layout:  chatLayout(patch),
 	})
+}
+
+// normalizeHex приводит цвет к тому виду, который принимает схема. Регистр —
+// единственное, что мы правим за модель: он не несёт смысла, а отказ из-за него
+// стоил бы автору лишнего ожидания.
+func normalizeHex(c string) string { return strings.ToLower(strings.TrimSpace(c)) }
+
+func chatLayout(patch ChatDesign) *DesignLayout {
+	if patch.Width == 0 {
+		return nil
+	}
+	width := patch.Width
+	return &DesignLayout{Width: &width}
 }
 
 // ChatDesignFree — та часть правки, которая бесплатна на любом тарифе (сегодня это
