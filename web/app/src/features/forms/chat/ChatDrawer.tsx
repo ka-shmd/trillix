@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Send, Sparkles, Trash2 } from 'lucide-react'
 
+import { useAppDrawerOffset } from '../../../shared/appDrawer'
 import { ApiError } from '../../../shared/api/errors'
 import { PlanUpsell } from '../../plan/PlanUpsell'
 import { usePlanQuota } from '../../plan/useFeature'
@@ -12,8 +13,17 @@ import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from '
 import { Textarea } from '@/components/ui/textarea'
 
 // Шторка разговора с ассистентом (фаза 26, слайс E). Соседка шторки оформления и
-// устроена так же — Sheet справа, — но живёт своим состоянием: разговор про форму
-// продолжается между открытиями.
+// устроена ТАК ЖЕ (решение владельца 2026-09-02): не накрывает страницу, а отодвигает
+// её — без затемнения, с сдвигом шапки и полотна. Довод тот же, что у оформления:
+// автор смотрит НЕ в панель, а на форму рядом. Правка от ассистента ложится на полотно
+// сразу, и увидеть её он обязан не выходя из разговора.
+//
+// Отсюда три отступления от вендоренного Sheet — те же, что у DesignDrawer:
+// modal={false} (фокус не заперт, полотно кликабельно), showOverlay={false}
+// (затемнение убило бы ровно тот смысл, ради которого шторка выбрана) и запрет
+// закрытия по клику снаружи (правка формы при открытом чате не должна его захлопывать).
+//
+// Своё состояние у неё остаётся: разговор про форму продолжается между открытиями.
 //
 // ЛЕНТА СООБЩЕНИЙ С НАПОЛНЯЕМЫМ ПУЗЫРЁМ — это не украшение, а условие, при котором
 // стриминг ответа (он отложен, `DEV-PLAN` фаза 26) добавится потом дёшево: менять
@@ -68,6 +78,8 @@ export function ChatDrawer({
   // Остаток сообщений — серверный стейт (снимок тарифа), а не счётчик в шторке:
   // квота живёт на пространстве, и вторая вкладка расходует ту же тридцатку.
   const quota = usePlanQuota('ai_generations')
+  // Оболочка съезжает под шторку — тем же хуком и на ту же ширину, что у оформления.
+  useAppDrawerOffset(open)
 
   // Разговор поднимается из хранилища ОДИН раз, на монтировании: экран редактора
   // пересоздаётся при смене формы (ключ маршрута), поэтому подписываться на formId
@@ -81,6 +93,7 @@ export function ChatDrawer({
   // (`features/plan/PlanUpsell`): чат не заводит своего разговора о деньгах.
   const [upsell, setUpsell] = useState(false)
   const feed = useRef<HTMLDivElement>(null)
+  const input = useRef<HTMLTextAreaElement>(null)
 
   // Лента прокручивается к свежему — и когда пришёл ответ, и когда ушёл вопрос.
   useEffect(() => {
@@ -129,8 +142,24 @@ export function ChatDrawer({
   const failure = error === null ? null : failureText(error)
 
   return (
-    <Sheet open={open} onOpenChange={onOpenChange}>
-      <SheetContent side="right" className="flex w-full flex-col gap-0 p-0 sm:max-w-md">
+    <Sheet open={open} onOpenChange={onOpenChange} modal={false}>
+      <SheetContent
+        side="right"
+        showOverlay={false}
+        // Фокус уводится В ПОЛЕ ВВОДА, а не запрещается вовсе (в отличие от
+        // оформления): шторку открывают, чтобы сказать, а не чтобы смотреть.
+        onOpenAutoFocus={(e) => {
+          e.preventDefault()
+          input.current?.focus()
+        }}
+        // Клик по полотну — обычный клик по полотну, а не «закрыть чат»: иначе любая
+        // правка формы посреди разговора захлопывала бы его.
+        onInteractOutside={(e) => e.preventDefault()}
+        // Длительность выровнена с оболочкой (300 мс в обе стороны против штатных
+        // 500/300): панель и шапка обязаны ехать одним движением, иначе видно, что
+        // это два разных элемента.
+        className="flex w-104 flex-col gap-0 p-0 sm:max-w-104 data-[state=closed]:duration-300 data-[state=open]:duration-300"
+      >
         <SheetHeader className="border-b p-4">
           <SheetTitle className="flex items-center gap-2">
             <Sparkles className="size-4" aria-hidden="true" />
@@ -202,6 +231,7 @@ export function ChatDrawer({
           }}
         >
           <Textarea
+            ref={input}
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             onKeyDown={(e) => {

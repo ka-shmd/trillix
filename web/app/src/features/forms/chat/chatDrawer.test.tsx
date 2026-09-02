@@ -79,7 +79,9 @@ async function setup(formId = 'form-1', used = 2) {
   const store = createBuilderStore()
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks: START })
   const ensureFormId = vi.fn().mockResolvedValue('created-1')
-  const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  // staleTime: Infinity — снимок тарифа положен в кэш руками, и без этого Query
+  // считала бы его протухшим и лезла в сеть, которой в тестах нет.
+  const qc = new QueryClient({ defaultOptions: { queries: { retry: false, staleTime: Infinity } } })
   seedPlan(qc, used)
 
   const rootRoute = createRootRoute({
@@ -217,6 +219,18 @@ describe('шторка ассистента', () => {
     expect(screen.getByText(/Сообщения на этом тарифе кончились/)).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Посмотреть тарифы' }))
     expect(await screen.findByText('Это на платном тарифе')).toBeTruthy()
+  })
+
+  // Шторка не накрывает страницу, а отодвигает её: ширину открытой панели держит
+  // переменная на корне документа, по которой оболочка маршрута сдвигает шапку и
+  // полотно. Пустая переменная у открытой шторки означала бы, что панель легла
+  // поверх полотна, — а весь смысл в том, чтобы правку было видно.
+  it('открытая шторка отодвигает оболочку, закрытая — нет', async () => {
+    await setup()
+    expect(document.documentElement.style.getPropertyValue('--app-drawer')).toBe('26rem')
+
+    cleanup()
+    expect(document.documentElement.style.getPropertyValue('--app-drawer')).toBe('')
   })
 
   it('отказ модели показывается словами бэка', async () => {

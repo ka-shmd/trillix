@@ -79,6 +79,19 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
   // Шторка ассистента (фаза 26). Своё состояние, как у шторки оформления.
   const [chatOpen, setChatOpen] = useState(false)
 
+  // ДВЕ ШТОРКИ ВЗАИМОИСКЛЮЧАЮЩИ: обе выезжают справа на одну и ту же ширину и
+  // отодвигают оболочку одной переменной (`shared/appDrawer.ts`). Открытые вместе они
+  // легли бы друг на друга, а закрытие первой сняло бы отступ из-под второй — шапка
+  // и полотно поехали бы назад под всё ещё открытую панель.
+  const openChat = (v: boolean) => {
+    setChatOpen(v)
+    if (v) setDesignOpen(false)
+  }
+  const openDesign = (v: boolean) => {
+    setDesignOpen(v)
+    if (v) setChatOpen(false)
+  }
+
   // Отмена/повтор + каретка на первый затронутый откатом блок (§2.4). id приходит из
   // стора; блок мог ещё не смонтироваться (только что восстановлен) — движок поставит
   // фокус, как только строка зарегистрирует цель (pending в focusEngine).
@@ -208,25 +221,29 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
       <SlashEditor
         formId={uploadTo}
         engine={engine}
-        onOpenDesign={() => setDesignOpen(true)}
-        onOpenChat={() => setChatOpen(true)}
+        onOpenDesign={() => openDesign(true)}
+        onOpenChat={() => openChat(true)}
       />
       {/* Кнопка ассистента — в правом нижнем углу (решение владельца 2026-09-01).
           Позиция fixed, а не absolute: полотно длинное и прокручивается, а вход в
           разговор обязан быть под рукой на любой его высоте. Угол свободен —
           кластеры значков строки и рейлы групп живут внутри колонки. */}
+      {/* Кнопка ЕДЕТ ВМЕСТЕ СО ШТОРКОЙ: она fixed, то есть привязана к окну, а не к
+          съезжающей оболочке — без сдвига открытая панель накрыла бы её, и вход в
+          разговор пропадал бы ровно тогда, когда разговор идёт. Та же длительность,
+          что у оболочки и панели: три элемента обязаны ехать одним движением. */}
       <Button
         type="button"
         size="lg"
-        className="fixed right-6 bottom-6 z-30 rounded-full shadow-lg"
-        onClick={() => setChatOpen(true)}
+        className="fixed right-[calc(1.5rem+var(--app-drawer))] bottom-6 z-30 rounded-full shadow-lg transition-[right] duration-300 ease-in-out"
+        onClick={() => openChat(true)}
       >
         <Sparkles className="size-4" aria-hidden="true" />
         Ассистент
       </Button>
       <ChatDrawer
         open={chatOpen}
-        onOpenChange={setChatOpen}
+        onOpenChange={openChat}
         formId={detail.id}
         ensureFormId={() => ensureForm().then((f) => f.id)}
       />
@@ -251,7 +268,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
           монтировать») тут не работает против нас: он про диалоги, подписанные на
           s.blocks и потому перерисовывающиеся на каждый символ, а эта панель
           подписана на s.design — он при вводе не меняется. */}
-      <DesignDrawer formId={uploadTo} open={designOpen} onOpenChange={setDesignOpen} />
+      <DesignDrawer formId={uploadTo} open={designOpen} onOpenChange={openDesign} />
     </BuilderStoreContext.Provider>
   )
 }
