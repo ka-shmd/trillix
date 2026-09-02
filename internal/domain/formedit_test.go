@@ -462,3 +462,41 @@ func TestApplyChatOps_TitleStyleWithoutText(t *testing.T) {
 		t.Errorf("оформление заголовка = %+v", title.Text)
 	}
 }
+
+// Подсказка внутри поля (`placeholder`) — часть словаря правки с 2026-09-02: до этого
+// модель её не видела и отказывала автору, который просил её заполнить.
+//
+// Три правила разом: модель видит существующую, заданная — встаёт, пустая — не трогает
+// (её проверяет «правка сохраняет id и всё, чего модель не видела»), а тип, которому
+// подсказку негде показать, теряет её вместе с остальными своими настройками.
+func TestApplyChatOps_Placeholder(t *testing.T) {
+	if got := ProjectForm(sampleForm()).Items[0].Placeholder; got != "Иван" {
+		t.Errorf("модель не видит подсказку пункта: %q", got)
+	}
+
+	out, err := ApplyChatEdit(sampleForm(), ChatEdit{Update: []ChatUpdate{{
+		Target: "q1",
+		Item: ChatItem{PlanItem: PlanItem{
+			Type: BlockShortText, Text: "Ваше имя", Placeholder: "Иван Иванов",
+		}},
+	}}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	if got := blockOf(t, out, "blk_name").Settings.Placeholder; got != "Иван Иванов" {
+		t.Errorf("подсказка = %q, ожидалась новая", got)
+	}
+
+	// Смена типа на тот, который подсказку не показывает: строка, которой негде
+	// появиться, — мусор в документе, а не сохранённая работа автора.
+	out, err = ApplyChatEdit(sampleForm(), ChatEdit{Update: []ChatUpdate{{
+		Target: "q1",
+		Item:   ChatItem{PlanItem: PlanItem{Type: BlockDate, Text: "Дата визита"}},
+	}}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	if got := blockOf(t, out, "blk_name").Settings.Placeholder; got != "" {
+		t.Errorf("подсказка осталась у типа, который её не показывает: %q", got)
+	}
+}

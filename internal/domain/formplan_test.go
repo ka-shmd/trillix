@@ -392,3 +392,38 @@ func anchorOf(t *testing.T, blocks []Block, b Block) string {
 	}
 	return b.ID
 }
+
+// Подсказка внутри поля в плане: у типа, который её показывает, она доезжает до
+// настроек блока; у прочих отвергается с перечислением подходящих — отказ уедет
+// модели на вторую попытку, а не станет строкой, которой негде появиться.
+func TestPlanPlaceholder(t *testing.T) {
+	schema, err := ExpandPlan(FormPlan{Title: "Заявка", Items: []PlanItem{
+		{Type: BlockPhone, Text: "Телефон", Placeholder: "+7 900 000-00-00"},
+	}})
+	if err != nil {
+		t.Fatalf("ExpandPlan() вернул ошибку: %v", err)
+	}
+	var got string
+	for _, b := range schema.Blocks {
+		if b.Type == BlockPhone {
+			got = b.Settings.Placeholder
+		}
+	}
+	if got != "+7 900 000-00-00" {
+		t.Errorf("подсказка = %q", got)
+	}
+
+	err = ValidatePlan(FormPlan{Title: "Заявка", Items: []PlanItem{
+		{Type: BlockSingleChoice, Text: "Мастер", Options: []string{"Иван", "Пётр"}, Placeholder: "любой"},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "не показывается") {
+		t.Errorf("подсказка у выбора принята: %v", err)
+	}
+
+	err = ValidatePlan(FormPlan{Title: "Заявка", Items: []PlanItem{
+		{Type: BlockShortText, Text: "Имя", Placeholder: strings.Repeat("я", MaxPlaceholderLen+1)},
+	}})
+	if err == nil || !strings.Contains(err.Error(), "подсказка длиннее") {
+		t.Errorf("слишком длинная подсказка принята: %v", err)
+	}
+}

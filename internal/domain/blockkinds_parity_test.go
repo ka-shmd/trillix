@@ -26,8 +26,7 @@ import (
 // молчаливого пропуска: тест, который перестал что-то проверять, хуже отсутствующего.
 //
 // Что тест НЕ покрывает и почему: requiresCaption (правило вставки редактора, зеркала в
-// Go нет намеренно), supportsPlaceholder (подсказка редактора, схемой не проверяется) и
-// ownSettings (в Go проверки закреплённых ключей написаны в validateBlock поштучно, и
+// Go нет намеренно) и ownSettings (в Go проверки закреплённых ключей написаны в validateBlock поштучно, и
 // сверять их следует поведением — это делают TestValidateSchema* на общих документах).
 
 const kindsDirRel = "../../web/shared/entities/blocks"
@@ -37,6 +36,10 @@ type tsBlockKind struct {
 	carriesText bool
 	canShareRow bool
 	choice      string // "", "single", "multi"
+	// placeholder — показывает ли поле подсказку внутри себя. Зеркало в Go появилось
+	// вместе со словарём ассистента (он отказывает в подсказке типу, который её не
+	// покажет), и с этого дня свойство сверяется, а не числится непокрытым.
+	placeholder bool
 }
 
 var (
@@ -50,6 +53,7 @@ var (
 	reCarriesText = regexp.MustCompile(`carriesText:\s*(true|false)`)
 	reCanShareRow = regexp.MustCompile(`canShareRow:\s*(true|false)`)
 	reChoice      = regexp.MustCompile(`choice:\s*'(single|multi)'`)
+	rePlaceholder = regexp.MustCompile(`supportsPlaceholder:\s*(true|false)`)
 	// Реестр в index.ts: и полная запись (`short_text: shortText,`), и сокращённая
 	// (`email,` — имя типа совпадает с именем константы).
 	reRegistryFull  = regexp.MustCompile(`(?m)^\s{2}([a-z0-9_]+):\s*(\w+),$`)
@@ -116,10 +120,16 @@ func tsKinds(t *testing.T) map[BlockType]tsBlockKind {
 			fam := reFamily.FindStringSubmatch(fields)
 			ct := reCarriesText.FindStringSubmatch(fields)
 			sr := reCanShareRow.FindStringSubmatch(fields)
-			if fam == nil || ct == nil || sr == nil {
+			ph := rePlaceholder.FindStringSubmatch(fields)
+			if fam == nil || ct == nil || sr == nil || ph == nil {
 				t.Fatalf("не удалось прочитать свойства типа %s (%s): форма файла изменилась", name, e.Name())
 			}
-			k := tsBlockKind{family: fam[1], carriesText: ct[1] == "true", canShareRow: sr[1] == "true"}
+			k := tsBlockKind{
+				family:      fam[1],
+				carriesText: ct[1] == "true",
+				canShareRow: sr[1] == "true",
+				placeholder: ph[1] == "true",
+			}
 			if ch := reChoice.FindStringSubmatch(fields); ch != nil {
 				k.choice = ch[1]
 			}
@@ -198,6 +208,9 @@ func TestBlockKindsParityWithFrontend(t *testing.T) {
 		}
 		if got, want := bt.isSingleChoice(), k.choice == "single"; got != want {
 			t.Errorf("%s: isSingleChoice()=%v, у фронта choice=%q", bt, got, k.choice)
+		}
+		if got := bt.showsPlaceholder(); got != k.placeholder {
+			t.Errorf("%s: showsPlaceholder()=%v, у фронта supportsPlaceholder=%v", bt, got, k.placeholder)
 		}
 	}
 }

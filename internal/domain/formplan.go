@@ -66,6 +66,19 @@ var planTypeOrder = []BlockType{
 	BlockConsent, BlockFile, BlockText, BlockHeading, BlockPageBreak,
 }
 
+// PlaceholderTypes — типы, у которых подсказка внутри поля видна. Считается из
+// предиката, а не перечисляется руками: список в инструкции модели, список в отказе и
+// правило применения обязаны быть одним и тем же знанием.
+func PlaceholderTypes() []string {
+	out := make([]string, 0, 5)
+	for _, t := range planTypeOrder {
+		if t.showsPlaceholder() {
+			out = append(out, string(t))
+		}
+	}
+	return out
+}
+
 // FormPlan — то, что вернула модель.
 type FormPlan struct {
 	Title string     `json:"title"`
@@ -100,6 +113,16 @@ type PlanItem struct {
 	Bold  bool   `json:"bold"`
 	Color string `json:"color"`
 	BG    string `json:"bg"`
+	// Placeholder — подсказка ВНУТРИ поля («+7 900 000-00-00»). Есть не у всех типов:
+	// у даты её гасит сам контрол, у выбора и файла показывать её негде
+	// (`showsPlaceholder`).
+	//
+	// ПУСТАЯ СТРОКА — «НЕ ТРОГАТЬ», а не «стереть». Схема ответа требует поле в каждом
+	// пункте, поэтому при любой правке (сделать заголовок жирным) модель пришлёт его
+	// пустым, если не думала о подсказке, — и «пусто значит стереть» вычищало бы
+	// авторские подсказки на каждой такой правке. Убрать подсказку можно в попапе
+	// блока, где она набрана.
+	Placeholder string `json:"placeholder"`
 }
 
 // styledText — подпись пункта в виде спанов: один кусок с марками, названными
@@ -175,9 +198,10 @@ func planItemJSONSchema() string {
           "scaleMax": {"type": "integer"},
           "bold": {"type": "boolean"},
           "color": {"type": "string"},
-          "bg": {"type": "string"}
+          "bg": {"type": "string"},
+          "placeholder": {"type": "string"}
         },
-        "required": ["type", "text", "required", "options", "scaleMin", "scaleMax", "bold", "color", "bg"],
+        "required": ["type", "text", "required", "options", "scaleMin", "scaleMax", "bold", "color", "bg", "placeholder"],
         "additionalProperties": false
       }`, enum)
 }
@@ -288,6 +312,15 @@ func validatePlanItem(item PlanItem) error {
 			return planErr("%s: %q — нужен цвет вида #rrggbb", c.name, c.value)
 		}
 	}
+	if item.Placeholder != "" {
+		if !item.Type.showsPlaceholder() {
+			return planErr("подсказка внутри поля не показывается у типа %s; она бывает у %s",
+				item.Type, strings.Join(PlaceholderTypes(), ", "))
+		}
+		if utf8.RuneCountInString(item.Placeholder) > MaxPlaceholderLen {
+			return planErr("подсказка длиннее %d символов", MaxPlaceholderLen)
+		}
+	}
 	if item.Type == BlockScale && (item.ScaleMin != 0 || item.ScaleMax != 0) {
 		// Границы либо обе не заданы (тогда дефолт), либо осмысленны. Правило то
 		// же, что в схеме: половина диапазона — ошибка.
@@ -378,6 +411,7 @@ func expandPlanItem(item PlanItem) []Block {
 	fieldID := newBlockID()
 	group := groupIDOf(fieldID)
 	field := Block{ID: fieldID, GroupID: group, Type: item.Type, Required: item.Required}
+	field.Settings.Placeholder = item.Placeholder
 	if item.Type.isChoice() {
 		field.Settings.Options = make([]Option, 0, len(item.Options))
 		for _, label := range item.Options {

@@ -127,6 +127,9 @@ func projectUnit(group []Block, ordinal int) ChatItem {
 		case b.Type.isAnswerable():
 			item.Type = b.Type
 			item.Required = b.Required
+			// Подсказка видна модели: иначе на просьбу «поменяй подсказку» ей нечего
+			// менять, а на любой другой правке она не знает, что подсказка уже есть.
+			item.Placeholder = b.Settings.Placeholder
 			for _, o := range b.Settings.Options {
 				item.Options = append(item.Options, o.Label)
 			}
@@ -398,6 +401,18 @@ func rebuildUnit(old []Block, item PlanItem) []Block {
 	updated := *field
 	updated.Type = item.Type
 	updated.Required = item.Required
+	// МИНА: пустая подсказка означает «не трогать», а не «стереть». Схема ответа
+	// требует поле в каждом пункте, и на правке про жирность модель пришлёт его
+	// пустым — «пусто значит стереть» вычищало бы авторские подсказки при каждой
+	// посторонней правке. Тип, который подсказку не показывает, теряет её вместе с
+	// остальными своими настройками: строка в документе, которой негде появиться, —
+	// мусор, а не сохранённая работа автора.
+	switch {
+	case !item.Type.showsPlaceholder():
+		updated.Settings.Placeholder = ""
+	case item.Placeholder != "":
+		updated.Settings.Placeholder = item.Placeholder
+	}
 	if item.Type.isChoice() {
 		updated.Settings.Options = mergeOptions(field.Settings.Options, item.Options)
 	} else {

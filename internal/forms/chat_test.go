@@ -37,6 +37,12 @@ const editAnswer = `{"action":"edit_form","reply":"Добавил вопрос �
  "add":[{"after":"q2","item":{"type":"number","text":"Бюджет","required":false,"options":[],"scaleMin":0,"scaleMax":0}}],
  "update":[],"remove":[],"move":[]}`
 
+// Подсказка внутри поля приезжает тем же пунктом правки — модель больше не отвечает
+// «не могу», как отвечала, пока её не было в словаре (2026-09-02).
+const placeholderEdit = `{"action":"edit_form","reply":"Добавил подсказку в поле телефона.","title":{"text":"","bold":false,"color":"","bg":""},
+ "add":[],"update":[{"target":"q2","item":{"type":"phone","text":"Телефон","required":true,"options":[],"scaleMin":0,"scaleMax":0,"placeholder":"+7 900 000-00-00"}}],
+ "remove":[],"move":[]}`
+
 const answerOnly = `{"action":"answer","reply":"В форме два вопроса: имя и телефон.","title":{"text":"","bold":false,"color":"","bg":""},
  "add":[],"update":[],"remove":[],"move":[]}`
 
@@ -160,6 +166,29 @@ func TestChat(t *testing.T) {
 		}
 		if n := len(fake.Requests()); n != 0 {
 			t.Errorf("вызовов модели = %d, ожидалось ноль", n)
+		}
+	})
+
+	t.Run("подсказка внутри поля доезжает до документа", func(t *testing.T) {
+		svc, store := chatService(ai.NewFake(placeholderEdit), &fakePlans{allowed: true})
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID,
+			"добавь подсказку в поле телефона", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		schema, err := domain.ValidateSchema(res.Schema)
+		if err != nil {
+			t.Fatalf("документ не проходит ValidateSchema: %v", err)
+		}
+		var got string
+		for _, b := range schema.Blocks {
+			if b.Type == domain.BlockPhone {
+				got = b.Settings.Placeholder
+			}
+		}
+		if got != "+7 900 000-00-00" {
+			t.Errorf("подсказка = %q", got)
 		}
 	})
 
