@@ -970,6 +970,9 @@ func (r chatRequest) turns() []ChatTurn {
 type chatResponse struct {
 	Reply  string          `json:"reply"`
 	Schema json.RawMessage `json:"schema,omitempty"`
+	// PlanRequired — часть просьбы не выполнена из-за тарифа: кабинет предлагает
+	// разговор о тарифе тем же оверлеем, что и остальные платные возможности.
+	PlanRequired bool `json:"planRequired,omitempty"`
 }
 
 func decodeChat(w http.ResponseWriter, r *http.Request) (chatRequest, bool) {

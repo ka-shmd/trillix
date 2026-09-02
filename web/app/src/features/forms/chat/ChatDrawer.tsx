@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Link } from '@tanstack/react-router'
 import { Send, Sparkles, Trash2 } from 'lucide-react'
 
 import { ApiError } from '../../../shared/api/errors'
+import { PlanUpsell } from '../../plan/PlanUpsell'
 import { useBuilderStore, useBuilderStoreApi } from '../builder/storeContext'
 import { MAX_CHAT_MESSAGE_LEN, sendChatMessage, type ChatTurn } from './api'
 import { clearHistory, loadHistory, saveHistory } from './history'
@@ -73,6 +73,9 @@ export function ChatDrawer({
   const [draft, setDraft] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  // Разговор о тарифе — тем же оверлеем, что и у прочих платных возможностей
+  // (`features/plan/PlanUpsell`): чат не заводит своего разговора о деньгах.
+  const [upsell, setUpsell] = useState(false)
   const feed = useRef<HTMLDivElement>(null)
 
   // Лента прокручивается к свежему — и когда пришёл ответ, и когда ушёл вопрос.
@@ -96,7 +99,10 @@ export function ChatDrawer({
       // Документ ложится на полотно ОДНИМ шагом истории: подтверждать правку
       // кнопкой посреди разговора незачем, откат (Ctrl+Z) и есть подтверждение.
       if (res.schema) applyExternal(res.schema)
-      const answered: ChatTurn[] = [...asked, { role: 'assistant', text: res.reply }]
+      const answered: ChatTurn[] = [
+        ...asked,
+        { role: 'assistant', text: res.reply, plan: res.planRequired },
+      ]
       setTurns(answered)
       saveHistory(id, answered)
     } catch (err) {
@@ -147,15 +153,17 @@ export function ChatDrawer({
           )}
 
           {turns.map((t, i) => (
-            <div
-              key={i}
-              className={
-                t.role === 'user'
-                  ? 'ml-auto w-fit max-w-[85%] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground'
-                  : 'w-fit max-w-[85%] rounded-lg bg-muted px-3 py-2 text-sm'
-              }
-            >
-              {t.text}
+            <div key={i} className={t.role === 'user' ? 'flex flex-col items-end' : 'space-y-1'}>
+              <div
+                className={
+                  t.role === 'user'
+                    ? 'w-fit max-w-[85%] rounded-lg bg-primary px-3 py-2 text-sm text-primary-foreground'
+                    : 'w-fit max-w-[85%] rounded-lg bg-muted px-3 py-2 text-sm'
+                }
+              >
+                {t.text}
+              </div>
+              {t.plan && <PlanButton onClick={() => setUpsell(true)} />}
             </div>
           ))}
 
@@ -168,14 +176,12 @@ export function ChatDrawer({
           )}
 
           {failure && (
-            <p role="alert" className="text-sm text-destructive">
-              {failure.text}{' '}
-              {failure.plan && (
-                <Link to="/settings/plan" className="underline underline-offset-2">
-                  Посмотреть тариф
-                </Link>
-              )}
-            </p>
+            <div className="space-y-1">
+              <p role="alert" className="text-sm text-destructive">
+                {failure.text}
+              </p>
+              {failure.plan && <PlanButton onClick={() => setUpsell(true)} />}
+            </div>
           )}
         </div>
 
@@ -220,6 +226,18 @@ export function ChatDrawer({
           </div>
         </form>
       </SheetContent>
+      <PlanUpsell open={upsell} onOpenChange={setUpsell} />
     </Sheet>
+  )
+}
+
+// Предложение тарифа под репликой: КНОПКА, открывающая общий оверлей, а не ссылка на
+// страницу тарифов. Ссылка уводила бы автора из разговора и из редактора, а оверлей
+// рассказывает про тариф на месте и закрывается обратно в чат.
+function PlanButton({ onClick }: { onClick: () => void }) {
+  return (
+    <Button type="button" variant="outline" size="sm" onClick={onClick}>
+      Посмотреть тарифы
+    </Button>
   )
 }

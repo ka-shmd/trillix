@@ -587,6 +587,7 @@ func ChatJSONSchema() json.RawMessage {
   "properties": {
     "action": {"type": "string", "enum": [%q, %q, %q]},
     "reply": {"type": "string"},
+    "planBlocked": {"type": "boolean"},
     "title": {
       "type": "object",
       "properties": {
@@ -653,7 +654,7 @@ func ChatJSONSchema() json.RawMessage {
       "additionalProperties": false
     }
   },
-  "required": ["action", "reply", "title", "add", "update", "remove", "move", "design"],
+  "required": ["action", "reply", "planBlocked", "title", "add", "update", "remove", "move", "design"],
   "additionalProperties": false
 }`, ActionEdit, ActionAnswer, ActionDesign, item, item, themes, fonts,
 		densities, aligns, outlines, btnVariants, btnWidths, btnAligns))

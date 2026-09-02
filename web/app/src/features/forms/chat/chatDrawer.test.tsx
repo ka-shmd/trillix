@@ -126,10 +126,39 @@ describe('шторка ассистента', () => {
 
     const alert = await screen.findByRole('alert')
     expect(alert.textContent).toContain('цвета — платная возможность')
-    expect(screen.getByRole('link', { name: 'Посмотреть тариф' }).getAttribute('href')).toBe(
-      '/settings/plan',
-    )
     expect(screen.getByText('добавь телефон')).toBeTruthy()
+
+    // Разговор о тарифе — общим оверлеем, а не уходом из редактора по ссылке.
+    fireEvent.click(screen.getByRole('button', { name: 'Посмотреть тарифы' }))
+    expect(await screen.findByText('Это на платном тарифе')).toBeTruthy()
+  })
+
+  // Часть просьбы, отсечённая тарифом, приходит УДАЧЕЙ: правка сделана, платное — нет.
+  // Разговор о тарифе предлагается у той реплики, в которой это сказано, и признак
+  // берётся флагом ответа, а не разбором слов ассистента.
+  it('срезанное тарифом предлагает тариф оверлеем у своей реплики', async () => {
+    sendChatMessage.mockResolvedValue({
+      reply: 'Правки вопросов применил. Цвета — платная возможность.',
+      schema: EDITED,
+      planRequired: true,
+    })
+    await setup()
+
+    await act(async () => ask('добавь телефон и покрась в синий'))
+
+    expect(await screen.findByText(/Правки вопросов применил/)).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Посмотреть тарифы' }))
+    expect(await screen.findByText('Это на платном тарифе')).toBeTruthy()
+  })
+
+  it('удачный ответ без тарифного отказа тариф не предлагает', async () => {
+    sendChatMessage.mockResolvedValue({ reply: 'Добавил телефон.', schema: EDITED })
+    await setup()
+
+    await act(async () => ask('добавь телефон'))
+
+    await screen.findByText('Добавил телефон.')
+    expect(screen.queryByRole('button', { name: 'Посмотреть тарифы' })).toBeNull()
   })
 
   it('отказ модели показывается словами бэка', async () => {

@@ -23,12 +23,18 @@ export type ChatRole = 'user' | 'assistant'
 export interface ChatTurn {
   role: ChatRole
   text: string
+  // plan — реплика ассистента, в которой часть просьбы не сделана из-за тарифа.
+  // Живёт на реплике, а не в состоянии экрана: разговор идёт дальше, и предложение
+  // тарифа обязано остаться у той реплики, к которой относится.
+  plan?: boolean
 }
 
-// Схема ответа: `schema` приходит, ТОЛЬКО если правка состоялась.
+// Схема ответа: `schema` приходит, ТОЛЬКО если правка состоялась; `planRequired` —
+// часть просьбы не выполнена из-за тарифа (решает сервер, а не разбор слов ответа).
 const chatReplySchema = z.object({
   reply: z.string(),
   schema: formSchemaSchema.optional(),
+  planRequired: z.boolean().optional(),
 })
 
 export type ChatReply = z.infer<typeof chatReplySchema>
@@ -41,7 +47,13 @@ export function sendChatMessage(
 ): Promise<ChatReply> {
   return apiRequest(`/forms/${formId}/ai/chat`, {
     method: 'POST',
-    body: { message, history: history.slice(-MAX_CHAT_HISTORY), schema },
+    // История едет БЕЗ своих пометок: сервер разбирает тело строго (лишнее поле —
+    // 422), а `plan` — знание кабинета о собственной ленте, модели оно не нужно.
+    body: {
+      message,
+      history: history.slice(-MAX_CHAT_HISTORY).map((t) => ({ role: t.role, text: t.text })),
+      schema,
+    },
     schema: chatReplySchema,
   })
 }

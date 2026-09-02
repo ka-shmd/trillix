@@ -345,6 +345,48 @@ func TestChat_Design(t *testing.T) {
 		if !strings.Contains(res.Reply, "Вид поменял") {
 			t.Errorf("ответ = %q — не сказано, что часть правки всё же применена", res.Reply)
 		}
+		// По этому флагу кабинет предлагает разговор о тарифе тем же оверлеем, что и
+		// прочие платные возможности. Флагом, а не разбором слов ответа: читать прозу
+		// модели программой значит зависеть от того, как она сегодня построила фразу.
+		if !res.PlanRequired {
+			t.Error("срезанная тарифом правка не помечена PlanRequired — кабинету нечем предложить тариф")
+		}
+	})
+
+	// Отказ САМОЙ МОДЕЛИ («цвета на платном тарифе») — обычный удачный ответ, и без
+	// её же флага кабинету нечем отличить его от любого другого: разбирать прозу
+	// модели программой значит зависеть от того, как она сегодня построила фразу.
+	t.Run("модель отказала сама — предложение тарифа всё равно есть", func(t *testing.T) {
+		const refused = `{"action":"answer","reply":"Цвета доступны на платном тарифе.","planBlocked":true,
+		 "title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
+		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
+		svc, store := chatService(ai.NewFake(refused), plans)
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "покрась в синий", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		if !res.PlanRequired {
+			t.Error("модель сказала, что упёрлась в тариф, а кабинету это не передано")
+		}
+	})
+
+	// На открытом тарифе чату гейтить нечего: «не сделал из-за тарифа» там означало бы
+	// предложить автору купить то, что у него уже куплено.
+	t.Run("слово модели о тарифе на открытом плане не в счёт", func(t *testing.T) {
+		const refused = `{"action":"answer","reply":"Это на платном тарифе.","planBlocked":true,
+		 "title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
+		svc, store := chatService(ai.NewFake(refused), &fakePlans{allowed: true})
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "покрась в синий", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		if res.PlanRequired {
+			t.Error("на открытом тарифе автору предлагается купить уже купленное")
+		}
 	})
 
 	t.Run("цвет на открытом тарифе применяется", func(t *testing.T) {
@@ -354,6 +396,9 @@ func TestChat_Design(t *testing.T) {
 		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "покрась в синий", nil, nil)
 		if err != nil {
 			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		if res.PlanRequired {
+			t.Error("правка прошла целиком, а тариф всё равно предлагается")
 		}
 		schema, _ := domain.ValidateSchema(res.Schema)
 		if schema.Design == nil || schema.Design.Palette == nil || schema.Design.Palette.Accent != "#2563eb" {
