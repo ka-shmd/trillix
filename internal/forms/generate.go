@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"strings"
 	"unicode/utf8"
 
@@ -13,6 +14,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/ai"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
+	"github.com/ka-shmd/trillix/internal/httpserver"
 )
 
 // Сборка формы по описанию автора (фаза 26). Здесь живёт только связка: право,
@@ -124,23 +126,38 @@ func (s *Service) askForPlan(ctx context.Context, prompt string) (domain.FormPla
 
 	raw, err := ai.AskJSON(ctx, s.ai, req, check)
 	if err != nil {
-		return domain.FormPlan{}, generationError(err)
+		return domain.FormPlan{}, generationError(ctx, err)
 	}
 	// Ответ уже прошёл check выше — здесь остаётся только разобрать его вторично.
 	return domain.ParsePlan(raw)
 }
 
-// generationError переводит отказ подсистемы в доменный.
+// generationError переводит отказ подсистемы в доменный — И ЛОГИРУЕТ ПРИЧИНУ.
+//
+// Логирует именно здесь, потому что здесь она и теряется: наружу уходит фраза для
+// автора, а внутренняя (чем именно не понравился ответ модели проверке) в неё не
+// входит и больше нигде не всплывает. Пока этой строки не было, отбраковка ответа
+// читалась в логе как «не удалось собрать форму по этому описанию» — то есть никак.
 //
 // Провайдер и невыносимый ответ модели дают 503, а не 422: 422 сказал бы автору,
 // что не так с его описанием, — а не так с нашей стороной, и правильное действие
 // у него одно, попробовать ещё раз. 404 у выключенного провайдера — то же
 // поведение, что у непрописанного провайдера OAuth: ручки на этом контуре нет.
-func generationError(err error) error {
+func generationError(ctx context.Context, err error) error {
 	switch {
 	case errors.Is(err, ai.ErrDisabled):
 		return domain.ErrNotFound
+	case errors.Is(err, ai.ErrTruncated):
+		// В лог — обязательно и отдельной строкой: снаружи этот отказ неотличим от
+		// недоступного провайдера, а внутри это вырождение модели, и растущая частота
+		// таких строк — повод менять модель, а не искать сбой у себя.
+		httpserver.LoggerFrom(ctx).Warn("ai ответ оборван потолком токенов", slog.String("error", err.Error()))
+		// «Попробуйте ещё раз», а не «сформулируйте короче»: просьба ни при чём —
+		// модель сбилась на ровном месте, и тот же текст со второго раза проходит
+		// (две попытки внутри клиента у него уже были).
+		return fmt.Errorf("%w: ассистент сбился на этой просьбе, попробуйте ещё раз", domain.ErrUnavailable)
 	case errors.Is(err, ai.ErrRejected):
+		httpserver.LoggerFrom(ctx).Warn("ai ответ отвергнут проверкой", slog.String("error", err.Error()))
 		return fmt.Errorf("%w: не удалось собрать форму по этому описанию, попробуйте сформулировать иначе", domain.ErrUnavailable)
 	case errors.Is(err, ai.ErrProvider), errors.Is(err, ai.ErrEmptyAnswer):
 		return fmt.Errorf("%w: модель сейчас не отвечает, попробуйте ещё раз", domain.ErrUnavailable)

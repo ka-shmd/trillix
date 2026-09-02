@@ -44,6 +44,13 @@ func AskJSON(ctx context.Context, g Generator, req Request, check func(json.RawM
 	repair.User = req.User + "\n\n" + repairPrefix + firstErr.Error() + repairSuffix
 	second, err := g.Generate(ctx, repair)
 	if err != nil {
+		// Обрыв — исключение из правила ниже: это не отказ провайдера, а вырождение
+		// модели, и лечится оно повтором, а не иной формулировкой просьбы. Подмени мы
+		// причину на ErrRejected — автор услышал бы «сформулируйте иначе» там, где
+		// работает «попробуйте ещё раз», а лог не показал бы вырождения вовсе.
+		if errors.Is(err, ErrTruncated) {
+			return nil, fmt.Errorf("%w (первая попытка отвергнута: %v)", ErrTruncated, firstErr)
+		}
 		// Транспорт отказал на починке — наружу идёт причина ОТКАЗА МОДЕЛИ, а не
 		// транспорта: первая попытка уже показала, что провайдер отвечает, и
 		// «провайдер недоступен» отправило бы искать не там.

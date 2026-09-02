@@ -87,6 +87,38 @@ func TestAskJSON(t *testing.T) {
 		}
 	})
 
+	// Починка удлиняет запрос на замечание, поэтому именно на ней ответ и обрывается
+	// чаще всего. Причина обязана дожить до автора: «попросите меньше» и
+	// «сформулируйте иначе» — разные советы, и первый здесь единственный рабочий.
+	t.Run("обрыв на починке остаётся ErrTruncated", func(t *testing.T) {
+		fake := NewFakeReplies(
+			FakeReply{Answer: json.RawMessage(`{"а":1}`)},
+			FakeReply{Err: ErrTruncated},
+		)
+
+		_, err := AskJSON(context.Background(), fake, Request{User: "анкета"}, reject("пункт 2: тип не поддерживается"))
+		if !errors.Is(err, ErrTruncated) {
+			t.Fatalf("ошибка = %v, ожидалась ErrTruncated", err)
+		}
+		if !strings.Contains(err.Error(), "пункт 2") {
+			t.Errorf("ошибка %q потеряла причину первой попытки", err)
+		}
+	})
+
+	t.Run("обрыв на первой попытке не чинится", func(t *testing.T) {
+		fake := NewFakeReplies(FakeReply{Err: ErrTruncated})
+
+		_, err := AskJSON(context.Background(), fake, Request{User: "собери форму записи на маникюр"}, ok)
+		if !errors.Is(err, ErrTruncated) {
+			t.Fatalf("ошибка = %v, ожидалась ErrTruncated", err)
+		}
+		// Починка тот же потолок не обходит, а запрос только удлиняет: второй вызов
+		// здесь — потраченные деньги и секунды ожидания автора.
+		if n := len(fake.Requests()); n != 1 {
+			t.Errorf("вызовов модели = %d, ожидался один (обрыв не чинится)", n)
+		}
+	})
+
 	t.Run("отказ провайдера на починке — ErrRejected с первой причиной", func(t *testing.T) {
 		fake := NewFakeReplies(
 			FakeReply{Answer: json.RawMessage(`{"а":1}`)},

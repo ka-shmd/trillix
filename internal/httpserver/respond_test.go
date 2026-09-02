@@ -31,6 +31,9 @@ func TestWriteError_Mapping(t *testing.T) {
 		{"plan required", domain.ErrPlanRequired, http.StatusPaymentRequired, "plan_required"},
 		{"wrapped validation", fmt.Errorf("%w: bad email", domain.ErrValidation), http.StatusUnprocessableEntity, "validation_failed"},
 		{"unknown -> 500", errors.New("boom"), http.StatusInternalServerError, "internal"},
+		// Голый сентинел без дописанного текста: объяснять нечем, и наружу идёт
+		// та же общая фраза, что у любой пятисотки.
+		{"unavailable без текста", domain.ErrUnavailable, http.StatusServiceUnavailable, "unavailable"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -49,9 +52,48 @@ func TestWriteError_Mapping(t *testing.T) {
 			if env.Error.Code != c.code {
 				t.Fatalf("code = %q, ожидалось %q", env.Error.Code, c.code)
 			}
-			if c.status >= 500 && env.Error.Message != "internal server error" {
+			if c.status >= 500 && env.Error.Message != internalMessage {
 				t.Fatalf("5xx не должен раскрывать внутренний текст: %q", env.Error.Message)
 			}
 		})
 	}
+
+	// Единственное исключение из правила «5xx молчит»: текст, дописанный к
+	// ErrUnavailable, написан ДЛЯ ЧЕЛОВЕКА, и клиент показывает его как есть. Пока
+	// он резался вместе с прочими пятисотками, автор формы читал в чате ассистента
+	// английское «internal server error» вместо объяснения.
+	// Человеку на экран не уходит английского: `code` конверта английский и
+	// предназначен коду, а `message` читает автор формы.
+	t.Run("общий текст пятисотки — по-русски", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		WriteError(rec, httptest.NewRequest(http.MethodGet, "/", nil), errors.New("boom"))
+
+		var env errorEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatalf("тело не JSON: %v", err)
+		}
+		for _, r := range env.Error.Message {
+			if r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' {
+				t.Fatalf("в сообщении для человека латиница: %q", env.Error.Message)
+			}
+		}
+	})
+
+	t.Run("503 доносит дописанный текст до клиента", func(t *testing.T) {
+		rec := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/", nil)
+
+		WriteError(rec, req, fmt.Errorf("%w: модель сейчас не отвечает, попробуйте ещё раз", domain.ErrUnavailable))
+
+		if rec.Code != http.StatusServiceUnavailable {
+			t.Fatalf("статус = %d, ожидалось 503", rec.Code)
+		}
+		var env errorEnvelope
+		if err := json.Unmarshal(rec.Body.Bytes(), &env); err != nil {
+			t.Fatalf("тело не JSON: %v", err)
+		}
+		if env.Error.Message != "модель сейчас не отвечает, попробуйте ещё раз" {
+			t.Fatalf("сообщение = %q, ожидался текст для человека без служебного префикса", env.Error.Message)
+		}
+	})
 }

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -34,12 +35,35 @@ const (
 	dialTimeout = 5 * time.Second
 	// attempts — сколько раз пробуем один запрос. Ретрай ровно один: генерация
 	// стоит денег, а провайдер, отказавший дважды, не станет доступнее с третьей
-	// попытки. Ретраятся отказ транспорта, 5xx и пустой ответ; 4xx — нет, это наш
-	// запрос, и повтор вернёт то же самое.
+	// попытки. Ретраятся отказ транспорта, 5xx, пустой и оборванный ответ; 4xx —
+	// нет, это наш запрос, и повтор вернёт то же самое.
 	attempts = 2
-	// temperature — низкая: план формы это структура, а не сочинение; разброс
-	// здесь означает лишь то, что одна и та же просьба даёт разные наборы полей.
-	temperature = 0.3
+	// truncatedAttempts — у ОБОРВАННОГО ответа попыток на одну больше, и довод здесь
+	// другой, чем у отказа провайдера. Провайдер, молчащий дважды, молчит и в третий
+	// раз — состояние; вырождение модели (ErrTruncated) это бросок монеты на каждой
+	// попытке, поэтому третья попытка стоит своих денег: при наблюдаемых 17–40%
+	// вырождения две попытки оставляют автору 3–16% отказов, три — 0,5–6%.
+	truncatedAttempts = 3
+	// temperature — 0.5, и это НЕ вкусовая настройка «поменьше фантазии»: ниже
+	// начинается вырождение. План формы — структура, а не сочинение, поэтому
+	// изначально стояло 0.3; замер 2026-09-02 (qwen3.6-35b-a3b, сборка формы из
+	// пяти вопросов с оформлением, по 10 просьб на значение) показал, чем это
+	// оборачивается:
+	//
+	//	0.3 — 75% попыток вырождаются в пробельный забег, 6 отказов из 10 у автора
+	//	0.5 — 17% попыток, 0 отказов из 10
+	//	0.8 — 14% попыток, 0 отказов из 10, но растёт разброс: один прогон из
+	//	      десяти собрал форму из одного вопроса вместо пяти
+	//
+	// Пробельный забег — классическое зацикливание жадного декодирования: чем
+	// острее распределение, тем охотнее модель повторяет один и тот же токен, а
+	// пробел между лексемами JSON законен всегда, и грамматика схемы его не
+	// обрывает. 0.5 гасит цикл, не покупая разброса 0.8. Остаток (около 17%
+	// попыток) снимает ретрай клиента — см. ErrTruncated.
+	temperature = 0.5
+	// finishLength — причина остановки «упёрлись в max_tokens» у совместимого
+	// входа.
+	finishLength = "length"
 )
 
 // Client — клиент совместимого с OpenAI входа.
@@ -171,7 +195,7 @@ func (c *Client) Generate(ctx context.Context, req Request) (json.RawMessage, er
 	}
 
 	var lastErr error
-	for attempt := 1; attempt <= attempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		started := time.Now()
 		out, usage, retry, err := c.once(ctx, body)
 		if err == nil {
@@ -185,7 +209,11 @@ func (c *Client) Generate(ctx context.Context, req Request) (json.RawMessage, er
 			return out, nil
 		}
 		lastErr = err
-		if !retry || ctx.Err() != nil {
+		limit := attempts
+		if errors.Is(err, ErrTruncated) {
+			limit = truncatedAttempts
+		}
+		if !retry || attempt >= limit || ctx.Err() != nil {
 			break
 		}
 		c.log.Warn("ai retry",
@@ -279,6 +307,14 @@ func (c *Client) once(ctx context.Context, body []byte) (json.RawMessage, chatUs
 		}
 		return nil, usage, true, fmt.Errorf("%w (finish_reason=%q, completion_tokens=%d)",
 			ErrEmptyAnswer, finish, parsed.Usage.CompletionTokens)
+	}
+	// Обрыв по потолку — отказ, а не ответ: JSON оборван на полуслове. РЕТРАИТСЯ,
+	// как и пустой ответ, и ровно по той же причине: это не «мы попросили слишком
+	// много», а недетерминированное вырождение модели (см. ErrTruncated), и тот же
+	// запрос со второй попытки обычно проходит.
+	if parsed.Choices[0].FinishReason == finishLength {
+		return nil, usage, true, fmt.Errorf("%w (completion_tokens=%d, answer_bytes=%d)",
+			ErrTruncated, parsed.Usage.CompletionTokens, len(parsed.Choices[0].Message.Content))
 	}
 	return json.RawMessage(parsed.Choices[0].Message.Content), usage, false, nil
 }

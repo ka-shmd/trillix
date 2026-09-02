@@ -10,6 +10,7 @@ import { COVER_COLORS, DEFAULT_COVER_COLOR } from './designEdit'
 import { uploadImage, type FormIdSource } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { humanError } from '../../../shared/api/errors'
 
 // Хром страницы в РЕДАКТОРЕ: та же обложка и тот же логотип, что увидит респондент
 // (общие CoverBand/LogoMark из @fields), плюс жесты автора поверх них. Ни одного
@@ -136,7 +137,7 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
       // Новая картинка приходит без сдвига: точка фокуса прежней ей не подходит —
       // это другое изображение с другой композицией.
       .then((imageKey) => setCover({ imageKey }))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
       .finally(() => setProgress(null))
   }
 
@@ -274,7 +275,7 @@ export function LogoArea({ formId, over }: { formId: FormIdSource; over: boolean
     setProgress(0)
     uploadImage(formId, file, { onProgress: setProgress }, 'logo')
       .then((imageKey) => setLogo({ imageKey }))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
       .finally(() => setProgress(null))
   }
 
@@ -347,7 +348,7 @@ export function AddChrome({
     setError(null)
     uploadImage(formId, file, {}, 'logo')
       .then((imageKey) => setLogo({ imageKey }))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
   }
 
   // Кластер живёт, даже когда заводить нечего: «Оформление» — не «завести», оно

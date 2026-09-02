@@ -32,6 +32,12 @@ const (
 	MaxChatReplyLen = 2000
 	// chatTokens — потолок ответа модели. Меньше, чем у сборки с нуля: правка — это
 	// несколько операций, а не документ целиком.
+	//
+	// ЗАПАС ТРОЙНОЙ, И ЭТО ПРОВЕРЕНО: замер 2026-09-02 на самом длинном, что тут
+	// бывает (сборка формы из пяти вопросов с оформлением, прямо в разговоре), —
+	// 818–1273 токена. Упёршийся в потолок ответ означает не тесноту, а вырождение
+	// модели (`ai.ErrTruncated`), и поднимать потолок в ответ на него бесполезно:
+	// пробельный забег съест любой.
 	chatTokens = 4000
 )
 
@@ -231,7 +237,7 @@ func (s *Service) askAssistant(
 
 	raw, err := ai.AskJSON(ctx, s.ai, req, check)
 	if err != nil {
-		return chatIntent{}, generationError(err)
+		return chatIntent{}, generationError(ctx, err)
 	}
 	return parseIntent(raw)
 }

@@ -4,6 +4,7 @@ import { type Block } from '@entities/formSchema'
 import { mediaSrc } from '@fields/media'
 import { useBuilderStore } from './storeContext'
 import { uploadImage, type FormIdSource } from './mediaUpload'
+import { humanError } from '../../../shared/api/errors'
 
 // ImageField — редактор image-блока: пустой блок показывает зону загрузки, при
 // выборе файла — оптимистичный локальный превью (createObjectURL) с прогресс-баром,
@@ -32,7 +33,7 @@ export function ImageField({ block, formId }: { block: Block; formId: FormIdSour
     setProgress(0)
     uploadImage(formId, file, { onProgress: setProgress })
       .then((key) => updateBlock(block.id, { settings: { ...block.settings, imageKey: key } }))
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
       .finally(() => {
         URL.revokeObjectURL(localURL)
         setPreview(null)
