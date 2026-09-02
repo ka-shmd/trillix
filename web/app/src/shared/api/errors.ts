@@ -39,3 +39,14 @@ export async function toApiError(res: Response): Promise<ApiError> {
   }
   return new ApiError(res.status, 'unknown', 'Что-то пошло не так. Попробуйте ещё раз.')
 }
+
+// humanError — текст отказа для показа человеку.
+//
+// НАШ ТОЛЬКО ТЕКСТ ApiError: его пишет бэк по-русски и специально для автора
+// («модель сейчас не отвечает, попробуйте ещё раз»). Сообщение любой другой
+// ошибки приходит от браузера или рантайма и по-английски — `Failed to fetch`,
+// `NetworkError when attempting to fetch resource`, — поэтому наружу оно не идёт
+// никогда, вместо него подставляется fallback.
+export function humanError(err: unknown, fallback = 'Что-то пошло не так. Попробуйте ещё раз.'): string {
+  return err instanceof ApiError ? err.message : fallback
+}

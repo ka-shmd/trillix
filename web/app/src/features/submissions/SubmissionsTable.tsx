@@ -21,6 +21,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table'
+import { humanError } from '../../shared/api/errors'
 
 // Таблица раздела «Ответы»: СТРОКА — одна запись, КОЛОНКА — один вопрос. Таблица из
 // даты и номера версии показывает ответы только по одному — окном на каждую строку,
@@ -126,7 +127,7 @@ export function SubmissionsTable({
     try {
       await downloadSubmissionPdf(formId, row.id)
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Не удалось напечатать ответ.')
+      toast.error(humanError(err, 'Не удалось напечатать ответ.'))
     } finally {
       setPrinting(null)
     }

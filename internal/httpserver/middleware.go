@@ -61,7 +61,7 @@ func withRecover(next http.Handler) http.Handler {
 			if rec := recover(); rec != nil {
 				loggerFrom(r.Context()).Error("panic recovered", slog.Any("panic", rec))
 				WriteJSON(w, r, http.StatusInternalServerError,
-					errorEnvelope{Error: errorBody{Code: "internal", Message: "internal server error"}})
+					errorEnvelope{Error: errorBody{Code: "internal", Message: internalMessage}})
 			}
 		}()
 		next.ServeHTTP(w, r)

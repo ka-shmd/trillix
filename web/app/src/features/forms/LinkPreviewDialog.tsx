@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { humanError } from '../../shared/api/errors'
 
 // Окно настройки карточки ссылки: пять полей слева, живой предпросмотр справа.
 //
@@ -261,7 +262,7 @@ function ImageSlot({
     setBusy(true)
     uploadImage(formId, file, {}, purpose)
       .then(onChange)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
       .finally(() => setBusy(false))
   }
 

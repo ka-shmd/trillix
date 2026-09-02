@@ -31,6 +31,7 @@ import { uploadImage, type FormIdSource, type UploadPurpose } from './mediaUploa
 import { CONTROL, CONTROL_BOX, CONTROL_SHELL, LABEL } from './designControl'
 import { NumberRow } from './NumberRow'
 import { useBuilderStore } from './storeContext'
+import { humanError } from '../../../shared/api/errors'
 
 // ХРОМ СТРАНИЦЫ В ПАНЕЛИ «ОФОРМЛЕНИЕ» — строки «Логотип» и «Обложка» в секции
 // «Лэйаут» (решение владельца 2026-08-16).
@@ -71,7 +72,7 @@ function useChromeUpload(
       setProgress(0)
       uploadImage(formId, file, { onProgress: setProgress }, purpose)
         .then(apply)
-        .catch((err: unknown) => setError(err instanceof Error ? err.message : 'Ошибка загрузки'))
+        .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
         .finally(() => setProgress(null))
     })
     input.click()

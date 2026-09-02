@@ -12,6 +12,7 @@ import { formatDateTime } from '../../shared/format'
 import { type AnswerFile, type AnswerValue } from '../../entities/submission'
 import { Button } from '@/components/ui/button'
 import { DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
+import { humanError } from '../../shared/api/errors'
 
 // Одна запись целиком — отправленный ответ или незавершённый: вопросы текущей схемы
 // плюс ответы на вопросы прежних версий (block_id, которых в текущей схеме нет) —
@@ -97,7 +98,7 @@ export function SubmissionPanel({
               setPrinting(true)
               downloadSubmissionPdf(formId, row.id)
                 .catch((err: unknown) =>
-                  toast.error(err instanceof Error ? err.message : 'Не удалось напечатать ответ.'),
+                  toast.error(humanError(err, 'Не удалось напечатать ответ.')),
                 )
                 .finally(() => setPrinting(false))
             }}
