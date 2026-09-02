@@ -125,6 +125,26 @@ type PlanItem struct {
 	Placeholder string `json:"placeholder"`
 }
 
+// withCreatedBold — жирность, с которой заголовок ПРИХОДИТ ОТ АССИСТЕНТА (решение
+// владельца 2026-09-02): на полотне заголовки создаются жирными, и форма, собранная
+// разговором, обязана выглядеть так же — иначе автор решит, что одна из двух сломана.
+//
+// Вес в этом продукте живёт МАРКОЙ на тексте, а не в CSS (`--rf-weight-bold` у
+// .rf-title и .rf-label), поэтому «по умолчанию жирный» — это марка, проставленная в
+// момент создания, а не правило вида. Уже собранные формы от этого не меняются.
+//
+// Только при СОЗДАНИИ (ExpandPlan и add): у правки готового пункта жирность берётся
+// из ответа модели, иначе «сделай заголовки обычными» стало бы нечем выразить.
+//
+// Заголовками считаются подпись вопроса и заголовок раздела. Текст согласия и
+// пояснение — нет: они живут в самом блоке и заголовками не являются.
+func withCreatedBold(item PlanItem) PlanItem {
+	item.Bold = item.Bold ||
+		(item.Type.isAnswerable() && !item.Type.carriesText()) ||
+		item.Type.isHeading()
+	return item
+}
+
 // styledText — подпись пункта в виде спанов: один кусок с марками, названными
 // правкой. Пустой текст даёт пустой массив (одно представление пустоты).
 func styledText(item PlanItem) []Span {
@@ -377,12 +397,14 @@ func ExpandPlan(p FormPlan) (FormSchema, error) {
 		return FormSchema{}, err
 	}
 
+	// Заголовок формы тоже приходит жирным (см. withCreatedBold): здесь он именно
+	// создаётся, а не правится.
 	titleID := newBlockID()
 	blocks := []Block{{
 		ID:      titleID,
 		GroupID: groupIDOf(titleID),
 		Type:    BlockFormTitle,
-		Text:    TextFromString(p.Title),
+		Text:    styledText(PlanItem{Text: p.Title, Bold: true}),
 	}}
 
 	for _, item := range p.Items {
@@ -398,7 +420,7 @@ func expandPlanItem(item PlanItem) []Block {
 		id := newBlockID()
 		b := Block{ID: id, GroupID: groupIDOf(id), Type: item.Type}
 		if item.Type != BlockPageBreak {
-			b.Text = styledText(item)
+			b.Text = styledText(withCreatedBold(item))
 		}
 		if item.Type.isAnswerable() {
 			b.Required = item.Required
@@ -426,7 +448,7 @@ func expandPlanItem(item PlanItem) []Block {
 		field.Settings.ScaleMin, field.Settings.ScaleMax = &lo, &hi
 	}
 
-	caption := Block{ID: newBlockID(), GroupID: group, Type: BlockTitle, Text: styledText(item)}
+	caption := Block{ID: newBlockID(), GroupID: group, Type: BlockTitle, Text: styledText(withCreatedBold(item))}
 	return []Block{caption, field}
 }
 

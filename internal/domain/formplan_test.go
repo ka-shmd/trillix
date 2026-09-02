@@ -427,3 +427,39 @@ func TestPlanPlaceholder(t *testing.T) {
 		t.Errorf("слишком длинная подсказка принята: %v", err)
 	}
 }
+
+// Заголовки, СОЗДАННЫЕ ассистентом, приходят жирными (решение владельца 2026-09-02):
+// на полотне они такими создаются, и форма из разговора обязана выглядеть так же.
+// Жирность — марка на тексте, а не правило вида, поэтому проверяется в документе.
+func TestExpandPlanBoldsHeadings(t *testing.T) {
+	schema, err := ExpandPlan(FormPlan{Title: "Запись", Items: []PlanItem{
+		{Type: BlockShortText, Text: "Ваше имя"},
+		{Type: BlockHeading, Text: "Контакты"},
+		{Type: BlockText, Text: "Заполните форму до пятницы"},
+		{Type: BlockConsent, Text: "Согласен на обработку данных"},
+	}})
+	if err != nil {
+		t.Fatalf("ExpandPlan() вернул ошибку: %v", err)
+	}
+
+	bold := map[BlockType]bool{}
+	for _, b := range schema.Blocks {
+		if len(b.Text) == 0 {
+			continue
+		}
+		m, _, _ := styleOf(b.Text)
+		bold[b.Type] = m
+	}
+	for _, bt := range []BlockType{BlockFormTitle, BlockTitle, BlockHeading} {
+		if !bold[bt] {
+			t.Errorf("%s создан обычным весом, ожидался жирный", bt)
+		}
+	}
+	// Пояснение и текст согласия заголовками не являются: они живут в самом блоке и
+	// набраны обычным текстом формы.
+	for _, bt := range []BlockType{BlockText, BlockConsent} {
+		if bold[bt] {
+			t.Errorf("%s создан жирным, а это не заголовок", bt)
+		}
+	}
+}

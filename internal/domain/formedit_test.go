@@ -500,3 +500,28 @@ func TestApplyChatOps_Placeholder(t *testing.T) {
 		t.Errorf("подсказка осталась у типа, который её не показывает: %q", got)
 	}
 }
+
+// Заголовок формы: ассистент СОЗДАЁТ его жирным (пустой заголовок — это создание), а
+// переименовывая готовый, жирность берёт из ответа модели — автор мог снять её сам.
+func TestApplyChatOps_TitleBoldOnCreate(t *testing.T) {
+	empty := FormSchema{SchemaVersion: SchemaVersion, Blocks: []Block{
+		{ID: "ft", GroupID: "g_ft", Type: BlockFormTitle},
+	}}
+	out, err := ApplyChatEdit(empty, ChatEdit{Title: ChatTitle{Text: "Запись в барбершоп"}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	if bold, _, _ := styleOf(blockOf(t, out, "ft").Text); !bold {
+		t.Error("созданный заголовок формы не жирный")
+	}
+
+	// Готовый заголовок sampleForm набран обычным весом: переименование его таким и
+	// оставляет.
+	out, err = ApplyChatEdit(sampleForm(), ChatEdit{Title: ChatTitle{Text: "Другое название"}})
+	if err != nil {
+		t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+	}
+	if bold, _, _ := styleOf(blockOf(t, out, "blk_title").Text); bold {
+		t.Error("переименование само сделало заголовок жирным — автор снимал жирность не для этого")
+	}
+}
