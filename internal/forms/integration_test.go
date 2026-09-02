@@ -107,7 +107,7 @@ func newStackWithAI(t *testing.T, gen forms.Generator) *httptest.Server {
 	}
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF).
 		WithNotifyMail("no-reply@trillix.test", "Trillix", "Новый ответ в Trillix").
-		WithGenerateLimiter(allowLimiter{})
+		WithAILimiter(allowLimiter{})
 	formsPublic, err := forms.NewPublicHandler(formsSvc, testTokenSecret,
 		"http://localhost:5174", "http://localhost:5174/og-preview.png", fixtureIndexPath(t),
 		allowLimiter{}, false)
@@ -359,6 +359,93 @@ func TestForms_Generate_ProviderDown(t *testing.T) {
 	}
 	if usage != 0 {
 		t.Errorf("строк расхода = %d, ожидалось ноль: несостоявшийся вызов не списывается", usage)
+	}
+}
+
+// Разговор с ассистентом над формой (фаза 26, слайс E): вертикаль «ручка → право →
+// квота → модель → правка» против настоящей базы. Модель — ai.Fake.
+func TestForms_Chat(t *testing.T) {
+	resetDB(t)
+	const reply = `{"action":"edit_form","reply":"Добавил телефон.","title":"",` +
+		`"add":[{"after":"q1","item":{"type":"phone","text":"Телефон","required":true,"options":[],"scaleMin":0,"scaleMax":0}}],` +
+		`"update":[],"remove":[],"move":[]}`
+	srv := newStackWithAI(t, ai.NewFake(reply))
+	alice := registerUser(t, srv, "alice@example.com")
+	form := createForm(t, alice, srv, "Запись")
+
+	// Документ приходит В ТЕЛЕ: правится то, что автор видит сейчас.
+	schema := `{"schemaVersion":1,"blocks":[` +
+		`{"id":"blk_c","groupId":"g_blk_n","type":"title","text":[{"t":"Ваше имя"}],"settings":{}},` +
+		`{"id":"blk_n","groupId":"g_blk_n","type":"short_text","required":true,"settings":{}}]}`
+	body := `{"message":"добавь телефон","history":[],"schema":` + schema + `}`
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/"+form.ID+"/ai/chat", body, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("чат: статус %d, ожидалось 200; тело=%s", r.StatusCode, body2(t, r))
+	}
+	var got struct {
+		Reply  string          `json:"reply"`
+		Schema json.RawMessage `json:"schema"`
+	}
+	decode(t, r, &got)
+	if got.Reply != "Добавил телефон." {
+		t.Errorf("ответ ассистента = %q", got.Reply)
+	}
+	parsed, err := domain.ValidateSchema(got.Schema)
+	if err != nil {
+		t.Fatalf("правленый документ не проходит ValidateSchema: %v", err)
+	}
+	if len(parsed.Blocks) != 4 {
+		t.Fatalf("блоков после правки = %d, ожидалось 4", len(parsed.Blocks))
+	}
+	if parsed.Blocks[0].ID != "blk_c" || parsed.Blocks[1].ID != "blk_n" {
+		t.Errorf("правка не сохранила id прежних блоков: %s, %s", parsed.Blocks[0].ID, parsed.Blocks[1].ID)
+	}
+
+	// Ручка чата в базу не пишет: черновик остаётся тем, что сохранил автосейв.
+	// Пустым он при этом не бывает — заголовок формы синтезируется на чтении
+	// (EnsureFormTitle), поэтому смотрим на отсутствие того, что добавил ассистент.
+	detail := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
+	stored, err := domain.ValidateSchema(detail.DraftSchema)
+	if err != nil {
+		t.Fatalf("черновик из базы не разобрался: %v", err)
+	}
+	for _, b := range stored.Blocks {
+		if b.Type == domain.BlockPhone {
+			t.Fatalf("чат записал правку в базу — этого он делать не должен: %s", detail.DraftSchema)
+		}
+	}
+
+	// Сообщение списано ровно одно.
+	var used int64
+	err = testPool.QueryRow(context.Background(),
+		`SELECT ai_generations FROM workspace_usage
+		  WHERE period = date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date`).Scan(&used)
+	if err != nil {
+		t.Fatalf("чтение расхода: %v", err)
+	}
+	if used != 1 {
+		t.Errorf("расход = %d, ожидалось 1", used)
+	}
+}
+
+// Чужая форма — 404, и модель об этом не спрашивают (инвариант 1).
+func TestForms_Chat_ForeignForm(t *testing.T) {
+	resetDB(t)
+	fake := ai.NewFake(`{"action":"answer","reply":"ок","title":"","add":[],"update":[],"remove":[],"move":[]}`)
+	srv := newStackWithAI(t, fake)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+	bobForm := createForm(t, bob, srv, "Форма боба")
+
+	r := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms/"+bobForm.ID+"/ai/chat",
+		`{"message":"что тут спрашивается?","history":[],"schema":null}`, csrf(t, alice, srv.URL))
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("статус %d, ожидалось 404", r.StatusCode)
+	}
+	if n := len(fake.Requests()); n != 0 {
+		t.Errorf("вызовов модели = %d, ожидалось ноль", n)
 	}
 }
 

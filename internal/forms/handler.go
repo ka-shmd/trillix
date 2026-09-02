@@ -34,6 +34,8 @@ type formsService interface {
 	Create(ctx context.Context, userID uuid.UUID, title string, workspaceID *uuid.UUID) (Form, error)
 	// Generate собирает черновик формы по описанию автора (фаза 26).
 	Generate(ctx context.Context, userID uuid.UUID, prompt string, workspaceID *uuid.UUID) (Form, error)
+	// Chat — одна реплика разговора с ассистентом над формой (фаза 26, слайс E).
+	Chat(ctx context.Context, userID, formID uuid.UUID, message string, history []ChatTurn, schema json.RawMessage) (ChatResult, error)
 	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -76,11 +78,13 @@ type Handler struct {
 	// с notifyMail: тема у писем разная, и бланк обязан показывать ту, которая
 	// действительно уйдёт. Адресата здесь нет вовсе — он приезжает ответом.
 	respondentMail notifyMailBody
-	// generateLimiter — ведро генерации формы. Ключ — АККАУНТ, а не адрес: вызов
-	// стоит денег, и защищать надо от своего же цикла в кабинете, а не только от
-	// чужого перебора. Не подключён (юнит-тесты) = ограничения нет: инвариант 6
-	// требует инжектировать пермиссивную реализацию, а не ослаблять боевую.
-	generateLimiter RateLimiter
+	// aiLimiter — ведро обращений к модели, общее у сборки формы и чата. Ключ —
+	// АККАУНТ, а не адрес: вызов стоит денег, и защищать надо от своего же цикла в
+	// кабинете, а не только от чужого перебора. Одно ведро на обе ручки, потому что
+	// защищает оно один и тот же кошелёк. Не подключено (юнит-тесты) = ограничения
+	// нет: инвариант 6 требует инжектировать пермиссивную реализацию, а не ослаблять
+	// боевую.
+	aiLimiter RateLimiter
 }
 
 // RateLimiter — ведро запросов, нужное транспорту форм. Реализация —
@@ -89,11 +93,11 @@ type RateLimiter interface {
 	Allow(key string) bool
 }
 
-// WithGenerateLimiter подключает ведро генерации. Отдельным сеттером, а не
+// WithAILimiter подключает ведро обращений к модели. Отдельным сеттером, а не
 // аргументом конструктора: конструктор зовут из десятков тестов, которым ведро
 // безразлично.
-func (h *Handler) WithGenerateLimiter(l RateLimiter) *Handler {
-	h.generateLimiter = l
+func (h *Handler) WithAILimiter(l RateLimiter) *Handler {
+	h.aiLimiter = l
 	return h
 }
 
@@ -123,6 +127,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// Литеральный сегмент специфичнее /forms/{id}, коллизии в mux нет (тот же
 	// довод, что у /forms/lookup).
 	mux.Handle("POST /api/v1/forms/generate", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.generate))))
+	mux.Handle("POST /api/v1/forms/{id}/ai/chat", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.chat))))
 	mux.Handle("GET /api/v1/forms/{id}", h.requireAuth(http.HandlerFunc(h.get)))
 	// Резолв формы по slug (кабинет адресует форму slug'ом в URL редактора/ответов/
 	// шаринга, как рендерер — /r/{slug}). slug — в query, а не в пути: путь
@@ -554,6 +559,51 @@ func (h *Handler) create(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusCreated, toFormResponse(form))
 }
 
+// allowAI — пускает ли ведро ещё один вызов модели этим аккаунтом.
+func (h *Handler) allowAI(userID uuid.UUID) bool {
+	return h.aiLimiter == nil || h.aiLimiter.Allow(userID.String())
+}
+
+// chat — реплика разговора с ассистентом над формой (фаза 26, слайс E).
+//
+// Документ приходит В ТЕЛЕ и возвращается правленым, но в базу здесь не пишется:
+// черновик сохраняет автосейв полотна своим путём с оптимистичной блокировкой, и
+// второй писатель означал бы гонку с ним на ровном месте.
+func (h *Handler) chat(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	if !h.allowAI(userID) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком часто, подождите немного", domain.ErrRateLimited))
+		return
+	}
+	req, ok := decodeChat(w, r)
+	if !ok {
+		return
+	}
+
+	// Дедлайн записи продлевается по тому же поводу, что у сборки формы: общий
+	// WriteTimeout сервера короче, чем модель вправе думать.
+	ctx, cancel := context.WithTimeout(r.Context(), generateTimeout)
+	defer cancel()
+	httpserver.ExtendWriteDeadline(w, httpserver.LoggerFrom(r.Context()), generateTimeout+5*time.Second)
+
+	res, err := h.svc.Chat(ctx, userID, formID, req.Message, req.turns(), req.Schema)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	// Преобразованием, а не сборкой по полям: состав у результата сервиса и у DTO
+	// сегодня совпадает, и в день, когда разойдётся, эта строка перестанет
+	// компилироваться — то есть заметит расхождение за нас.
+	httpserver.WriteJSON(w, r, http.StatusOK, chatResponse(res))
+}
+
 // generate — форма по описанию автора (фаза 26). Ответ тот же, что у создания:
 // кабинет уходит в редактор по id, и знать, чем форма собрана, ему не нужно.
 func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
@@ -561,7 +611,7 @@ func (h *Handler) generate(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if h.generateLimiter != nil && !h.generateLimiter.Allow(userID.String()) {
+	if !h.allowAI(userID) {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком часто, подождите немного", domain.ErrRateLimited))
 		return
 	}
@@ -888,6 +938,51 @@ func parseWorkspaceID(w http.ResponseWriter, r *http.Request, raw *string) (*uui
 // починка) с запасом. Человек ждёт ответа на экране, и минута ожидания отказа —
 // предел терпимого; типичный ответ приходит за единицы секунд.
 const generateTimeout = 60 * time.Second
+
+// chatRequest — реплика автора, история разговора и документ, который он сейчас
+// видит. История приезжает с клиента (ADR §10): сервер чата состояния не держит.
+type chatRequest struct {
+	Message string          `json:"message"`
+	History []chatTurnDTO   `json:"history"`
+	Schema  json.RawMessage `json:"schema"`
+}
+
+// chatTurnDTO — реплика разговора. Роль строкой, как у совместимого входа: «кто
+// сказал» на клиенте и на сервере обязано называться одинаково.
+type chatTurnDTO struct {
+	Role string `json:"role"`
+	Text string `json:"text"`
+}
+
+const chatRoleAssistant = "assistant"
+
+func (r chatRequest) turns() []ChatTurn {
+	out := make([]ChatTurn, 0, len(r.History))
+	for _, t := range r.History {
+		out = append(out, ChatTurn{Assistant: t.Role == chatRoleAssistant, Text: t.Text})
+	}
+	return out
+}
+
+// chatResponse — что ассистент сказал и, если правил, новый документ формы.
+// Пустая схема означает «ничего не менял»: класть в ответ нетронутый документ
+// значило бы заставлять кабинет сравнивать его с тем, что у него уже есть.
+type chatResponse struct {
+	Reply  string          `json:"reply"`
+	Schema json.RawMessage `json:"schema,omitempty"`
+}
+
+func decodeChat(w http.ResponseWriter, r *http.Request) (chatRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req chatRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return chatRequest{}, false
+	}
+	return req, true
+}
 
 // generateRequest — описание формы словами и (необязательно) пространство, в
 // котором её создать.

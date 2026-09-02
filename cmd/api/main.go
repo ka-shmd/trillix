@@ -138,13 +138,16 @@ const (
 	inviteRatePerSec = 1.0 / 120.0
 	inviteBurst      = 5
 
-	// generateRatePerSec/generateBurst — сборка формы моделью. Ключ ведра —
-	// АККАУНТ: вызов стоит денег снаружи, и ограничивать надо того, кто платит, а
-	// не адрес, с которого пришли. Одна генерация в минуту при запасе на пять —
-	// месячная квота (10 на бесплатном плане) выбирается за пять минут, дальше
-	// отвечает она, а ведро держит цикл в кабинете и вкладку, залипшую на кнопке.
-	generateRatePerSec = 1.0 / 60.0
-	generateBurst      = 5
+	// aiRatePerSec/aiBurst — обращения к модели (сборка формы и чат, одно ведро на
+	// обе ручки: кошелёк у них общий). Ключ ведра — АККАУНТ: вызов стоит денег
+	// снаружи, и ограничивать надо того, кто платит, а не адрес, с которого пришли.
+	//
+	// Двенадцать в минуту при запасе на пять — темп разговора, а не сборки формы:
+	// минута между репликами (прежнее число под одноразовую генерацию) означала бы,
+	// что в чате нельзя переспросить. Настоящий потолок расхода держит квота тарифа,
+	// ведро отвечает только за всплеск: залипшую кнопку и цикл в кабинете.
+	aiRatePerSec = 1.0 / 5.0
+	aiBurst      = 5
 
 	resendRatePerSec = 1.0 / 300.0
 	resendBurst      = 3
@@ -435,9 +438,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{}, workspacesSvc, entitlementsSvc).
 		WithSecret(cfg.FormTokenSecret).
 		WithAI(formGenerator(cfg, log))
-	generateLimiter := ratelimit.NewTokenBucket(generateRatePerSec, generateBurst)
+	aiLimiter := ratelimit.NewTokenBucket(aiRatePerSec, aiBurst)
 	formsHandler := forms.NewHandler(formsSvc, authHandler.RequireAuth, authHandler.RequireCSRF).
-		WithGenerateLimiter(generateLimiter).
+		WithAILimiter(aiLimiter).
 		// Письмо о новом ответе без авторских правок — для бланка в настройках формы.
 		// Адрес и имя разбираются из MAIL_FROM («Trillix <no-reply@…>»), тема живёт
 		// в самом шаблоне письма. Разбор не удался — строки пустые, и кабинет

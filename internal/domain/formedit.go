@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"encoding/json"
 	"fmt"
 	"strconv"
 	"strings"
@@ -411,4 +412,140 @@ func mergeOptions(old []Option, labels []string) []Option {
 
 func opErr(format string, args ...any) error {
 	return fmt.Errorf("%w: "+format, append([]any{ErrValidation}, args...)...)
+}
+
+// ChatEdit — правка формы, как её присылает МОДЕЛЬ: четыре списка вместо одного
+// разнородного.
+//
+// Форма ответа выбрана под строгую схему провайдера, а не под удобство кода: в
+// строгом режиме каждое поле объекта обязано присутствовать, и один список
+// разнородных операций потребовал бы либо необязательного вложенного объекта
+// (`null` там принимают не все совместимые входы), либо пустышки-заглушки у
+// remove и move. Четыре однородных списка обходятся без того и другого.
+//
+// КЛЮЧИ ВНУТРИ ОДНОЙ ПРАВКИ ССЫЛАЮТСЯ НА ФОРМУ, КОТОРУЮ МОДЕЛЬ ВИДЕЛА: применение
+// пунктов не перенумеровывает, поэтому «после q3» значит «после того, что было
+// третьим», даже если q3 к тому моменту уже переехал. Новые пункты ключа не
+// получают — сослаться на них в той же правке нельзя.
+type ChatEdit struct {
+	// Title — новый заголовок формы; пусто = не трогаем.
+	Title string `json:"title"`
+	// Add — что добавить и после какого пункта (пусто — в начало формы).
+	Add []ChatAdd `json:"add"`
+	// Update — что заменить: ключ пункта и его новое содержимое.
+	Update []ChatUpdate `json:"update"`
+	// Remove — ключи пунктов на удаление.
+	Remove []string `json:"remove"`
+	// Move — что подвинуть и после какого пункта (пусто — в начало формы).
+	Move []ChatMove `json:"move"`
+}
+
+type ChatAdd struct {
+	After string   `json:"after"`
+	Item  ChatItem `json:"item"`
+}
+
+type ChatUpdate struct {
+	Target string   `json:"target"`
+	Item   ChatItem `json:"item"`
+}
+
+type ChatMove struct {
+	Target string `json:"target"`
+	After  string `json:"after"`
+}
+
+// Empty — правка ничего не меняет. Пустая правка при заявленной правке формы —
+// ошибка модели, а не безобидный ответ: она сказала, что что-то сделает.
+func (e ChatEdit) Empty() bool {
+	return strings.TrimSpace(e.Title) == "" && len(e.Add) == 0 && len(e.Update) == 0 &&
+		len(e.Remove) == 0 && len(e.Move) == 0
+}
+
+// ops разворачивает правку в плоский список операций. Порядок фиксирован —
+// заголовок, замены, удаления, переносы, добавления, — и это часть контракта:
+// перенос, целящийся в только что удалённый пункт, обязан отказать одинаково при
+// любом порядке списков в ответе модели.
+func (e ChatEdit) ops() []ChatOp {
+	var ops []ChatOp
+	if strings.TrimSpace(e.Title) != "" {
+		ops = append(ops, ChatOp{Op: OpTitle, Item: &ChatItem{PlanItem: PlanItem{Text: e.Title}}})
+	}
+	for _, u := range e.Update {
+		item := u.Item
+		ops = append(ops, ChatOp{Op: OpUpdate, Target: u.Target, Item: &item})
+	}
+	for _, key := range e.Remove {
+		ops = append(ops, ChatOp{Op: OpRemove, Target: key})
+	}
+	for _, m := range e.Move {
+		ops = append(ops, ChatOp{Op: OpMove, Target: m.Target, After: m.After})
+	}
+	for _, a := range e.Add {
+		item := a.Item
+		ops = append(ops, ChatOp{Op: OpAdd, After: a.After, Item: &item})
+	}
+	return ops
+}
+
+// ApplyChatEdit — правка модели поверх документа.
+func ApplyChatEdit(s FormSchema, e ChatEdit) (FormSchema, error) {
+	return ApplyChatOps(s, e.ops())
+}
+
+// Что модель может сделать в ответ на реплику автора. Закрытый список: он же
+// перечислением уезжает в схему ответа, и неизвестное действие отвергается.
+const (
+	// ActionEdit — правка формы: reply объясняет сделанное, списки правок несут само
+	// изменение.
+	ActionEdit = "edit_form"
+	// ActionAnswer — ответ словами, документ не трогаем.
+	ActionAnswer = "answer"
+)
+
+// ChatJSONSchema — схема ответа модели в разговоре.
+//
+// Все поля обязательны (строгий режим провайдера иначе не работает), поэтому
+// «ничего не меняем» выражается пустыми списками и пустым заголовком, а не
+// отсутствием ключей.
+func ChatJSONSchema() json.RawMessage {
+	item := planItemJSONSchema()
+	return json.RawMessage(fmt.Sprintf(`{
+  "type": "object",
+  "properties": {
+    "action": {"type": "string", "enum": [%q, %q]},
+    "reply": {"type": "string"},
+    "title": {"type": "string"},
+    "add": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"after": {"type": "string"}, "item": %s},
+        "required": ["after", "item"],
+        "additionalProperties": false
+      }
+    },
+    "update": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"target": {"type": "string"}, "item": %s},
+        "required": ["target", "item"],
+        "additionalProperties": false
+      }
+    },
+    "remove": {"type": "array", "items": {"type": "string"}},
+    "move": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {"target": {"type": "string"}, "after": {"type": "string"}},
+        "required": ["target", "after"],
+        "additionalProperties": false
+      }
+    }
+  },
+  "required": ["action", "reply", "title", "add", "update", "remove", "move"],
+  "additionalProperties": false
+}`, ActionEdit, ActionAnswer, item, item))
 }

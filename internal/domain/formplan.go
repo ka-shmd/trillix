@@ -119,22 +119,16 @@ func PlanTypes() []PlanTypeDoc {
 	return out
 }
 
-// PlanJSONSchema — схема ответа модели (json_schema у провайдера). Перечисление
-// типов берётся из реестра, поэтому новый тип попадает в схему тогда же, когда в
-// инструкцию, и разойтись им нечем.
-func PlanJSONSchema() json.RawMessage {
+// planItemJSONSchema — один пункт в схеме ответа модели. Общий кусок: его берут и
+// генерация формы с нуля, и правка в разговоре, и перечисление типов в обоих —
+// одно и то же, из реестра.
+func planItemJSONSchema() string {
 	types := make([]string, 0, len(planTypeOrder))
 	for _, d := range PlanTypes() {
 		types = append(types, string(d.Type))
 	}
 	enum, _ := json.Marshal(types)
-	return json.RawMessage(fmt.Sprintf(`{
-  "type": "object",
-  "properties": {
-    "title": {"type": "string"},
-    "items": {
-      "type": "array",
-      "items": {
+	return fmt.Sprintf(`{
         "type": "object",
         "properties": {
           "type": {"type": "string", "enum": %s},
@@ -146,12 +140,25 @@ func PlanJSONSchema() json.RawMessage {
         },
         "required": ["type", "text", "required", "options", "scaleMin", "scaleMax"],
         "additionalProperties": false
-      }
+      }`, enum)
+}
+
+// PlanJSONSchema — схема ответа модели (json_schema у провайдера). Перечисление
+// типов берётся из реестра, поэтому новый тип попадает в схему тогда же, когда в
+// инструкцию, и разойтись им нечем.
+func PlanJSONSchema() json.RawMessage {
+	return json.RawMessage(fmt.Sprintf(`{
+  "type": "object",
+  "properties": {
+    "title": {"type": "string"},
+    "items": {
+      "type": "array",
+      "items": %s
     }
   },
   "required": ["title", "items"],
   "additionalProperties": false
-}`, enum))
+}`, planItemJSONSchema()))
 }
 
 // ParsePlan строго разбирает ответ модели. Строго — то есть лишние поля отвергаются,

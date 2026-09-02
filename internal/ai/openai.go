@@ -210,6 +210,13 @@ func (c *Client) chatRequest(req Request) chatRequest {
 	if req.System != "" {
 		out.Messages = append(out.Messages, chatMessage{Role: "system", Content: req.System})
 	}
+	for _, t := range req.History {
+		role := "user"
+		if t.Assistant {
+			role = "assistant"
+		}
+		out.Messages = append(out.Messages, chatMessage{Role: role, Content: t.Text})
+	}
 	out.Messages = append(out.Messages, chatMessage{Role: "user", Content: req.User})
 	if len(req.Schema) > 0 {
 		out.ResponseFormat = &responseFormat{
