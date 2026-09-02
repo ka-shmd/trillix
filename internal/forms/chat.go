@@ -117,33 +117,29 @@ func (s *Service) Chat(
 	}
 
 	result := ChatResult{Reply: trimRunes(intent.Reply, MaxChatReplyLen)}
-	var updated domain.FormSchema
-	switch intent.Action {
-	case domain.ActionEdit:
-		updated, err = domain.ApplyChatEdit(schema, intent.ChatEdit)
-	case domain.ActionDesign:
-		// ГЕЙТ СТОИТ ЗДЕСЬ, а не на публикации: покрасить форму, чтобы автор упёрся
-		// в 402 при попытке её опубликовать, — худший из вариантов. Модели про тариф
-		// сказано в инструкции, но замер показал, что она это указание нарушает,
-		// поэтому решает всё равно сервер.
-		//
-		// ПЛАТНОЕ ОТСЕКАЕТСЯ, А БЕСПЛАТНОЕ ДЕЛАЕТСЯ: «сделай тёмной и покрась в
-		// синий» на бесплатном тарифе даёт тёмную форму и честную фразу про цвета —
-		// отказать целиком значило бы не сделать и того, что человеку положено.
-		// Ответ ассистента при этом ЗАМЕНЯЕТСЯ нашим: свой он написал про обе
-		// правки, и оставить его значило бы соврать.
-		patch := intent.Design
-		if paid := domain.ChatDesignPaid(patch); len(paid) > 0 && !paidDesign {
-			patch = domain.ChatDesignFree(patch)
-			if patch.Empty() {
-				return ChatResult{}, fmt.Errorf("%w: %s — платная возможность, на этом тарифе доступна только тема",
-					domain.ErrPlanRequired, strings.Join(paid, " и "))
-			}
-			result.Reply = fmt.Sprintf("Поменял тему. %s — платная возможность, на этом тарифе недоступна.",
-				capitalize(strings.Join(paid, " и ")))
+
+	// ГЕЙТ ОФОРМЛЕНИЯ СТОИТ ЗДЕСЬ, а не на публикации: покрасить форму, чтобы автор
+	// упёрся в 402 при попытке её опубликовать, — худший из вариантов. Модели про
+	// тариф сказано в инструкции, но замер показал, что она это указание нарушает,
+	// поэтому решает всё равно сервер.
+	//
+	// ПЛАТНОЕ ОТСЕКАЕТСЯ, А БЕСПЛАТНОЕ ДЕЛАЕТСЯ: «сделай тёмной и покрась в синий»
+	// на бесплатном тарифе даёт тёмную форму и честную фразу про цвета — отказать
+	// целиком значило бы не сделать и того, что человеку положено. Ответ ассистента
+	// при этом ЗАМЕНЯЕТСЯ нашим: свой он написал про обе правки.
+	if paid := domain.ChatDesignPaid(intent.Design); len(paid) > 0 && !paidDesign {
+		intent.Design = domain.ChatDesignFree(intent.Design)
+		if intent.Design.Empty() && intent.Empty() {
+			return ChatResult{}, fmt.Errorf("%w: %s — платная возможность, на этом тарифе она недоступна",
+				domain.ErrPlanRequired, strings.Join(paid, " и "))
 		}
-		updated, err = domain.ApplyChatDesign(schema, patch)
+		// Ответ ассистента ЗАМЕНЯЕТСЯ целиком, а не дополняется: свой он написал про
+		// всю просьбу разом («сделал тёмной и покрасил в синий»), и приписка «цвета
+		// недоступны» рядом с этой фразой противоречила бы ей же.
+		result.Reply = paidRefusalReply(intent, paid)
 	}
+
+	updated, err := applyIntent(schema, intent)
 	if err != nil {
 		// Сюда попасть можно только при расхождении внутри домена: тот же разбор уже
 		// прошёл проверкой цикла починки. Поэтому %v, а не %w: это наша поломка, и
@@ -151,7 +147,9 @@ func (s *Service) Chat(
 		// значит выдавать внутренности за объяснение.
 		return ChatResult{}, fmt.Errorf("apply chat intent %q: %v", intent.Action, err)
 	}
-	if intent.Action != domain.ActionAnswer {
+	// Документ возвращается, только если он изменился: класть нетронутый значило бы
+	// заставлять кабинет сравнивать его с тем, что у него уже есть.
+	if !intent.Empty() || !intent.Design.Empty() {
 		doc, err := json.Marshal(updated)
 		if err != nil {
 			return ChatResult{}, fmt.Errorf("marshal edited schema: %w", err)
@@ -198,12 +196,7 @@ func (s *Service) askAssistant(
 		// МИНА: проверять надо ОБА действия. Пока здесь стояла только правка
 		// вопросов, негодное оформление (цвет заглавными буквами) доживало до
 		// применения и вылезало пятисоткой вместо второй попытки модели.
-		switch intent.Action {
-		case domain.ActionEdit:
-			_, err = domain.ApplyChatEdit(schema, intent.ChatEdit)
-		case domain.ActionDesign:
-			_, err = domain.ApplyChatDesign(schema, intent.Design)
-		}
+		_, err = applyIntent(schema, intent)
 		return err
 	}
 
@@ -212,6 +205,39 @@ func (s *Service) askAssistant(
 		return chatIntent{}, generationError(err)
 	}
 	return parseIntent(raw)
+}
+
+// paidRefusalReply — что ассистент скажет, когда часть правки вида отсечена
+// тарифом. Собирается из того, что мы РЕАЛЬНО применили, а не из слов модели.
+func paidRefusalReply(intent chatIntent, paid []string) string {
+	var did []string
+	if !intent.Empty() {
+		did = append(did, "правки вопросов применил")
+	}
+	if !intent.Design.Empty() {
+		did = append(did, "вид поменял в доступной части")
+	}
+	return fmt.Sprintf("%s. %s — платная возможность, на этом тарифе недоступна.",
+		capitalize(strings.Join(did, ", ")), capitalize(strings.Join(paid, ", ")))
+}
+
+// applyIntent накладывает обе части ответа — правку вопросов и правку вида — на
+// документ. Одна функция на проверку и на применение: разойдись они, проверка цикла
+// починки перестала бы ловить то, на чём падает применение (так и случилось с
+// оформлением, пока проверка смотрела только на вопросы).
+func applyIntent(s domain.FormSchema, intent chatIntent) (domain.FormSchema, error) {
+	var err error
+	if !intent.Empty() {
+		if s, err = domain.ApplyChatEdit(s, intent.ChatEdit); err != nil {
+			return domain.FormSchema{}, err
+		}
+	}
+	if !intent.Design.Empty() {
+		if s, err = domain.ApplyChatDesign(s, intent.Design); err != nil {
+			return domain.FormSchema{}, err
+		}
+	}
+	return s, nil
 }
 
 // parseIntent разбирает ответ модели строго: лишние поля отвергаются, как и в
@@ -229,13 +255,12 @@ func parseIntent(raw json.RawMessage) (chatIntent, error) {
 	}
 	switch intent.Action {
 	case domain.ActionEdit:
-		if intent.Empty() {
+		// Правка ВПРАВЕ нести и оформление: «сделай заголовки жирными и скругления
+		// 8px» — одна просьба автора, и требовать от модели выбрать половину значит
+		// получить половину сделанного и рапорт про целое.
+		if intent.Empty() && intent.Design.Empty() {
 			return chatIntent{}, fmt.Errorf("%w: заявлена правка формы, но ни одного изменения не названо; "+
 				"если менять нечего, отвечай действием %q", domain.ErrValidation, domain.ActionAnswer)
-		}
-		if !intent.Design.Empty() {
-			return chatIntent{}, fmt.Errorf("%w: действие %q оформления не касается; для вида формы возьми %q",
-				domain.ErrValidation, domain.ActionEdit, domain.ActionDesign)
 		}
 	case domain.ActionDesign:
 		if intent.Design.Empty() {
@@ -303,12 +328,14 @@ func chatInstructions(form domain.ChatForm, paidDesign bool) string {
 	var b strings.Builder
 	b.WriteString(`Ты — помощник в редакторе форм. Отвечай только JSON по схеме ответа.
 
-Два действия:
-- "` + domain.ActionEdit + `" — изменить форму: добавить, заменить, убрать, переставить пункты, сменить заголовок. В reply одной фразой скажи, что сделал.
-- "` + domain.ActionDesign + `" — изменить ВИД формы: тема, шрифт, цвет акцента, цвет страницы. Вопросов это действие не трогает.
+Три действия:
+- "` + domain.ActionEdit + `" — изменить форму: добавить, заменить, убрать, переставить пункты, сменить заголовок. МОЖНО одновременно поправить и вид (поле design) — если просьба про то и другое сразу, бери именно это действие и заполняй обе части.
+- "` + domain.ActionDesign + `" — изменить только ВИД формы, вопросов не трогая.
 - "` + domain.ActionAnswer + `" — ответить словами о самой форме, ничего не меняя. Списки правок и оформление при этом пустые.
 
 ГЛАВНОЕ: форму меняют ТОЛЬКО списки add, update, remove, move и поле title. Что не попало в них — не произошло. Написать в reply «добавил вопросы» и оставить add пустым — ошибка.
+
+reply обязан СООТВЕТСТВОВАТЬ заполненным полям: не приписывай себе того, чего в них нет, и не отрицай того, что в них есть. Если поле заполнено — значит ты это сделал, так и пиши. Если часть просьбы выполнить нечем — сделай остальное и честно скажи, чего не сделал и почему.
 
 reply — это то, что автор прочитает в чате. Никогда не упоминай в нём JSON, схему ответа, поля, действия и прочее своё устройство: автор их не видит.
 Плохо: «не могу изменить это через JSON». Хорошо: «Скругление полей меняется в панели оформления».
@@ -323,7 +350,8 @@ reply — это то, что автор прочитает в чате. Ник�
 - Ключи пунктов (q1, q2, …) бери только из формы ниже. У новых пунктов ключа нет — сослаться на них в этой же правке нельзя.
 - add.after и move.after — ключ пункта, ПОСЛЕ которого встать; пустая строка — в начало формы. Несколько добавлений с одним after встают в том порядке, в каком перечислены.
 - update заменяет пункт целиком: пришли его новое содержимое, включая варианты.
-- title — новый заголовок формы; пустая строка — не менять.
+- title.text — новый заголовок формы; пустая строка — не менять. У заголовка есть своё оформление: title.bold, title.color, title.bg.
+- ЖИРНОСТЬ ПОДПИСИ И ЕЁ ЦВЕТА — ЭТО ПРАВКА ПУНКТА, а не оформление формы: «сделай все заголовки жирными» = update на каждый пункт с bold: true и прежними text, type, options. «Выдели заголовок формы фоном» = title с полем bg.
 - Делай ровно то, о чём попросили: остальные пункты не трогай.
 
 `)

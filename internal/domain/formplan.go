@@ -90,6 +90,42 @@ type PlanItem struct {
 	// законное значение обеих границ.
 	ScaleMin int `json:"scaleMin"`
 	ScaleMax int `json:"scaleMax"`
+	// Bold, Color, BG — оформление ПОДПИСИ целиком: жирная, цвет текста, цвет фона
+	// (последние два — #rrggbb, пусто = обычный).
+	//
+	// Целиком, а не по кускам: богатый текст в схеме — массив спанов со своими
+	// марками, и отдавать модели спаны значило бы просить её размечать текст
+	// посимвольно там, где просят «сделай заголовки жирными». Кусочная разметка
+	// остаётся за полотном, где её видно.
+	Bold  bool   `json:"bold"`
+	Color string `json:"color"`
+	BG    string `json:"bg"`
+}
+
+// styledText — подпись пункта в виде спанов: один кусок с марками, названными
+// правкой. Пустой текст даёт пустой массив (одно представление пустоты).
+func styledText(item PlanItem) []Span {
+	spans := TextFromString(item.Text)
+	if len(spans) == 0 {
+		return nil
+	}
+	if item.Bold {
+		spans[0].M = []Mark{MarkBold}
+	}
+	spans[0].Color = normalizeHex(item.Color)
+	spans[0].BG = normalizeHex(item.BG)
+	return spans
+}
+
+// styleOf — обратный ход: марки первого куска подписи. Разметка, сделанная на
+// полотне по кускам, схлопывается до «жирная/не жирная» — модель видит то, что
+// умеет назвать, и не пытается пересобрать чужую разметку.
+func styleOf(spans []Span) (bold bool, color, bg string) {
+	if len(spans) == 0 {
+		return false, "", ""
+	}
+	first := spans[0]
+	return slices.Contains(first.M, MarkBold), first.Color, first.BG
 }
 
 // MaxPlanItems — потолок пунктов плана. Меньше MaxBlocks, потому что пункт
@@ -136,9 +172,12 @@ func planItemJSONSchema() string {
           "required": {"type": "boolean"},
           "options": {"type": "array", "items": {"type": "string"}},
           "scaleMin": {"type": "integer"},
-          "scaleMax": {"type": "integer"}
+          "scaleMax": {"type": "integer"},
+          "bold": {"type": "boolean"},
+          "color": {"type": "string"},
+          "bg": {"type": "string"}
         },
-        "required": ["type", "text", "required", "options", "scaleMin", "scaleMax"],
+        "required": ["type", "text", "required", "options", "scaleMin", "scaleMax", "bold", "color", "bg"],
         "additionalProperties": false
       }`, enum)
 }
@@ -244,6 +283,11 @@ func validatePlanItem(item PlanItem) error {
 			}
 		}
 	}
+	for _, c := range []struct{ name, value string }{{"color", item.Color}, {"bg", item.BG}} {
+		if c.value != "" && !isHexColor(normalizeHex(c.value)) {
+			return planErr("%s: %q — нужен цвет вида #rrggbb", c.name, c.value)
+		}
+	}
 	if item.Type == BlockScale && (item.ScaleMin != 0 || item.ScaleMax != 0) {
 		// Границы либо обе не заданы (тогда дефолт), либо осмысленны. Правило то
 		// же, что в схеме: половина диапазона — ошибка.
@@ -321,7 +365,7 @@ func expandPlanItem(item PlanItem) []Block {
 		id := newBlockID()
 		b := Block{ID: id, GroupID: groupIDOf(id), Type: item.Type}
 		if item.Type != BlockPageBreak {
-			b.Text = TextFromString(item.Text)
+			b.Text = styledText(item)
 		}
 		if item.Type.isAnswerable() {
 			b.Required = item.Required
@@ -348,7 +392,7 @@ func expandPlanItem(item PlanItem) []Block {
 		field.Settings.ScaleMin, field.Settings.ScaleMax = &lo, &hi
 	}
 
-	caption := Block{ID: newBlockID(), GroupID: group, Type: BlockTitle, Text: TextFromString(item.Text)}
+	caption := Block{ID: newBlockID(), GroupID: group, Type: BlockTitle, Text: styledText(item)}
 	return []Block{caption, field}
 }
 

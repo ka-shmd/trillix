@@ -33,11 +33,11 @@ func chatService(gen Generator, plans *fakePlans) (*Service, *fakeStore) {
 	return NewService(nil, fakeTx{}, store, &fakeAccess{}, plans).WithAI(gen), store
 }
 
-const editAnswer = `{"action":"edit_form","reply":"Добавил вопрос про бюджет.","title":"",
+const editAnswer = `{"action":"edit_form","reply":"Добавил вопрос про бюджет.","title":{"text":"","bold":false,"color":"","bg":""},
  "add":[{"after":"q2","item":{"type":"number","text":"Бюджет","required":false,"options":[],"scaleMin":0,"scaleMax":0}}],
  "update":[],"remove":[],"move":[]}`
 
-const answerOnly = `{"action":"answer","reply":"В форме два вопроса: имя и телефон.","title":"",
+const answerOnly = `{"action":"answer","reply":"В форме два вопроса: имя и телефон.","title":{"text":"","bold":false,"color":"","bg":""},
  "add":[],"update":[],"remove":[],"move":[]}`
 
 func TestChat(t *testing.T) {
@@ -189,7 +189,7 @@ func TestChat(t *testing.T) {
 
 	// Негодный ответ модели чинится второй попыткой — той же, что у сборки формы.
 	t.Run("негодная правка чинится второй попыткой", func(t *testing.T) {
-		bad := `{"action":"edit_form","reply":"убрал","title":"","add":[],"update":[],"remove":["q99"],"move":[]}`
+		bad := `{"action":"edit_form","reply":"убрал","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":["q99"],"move":[]}`
 		fake := ai.NewFake(bad, editAnswer)
 		svc, store := chatService(fake, &fakePlans{allowed: true})
 
@@ -211,10 +211,10 @@ func TestChat(t *testing.T) {
 
 	t.Run("несогласованный ответ модели отвергается", func(t *testing.T) {
 		cases := map[string]string{
-			"неизвестное действие": `{"action":"delete_form","reply":"ок","title":"","add":[],"update":[],"remove":[],"move":[]}`,
-			"правка без правок":    `{"action":"edit_form","reply":"поправил","title":"","add":[],"update":[],"remove":[],"move":[]}`,
-			"ответ с правками":     `{"action":"answer","reply":"вот","title":"Другое","add":[],"update":[],"remove":[],"move":[]}`,
-			"пустой ответ":         `{"action":"answer","reply":"  ","title":"","add":[],"update":[],"remove":[],"move":[]}`,
+			"неизвестное действие": `{"action":"delete_form","reply":"ок","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[]}`,
+			"правка без правок":    `{"action":"edit_form","reply":"поправил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[]}`,
+			"ответ с правками":     `{"action":"answer","reply":"вот","title":{"text":"Другое","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[]}`,
+			"пустой ответ":         `{"action":"answer","reply":"  ","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[]}`,
 		}
 		for name, answer := range cases {
 			t.Run(name, func(t *testing.T) {
@@ -260,9 +260,9 @@ func TestChat(t *testing.T) {
 // Оформление через чат (слайс F). Гейт стоит НА ВХОДЕ, а не на публикации: покрасить
 // форму, чтобы автор упёрся в 402 при попытке её опубликовать, — худший из вариантов.
 func TestChat_Design(t *testing.T) {
-	const dark = `{"action":"design","reply":"Сделал тёмную тему.","title":"","add":[],"update":[],"remove":[],"move":[],
+	const dark = `{"action":"design","reply":"Сделал тёмную тему.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 	 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
-	const blue = `{"action":"design","reply":"Покрасил в синий.","title":"","add":[],"update":[],"remove":[],"move":[],
+	const blue = `{"action":"design","reply":"Покрасил в синий.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 	 "design":{"theme":"","font":"","accent":"#2563eb","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 
 	t.Run("тема ложится на документ", func(t *testing.T) {
@@ -312,7 +312,7 @@ func TestChat_Design(t *testing.T) {
 	// бесплатное делается, платное отсекается, а ответ ассистента заменяется нашим —
 	// свой он написал про обе правки сразу.
 	t.Run("тема с цветом на закрытом тарифе: тема встаёт, цвет объясняется", func(t *testing.T) {
-		const both = `{"action":"design","reply":"Сделал тёмной и покрасил в синий.","title":"","add":[],"update":[],"remove":[],"move":[],
+		const both = `{"action":"design","reply":"Сделал тёмной и покрасил в синий.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"dark","font":"","accent":"#2563eb","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
 		svc, store := chatService(ai.NewFake(both), plans)
@@ -336,6 +336,9 @@ func TestChat_Design(t *testing.T) {
 		}
 		if strings.Contains(res.Reply, "покрасил") {
 			t.Errorf("ответ = %q — оставлено обещание модели, которого мы не выполнили", res.Reply)
+		}
+		if !strings.Contains(res.Reply, "Вид поменял") {
+			t.Errorf("ответ = %q — не сказано, что часть правки всё же применена", res.Reply)
 		}
 	})
 
@@ -373,11 +376,9 @@ func TestChat_Design(t *testing.T) {
 
 	t.Run("несогласованные ответы про оформление отвергаются", func(t *testing.T) {
 		cases := map[string]string{
-			"оформление без настроек": `{"action":"design","reply":"покрасил","title":"","add":[],"update":[],"remove":[],"move":[],
+			"оформление без настроек": `{"action":"design","reply":"покрасил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 			 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
-			"оформление с вопросами": `{"action":"design","reply":"и то и то","title":"Другое","add":[],"update":[],"remove":[],"move":[],
-			 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
-			"правка с оформлением": `{"action":"edit_form","reply":"добавил","title":"","add":[],"update":[],"remove":["q1"],"move":[],
+			"оформление с вопросами": `{"action":"design","reply":"и то и то","title":{"text":"Другое","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 			 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
 		}
 		for name, answer := range cases {
@@ -398,7 +399,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// нижний регистр. Приводим сами: вторая попытка из-за регистра букв — трата
 	// ожидания автора и денег.
 	t.Run("цвет заглавными принимается", func(t *testing.T) {
-		const upper = `{"action":"design","reply":"Сделал фон жёлтым.","title":"","add":[],"update":[],"remove":[],"move":[],
+		const upper = `{"action":"design","reply":"Сделал фон жёлтым.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"","canvas":"#FFFF00","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		fake := ai.NewFake(upper)
 		svc, store := chatService(fake, &fakePlans{allowed: true})
@@ -421,7 +422,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 
 	// Ширина колонки просится словами («сделай пошире»), поэтому она в словаре чата.
 	t.Run("ширина колонки применяется", func(t *testing.T) {
-		const wide = `{"action":"design","reply":"Сделал колонку шире.","title":"","add":[],"update":[],"remove":[],"move":[],
+		const wide = `{"action":"design","reply":"Сделал колонку шире.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":1200,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		svc, store := chatService(ai.NewFake(wide), &fakePlans{allowed: true})
 
@@ -442,9 +443,9 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// применения: пока проверка цикла смотрела только на правку вопросов, кривой
 	// цвет доживал до применения и показывался автору внутренностями валидатора.
 	t.Run("негодное оформление чинится второй попыткой", func(t *testing.T) {
-		const bad = `{"action":"design","reply":"покрасил","title":"","add":[],"update":[],"remove":[],"move":[],
+		const bad = `{"action":"design","reply":"покрасил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"зелёный","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
-		const good = `{"action":"design","reply":"Покрасил акцент в зелёный.","title":"","add":[],"update":[],"remove":[],"move":[],
+		const good = `{"action":"design","reply":"Покрасил акцент в зелёный.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"#16a34a","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		fake := ai.NewFake(bad, good)
 		svc, store := chatService(fake, &fakePlans{allowed: true})
@@ -468,7 +469,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// Ширина — платная настройка (ширина колонки), значит на закрытом тарифе она
 	// отсекается так же, как цвет.
 	t.Run("ширина на закрытом тарифе — платная", func(t *testing.T) {
-		const wide = `{"action":"design","reply":"Сделал шире.","title":"","add":[],"update":[],"remove":[],"move":[],
+		const wide = `{"action":"design","reply":"Сделал шире.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":1200,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
 		svc, store := chatService(ai.NewFake(wide), plans)
@@ -487,7 +488,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 // толщина края, плотность, выравнивание, вид кнопки. Заодно проверяется сентинел:
 // ноль у скругления значит «убрать скругления», а не «не трогать».
 func TestChat_DesignVocabulary(t *testing.T) {
-	const rich = `{"action":"design","reply":"Убрал скругления и сделал форму просторнее.","title":"",
+	const rich = `{"action":"design","reply":"Убрал скругления и сделал форму просторнее.","title":{"text":"","bold":false,"color":"","bg":""},
 	 "add":[],"update":[],"remove":[],"move":[],
 	 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"",
 	  "width":-1,"fontSize":-1,"density":"roomy","align":"","radius":0,"borderWidth":2,
@@ -531,5 +532,35 @@ func TestChat_MissingDesignIsNotAnEdit(t *testing.T) {
 	}
 	if res.Schema != nil {
 		t.Errorf("ответ словами вернул документ: %s", res.Schema)
+	}
+}
+
+// Диалог владельца 2026-09-02: «сделай заголовки жирными, скругления 8px». Просьба
+// смешивает вопросы и вид, и пока действия были взаимоисключающими, ассистент делал
+// половину, а рапортовал про целое.
+func TestChat_EditAndDesignTogether(t *testing.T) {
+	const both = `{"action":"edit_form","reply":"Сделал заголовки жирными и скругление 8px.","title":{"text":"","bold":false,"color":"","bg":""},
+	 "add":[],"update":[
+	   {"target":"q1","item":{"type":"short_text","text":"Ваше имя","required":true,"options":[],"scaleMin":0,"scaleMax":0,"bold":true,"color":"","bg":""}}],
+	 "remove":[],"move":[],
+	 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,
+	  "density":"","align":"","radius":8,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
+	svc, store := chatService(ai.NewFake(both), &fakePlans{allowed: true})
+
+	res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID,
+		"сделай заголовки жирными и скругления 8px", nil, nil)
+	if err != nil {
+		t.Fatalf("Chat() вернул ошибку: %v", err)
+	}
+	schema, err := domain.ValidateSchema(res.Schema)
+	if err != nil {
+		t.Fatalf("документ не проходит ValidateSchema: %v", err)
+	}
+	if item := domain.ProjectForm(schema).Items[0]; !item.Bold {
+		t.Errorf("подпись не стала жирной: %+v", item)
+	}
+	if schema.Design == nil || schema.Design.Controls == nil || schema.Design.Controls.Radius == nil ||
+		*schema.Design.Controls.Radius != 8 {
+		t.Errorf("скругление не встало: %+v", schema.Design)
 	}
 }

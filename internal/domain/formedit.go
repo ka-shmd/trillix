@@ -122,6 +122,7 @@ func projectUnit(group []Block, ordinal int) ChatItem {
 		case b.Type.isCaption():
 			if caption == "" {
 				caption = PlainText(b.Text)
+				item.Bold, item.Color, item.BG = styleOf(b.Text)
 			}
 		case b.Type.isAnswerable():
 			item.Type = b.Type
@@ -134,6 +135,7 @@ func projectUnit(group []Block, ordinal int) ChatItem {
 			}
 			if b.Type.carriesText() {
 				caption = PlainText(b.Text)
+				item.Bold, item.Color, item.BG = styleOf(b.Text)
 			}
 		}
 	}
@@ -149,6 +151,7 @@ func projectUnit(group []Block, ordinal int) ChatItem {
 		}
 		item.Type = lead.Type
 		caption = PlainText(lead.Text)
+		item.Bold, item.Color, item.BG = styleOf(lead.Text)
 	}
 	item.Text = caption
 	return item
@@ -238,22 +241,25 @@ func applyTitle(title *Block, op ChatOp) (*Block, error) {
 	if op.Item == nil {
 		return title, opErr("заголовок не назван")
 	}
-	text := strings.TrimSpace(op.Item.Text)
-	if err := checkTextLen(text, MaxFormTitleLen); err != nil {
+	styled := *op.Item
+	styled.Text = strings.TrimSpace(styled.Text)
+	if err := checkTextLen(styled.Text, MaxFormTitleLen); err != nil {
 		return title, err
 	}
 	if title == nil {
 		id := newBlockID()
-		return &Block{ID: id, GroupID: groupIDOf(id), Type: BlockFormTitle, Text: TextFromString(text)}, nil
+		return &Block{ID: id, GroupID: groupIDOf(id), Type: BlockFormTitle, Text: styledText(styled.PlanItem)}, nil
 	}
-	// Тот же заголовок — не правка: модель охотно присылает его эхом при любой
-	// просьбе, и переписывать документ ради неизменившейся строки значит гонять
-	// автосейв и историю впустую.
-	if PlainText(title.Text) == text {
+	// Тот же заголовок И то же оформление — не правка: модель охотно присылает
+	// заголовок эхом при любой просьбе, и переписывать документ ради неизменившейся
+	// строки значит гонять автосейв и историю впустую.
+	bold, color, bg := styleOf(title.Text)
+	if PlainText(title.Text) == styled.Text && bold == styled.Bold &&
+		color == normalizeHex(styled.Color) && bg == normalizeHex(styled.BG) {
 		return title, nil
 	}
 	updated := *title
-	updated.Text = TextFromString(text)
+	updated.Text = styledText(styled.PlanItem)
 	return &updated, nil
 }
 
@@ -368,10 +374,10 @@ func rebuildUnit(old []Block, item PlanItem) []Block {
 	// только текст, и только если он у типа есть.
 	if field == nil {
 		if len(out) > 0 && out[0].Type != BlockPageBreak && out[0].Type != BlockImage {
-			out[0].Text = TextFromString(item.Text)
+			out[0].Text = styledText(item)
 		}
 		if caption != nil {
-			caption.Text = TextFromString(item.Text)
+			caption.Text = styledText(item)
 			return append([]Block{*caption}, out...)
 		}
 		return out
@@ -397,7 +403,7 @@ func rebuildUnit(old []Block, item PlanItem) []Block {
 
 	// Текст согласия живёт в самом блоке, у остальных — в подписи.
 	if item.Type.carriesText() {
-		updated.Text = TextFromString(item.Text)
+		updated.Text = styledText(item)
 		return append([]Block{updated}, out...)
 	}
 	updated.Text = nil
@@ -406,7 +412,7 @@ func rebuildUnit(old []Block, item PlanItem) []Block {
 		// Голое поле получило подпись: заводим блок в той же группе.
 		caption = &Block{ID: newBlockID(), GroupID: updated.GroupID, Type: BlockTitle}
 	}
-	caption.Text = TextFromString(item.Text)
+	caption.Text = styledText(item)
 	return append([]Block{*caption, updated}, out...)
 }
 
@@ -449,8 +455,10 @@ func opErr(format string, args ...any) error {
 // третьим», даже если q3 к тому моменту уже переехал. Новые пункты ключа не
 // получают — сослаться на них в той же правке нельзя.
 type ChatEdit struct {
-	// Title — новый заголовок формы; пусто = не трогаем.
-	Title string `json:"title"`
+	// Title — новый заголовок формы; пустой text = не трогаем. Объект, а не строка:
+	// заголовок красят так же, как подписи вопросов («выдели заголовок фоном»), и
+	// голая строка этого не выражала.
+	Title ChatTitle `json:"title"`
 	// Add — что добавить и после какого пункта (пусто — в начало формы).
 	Add []ChatAdd `json:"add"`
 	// Update — что заменить: ключ пункта и его новое содержимое.
@@ -459,6 +467,18 @@ type ChatEdit struct {
 	Remove []string `json:"remove"`
 	// Move — что подвинуть и после какого пункта (пусто — в начало формы).
 	Move []ChatMove `json:"move"`
+}
+
+// ChatTitle — заголовок формы вместе с его оформлением.
+type ChatTitle struct {
+	Text  string `json:"text"`
+	Bold  bool   `json:"bold"`
+	Color string `json:"color"`
+	BG    string `json:"bg"`
+}
+
+func (t ChatTitle) item() ChatItem {
+	return ChatItem{PlanItem: PlanItem{Text: t.Text, Bold: t.Bold, Color: t.Color, BG: t.BG}}
 }
 
 type ChatAdd struct {
@@ -479,7 +499,7 @@ type ChatMove struct {
 // Empty — правка ничего не меняет. Пустая правка при заявленной правке формы —
 // ошибка модели, а не безобидный ответ: она сказала, что что-то сделает.
 func (e ChatEdit) Empty() bool {
-	return strings.TrimSpace(e.Title) == "" && len(e.Add) == 0 && len(e.Update) == 0 &&
+	return strings.TrimSpace(e.Title.Text) == "" && len(e.Add) == 0 && len(e.Update) == 0 &&
 		len(e.Remove) == 0 && len(e.Move) == 0
 }
 
@@ -489,8 +509,9 @@ func (e ChatEdit) Empty() bool {
 // любом порядке списков в ответе модели.
 func (e ChatEdit) ops() []ChatOp {
 	var ops []ChatOp
-	if strings.TrimSpace(e.Title) != "" {
-		ops = append(ops, ChatOp{Op: OpTitle, Item: &ChatItem{PlanItem: PlanItem{Text: e.Title}}})
+	if strings.TrimSpace(e.Title.Text) != "" {
+		item := e.Title.item()
+		ops = append(ops, ChatOp{Op: OpTitle, Item: &item})
 	}
 	for _, u := range e.Update {
 		item := u.Item
@@ -547,7 +568,17 @@ func ChatJSONSchema() json.RawMessage {
   "properties": {
     "action": {"type": "string", "enum": [%q, %q, %q]},
     "reply": {"type": "string"},
-    "title": {"type": "string"},
+    "title": {
+      "type": "object",
+      "properties": {
+        "text": {"type": "string"},
+        "bold": {"type": "boolean"},
+        "color": {"type": "string"},
+        "bg": {"type": "string"}
+      },
+      "required": ["text", "bold", "color", "bg"],
+      "additionalProperties": false
+    },
     "add": {
       "type": "array",
       "items": {

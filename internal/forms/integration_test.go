@@ -366,7 +366,7 @@ func TestForms_Generate_ProviderDown(t *testing.T) {
 // квота → модель → правка» против настоящей базы. Модель — ai.Fake.
 func TestForms_Chat(t *testing.T) {
 	resetDB(t)
-	const reply = `{"action":"edit_form","reply":"Добавил телефон.","title":"",` +
+	const reply = `{"action":"edit_form","reply":"Добавил телефон.","title":{"text":"","bold":false,"color":"","bg":""},` +
 		`"add":[{"after":"q1","item":{"type":"phone","text":"Телефон","required":true,"options":[],"scaleMin":0,"scaleMax":0}}],` +
 		`"update":[],"remove":[],"move":[]}`
 	srv := newStackWithAI(t, ai.NewFake(reply))
@@ -432,7 +432,7 @@ func TestForms_Chat(t *testing.T) {
 // Чужая форма — 404, и модель об этом не спрашивают (инвариант 1).
 func TestForms_Chat_ForeignForm(t *testing.T) {
 	resetDB(t)
-	fake := ai.NewFake(`{"action":"answer","reply":"ок","title":"","add":[],"update":[],"remove":[],"move":[]}`)
+	fake := ai.NewFake(`{"action":"answer","reply":"ок","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[]}`)
 	srv := newStackWithAI(t, fake)
 	alice := registerUser(t, srv, "alice@example.com")
 	bob := registerUser(t, srv, "bob@example.com")

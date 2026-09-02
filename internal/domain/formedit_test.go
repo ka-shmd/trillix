@@ -3,6 +3,7 @@ package domain
 import (
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -290,7 +291,7 @@ func TestApplyChatOps_AddsKeepOrder(t *testing.T) {
 	}
 
 	out, err := ApplyChatEdit(empty, ChatEdit{
-		Title: "Запись",
+		Title: ChatTitle{Text: "Запись"},
 		Add:   []ChatAdd{add(BlockShortText, "Имя"), add(BlockPhone, "Телефон"), add(BlockDate, "Дата")},
 	})
 	if err != nil {
@@ -329,7 +330,7 @@ func TestApplyChatOps_AddsKeepOrder(t *testing.T) {
 func TestApplyChatOps_SameTitleIsNoChange(t *testing.T) {
 	before := sampleForm()
 	out, err := ApplyChatEdit(before, ChatEdit{
-		Title: "Запись в барбершоп",
+		Title: ChatTitle{Text: "Запись в барбершоп"},
 		Add:   []ChatAdd{{After: "q1", Item: ChatItem{PlanItem: PlanItem{Type: BlockEmail, Text: "Почта"}}}},
 	})
 	if err != nil {
@@ -339,4 +340,70 @@ func TestApplyChatOps_SameTitleIsNoChange(t *testing.T) {
 	if len(got.Text) != 1 || got.Text[0].T != "Запись в барбершоп" {
 		t.Errorf("заголовок = %+v", got.Text)
 	}
+}
+
+// Жирность и цвета подписи — марки богатого текста, и до фазы их в словаре чата не
+// было вовсе: на «сделай заголовки жирными» ассистент рапортовал об успехе, а делал
+// только то, что умел. Теперь оформление подписи выражается пунктом.
+func TestChatItemStyle(t *testing.T) {
+	t.Run("правка красит подпись целиком", func(t *testing.T) {
+		out, err := ApplyChatEdit(sampleForm(), ChatEdit{Update: []ChatUpdate{{
+			Target: "q1",
+			Item: ChatItem{PlanItem: PlanItem{
+				Type: BlockShortText, Text: "Ваше имя", Bold: true, BG: "#FFF3C4",
+			}},
+		}}})
+		if err != nil {
+			t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+		}
+
+		raw, _ := json.Marshal(out)
+		if _, err := ValidateSchema(raw); err != nil {
+			t.Fatalf("документ с разметкой не проходит ValidateSchema: %v", err)
+		}
+		caption := blockOf(t, out, "blk_cap1")
+		if len(caption.Text) != 1 {
+			t.Fatalf("подпись = %+v", caption.Text)
+		}
+		span := caption.Text[0]
+		if !slices.Contains(span.M, MarkBold) {
+			t.Errorf("жирность не встала: %+v", span)
+		}
+		if span.BG != "#fff3c4" {
+			t.Errorf("фон = %q — цвет обязан приводиться к нижнему регистру", span.BG)
+		}
+	})
+
+	// Разметку видно и в проекции: иначе ассистент, спрошенный «что тут есть»,
+	// пересказал бы форму без её оформления, а на правке снял бы его молча.
+	t.Run("проекция показывает разметку подписи", func(t *testing.T) {
+		styled := sampleForm()
+		styled.Blocks[1].Text = []Span{{T: "Ваше имя", M: []Mark{MarkBold}, Color: "#123456"}}
+
+		item := ProjectForm(styled).Items[0]
+		if !item.Bold || item.Color != "#123456" {
+			t.Errorf("проекция = %+v", item)
+		}
+
+		// И переживает правку, о разметке не говорящую.
+		out, err := ApplyChatEdit(styled, ChatEdit{Update: []ChatUpdate{{
+			Target: "q1", Item: ChatItem{PlanItem: item.PlanItem},
+		}}})
+		if err != nil {
+			t.Fatalf("ApplyChatEdit() вернул ошибку: %v", err)
+		}
+		if got := ProjectForm(out).Items[0]; !got.Bold || got.Color != "#123456" {
+			t.Errorf("после правки разметка потерялась: %+v", got)
+		}
+	})
+
+	t.Run("негодный цвет отвергается с текстом для модели", func(t *testing.T) {
+		_, err := ApplyChatEdit(sampleForm(), ChatEdit{Update: []ChatUpdate{{
+			Target: "q1",
+			Item:   ChatItem{PlanItem: PlanItem{Type: BlockShortText, Text: "Имя", Color: "жёлтый"}},
+		}}})
+		if !errors.Is(err, ErrValidation) || !strings.Contains(err.Error(), "#rrggbb") {
+			t.Fatalf("ошибка = %v", err)
+		}
+	})
 }
