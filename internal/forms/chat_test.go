@@ -9,6 +9,7 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/ai"
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 )
 
 // Форма, над которой идёт разговор: два вопроса с живыми id — на них ссылаются
@@ -252,6 +253,141 @@ func TestChat(t *testing.T) {
 		}
 		if n := len(fake.Requests()); n != 0 {
 			t.Errorf("вызовов модели = %d, ожидалось ноль", n)
+		}
+	})
+}
+
+// Оформление через чат (слайс F). Гейт стоит НА ВХОДЕ, а не на публикации: покрасить
+// форму, чтобы автор упёрся в 402 при попытке её опубликовать, — худший из вариантов.
+func TestChat_Design(t *testing.T) {
+	const dark = `{"action":"design","reply":"Сделал тёмную тему.","title":"","add":[],"update":[],"remove":[],"move":[],
+	 "design":{"theme":"dark","font":"","accent":"","canvas":""}}`
+	const blue = `{"action":"design","reply":"Покрасил в синий.","title":"","add":[],"update":[],"remove":[],"move":[],
+	 "design":{"theme":"","font":"","accent":"#2563eb","canvas":""}}`
+
+	t.Run("тема ложится на документ", func(t *testing.T) {
+		plans := &fakePlans{allowed: true}
+		svc, store := chatService(ai.NewFake(dark), plans)
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай тёмной", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		schema, err := domain.ValidateSchema(res.Schema)
+		if err != nil {
+			t.Fatalf("документ с оформлением не проходит ValidateSchema: %v", err)
+		}
+		if schema.Design == nil || schema.Design.Theme != "dark" {
+			t.Fatalf("оформление = %+v", schema.Design)
+		}
+		// Вопросы действие оформления не трогает.
+		if len(domain.ProjectForm(schema).Items) != 2 {
+			t.Errorf("вопросы изменились: %+v", domain.ProjectForm(schema).Items)
+		}
+	})
+
+	t.Run("тема бесплатна и на закрытом тарифе", func(t *testing.T) {
+		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
+		svc, store := chatService(ai.NewFake(dark), plans)
+
+		if _, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай тёмной", nil, nil); err != nil {
+			t.Fatalf("тему не пустили на бесплатном тарифе: %v", err)
+		}
+	})
+
+	t.Run("только цвет на закрытом тарифе — 402, документ не тронут", func(t *testing.T) {
+		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
+		svc, store := chatService(ai.NewFake(blue), plans)
+
+		_, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "покрась в синий", nil, nil)
+		if !errors.Is(err, domain.ErrPlanRequired) {
+			t.Fatalf("ошибка = %v, ожидалась ErrPlanRequired", err)
+		}
+		if !strings.Contains(err.Error(), "цвета") {
+			t.Errorf("отказ не называет платную настройку: %v", err)
+		}
+	})
+
+	// Замер показал, что модель нарушает указание про тариф, поэтому решает сервер:
+	// бесплатное делается, платное отсекается, а ответ ассистента заменяется нашим —
+	// свой он написал про обе правки сразу.
+	t.Run("тема с цветом на закрытом тарифе: тема встаёт, цвет объясняется", func(t *testing.T) {
+		const both = `{"action":"design","reply":"Сделал тёмной и покрасил в синий.","title":"","add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"dark","font":"","accent":"#2563eb","canvas":""}}`
+		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
+		svc, store := chatService(ai.NewFake(both), plans)
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай тёмной и синей", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		schema, err := domain.ValidateSchema(res.Schema)
+		if err != nil {
+			t.Fatalf("документ не проходит ValidateSchema: %v", err)
+		}
+		if schema.Design == nil || schema.Design.Theme != "dark" {
+			t.Errorf("тема не встала: %+v", schema.Design)
+		}
+		if schema.Design.Palette != nil && schema.Design.Palette.Accent != "" {
+			t.Errorf("платный цвет применился на закрытом тарифе: %+v", schema.Design.Palette)
+		}
+		if !strings.Contains(res.Reply, "платная") {
+			t.Errorf("ответ = %q — про платность не сказано", res.Reply)
+		}
+		if strings.Contains(res.Reply, "покрасил") {
+			t.Errorf("ответ = %q — оставлено обещание модели, которого мы не выполнили", res.Reply)
+		}
+	})
+
+	t.Run("цвет на открытом тарифе применяется", func(t *testing.T) {
+		plans := &fakePlans{allowed: true}
+		svc, store := chatService(ai.NewFake(blue), plans)
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "покрась в синий", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		schema, _ := domain.ValidateSchema(res.Schema)
+		if schema.Design == nil || schema.Design.Palette == nil || schema.Design.Palette.Accent != "#2563eb" {
+			t.Fatalf("оформление = %+v", schema.Design)
+		}
+	})
+
+	t.Run("модели сказано про тариф", func(t *testing.T) {
+		free := ai.NewFake(dark)
+		svcFree, storeFree := chatService(free, &fakePlans{
+			allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true},
+		})
+		_, _ = svcFree.Chat(context.Background(), domain.NewID(), storeFree.form.ID, "сделай тёмной", nil, nil)
+		if !strings.Contains(free.Requests()[0].System, "платные") {
+			t.Error("модели не сказано, что цвета и шрифт платные")
+		}
+
+		paid := ai.NewFake(dark)
+		svcPaid, storePaid := chatService(paid, &fakePlans{allowed: true})
+		_, _ = svcPaid.Chat(context.Background(), domain.NewID(), storePaid.form.ID, "сделай тёмной", nil, nil)
+		if !strings.Contains(paid.Requests()[0].System, "позволяет всё") {
+			t.Error("модели не сказано, что оформление доступно")
+		}
+	})
+
+	t.Run("несогласованные ответы про оформление отвергаются", func(t *testing.T) {
+		cases := map[string]string{
+			"оформление без настроек": `{"action":"design","reply":"покрасил","title":"","add":[],"update":[],"remove":[],"move":[],
+			 "design":{"theme":"","font":"","accent":"","canvas":""}}`,
+			"оформление с вопросами": `{"action":"design","reply":"и то и то","title":"Другое","add":[],"update":[],"remove":[],"move":[],
+			 "design":{"theme":"dark","font":"","accent":"","canvas":""}}`,
+			"правка с оформлением": `{"action":"edit_form","reply":"добавил","title":"","add":[],"update":[],"remove":["q1"],"move":[],
+			 "design":{"theme":"dark","font":"","accent":"","canvas":""}}`,
+		}
+		for name, answer := range cases {
+			t.Run(name, func(t *testing.T) {
+				svc, store := chatService(ai.NewFake(answer, answer), &fakePlans{allowed: true})
+				_, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай красиво", nil, nil)
+				if !errors.Is(err, domain.ErrUnavailable) {
+					t.Fatalf("ошибка = %v, ожидалась ErrUnavailable", err)
+				}
+			})
 		}
 	})
 }

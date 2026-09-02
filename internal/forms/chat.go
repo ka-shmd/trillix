@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -58,6 +59,7 @@ type chatIntent struct {
 	Action string `json:"action"`
 	Reply  string `json:"reply"`
 	domain.ChatEdit
+	Design domain.ChatDesign `json:"design"`
 }
 
 // Chat — одна реплика разговора.
@@ -101,19 +103,53 @@ func (s *Service) Chat(
 		return ChatResult{}, domain.ErrPlanRequired
 	}
 
-	intent, err := s.askAssistant(ctx, message, history, schema)
+	// Тариф на оформление спрашивается ДО вызова: модель должна знать, что ей
+	// позволено, и объяснить отказ словами автора, а не получить сухую 402 после.
+	design, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormDesignCustom)
+	if err != nil {
+		return ChatResult{}, err
+	}
+	paidDesign := design.Allowed
+
+	intent, err := s.askAssistant(ctx, message, history, schema, paidDesign)
 	if err != nil {
 		return ChatResult{}, err
 	}
 
 	result := ChatResult{Reply: trimRunes(intent.Reply, MaxChatReplyLen)}
-	if intent.Action == domain.ActionEdit {
-		updated, err := domain.ApplyChatEdit(schema, intent.ChatEdit)
-		if err != nil {
-			// Сюда попасть можно только при расхождении внутри домена: тот же
-			// разбор уже прошёл проверкой цикла починки.
-			return ChatResult{}, fmt.Errorf("apply chat edit: %w", err)
+	var updated domain.FormSchema
+	switch intent.Action {
+	case domain.ActionEdit:
+		updated, err = domain.ApplyChatEdit(schema, intent.ChatEdit)
+	case domain.ActionDesign:
+		// ГЕЙТ СТОИТ ЗДЕСЬ, а не на публикации: покрасить форму, чтобы автор упёрся
+		// в 402 при попытке её опубликовать, — худший из вариантов. Модели про тариф
+		// сказано в инструкции, но замер показал, что она это указание нарушает,
+		// поэтому решает всё равно сервер.
+		//
+		// ПЛАТНОЕ ОТСЕКАЕТСЯ, А БЕСПЛАТНОЕ ДЕЛАЕТСЯ: «сделай тёмной и покрась в
+		// синий» на бесплатном тарифе даёт тёмную форму и честную фразу про цвета —
+		// отказать целиком значило бы не сделать и того, что человеку положено.
+		// Ответ ассистента при этом ЗАМЕНЯЕТСЯ нашим: свой он написал про обе
+		// правки, и оставить его значило бы соврать.
+		patch := intent.Design
+		if paid := domain.ChatDesignPaid(patch); len(paid) > 0 && !paidDesign {
+			patch = domain.ChatDesignFree(patch)
+			if patch.Empty() {
+				return ChatResult{}, fmt.Errorf("%w: %s — платная возможность, на этом тарифе доступна только тема",
+					domain.ErrPlanRequired, strings.Join(paid, " и "))
+			}
+			result.Reply = fmt.Sprintf("Поменял тему. %s — платная возможность, на этом тарифе недоступна.",
+				capitalize(strings.Join(paid, " и ")))
 		}
+		updated, err = domain.ApplyChatDesign(schema, patch)
+	}
+	if err != nil {
+		// Сюда попасть можно только при расхождении внутри домена: тот же разбор
+		// уже прошёл проверкой цикла починки.
+		return ChatResult{}, fmt.Errorf("apply chat intent %q: %w", intent.Action, err)
+	}
+	if intent.Action != domain.ActionAnswer {
 		doc, err := json.Marshal(updated)
 		if err != nil {
 			return ChatResult{}, fmt.Errorf("marshal edited schema: %w", err)
@@ -131,10 +167,10 @@ func (s *Service) Chat(
 
 // askAssistant — вызов модели с одной попыткой починки и разбор намерения.
 func (s *Service) askAssistant(
-	ctx context.Context, message string, history []ChatTurn, schema domain.FormSchema,
+	ctx context.Context, message string, history []ChatTurn, schema domain.FormSchema, paidDesign bool,
 ) (chatIntent, error) {
 	req := ai.Request{
-		System:     chatInstructions(domain.ProjectForm(schema)),
+		System:     chatInstructions(domain.ProjectForm(schema), paidDesign),
 		User:       message,
 		History:    turns(history),
 		SchemaName: "form_chat",
@@ -180,14 +216,27 @@ func parseIntent(raw json.RawMessage) (chatIntent, error) {
 			return chatIntent{}, fmt.Errorf("%w: заявлена правка формы, но ни одного изменения не названо; "+
 				"если менять нечего, отвечай действием %q", domain.ErrValidation, domain.ActionAnswer)
 		}
-	case domain.ActionAnswer:
+		if !intent.Design.Empty() {
+			return chatIntent{}, fmt.Errorf("%w: действие %q оформления не касается; для вида формы возьми %q",
+				domain.ErrValidation, domain.ActionEdit, domain.ActionDesign)
+		}
+	case domain.ActionDesign:
+		if intent.Design.Empty() {
+			return chatIntent{}, fmt.Errorf("%w: заявлено оформление, но ни тема, ни шрифт, ни цвета не названы",
+				domain.ErrValidation)
+		}
 		if !intent.Empty() {
-			return chatIntent{}, fmt.Errorf("%w: действие %q форму не правит; чтобы поправить, возьми %q",
-				domain.ErrValidation, domain.ActionAnswer, domain.ActionEdit)
+			return chatIntent{}, fmt.Errorf("%w: действие %q вопросов не трогает; чтобы поправить их, возьми %q",
+				domain.ErrValidation, domain.ActionDesign, domain.ActionEdit)
+		}
+	case domain.ActionAnswer:
+		if !intent.Empty() || !intent.Design.Empty() {
+			return chatIntent{}, fmt.Errorf("%w: действие %q форму не правит; чтобы поправить, возьми %q или %q",
+				domain.ErrValidation, domain.ActionAnswer, domain.ActionEdit, domain.ActionDesign)
 		}
 	default:
-		return chatIntent{}, fmt.Errorf("%w: неизвестное действие %q; возможны: %s, %s",
-			domain.ErrValidation, intent.Action, domain.ActionEdit, domain.ActionAnswer)
+		return chatIntent{}, fmt.Errorf("%w: неизвестное действие %q; возможны: %s, %s, %s",
+			domain.ErrValidation, intent.Action, domain.ActionEdit, domain.ActionAnswer, domain.ActionDesign)
 	}
 	if strings.TrimSpace(intent.Reply) == "" {
 		return chatIntent{}, fmt.Errorf("%w: скажи словами, что сделал: поле reply пустое", domain.ErrValidation)
@@ -212,6 +261,16 @@ func turns(history []ChatTurn) []ai.Turn {
 	return out
 }
 
+// capitalize поднимает первую букву: перечень платных настроек приходит из домена
+// строчными («цвета», «шрифт»), а начинать им предложение.
+func capitalize(s string) string {
+	r := []rune(s)
+	if len(r) == 0 {
+		return s
+	}
+	return string(unicode.ToUpper(r[0])) + string(r[1:])
+}
+
 func trimRunes(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {
@@ -223,13 +282,14 @@ func trimRunes(s string, max int) string {
 // chatInstructions — системная инструкция ассистента. Перечень типов и правила
 // пунктов берутся оттуда же, откуда их берёт сборка с нуля (реестр), а форма
 // приезжает проекцией — тем же словарём, которым модель отвечает.
-func chatInstructions(form domain.ChatForm) string {
+func chatInstructions(form domain.ChatForm, paidDesign bool) string {
 	var b strings.Builder
 	b.WriteString(`Ты — помощник в редакторе форм. Отвечай только JSON по схеме ответа.
 
 Два действия:
 - "` + domain.ActionEdit + `" — изменить форму: добавить, заменить, убрать, переставить пункты, сменить заголовок. В reply одной фразой скажи, что сделал.
-- "` + domain.ActionAnswer + `" — ответить словами о самой форме, ничего не меняя. Списки правок при этом пустые.
+- "` + domain.ActionDesign + `" — изменить ВИД формы: тема, шрифт, цвет акцента, цвет страницы. Вопросов это действие не трогает.
+- "` + domain.ActionAnswer + `" — ответить словами о самой форме, ничего не меняя. Списки правок и оформление при этом пустые.
 
 ГЛАВНОЕ: форму меняют ТОЛЬКО списки add, update, remove, move и поле title. Что не попало в них — не произошло. Написать в reply «добавил вопросы» и оставить add пустым — ошибка.
 
@@ -253,6 +313,15 @@ func chatInstructions(form domain.ChatForm) string {
 	doc, err := json.MarshalIndent(form, "", " ")
 	if err == nil {
 		b.Write(doc)
+	}
+	b.WriteString("\n\nОформление (действие " + domain.ActionDesign + "): в поле design заполняй только то, что просят, остальное — пустая строка. " +
+		"theme — " + strings.Join(domain.DesignThemes(), " или ") + "; font — один из: " + strings.Join(domain.DesignFonts(), ", ") + "; " +
+		"accent и canvas — цвет в формате #rrggbb строчными буквами (акцент и фон страницы).")
+	if paidDesign {
+		b.WriteString(" Тариф автора позволяет всё перечисленное.")
+	} else {
+		b.WriteString(" ВАЖНО: на тарифе автора бесплатна только тема; шрифт и цвета — платные. " +
+			"Попросят цвет или шрифт — не меняй их, а действием " + domain.ActionAnswer + " объясни, что это платная возможность.")
 	}
 	b.WriteString(`
 

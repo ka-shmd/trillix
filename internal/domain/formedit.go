@@ -531,10 +531,12 @@ const (
 // отсутствием ключей.
 func ChatJSONSchema() json.RawMessage {
 	item := planItemJSONSchema()
+	themes, _ := json.Marshal(append([]string{""}, designThemes...))
+	fonts, _ := json.Marshal(append([]string{""}, designFonts...))
 	return json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {
-    "action": {"type": "string", "enum": [%q, %q]},
+    "action": {"type": "string", "enum": [%q, %q, %q]},
     "reply": {"type": "string"},
     "title": {"type": "string"},
     "add": {
@@ -564,9 +566,125 @@ func ChatJSONSchema() json.RawMessage {
         "required": ["target", "after"],
         "additionalProperties": false
       }
+    },
+    "design": {
+      "type": "object",
+      "properties": {
+        "theme": {"type": "string", "enum": %s},
+        "font": {"type": "string", "enum": %s},
+        "accent": {"type": "string"},
+        "canvas": {"type": "string"}
+      },
+      "required": ["theme", "font", "accent", "canvas"],
+      "additionalProperties": false
     }
   },
-  "required": ["action", "reply", "title", "add", "update", "remove", "move"],
+  "required": ["action", "reply", "title", "add", "update", "remove", "move", "design"],
   "additionalProperties": false
-}`, ActionEdit, ActionAnswer, item, item))
+}`, ActionEdit, ActionAnswer, ActionDesign, item, item, themes, fonts))
 }
+
+// ActionDesign — третье намерение: оформление страницы формы (фаза 26, слайс F).
+const ActionDesign = "design"
+
+// ChatDesign — оформление глазами модели: узкий срез FormDesign, а не он целиком.
+//
+// Срез, потому что оформление — двадцать с лишним ключей (палитра из девяти цветов,
+// раскладка, контролы, кнопка, свой CSS), и просить у модели документ целиком значит
+// получать обратно то, чего автор не просил. Разговор оперирует четырьмя понятиями:
+// тема, шрифт, цвет акцента, цвет страницы. Остальное правится панелью оформления,
+// где у каждой настройки свой контрол и видно, что меняется.
+//
+// Пустая строка значит «не трогать»: своего «сбросить» у чата нет — сброс живёт
+// кнопкой в панели, и путать «поставь светлую тему» со «сними всё оформление»
+// нельзя.
+type ChatDesign struct {
+	Theme  string `json:"theme"`
+	Font   string `json:"font"`
+	Accent string `json:"accent"`
+	Canvas string `json:"canvas"`
+}
+
+// Empty — правка оформления ничего не меняет.
+func (d ChatDesign) Empty() bool {
+	return d.Theme == "" && d.Font == "" && d.Accent == "" && d.Canvas == ""
+}
+
+// ApplyChatDesign накладывает правку оформления на документ.
+//
+// Наложением, а не заменой: у формы уже может быть оформление, выставленное панелью,
+// и «сделай тёмной» не должно снимать выбранный автором шрифт.
+func ApplyChatDesign(s FormSchema, patch ChatDesign) (FormSchema, error) {
+	if patch.Empty() {
+		return FormSchema{}, opErr("оформление не названо")
+	}
+
+	design := FormDesign{}
+	if s.Design != nil {
+		design = *s.Design
+	}
+	if patch.Theme != "" {
+		design.Theme = patch.Theme
+	}
+	if patch.Font != "" {
+		design.Font = patch.Font
+	}
+	if patch.Accent != "" || patch.Canvas != "" {
+		palette := DesignPalette{}
+		if design.Palette != nil {
+			palette = *design.Palette
+		}
+		if patch.Accent != "" {
+			palette.Accent = patch.Accent
+		}
+		if patch.Canvas != "" {
+			palette.Canvas = patch.Canvas
+		}
+		design.Palette = &palette
+	}
+
+	if err := validateDesign(&design); err != nil {
+		return FormSchema{}, fmt.Errorf("%w: %v", ErrValidation, err)
+	}
+	out := s
+	out.Design = &design
+	return out, nil
+}
+
+// ChatDesignPaid — что из ПРАВКИ платно (перечень для человека; пусто — правка
+// бесплатна на любом тарифе).
+//
+// Считается по самой правке, а не по документу после наложения: иначе автор
+// бесплатного тарифа, у которого цвет уже стоит с прежних времён, не смог бы
+// переключить даже тему.
+func ChatDesignPaid(patch ChatDesign) []string {
+	return DesignPaidFeatures(&FormDesign{
+		Font:    patch.Font,
+		Palette: chatPalette(patch),
+	})
+}
+
+// ChatDesignFree — та часть правки, которая бесплатна на любом тарифе (сегодня это
+// тема). Знание о платном живёт здесь, рядом с DesignPaidFeatures, а не у
+// вызывающего: иначе продукт, открывший завтра шрифты бесплатным, забыл бы про
+// вторую копию правила.
+func ChatDesignFree(patch ChatDesign) ChatDesign {
+	free := ChatDesign{}
+	if len(DesignPaidFeatures(&FormDesign{Theme: patch.Theme})) == 0 {
+		free.Theme = patch.Theme
+	}
+	return free
+}
+
+func chatPalette(patch ChatDesign) *DesignPalette {
+	if patch.Accent == "" && patch.Canvas == "" {
+		return nil
+	}
+	return &DesignPalette{Accent: patch.Accent, Canvas: patch.Canvas}
+}
+
+// DesignThemes и DesignFonts — что модель вправе назвать. Отдаются списками, потому
+// что уезжают перечислением в схему ответа: второй копии этих значений в проекте не
+// заводится.
+func DesignThemes() []string { return append([]string(nil), designThemes...) }
+func DesignFonts() []string  { return append([]string(nil), designFonts...) }
