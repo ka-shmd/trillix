@@ -174,18 +174,25 @@ export function ChatDrawer({
           <SheetTitle>Помощь ИИ</SheetTitle>
         </SheetHeader>
 
-        <div ref={feed} className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
+        {/* РИТМ ЛЕНТЫ ДЕЛИТ ЕЁ НА ОБМЕНЫ (DESIGN-SYSTEM §5, значения хрома 4/8/16/24):
+            ответ прижат к своему вопросу на 8, следующий вопрос отбит от него на 24.
+            Равные промежутки, стоявшие здесь раньше, превращали разговор в ровный
+            столбец строк, где не видно, что кому отвечает. */}
+        <div ref={feed} className="flex-1 overflow-y-auto p-4" aria-live="polite">
           {/* ЛЕНТА БЕЗ ВИДА ЧАТА (решение владельца 2026-09-02): реплика автора — рамка,
               ответ — просто текст, обе во всю ширину. Пузыри с заливкой и прижатые к
               краям делают из панели мессенджер; здесь же идёт работа над документом, и
               ответ ассистента читается как текст, а не как сообщение собеседника.
               Рамка у своей реплики нужна, чтобы взгляд находил, с чего начался ответ. */}
           {turns.map((t, i) => (
-            <div key={i} className="space-y-1">
+            <div
+              key={i}
+              className={t.role === 'user' ? 'mt-6 space-y-2 first:mt-0' : 'mt-2 space-y-2'}
+            >
               {t.role === 'user' ? (
-                <p className="rounded-lg border px-3 py-2 text-sm">{t.text}</p>
+                <p className="rounded-xl border px-4 py-3 text-sm">{t.text}</p>
               ) : (
-                <p className="text-sm whitespace-pre-line">{t.text}</p>
+                <p className="px-1 text-sm leading-relaxed whitespace-pre-line">{t.text}</p>
               )}
               {t.plan && <PlanButton onClick={() => setUpsell(true)} />}
             </div>
@@ -194,10 +201,10 @@ export function ChatDrawer({
           {/* Место ответа занято с первого дня намеренно: со стримингом (он отложен,
               `DEV-PLAN` фаза 26) здесь появится текст по мере прихода, и менять
               придётся источник строки, а не устройство ленты. */}
-          {pending && <p className="text-sm text-muted-foreground">Думаю…</p>}
+          {pending && <p className="mt-2 px-1 text-sm text-muted-foreground">Думаю…</p>}
 
           {failure && (
-            <div className="space-y-1">
+            <div className="mt-2 space-y-2 px-1">
               <p role="alert" className="text-sm text-destructive">
                 {failure.text}
               </p>
@@ -210,7 +217,7 @@ export function ChatDrawer({
             шторку на два блока, хотя лента и поле — одно место работы. Границы поля
             хватает, чтобы отделить набираемое от сказанного. */}
         <form
-          className="p-4"
+          className="px-4 pt-2 pb-4"
           onSubmit={(e) => {
             e.preventDefault()
             void send(trimmed)
