@@ -141,6 +141,7 @@ type bookingView struct {
 	ID              string    `json:"id"`
 	FormID          string    `json:"formId"`
 	FormTitle       string    `json:"formTitle"`
+	FormSlug        string    `json:"formSlug"`
 	StartsAt        time.Time `json:"startsAt"`
 	DurationMinutes int       `json:"durationMinutes"`
 	Seats           int       `json:"seats"`
@@ -154,6 +155,7 @@ func toBookingView(b Booking) bookingView {
 		ID:              b.ID.String(),
 		FormID:          b.FormID.String(),
 		FormTitle:       b.FormTitle,
+		FormSlug:        b.FormSlug,
 		StartsAt:        b.StartsAt,
 		DurationMinutes: b.DurationMinutes,
 		Seats:           b.Seats,

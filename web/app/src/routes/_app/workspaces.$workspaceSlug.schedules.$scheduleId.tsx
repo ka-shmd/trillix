@@ -8,7 +8,7 @@ import {
   useUpdateSchedule,
 } from '../../shared/schedules/queries'
 import { ScheduleEditor } from '../../features/schedules/ScheduleEditor'
-import { BlocksSection } from '../../features/schedules/BlocksSection'
+import { LazyScheduleCanvas } from '../../features/schedules/lazyCanvas'
 import { UpcomingSection } from '../../features/schedules/UpcomingSection'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { humanError } from '../../shared/api/errors'
@@ -16,6 +16,7 @@ import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
+import { Section } from '../../shared/page/Section'
 import { Button } from '@/components/ui/button'
 import {
   DropdownMenu,
@@ -48,11 +49,7 @@ function SchedulePage() {
     <Link key="ws" to="/workspaces/$workspaceSlug" params={{ workspaceSlug }}>
       {workspace?.name ?? '…'}
     </Link>,
-    <Link
-      key="schedules"
-      to="/workspaces/$workspaceSlug/schedules"
-      params={{ workspaceSlug }}
-    >
+    <Link key="schedules" to="/workspaces/$workspaceSlug/schedules" params={{ workspaceSlug }}>
       Расписания
     </Link>,
   ]
@@ -122,13 +119,19 @@ function SchedulePage() {
         )}
 
         <div className="mt-8 flex flex-col gap-12">
+          <Section
+            title="Неделя"
+            description="Часы приёма, занятое время и записи. Протяните мышью, чтобы открыть приём; потяните за край, чтобы изменить часы."
+          >
+            <LazyScheduleCanvas schedule={schedule} />
+          </Section>
+
           <ScheduleEditor
             schedule={schedule}
             saving={update.isPending}
             error={update.isError ? humanError(update.error) : undefined}
             onSave={(input) => update.mutate(input)}
           />
-          <BlocksSection scheduleId={scheduleId} timezone={schedule.timezone} />
           <UpcomingSection scheduleId={scheduleId} timezone={schedule.timezone} />
         </div>
       </PageContainer>

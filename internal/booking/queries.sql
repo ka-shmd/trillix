@@ -104,7 +104,7 @@ DELETE FROM schedule_blocks WHERE id = $1 AND schedule_id = $2;
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
        b.starts_at, b.duration_minutes, b.seats, b.status,
        b.hold_expires_at, b.created_at,
-       coalesce(f.name, f.title) AS form_title
+       coalesce(f.name, f.title) AS form_title, f.slug AS form_slug
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 WHERE b.schedule_id = $1 AND b.status = 'confirmed' AND b.starts_at >= $2
@@ -122,7 +122,7 @@ LIMIT $3;
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
        b.starts_at, b.duration_minutes, b.seats, b.status,
        b.hold_expires_at, b.created_at,
-       coalesce(f.name, f.title) AS form_title
+       coalesce(f.name, f.title) AS form_title, f.slug AS form_slug
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 WHERE b.schedule_id = $1

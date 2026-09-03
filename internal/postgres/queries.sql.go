@@ -58,7 +58,7 @@ const bookingsInRange = `-- name: BookingsInRange :many
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
        b.starts_at, b.duration_minutes, b.seats, b.status,
        b.hold_expires_at, b.created_at,
-       coalesce(f.name, f.title) AS form_title
+       coalesce(f.name, f.title) AS form_title, f.slug AS form_slug
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 WHERE b.schedule_id = $1
@@ -86,6 +86,7 @@ type BookingsInRangeRow struct {
 	HoldExpiresAt   pgtype.Timestamptz
 	CreatedAt       pgtype.Timestamptz
 	FormTitle       string
+	FormSlug        string
 }
 
 // Записи, задевающие отрезок, — полотну недели. Условие пересечения считается по
@@ -116,6 +117,7 @@ func (q *Queries) BookingsInRange(ctx context.Context, arg BookingsInRangeParams
 			&i.HoldExpiresAt,
 			&i.CreatedAt,
 			&i.FormTitle,
+			&i.FormSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -4546,7 +4548,7 @@ const listUpcomingBookings = `-- name: ListUpcomingBookings :many
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
        b.starts_at, b.duration_minutes, b.seats, b.status,
        b.hold_expires_at, b.created_at,
-       coalesce(f.name, f.title) AS form_title
+       coalesce(f.name, f.title) AS form_title, f.slug AS form_slug
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 WHERE b.schedule_id = $1 AND b.status = 'confirmed' AND b.starts_at >= $2
@@ -4572,6 +4574,7 @@ type ListUpcomingBookingsRow struct {
 	HoldExpiresAt   pgtype.Timestamptz
 	CreatedAt       pgtype.Timestamptz
 	FormTitle       string
+	FormSlug        string
 }
 
 // Ближайшие записи для экрана расписания. Отменённые не показываются: экран
@@ -4600,6 +4603,7 @@ func (q *Queries) ListUpcomingBookings(ctx context.Context, arg ListUpcomingBook
 			&i.HoldExpiresAt,
 			&i.CreatedAt,
 			&i.FormTitle,
+			&i.FormSlug,
 		); err != nil {
 			return nil, err
 		}

@@ -48,7 +48,11 @@ export function BlocksSection({ scheduleId, timezone }: { scheduleId: string; ti
     >
       {blocks.isPending && <LoadingRows rows={2} />}
       {blocks.isError && (
-        <ErrorState title="Не удалось загрузить занятое время." onRetry={() => void blocks.refetch()} retryLabel="Повторить" />
+        <ErrorState
+          title="Не удалось загрузить занятое время."
+          onRetry={() => void blocks.refetch()}
+          retryLabel="Повторить"
+        />
       )}
 
       {blocks.data && blocks.data.length === 0 && (
@@ -62,7 +66,10 @@ export function BlocksSection({ scheduleId, timezone }: { scheduleId: string; ti
       {blocks.data && blocks.data.length > 0 && (
         <ul className="flex flex-col gap-2">
           {blocks.data.map((b) => (
-            <li key={b.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+            <li
+              key={b.id}
+              className="flex items-center justify-between gap-3 rounded-lg border p-3"
+            >
               <div className="min-w-0">
                 <p className="truncate text-base font-semibold">{blockRange(b, timezone)}</p>
                 {b.note && <p className="truncate text-sm text-muted-foreground">{b.note}</p>}

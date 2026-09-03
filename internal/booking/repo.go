@@ -51,9 +51,12 @@ type Block struct {
 // записавшегося здесь нет: они живут в ответе формы и подчиняются его правилам
 // (152-ФЗ, спека §13). Экран показывает время и форму, из которой запись пришла.
 type Booking struct {
-	ID              uuid.UUID
-	FormID          uuid.UUID
-	FormTitle       string
+	ID        uuid.UUID
+	FormID    uuid.UUID
+	FormTitle string
+	// FormSlug — адрес формы в кабинете: карточка записи ведёт к ответу, из
+	// которого запись пришла, а ответы адресуются слагом формы, не её id.
+	FormSlug        string
 	SubmissionID    *uuid.UUID
 	StartsAt        time.Time
 	DurationMinutes int
@@ -245,6 +248,7 @@ func (Repo) UpcomingBookings(ctx context.Context, db postgres.DBTX, scheduleID u
 			ID:              r.ID,
 			FormID:          r.FormID,
 			FormTitle:       r.FormTitle,
+			FormSlug:        r.FormSlug,
 			StartsAt:        r.StartsAt.Time.UTC(),
 			DurationMinutes: int(r.DurationMinutes),
 			Seats:           int(r.Seats),
@@ -280,6 +284,7 @@ func (Repo) BookingsInRange(ctx context.Context, db postgres.DBTX, scheduleID uu
 			ID:              r.ID,
 			FormID:          r.FormID,
 			FormTitle:       r.FormTitle,
+			FormSlug:        r.FormSlug,
 			StartsAt:        r.StartsAt.Time.UTC(),
 			DurationMinutes: int(r.DurationMinutes),
 			Seats:           int(r.Seats),

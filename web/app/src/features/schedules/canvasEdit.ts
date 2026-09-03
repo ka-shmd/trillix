@@ -21,8 +21,10 @@ export type Scope = 'weekly' | 'date'
 export type Gesture =
   // Протяжка по пустому месту.
   | { kind: 'create'; date: string; window: TimeWindow }
-  // Перенос или растягивание существующего окна: orig опознаёт его на дате.
+  // Растягивание или перенос внутри дня: orig опознаёт окно на дате.
   | { kind: 'update'; date: string; orig: TimeWindow; window: TimeWindow }
+  // Перенос на соседнюю колонку: у жеста две даты, и обе меняются.
+  | { kind: 'move'; fromDate: string; orig: TimeWindow; date: string; window: TimeWindow }
   | { kind: 'remove'; date: string; orig: TimeWindow }
 
 // applyGesture — обе области действия одним утверждением: «сделай, чтобы эта колонка
@@ -32,6 +34,13 @@ export type Gesture =
 // конкретный день и говорит «пусть так будет всегда», а оставленное исключение
 // немедленно противоречило бы тому, что он видит.
 export function applyGesture(a: Availability, g: Gesture, scope: Scope): Availability {
+  // Перенос между колонками — это два жеста подряд по тем же правилам, а не третий
+  // способ править документ: окно уходит с одной даты и появляется на другой, и
+  // область действия применяется к обеим одинаково.
+  if (g.kind === 'move') {
+    const without = applyGesture(a, { kind: 'remove', date: g.fromDate, orig: g.orig }, scope)
+    return applyGesture(without, { kind: 'create', date: g.date, window: g.window }, scope)
+  }
   const next = nextWindows(effectiveWindows(a, g.date).windows, g)
   if (scope === 'date') {
     const others = a.exceptions.filter((e) => e.date !== g.date)
@@ -54,7 +63,7 @@ export function applyGesture(a: Availability, g: Gesture, scope: Scope): Availab
 // Слияние обязательно, а не любезность: пересекающиеся окна документ запрещает
 // (сервер отвечает 422), а протянуть мышью поверх соседнего окна — обычное дело.
 // Автор при этом видит ровно то, что нарисовал: два окна, ставшие одним.
-function nextWindows(windows: TimeWindow[], g: Gesture): TimeWindow[] {
+function nextWindows(windows: TimeWindow[], g: Exclude<Gesture, { kind: 'move' }>): TimeWindow[] {
   const kept = g.kind === 'create' ? windows : windows.filter((w) => !sameWindow(w, g.orig))
   const added = g.kind === 'remove' ? [] : [g.window]
   return mergeWindows([...kept, ...added])

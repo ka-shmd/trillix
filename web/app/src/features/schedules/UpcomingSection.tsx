@@ -61,7 +61,10 @@ export function UpcomingSection({
       {bookings.data && bookings.data.length > 0 && (
         <ul className="flex flex-col gap-2">
           {bookings.data.map((b) => (
-            <li key={b.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
+            <li
+              key={b.id}
+              className="flex items-center justify-between gap-3 rounded-lg border p-3"
+            >
               <div className="min-w-0">
                 <p className="text-base font-semibold">{bookingTime(b, timezone)}</p>
                 <p className="truncate text-sm text-muted-foreground">

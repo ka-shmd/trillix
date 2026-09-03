@@ -1,0 +1,85 @@
+/* Вид полотна расписания. Отдельным файлом рядом с компонентом, а не в index.css:
+   он импортируется ЛЕНИВЫМ чанком и уезжает вместе с ним — на страницах без
+   расписания этих правил в бандле нет.
+
+   ЦЕПЛЯТЬСЯ ЗА КЛАССЫ БИБЛИОТЕКИ НЕЛЬЗЯ: седьмая ветка FullCalendar минифицирует
+   собственные имена (`.fc-a`, `.fc-cc`, …), и они меняются от сборки к сборке. Все
+   селекторы здесь идут от НАШИХ классов, которые вешает опция `eventClass`, а до
+   чужой обёртки достают через `:has(> …)` — по родству, а не по имени. */
+
+.sc-canvas {
+  --sc-av: color-mix(in oklab, var(--primary) 12%, transparent);
+  --sc-av-line: color-mix(in oklab, var(--primary) 35%, transparent);
+  --sc-av-ex: color-mix(in oklab, var(--highlight) 18%, transparent);
+  --sc-av-ex-line: color-mix(in oklab, var(--highlight) 45%, transparent);
+  overflow: hidden;
+}
+
+/* СЛОЕНИЕ, А НЕ СОСЕДСТВО. Библиотека раскладывает пересекающиеся события бок о бок:
+   запись внутри часов приёма встала бы РЯДОМ с окном, вдвое сузив обоих, — и полотно
+   перестало бы читаться как «занято внутри приёмного времени».
+   Окно приёма растягивается во всю колонку и уходит под остальные слои. */
+.sc-canvas :has(> .sc-av) {
+  inset-inline: 0 !important;
+  z-index: 1;
+}
+
+.sc-canvas :has(> .sc-block),
+.sc-canvas :has(> .sc-booking) {
+  z-index: 3;
+}
+
+.sc-canvas .sc-ev {
+  border-radius: var(--radius-sm);
+  font-size: 0.8125rem;
+  line-height: 1.2;
+  padding: 2px 4px;
+  overflow: hidden;
+}
+
+/* Часы приёма — подложка: цвет заливки, а не карточка. Автор смотрит СКВОЗЬ них на
+   записи, и плотная плашка мешала бы. */
+.sc-canvas .sc-av {
+  background: var(--sc-av);
+  border: 1px solid var(--sc-av-line);
+  border-left-width: 3px;
+  color: transparent; /* время библиотеки внутри подложки не нужно */
+  cursor: pointer;
+}
+
+/* Исключение по дате отличается ЦВЕТОМ, а не подписью: «так каждую неделю» и «так
+   только в этот день» — первое, что автор пришёл увидеть. */
+.sc-canvas .sc-av-ex {
+  background: var(--sc-av-ex);
+  border-color: var(--sc-av-ex-line);
+  border-left-style: dashed;
+}
+
+.sc-canvas .sc-block {
+  background: repeating-linear-gradient(
+    135deg,
+    var(--muted),
+    var(--muted) 6px,
+    var(--background) 6px,
+    var(--background) 12px
+  );
+  border: 1px solid var(--border);
+  color: var(--muted-foreground);
+}
+
+.sc-canvas .sc-booking {
+  background: var(--primary);
+  border: 1px solid var(--primary);
+  color: var(--primary-foreground);
+  font-weight: 500;
+}
+
+/* Курсор перетаскивания — только у того, что двигается. Запись не двигается: её
+   время договорено с человеком, и «схватилось, но не поехало» читается как поломка. */
+.sc-canvas .sc-booking {
+  cursor: default;
+}
+
+.sc-canvas .sc-block {
+  cursor: grab;
+}

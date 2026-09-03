@@ -58,7 +58,9 @@ describe('приём по дням недели', () => {
 
     fireEvent.click(within(dayRow('Понедельник')).getByRole('button', { name: 'Окно' }))
 
-    expect(within(dayRow('Понедельник')).getAllByRole('button', { name: 'Убрать окно' })).toHaveLength(2)
+    expect(
+      within(dayRow('Понедельник')).getAllByRole('button', { name: 'Убрать окно' }),
+    ).toHaveLength(2)
   })
 
   it('«На все будни» повторяет окна дня на пн–пт и не трогает выходные', () => {
