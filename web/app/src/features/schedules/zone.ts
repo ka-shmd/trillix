@@ -51,3 +51,28 @@ export function zonedToUTC(date: string, time: string, timeZone: string): string
   const twice = naive - offsetAt(new Date(once), timeZone)
   return new Date(twice).toISOString()
 }
+
+// zonedParts — момент времени, разложенный в поясе расписания: дата ГГГГ-ММ-ДД и
+// время ЧЧ:ММ. Нужен там, где точка на оси (бронь, блокировка) сравнивается с
+// правилом, которое живёт в местном времени: «во сколько это по расписанию».
+export function zonedParts(at: Date, timeZone: string): { date: string; clock: string } {
+  const dtf = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    hour12: false,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
+  const parts: Record<string, string> = {}
+  for (const p of dtf.formatToParts(at)) {
+    if (p.type !== 'literal') parts[p.type] = p.value
+  }
+  // Полночь часть движков отдаёт как «24»: без поправки час уезжает за сутки.
+  const hour = parts.hour === '24' ? '00' : (parts.hour ?? '00')
+  return {
+    date: `${parts.year}-${parts.month}-${parts.day}`,
+    clock: `${hour}:${parts.minute ?? '00'}`,
+  }
+}

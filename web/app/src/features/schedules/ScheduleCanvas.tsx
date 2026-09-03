@@ -2,11 +2,16 @@ import { useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import Calendar, { useCalendarController } from '@fullcalendar/react'
 import timeGridPlugin from '@fullcalendar/react/timegrid'
+import dayGridPlugin from '@fullcalendar/react/daygrid'
 import interactionPlugin from '@fullcalendar/react/interaction'
+import classicTheme from '@fullcalendar/react/themes/classic'
 import ruLocale from '@fullcalendar/react/locales/ru'
 import { ChevronLeft, ChevronRight } from 'lucide-react'
 
+// Скелет — вёрстка сетки, тема — её вид. Палитру темы мы НЕ импортируем: она
+// переопределена нашими токенами в canvas.css.
 import '@fullcalendar/react/skeleton.css'
+import '@fullcalendar/react/themes/classic/theme.css'
 import './canvas.css'
 
 import type { Booking, Schedule, ScheduleBlock, ScheduleInput } from '../../entities/schedule'
@@ -23,14 +28,16 @@ import {
   clockOfNaive,
   dateKeys,
   dateOfNaive,
+  effectiveWindows,
   shiftDate,
   spansIn,
   weekStart,
   type AvailabilitySpan,
 } from './canvas'
 import { applyGesture, docError, SNAP_MINUTES, type Gesture, type Scope } from './canvasEdit'
+import { clockToMinutes, minutesToClock } from './weekly'
 import { CanvasPopover, type Anchor } from './CanvasPopover'
-import { zonedToUTC } from './zone'
+import { zonedParts, zonedToUTC } from './zone'
 
 // Полотно недели: часы приёма, исключения, занятое время и записи одним экраном.
 //
@@ -52,6 +59,9 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
   // Сколько дней в видимом отрезке — тоже от календаря: на узком экране их один, и
   // считать слой приёма на семь означало бы рисовать шесть невидимых колонок.
   const [visibleDays, setVisibleDays] = useState(7)
+  const [view, setView] = useState<ViewName>(() =>
+    narrowScreen() ? 'timeGridDay' : 'timeGridWeek',
+  )
   const [anchor, setAnchor] = useState<Anchor | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Документ ДО жеста: чип переключает область действия пересчётом от него.
@@ -71,14 +81,29 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
   const addBlock = useAddBlock(schedule.id)
   const removeBlock = useRemoveBlock(schedule.id)
 
+  const month = view === 'dayGridMonth'
   const events = useMemo(
     () => [
-      ...spansIn(schedule.availability, dates).map(availabilityEvent),
+      // В месяце полос приёма нет: тридцать полос превратили бы клетки в кашу, а
+      // «работаю — не работаю» там показывает приглушённый день (dayCellClass).
+      ...(month ? [] : spansIn(schedule.availability, dates).map(availabilityEvent)),
       ...(busy.data?.blocks ?? []).map(blockEvent),
       ...(busy.data?.bookings ?? []).map(bookingEvent),
     ],
-    [schedule.availability, dates, busy.data],
+    [schedule.availability, dates, busy.data, month],
   )
+
+  // Дни видимого отрезка, в которые приём вообще ведётся, — месяцу.
+  const workingDays = useMemo(
+    () =>
+      new Set(dates.filter((d) => effectiveWindows(schedule.availability, d).windows.length > 0)),
+    [schedule.availability, dates],
+  )
+
+  // Границы оси часов: от самого раннего окна приёма до самого позднего, с запасом
+  // в час, но не уже рабочего дня и не шире суток. Считаются и по занятому времени
+  // тоже — встреча, назначенная до открытия приёма, обязана быть видна.
+  const hours = useMemo(() => axisHours(schedule, dates, busy.data), [schedule, dates, busy.data])
 
   // saveAvailability — правка правила уходит на сервер СРАЗУ: полотно живёт по
   // законам календаря, а не формы с кнопкой «Сохранить». Параметры записи ниже по
@@ -155,20 +180,40 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
           <Button variant="ghost" size="sm" onClick={() => controller.today()}>
             Сегодня
           </Button>
-          <Button
-            variant="ghost"
-            size="sm"
-            onClick={() =>
-              controller.changeView(visibleDays === 1 ? 'timeGridWeek' : 'timeGridDay')
-            }
-          >
-            {visibleDays === 1 ? 'Неделя' : 'День'}
-          </Button>
-          <span className="ml-2 text-base font-semibold">{weekTitle(dates)}</span>
+          <span className="ml-2 text-base font-semibold">{rangeTitle(dates, view)}</span>
         </div>
-        <p className="text-sm text-muted-foreground">
-          Время в поясе расписания ({schedule.timezone})
-        </p>
+        <div className="flex items-center gap-3">
+          <p className="hidden text-sm text-muted-foreground @3xl:block">
+            Пояс расписания: {schedule.timezone}
+          </p>
+          {/* Переключатель видов — сегментами, а не тремя одинаковыми кнопками:
+              выбран всегда ровно один, и группа должна читаться как один орган
+              управления. */}
+          <div className="flex rounded-md border p-0.5">
+            {VIEWS.map((v) => (
+              <button
+                key={v.name}
+                type="button"
+                aria-pressed={view === v.name}
+                className={
+                  view === v.name
+                    ? 'rounded-sm bg-primary px-2.5 py-1 text-sm font-medium text-primary-foreground'
+                    : 'rounded-sm px-2.5 py-1 text-sm text-muted-foreground hover:text-foreground'
+                }
+                onClick={() => controller.changeView(v.name)}
+              >
+                {v.title}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+        <Legend className="sc-key-av" title="Приём" />
+        <Legend className="sc-key-ex" title="Только в этот день" />
+        <Legend className="sc-key-block" title="Занято" />
+        <Legend className="sc-key-booking" title="Запись" />
       </div>
 
       {error && (
@@ -177,12 +222,17 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
         </p>
       )}
 
-      <div className="sc-canvas rounded-lg border">
+      {/* Класс вида на КОНТЕЙНЕРЕ, а не на самом виде: правила слоения должны
+          действовать только в сетке времени, а `viewClass` вешает класс глубже, чем
+          живут обёртки событий. */}
+      <div className={`sc-canvas rounded-lg border ${month ? 'sc-month' : 'sc-grid'}`}>
         <Calendar
           controller={controller}
-          plugins={[timeGridPlugin, interactionPlugin]}
-          initialView={narrowScreen() ? 'timeGridDay' : 'timeGridWeek'}
-          initialDate={firstDate}
+          plugins={[timeGridPlugin, dayGridPlugin, interactionPlugin, classicTheme]}
+          initialView={view}
+          // Сегодня, а не понедельник недели: отрезок выбирает сам вид, и в виде дня
+          // понедельник означал бы «открыть на прошлом дне».
+          initialDate={todayIn(schedule.timezone)}
           timeZone={schedule.timezone}
           locale={ruLocale}
           firstDay={1}
@@ -193,10 +243,45 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
           height="auto"
           slotDuration={{ minutes: 30 }}
           snapDuration={{ minutes: SNAP_MINUTES }}
-          scrollTime="08:00"
+          slotHeaderInterval={{ hours: 1 }}
+          // «09:00», а не «9»: час без минут читается как число, а не как время, и
+          // на оси рядом с записями это сбивает.
+          slotHeaderFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
+          eventTimeFormat={{ hour: '2-digit', minute: '2-digit', hour12: false }}
+          // В карточке только НАЧАЛО: конец виден по высоте самой карточки, а
+          // «11:00 – 12:00» рядом с названием переносит его на вторую строку и
+          // обрезает на полуслове.
+          displayEventEnd={false}
+          // Сутки показываются НЕ ЦЕЛИКОМ: двадцать четыре часа, из которых заняты
+          // восемь, — это полотно, где приём приходится искать прокруткой. Границы
+          // берутся из самого расписания и расширяются на час в каждую сторону,
+          // чтобы соседний час был виден и на него можно было протянуть окно.
+          slotMinTime={hours.min}
+          slotMaxTime={hours.max}
+          dayMaxEvents={3}
+          slotHeaderContent={(info) => <span className="sc-slot-label">{info.text}</span>}
+          dayCellTopContent={(info) => (
+            <span className={`sc-cell-num${info.isToday ? ' sc-cell-today' : ''}`}>
+              {info.text}
+            </span>
+          )}
+          dayHeaderContent={(info) => (
+            <span className={`sc-day-head${info.isToday ? ' sc-day-today' : ''}`}>
+              <span className="sc-day-name">{info.weekdayText}</span>
+              <span className="sc-day-num">{info.dayNumberText}</span>
+            </span>
+          )}
+          // В МЕСЯЦЕ полос приёма нет — там их было бы тридцать штук, и клетка
+          // превратилась бы в кашу. Вместо них приглушается день, в который приёма
+          // нет вовсе: «работаю — не работаю» иначе не видно ничем.
+          dayCellClass={(info) =>
+            workingDays.has(dateKeyOf(info.date, schedule.timezone)) ? '' : 'sc-day-off'
+          }
+          eventContent={eventContent}
           datesSet={(info) => {
             setFirstDate(dateOfNaive(info.startStr))
             setVisibleDays(daysBetween(info.startStr, info.endStr))
+            setView(info.view.type as ViewName)
           }}
           selectable
           selectMirror
@@ -432,10 +517,110 @@ function narrowScreen(): boolean {
     : false
 }
 
-function weekTitle(dates: string[]): string {
+function Legend({ className, title }: { className: string; title: string }) {
+  return (
+    <span className="flex items-center gap-1.5">
+      <span className={`sc-key ${className}`} aria-hidden />
+      {title}
+    </span>
+  )
+}
+
+// VIEWS — три вида полотна. Месяц отвечает на вопрос «когда я вообще работаю»,
+// неделя — «как устроен распорядок», день — «что сегодня» и он же единственный
+// читаемый на телефоне.
+const VIEWS = [
+  { name: 'dayGridMonth', title: 'Месяц' },
+  { name: 'timeGridWeek', title: 'Неделя' },
+  { name: 'timeGridDay', title: 'День' },
+] as const
+
+type ViewName = (typeof VIEWS)[number]['name']
+
+// axisHours — границы оси часов. Сутки целиком показывать нельзя: приём занимает в
+// них треть, и его пришлось бы искать прокруткой. Час запаса с каждой стороны — не
+// красота: без него окно приёма прижато к краю, и протянуть новое рядом некуда.
+function axisHours(
+  schedule: Schedule,
+  dates: string[],
+  busy: { blocks: ScheduleBlock[]; bookings: Booking[] } | undefined,
+): { min: string; max: string } {
+  const clocks: number[] = []
+  for (const date of dates) {
+    for (const w of effectiveWindows(schedule.availability, date).windows) {
+      const from = clockToMinutes(w.from)
+      const to = clockToMinutes(w.to)
+      if (from !== null) clocks.push(from)
+      if (to !== null) clocks.push(to)
+    }
+  }
+  const busyAt = (iso: string) => clockToMinutes(zonedParts(new Date(iso), schedule.timezone).clock)
+  for (const b of busy?.blocks ?? []) {
+    const from = busyAt(b.startsAt)
+    const to = busyAt(b.endsAt)
+    if (from !== null) clocks.push(from)
+    if (to !== null) clocks.push(to)
+  }
+  for (const b of busy?.bookings ?? []) {
+    const from = busyAt(b.startsAt)
+    if (from !== null) clocks.push(from, from + b.durationMinutes)
+  }
+  // Пустое расписание показывает рабочий день, а не полночь-полночь: полотно, на
+  // котором ещё ничего нет, должно открываться там, где приём заводят.
+  const min = clocks.length > 0 ? Math.min(...clocks, 9 * 60) : 8 * 60
+  const max = clocks.length > 0 ? Math.max(...clocks, 18 * 60) : 20 * 60
+  return {
+    min: minutesToClock(Math.max(0, Math.floor((min - 60) / 60) * 60)),
+    max: minutesToClock(Math.min(24 * 60, Math.ceil((max + 60) / 60) * 60)),
+  }
+}
+
+// dateKeyOf — календарная дата момента В ПОЯСЕ РАСПИСАНИЯ: клетка месяца приходит
+// от библиотеки моментом, а «работаю ли я в этот день» спрашивается у правила,
+// которое живёт в местном времени.
+function dateKeyOf(at: Date, timeZone: string): string {
+  return zonedParts(at, timeZone).date
+}
+
+// eventContent — своя отрисовка вместо библиотечной: у трёх слоёв разный смысл, и
+// одинаковая строка «10:00 Название» у всех троих их бы уравняла.
+function eventContent(info: {
+  event: { extendedProps: Record<string, unknown>; title: string }
+  timeText: string
+}) {
+  const props = info.event.extendedProps as EventProps
+  if (props.layer === 'availability') {
+    // Полоса приёма БЕЗ ТЕКСТА: это фон дня, а не событие. Что означает цвет,
+    // говорит легенда под панелью — надпись в каждой полосе повторяла бы её
+    // семь раз на экран.
+    return <span className="sc-av-fill" />
+  }
+  return (
+    <span className="sc-ev-short">
+      <span className="sc-ev-time">{info.timeText}</span>
+      <span className="sc-ev-title">{info.event.title}</span>
+    </span>
+  )
+}
+
+// rangeTitle — что за отрезок показан: «14 — 20 сентября», «сентябрь 2026»,
+// «16 сентября». Не «неделя 38»: номерами недель у нас никто не живёт.
+function rangeTitle(dates: string[], view: ViewName): string {
   const first = dates[0]
   const last = dates[dates.length - 1]
   if (!first || !last) return ''
+  if (view === 'dayGridMonth') {
+    // У месяца в отрезок попадают хвосты соседних месяцев, поэтому имя берётся у
+    // середины, а не у первой клетки: иначе сентябрь назывался бы августом.
+    const middle = dates[Math.floor(dates.length / 2)] ?? first
+    return capitalize(
+      new Date(`${middle}T00:00:00Z`).toLocaleDateString(LOCALE, {
+        timeZone: 'UTC',
+        month: 'long',
+        year: 'numeric',
+      }),
+    )
+  }
   const fmt = (d: string, withMonth: boolean) =>
     new Date(`${d}T00:00:00Z`).toLocaleDateString(LOCALE, {
       timeZone: 'UTC',
@@ -445,4 +630,8 @@ function weekTitle(dates: string[]): string {
   if (first === last) return fmt(first, true)
   const sameMonth = first.slice(0, 7) === last.slice(0, 7)
   return `${fmt(first, !sameMonth)} — ${fmt(last, true)}`
+}
+
+function capitalize(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1)
 }

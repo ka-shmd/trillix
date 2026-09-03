@@ -2,84 +2,251 @@
    он импортируется ЛЕНИВЫМ чанком и уезжает вместе с ним — на страницах без
    расписания этих правил в бандле нет.
 
-   ЦЕПЛЯТЬСЯ ЗА КЛАССЫ БИБЛИОТЕКИ НЕЛЬЗЯ: седьмая ветка FullCalendar минифицирует
-   собственные имена (`.fc-a`, `.fc-cc`, …), и они меняются от сборки к сборке. Все
-   селекторы здесь идут от НАШИХ классов, которые вешает опция `eventClass`, а до
-   чужой обёртки достают через `:has(> …)` — по родству, а не по имени. */
+   ОСНОВА — ШТАТНАЯ ТЕМА `classic` библиотеки, покрашенная нашими токенами. Сетка,
+   разделители, заголовки дней и «сегодня» у неё уже собраны и продуманы; писать их
+   заново означало бы держать свою вёрстку календаря без единой выгоды. Тема
+   полностью переменная (`--fc-classic-*`), поэтому её палитра здесь просто
+   переопределяется — файл `themes/classic/palette.css` мы не импортируем вовсе.
+
+   ЦЕПЛЯТЬСЯ ЗА КЛАССЫ БИБЛИОТЕКИ НЕЛЬЗЯ: седьмая ветка минифицирует собственные
+   имена (`.fc-a`, `.fc-cc`, …), и они меняются от сборки к сборке. Все селекторы
+   ниже идут от НАШИХ классов (опции `eventClass`, `dayCellClass`, …), а до чужой
+   обёртки достают через `:has(> …)` — по родству, а не по имени. */
 
 .sc-canvas {
-  --sc-av: color-mix(in oklab, var(--primary) 12%, transparent);
-  --sc-av-line: color-mix(in oklab, var(--primary) 35%, transparent);
-  --sc-av-ex: color-mix(in oklab, var(--highlight) 18%, transparent);
-  --sc-av-ex-line: color-mix(in oklab, var(--highlight) 45%, transparent);
+  /* Палитра темы = наши токены. Кнопок темы на полотне нет (панель своя), но
+     переменные заданы: тема рисует ими фокус и ховеры. */
+  --fc-classic-primary: var(--primary);
+  --fc-classic-primary-foreground: var(--primary-foreground);
+  --fc-classic-event: var(--primary);
+  --fc-classic-event-contrast: var(--primary-foreground);
+  --fc-classic-background: var(--card);
+  --fc-classic-foreground: var(--foreground);
+  --fc-classic-faint: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --fc-classic-muted: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --fc-classic-strong: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --fc-classic-faint-foreground: var(--muted-foreground);
+  --fc-classic-muted-foreground: var(--muted-foreground);
+  --fc-classic-border: var(--border);
+  --fc-classic-strong-border: color-mix(in oklab, var(--border) 60%, var(--foreground));
+  --fc-classic-highlight: color-mix(in oklab, var(--primary) 14%, transparent);
+  --fc-classic-today: color-mix(in oklab, var(--primary) 6%, transparent);
+  --fc-classic-now: var(--destructive);
+  --fc-classic-ring-color: var(--ring);
+
+  /* Свои цвета слоёв. Приём — заливка, а не карточка: автор смотрит СКВОЗЬ неё на
+     записи, и плотная плашка мешала бы. */
+  --sc-av: color-mix(in oklab, var(--primary) 10%, transparent);
+  --sc-av-line: color-mix(in oklab, var(--primary) 55%, transparent);
+  --sc-av-ex: color-mix(in oklab, var(--highlight) 14%, transparent);
+  --sc-av-ex-line: color-mix(in oklab, var(--highlight) 65%, transparent);
+  --sc-block-stripe: color-mix(in oklab, var(--foreground) 8%, transparent);
+
+  font-size: 0.8125rem;
   overflow: hidden;
 }
 
 /* СЛОЕНИЕ, А НЕ СОСЕДСТВО. Библиотека раскладывает пересекающиеся события бок о бок:
    запись внутри часов приёма встала бы РЯДОМ с окном, вдвое сузив обоих, — и полотно
    перестало бы читаться как «занято внутри приёмного времени».
-   Окно приёма растягивается во всю колонку и уходит под остальные слои. */
-.sc-canvas :has(> .sc-av) {
+   Окно приёма растягивается во всю колонку и уходит под остальные слои.
+
+   ⚠ ТОЛЬКО В СЕТКЕ ВРЕМЕНИ (`.sc-grid`). В месяце событие лежит в строке недели, а
+   не в колонке дня, и `inset-inline` растягивает его на все семь дней — проверено
+   глазами: «Обед» занимал неделю целиком. */
+.sc-grid :has(> .sc-av) {
   inset-inline: 0 !important;
   z-index: 1;
 }
 
-.sc-canvas :has(> .sc-block),
-.sc-canvas :has(> .sc-booking) {
+.sc-grid :has(> .sc-block),
+.sc-grid :has(> .sc-booking) {
   z-index: 3;
 }
 
+/* Записи не жмутся к правому краю колонки: раскладка библиотеки отводит окну приёма
+   собственный уровень, и без этой поправки встреча занимала бы правую половину дня.
+   Левый отступ оставлен намеренно — сквозь него видно, что запись лежит ВНУТРИ
+   приёмного часа, а не вместо него. */
+.sc-grid :has(> .sc-booking),
+.sc-grid :has(> .sc-block) {
+  inset-inline-start: 6px !important;
+  inset-inline-end: 2px !important;
+}
+
 .sc-canvas .sc-ev {
-  border-radius: var(--radius-sm);
-  font-size: 0.8125rem;
-  line-height: 1.2;
-  padding: 2px 4px;
+  border-radius: 4px;
+  line-height: 1.25;
   overflow: hidden;
 }
 
-/* Часы приёма — подложка: цвет заливки, а не карточка. Автор смотрит СКВОЗЬ них на
-   записи, и плотная плашка мешала бы. */
 .sc-canvas .sc-av {
   background: var(--sc-av);
-  border: 1px solid var(--sc-av-line);
-  border-left-width: 3px;
-  color: transparent; /* время библиотеки внутри подложки не нужно */
+  border: 0;
+  border-left: 2px solid var(--sc-av-line);
+  border-radius: 0 4px 4px 0;
   cursor: pointer;
 }
 
-/* Исключение по дате отличается ЦВЕТОМ, а не подписью: «так каждую неделю» и «так
-   только в этот день» — первое, что автор пришёл увидеть. */
+/* Исключение по дате отличается ЦВЕТОМ и штриховкой левой границы, а не подписью:
+   «так каждую неделю» и «так только в этот день» — первое, что автор пришёл увидеть. */
 .sc-canvas .sc-av-ex {
   background: var(--sc-av-ex);
-  border-color: var(--sc-av-ex-line);
-  border-left-style: dashed;
+  border-left: 2px dashed var(--sc-av-ex-line);
 }
 
-.sc-canvas .sc-block {
-  background: repeating-linear-gradient(
-    135deg,
-    var(--muted),
-    var(--muted) 6px,
-    var(--background) 6px,
-    var(--background) 12px
-  );
-  border: 1px solid var(--border);
-  color: var(--muted-foreground);
+/* Полоса приёма пуста внутри: это фон дня, а не событие. */
+.sc-canvas .sc-av-fill {
+  display: block;
+  height: 100%;
 }
 
+/* Запись — ПЛОТНАЯ заливка акцентом. Светлая карточка с полосой слева (как в новом
+   Outlook) здесь проверена и отвергнута: полоса приёма под записью того же цвета, и
+   бледная встреча на бледном фоне переставала читаться вовсе. Плотная заливка —
+   единственное, что отделяет «занято человеком» от «в это время принимаю». */
 .sc-canvas .sc-booking {
   background: var(--primary);
-  border: 1px solid var(--primary);
+  border: 1px solid color-mix(in oklab, var(--primary) 80%, var(--foreground));
   color: var(--primary-foreground);
-  font-weight: 500;
-}
-
-/* Курсор перетаскивания — только у того, что двигается. Запись не двигается: её
-   время договорено с человеком, и «схватилось, но не поехало» читается как поломка. */
-.sc-canvas .sc-booking {
   cursor: default;
+  padding: 2px 6px;
 }
 
 .sc-canvas .sc-block {
+  background:
+    repeating-linear-gradient(135deg, var(--sc-block-stripe) 0 5px, transparent 5px 10px),
+    var(--card);
+  border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in oklab, var(--foreground) 35%, transparent);
+  color: color-mix(in oklab, var(--foreground) 80%, transparent);
   cursor: grab;
+  padding: 2px 6px;
+}
+
+.sc-canvas .sc-ev-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.sc-canvas .sc-ev-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Короткое событие — одна строка: время и название в строку, иначе название
+   выдавливается за пределы карточки и обрезается на полуслове. */
+.sc-canvas .sc-ev-short {
+  align-items: baseline;
+  display: flex;
+  gap: 4px;
+}
+
+/* Ось часов: числа мельче и приглушены, как в почтовом календаре, и прижаты к
+   линии часа, а не висят по центру строки. */
+.sc-canvas .sc-slot-label {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  padding-inline-end: 8px;
+}
+
+/* Шапка дня: имя дня мелким и приглушённым, число крупным. Сегодняшнее число —
+   в залитом кружке: так «сегодня» видно боковым зрением, а не вычитывается. */
+.sc-canvas .sc-day-head {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+}
+
+.sc-canvas .sc-day-name {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  text-transform: lowercase;
+}
+
+.sc-canvas .sc-day-num {
+  align-items: center;
+  border-radius: 999px;
+  display: flex;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  height: 1.75rem;
+  justify-content: center;
+  min-width: 1.75rem;
+}
+
+.sc-canvas .sc-day-today .sc-day-num {
+  background: var(--primary);
+  color: var(--primary-foreground);
+}
+
+/* День, в который приёма нет вовсе, приглушён в МЕСЯЦЕ: там полос приёма нет, и
+   «работаю — не работаю» иначе не видно ничем. */
+.sc-canvas .sc-day-off {
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+}
+
+/* В месяце событие — компактная строка-чип, а не карточка: в клетку их влезает
+   несколько, и высота карточки съела бы день целиком. */
+.sc-month .sc-ev {
+  border-radius: 3px;
+  font-size: 0.6875rem;
+  margin: 0 2px 1px;
+  padding: 1px 5px;
+}
+
+/* Число дня в месяце: сегодняшнее — в залитом кружке, как в шапке недели. */
+.sc-month .sc-cell-num {
+  align-items: center;
+  display: inline-flex;
+  font-variant-numeric: tabular-nums;
+  height: 1.5rem;
+  justify-content: center;
+  min-width: 1.5rem;
+}
+
+.sc-month .sc-cell-today {
+  background: var(--primary);
+  border-radius: 999px;
+  color: var(--primary-foreground);
+  font-weight: 600;
+}
+
+/* Легенда: что означает цвет. Живёт под панелью, а не подписями внутри полос —
+   надпись в каждой полосе повторяла бы одно и то же семь раз на экран. */
+.sc-key {
+  border-radius: 3px;
+  display: inline-block;
+  height: 0.75rem;
+  width: 0.75rem;
+}
+
+.sc-key-av {
+  background: color-mix(in oklab, var(--primary) 10%, var(--card));
+  border-left: 2px solid color-mix(in oklab, var(--primary) 55%, transparent);
+}
+
+.sc-key-ex {
+  background: color-mix(in oklab, var(--highlight) 14%, var(--card));
+  border-left: 2px dashed color-mix(in oklab, var(--highlight) 65%, transparent);
+}
+
+.sc-key-block {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--foreground) 8%, transparent) 0 4px,
+      transparent 4px 8px
+    ),
+    var(--card);
+  border: 1px solid var(--border);
+}
+
+.sc-key-booking {
+  background: var(--primary);
 }
