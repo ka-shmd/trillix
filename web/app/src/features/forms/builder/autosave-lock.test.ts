@@ -22,6 +22,8 @@ const draftSchema = { blocks: [] } as FormDetail['draftSchema']
 function seedDetail(qc: QueryClient) {
   qc.setQueryData<FormDetail>(formKeys.detail(formId), {
     id: formId,
+    workspaceId: 'ws-1',
+    scheduleId: null,
     name: null,
     title: 'Старое имя',
     slug: 'old-slug',

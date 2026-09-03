@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { CalendarClock } from 'lucide-react'
 
 import { type Booking } from '../../entities/schedule'
-import { bookingsQueryOptions, useCancelBooking } from './queries'
+import { bookingsQueryOptions, useCancelBooking } from '../../shared/schedules/queries'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'

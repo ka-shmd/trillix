@@ -1825,3 +1825,37 @@ textarea.rf-input {
   border-radius: var(--rf-radius);
   box-shadow: var(--rf-focus-shadow);
 }
+
+/* Запись на время (фаза 27). Плашка с выбранным временем — не инпут: выбирает время
+   пикер, приезжающий в рендерер отдельным чанком, а здесь стоит то, что уже выбрано
+   (и это же печатается на листе ответа).
+
+   Высота и рамка — те же, что у поля: строка вопроса обязана стоять в общем ритме,
+   даже когда внутри неё не инпут. */
+.rf-slot {
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  width: 100%;
+  max-width: var(--rf-input-max);
+  min-height: var(--rf-control-h);
+  /* Те же поля и та же тень, что у .rf-input: разойдясь на пиксель, плашка встала бы
+     в строке чуть иначе, чем соседнее поле. */
+  padding: 0.375rem var(--rf-input-px);
+  border-radius: var(--rf-radius);
+  font-size: var(--rf-font-size);
+  line-height: 1.5rem;
+  color: var(--rf-text);
+  background: var(--rf-field-bg);
+  box-shadow: var(--rf-field-shadow);
+}
+
+.rf-slot-value {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Пусто — служебная подсказка, а не текст автора: тот же приглушённый цвет, что у
+   подсказки внутри поля. */
+.rf-slot-empty {
+  color: var(--rf-muted);
+}

@@ -1,3 +1,6 @@
+// Транспорт и кэш расписаний живут в shared, а не в фиче: их спрашивают ДВЕ фичи —
+// экран расписаний и попап блока «Запись» на полотне, — а импорт фичи из фичи запрещён
+// (web/CLAUDE.md). Компоненты экрана при этом остались в features/schedules.
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 
 import { scheduleKeys } from './keys'

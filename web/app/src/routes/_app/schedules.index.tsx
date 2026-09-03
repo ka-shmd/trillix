@@ -5,7 +5,7 @@ import { CalendarClock, Plus } from 'lucide-react'
 import { z } from 'zod'
 
 import { DEFAULT_SCHEDULE, MAX_SCHEDULE_NAME_LEN } from '../../entities/schedule'
-import { schedulesQueryOptions, useCreateSchedule } from '../../features/schedules/queries'
+import { schedulesQueryOptions, useCreateSchedule } from '../../shared/schedules/queries'
 import { weekSummary } from '../../features/schedules/weekly'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'

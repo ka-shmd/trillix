@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { MoreHorizontal, Trash2 } from 'lucide-react'
 import { z } from 'zod'
 
-import { scheduleQueryOptions, useDeleteSchedule, useUpdateSchedule } from '../../features/schedules/queries'
+import { scheduleQueryOptions, useDeleteSchedule, useUpdateSchedule } from '../../shared/schedules/queries'
 import { ScheduleEditor } from '../../features/schedules/ScheduleEditor'
 import { BlocksSection } from '../../features/schedules/BlocksSection'
 import { UpcomingSection } from '../../features/schedules/UpcomingSection'

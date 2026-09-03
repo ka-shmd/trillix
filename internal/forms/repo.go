@@ -101,6 +101,9 @@ type Form struct {
 	// колонка; заполняют только Get/GetBySlug — та же мина, что у Branding.
 	// Расшифровывает его service (Password ниже), repo байты не трогает.
 	PasswordSealed []byte
+	// ScheduleID — расписание записи на время (0050); nil = у формы нет записи.
+	// Живая колонка, как настройки закрытия: заполняют только Get/GetBySlug.
+	ScheduleID *uuid.UUID
 	// Password — расшифрованный пароль формы (nil = пароля нет). Заполняет ТОЛЬКО
 	// service.Get/GetBySlug, то есть путь автора: он свой пароль видит и копирует
 	// (design/form-password.md §2.1).
@@ -429,6 +432,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		NotifyRespondent:      row.NotifyRespondent,
 		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
 		PasswordSealed:        row.Password,
+		ScheduleID:            ptrUUID(row.ScheduleID),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -472,6 +476,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		NotifyRespondent:      row.NotifyRespondent,
 		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
 		PasswordSealed:        row.Password,
+		ScheduleID:            ptrUUID(row.ScheduleID),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -971,6 +976,46 @@ func (Repo) UpdateFormNotifyRespondent(ctx context.Context, db postgres.DBTX, id
 // UpdateFormPassword ставит или снимает пароль формы (0047): sealed — шифротекст,
 // nil — снять. Шифрует service; repo и БД видят только байты. В пределах воркспейса
 // (анти-IDOR); pgx.ErrNoRows (чужая/нет формы) пробрасывается — service вернёт 404.
+// ScheduleInWorkspace — принадлежит ли расписание пространству формы.
+func (Repo) ScheduleInWorkspace(ctx context.Context, db postgres.DBTX, scheduleID, workspaceID uuid.UUID) (bool, error) {
+	ok, err := postgres.New(db).ScheduleInWorkspace(ctx, postgres.ScheduleInWorkspaceParams{
+		ID:          scheduleID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("check schedule %s in workspace %s: %w", scheduleID, workspaceID, err)
+	}
+	return ok, nil
+}
+
+// UpdateFormSchedule ставит или снимает расписание записи у формы. Проверку «то же
+// пространство» делает service — ключу её не выразить.
+func (Repo) UpdateFormSchedule(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, scheduleID *uuid.UUID) (Form, error) {
+	arg := pgtype.UUID{}
+	if scheduleID != nil {
+		arg = pgtype.UUID{Bytes: *scheduleID, Valid: true}
+	}
+	row, err := postgres.New(db).UpdateFormSchedule(ctx, postgres.UpdateFormScheduleParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		ScheduleID:  arg,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form schedule: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
 func (Repo) UpdateFormPassword(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, sealed []byte) (Form, error) {
 	row, err := postgres.New(db).UpdateFormPassword(ctx, postgres.UpdateFormPasswordParams{
 		ID:          id,

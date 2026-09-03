@@ -87,6 +87,11 @@ type Store interface {
 	UpdateFormNotifyRespondent(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormRespondentEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, r *domain.RespondentEmail) (Form, error)
 	UpdateFormPassword(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, sealed []byte) (Form, error)
+	// UpdateFormSchedule — расписание записи у формы (фаза 27), живая колонка.
+	UpdateFormSchedule(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, scheduleID *uuid.UUID) (Form, error)
+	// ScheduleInWorkspace — принадлежит ли расписание пространству формы: id
+	// приезжает телом запроса и правом доступа не является.
+	ScheduleInWorkspace(ctx context.Context, db postgres.DBTX, scheduleID, workspaceID uuid.UUID) (bool, error)
 	GetFormPasswordBySlug(ctx context.Context, db postgres.DBTX, slug string) (uuid.UUID, []byte, error)
 	SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
 	UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error)
@@ -835,6 +840,20 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 		return Form{}, err
 	}
 
+	// ГЕЙТ ЗАПИСИ НА ВРЕМЯ: блок «Запись» есть, а расписание не выбрано (фаза 27,
+	// решение владельца 2026-09-03). Здесь, а не на сохранении, и по тому же доводу,
+	// что у гейта оформления: черновик в промежуточном состоянии обязан сохраняться,
+	// иначе автосейв отвечает 422 посреди работы.
+	//
+	// Молча опубликовать такую форму нельзя: респондент увидел бы вопрос о времени,
+	// который ничего не предлагает, — то есть форму, которая обещает распорядок и не
+	// имеет его. Обратный перекос (расписание выбрано, блока нет) публикацию не
+	// держит: это законное состояние, о нём предупреждает экран настроек.
+	if form.ScheduleID == nil && domain.HasSlot(parsed) {
+		return Form{}, fmt.Errorf("%w: в форме есть вопрос о записи, но расписание не выбрано — выберите его в блоке «Запись»",
+			domain.ErrValidation)
+	}
+
 	// ГЕЙТ ОФОРМЛЕНИЯ — ЗДЕСЬ, А НЕ НА СОХРАНЕНИИ (спека design/theme.md §9.3).
 	// Автосейв не имеет права вернуть 402 посреди набора: промежуточное состояние
 	// документа обязано сохраняться — тот же довод, по которому фаза 21 отказалась
@@ -1002,6 +1021,39 @@ const MaxFormPasswordLen = 128
 // Тарифа здесь НЕТ вовсе: пароль бесплатен на всех планах (решение владельца
 // 2026-09-01, design/form-password.md §2.2) — он про приватность, а не про объём.
 // Живая колонка: и постановка, и снятие действуют без перепубликации.
+// UpdateSchedule ставит или снимает расписание записи у формы (фаза 27). Живая
+// колонка: смена действует со следующего же ответа, без перепубликации.
+//
+// РАСПИСАНИЕ ОБЯЗАНО БЫТЬ ИЗ ТОГО ЖЕ ПРОСТРАНСТВА, и проверяет это сервис: id
+// приезжает из тела запроса и правом доступа не является (инвариант 1). Без проверки
+// форма ссылалась бы на чужое расписание по угаданному id, а публичная выдача
+// показывала бы чужую занятость.
+func (s *Service) UpdateSchedule(ctx context.Context, userID, formID uuid.UUID, scheduleID *uuid.UUID) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if scheduleID != nil {
+		ok, err := s.repo.ScheduleInWorkspace(ctx, s.db, *scheduleID, form.WorkspaceID)
+		if err != nil {
+			return Form{}, err
+		}
+		if !ok {
+			// 404, а не 403: чужое расписание для этой формы неотличимо от
+			// несуществующего — существование чужого не раскрывается (инвариант 5).
+			return Form{}, domain.ErrNotFound
+		}
+	}
+	updated, err := s.repo.UpdateFormSchedule(ctx, s.db, form.ID, form.WorkspaceID, scheduleID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
+
 func (s *Service) UpdatePassword(ctx context.Context, userID, formID uuid.UUID, password *string) (Form, error) {
 	var sealed []byte
 	if password != nil {

@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { CalendarOff, Plus, X } from 'lucide-react'
 
 import { MAX_SCHEDULE_NOTE_LEN, type ScheduleBlock } from '../../entities/schedule'
-import { blocksQueryOptions, useAddBlock, useRemoveBlock } from './queries'
+import { blocksQueryOptions, useAddBlock, useRemoveBlock } from '../../shared/schedules/queries'
 import { DateField } from '../../shared/DateField'
 import { TimeField } from '../../shared/TimeField'
 import { Section } from '../../shared/page/Section'

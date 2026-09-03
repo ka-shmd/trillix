@@ -242,6 +242,8 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
       "type": "short_text",         // отвечаемые: short_text | long_text | email | phone
                                     //   | number | scale | single_choice | dropdown
                                     //   | multi_choice | date | consent (несёт свой text)
+                                    //   | file | slot (запись на время; в форме ≤1,
+                                    //     расписание — в forms.schedule_id, не в схеме)
                                     // подписи: title | label
                                     // контент: heading | heading_2 | heading_3
                                     //   | text | image (неотвечаемые)

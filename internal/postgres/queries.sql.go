@@ -1809,6 +1809,10 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- design/form-password.md §2.1), расшифровывает его service. Публичному пути
     -- шифротекст не нужен — GetPublicFormBySlug берёт только признак.
     f.password,
+    -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
+    -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
+    -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
+    f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1844,6 +1848,7 @@ type GetFormRow struct {
 	NotifyRespondent      bool
 	RespondentEmail       []byte
 	Password              []byte
+	ScheduleID            pgtype.UUID
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1883,6 +1888,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
 		&i.Password,
+		&i.ScheduleID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1909,6 +1915,10 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
     f.password,
+    -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
+    -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
+    -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
+    f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -1944,6 +1954,7 @@ type GetFormBySlugRow struct {
 	NotifyRespondent      bool
 	RespondentEmail       []byte
 	Password              []byte
+	ScheduleID            pgtype.UUID
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1985,6 +1996,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
 		&i.Password,
+		&i.ScheduleID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -4661,6 +4673,24 @@ func (q *Queries) RevealHiddenSubmissions(ctx context.Context, workspaceID uuid.
 	return result.RowsAffected(), nil
 }
 
+const scheduleInWorkspace = `-- name: ScheduleInWorkspace :one
+SELECT EXISTS (SELECT 1 FROM schedules WHERE id = $1 AND workspace_id = $2)
+`
+
+type ScheduleInWorkspaceParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+// Есть ли такое расписание в этом пространстве. Вопрос задаёт привязка формы к
+// расписанию: id приезжает телом запроса и правом доступа не является (инвариант 1).
+func (q *Queries) ScheduleInWorkspace(ctx context.Context, arg ScheduleInWorkspaceParams) (bool, error) {
+	row := q.db.QueryRow(ctx, scheduleInWorkspace, arg.ID, arg.WorkspaceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const setFormClosed = `-- name: SetFormClosed :one
 UPDATE forms
 SET status = 'closed', updated_at = now()
@@ -5589,6 +5619,53 @@ type UpdateFormRespondentEmailRow struct {
 func (q *Queries) UpdateFormRespondentEmail(ctx context.Context, arg UpdateFormRespondentEmailParams) (UpdateFormRespondentEmailRow, error) {
 	row := q.db.QueryRow(ctx, updateFormRespondentEmail, arg.ID, arg.WorkspaceID, arg.RespondentEmail)
 	var i UpdateFormRespondentEmailRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const updateFormSchedule = `-- name: UpdateFormSchedule :one
+UPDATE forms
+SET schedule_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormScheduleParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	ScheduleID  pgtype.UUID
+}
+
+type UpdateFormScheduleRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Расписание записи у формы (0050). Живая колонка: смена действует со следующего же
+// ответа, без перепубликации. NULL снимает запись.
+//
+// Проверку «расписание из ТОГО ЖЕ пространства» делает service: ключу её не выразить,
+// а без неё форма ссылалась бы на чужое расписание по угаданному id (инвариант 1).
+func (q *Queries) UpdateFormSchedule(ctx context.Context, arg UpdateFormScheduleParams) (UpdateFormScheduleRow, error) {
+	row := q.db.QueryRow(ctx, updateFormSchedule, arg.ID, arg.WorkspaceID, arg.ScheduleID)
+	var i UpdateFormScheduleRow
 	err := row.Scan(
 		&i.ID,
 		&i.WorkspaceID,

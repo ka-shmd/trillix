@@ -20,6 +20,7 @@ import { type FormIdSource } from './mediaUpload'
 import { createFocusEngine } from './focusEngine'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
+import { FormFactsProvider, type FormFacts } from './formFacts'
 import { ChatDrawer } from '../chat/ChatDrawer'
 import { useAutosave, type DraftCreation } from './useAutosave'
 import { useGlobalChord } from './useGlobalChord'
@@ -131,8 +132,19 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
     else redo()
   })
 
+  // Факты формы, которых нет в схеме: id (может быть обещанием — черновика ещё нет),
+  // пространство и выбранное расписание записи. Попап блока «Запись» берёт их отсюда:
+  // тащить три поля пропами через строку до попапа значило бы расширить контракт всем
+  // типам ради одного.
+  const formFacts: FormFacts = {
+    id: uploadTo,
+    workspaceId: detail.workspaceId,
+    scheduleId: detail.scheduleId,
+  }
+
   return (
     <BuilderStoreContext.Provider value={store}>
+      <FormFactsProvider value={formFacts}>
       <PageCrumbs items={[workspaceCrumb, displayFormName(detail)]} />
       {/* Кнопки редактора — в правую половину верхнего бара. */}
       <PageActions>
@@ -280,6 +292,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
           s.blocks и потому перерисовывающиеся на каждый символ, а эта панель
           подписана на s.design — он при вводе не меняется. */}
       <DesignDrawer formId={uploadTo} open={drawers.designOpen} onOpenChange={drawers.openDesign} />
+      </FormFactsProvider>
     </BuilderStoreContext.Provider>
   )
 }

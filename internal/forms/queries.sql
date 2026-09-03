@@ -63,6 +63,10 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- design/form-password.md §2.1), расшифровывает его service. Публичному пути
     -- шифротекст не нужен — GetPublicFormBySlug берёт только признак.
     f.password,
+    -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
+    -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
+    -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
+    f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -93,6 +97,10 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
     f.password,
+    -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
+    -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
+    -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
+    f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
@@ -460,3 +468,19 @@ UPDATE forms
 SET status = 'closed', updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: UpdateFormSchedule :one
+-- Расписание записи у формы (0050). Живая колонка: смена действует со следующего же
+-- ответа, без перепубликации. NULL снимает запись.
+--
+-- Проверку «расписание из ТОГО ЖЕ пространства» делает service: ключу её не выразить,
+-- а без неё форма ссылалась бы на чужое расписание по угаданному id (инвариант 1).
+UPDATE forms
+SET schedule_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: ScheduleInWorkspace :one
+-- Есть ли такое расписание в этом пространстве. Вопрос задаёт привязка формы к
+-- расписанию: id приезжает телом запроса и правом доступа не является (инвариант 1).
+SELECT EXISTS (SELECT 1 FROM schedules WHERE id = $1 AND workspace_id = $2);

@@ -1,6 +1,7 @@
 import {
   AlignLeft,
   Calendar,
+  CalendarClock,
   CaseSensitive,
   CheckSquare,
   ChevronDown,
@@ -61,6 +62,7 @@ export const BLOCK_ICONS: Record<BlockType, LucideIcon> = {
   date: Calendar,
   consent: ShieldCheck,
   file: Paperclip,
+  slot: CalendarClock,
   title: Type,
   label: Tag,
   // Общий «Heading», а не Heading1: тот занят заголовком ФОРМЫ.

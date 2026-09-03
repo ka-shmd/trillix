@@ -579,3 +579,69 @@ func TestValidateSchema_PageBreak(t *testing.T) {
 		})
 	}
 }
+
+// Вопрос о записи в форме один: одна отправка — одна бронь (фаза 27,
+// design/booking.md §4.3).
+func TestValidateSchema_SlotOnlyOne(t *testing.T) {
+	one := `{"blocks":[{"id":"s1","groupId":"g1","type":"slot","settings":{}}]}`
+	if _, err := ValidateSchema(json.RawMessage(one)); err != nil {
+		t.Fatalf("один вопрос о записи отвергнут: %v", err)
+	}
+
+	two := `{"blocks":[
+		{"id":"s1","groupId":"g1","type":"slot","settings":{}},
+		{"id":"s2","groupId":"g2","type":"slot","settings":{}}
+	]}`
+	err := ValidateSchema2(t, two)
+	if err == nil {
+		t.Fatal("два вопроса о записи приняты, ожидался отказ")
+	}
+	if !errors.Is(err, ErrValidation) {
+		t.Fatalf("ошибка не ErrValidation: %v", err)
+	}
+
+	// Расписание схема не хранит и не спрашивает: оно живёт живой колонкой, а
+	// незаполненный выбор держит гейт публикации, а не валидатор документа.
+	withSettings := `{"blocks":[{"id":"s1","groupId":"g1","type":"slot","settings":{"scheduleId":"x"}}]}`
+	if err := ValidateSchema2(t, withSettings); err == nil {
+		t.Fatal("настройка расписания в схеме принята — её там быть не должно")
+	}
+}
+
+// ValidateSchema2 — обёртка ради читаемости таблиц выше: ошибка без второго значения.
+func ValidateSchema2(t *testing.T, raw string) error {
+	t.Helper()
+	_, err := ValidateSchema(json.RawMessage(raw))
+	return err
+}
+
+// Формат значения у записи на время — два, и валидатор обязан принять оба:
+// id брони приезжает от респондента, время записывает сервер.
+func TestValidateAnswers_Slot(t *testing.T) {
+	schema := FormSchema{Blocks: []Block{
+		{ID: "s1", GroupID: "g1", Type: BlockSlot, Required: true},
+	}}
+	ok := func(name, value string) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			answers := map[string]json.RawMessage{"s1": json.RawMessage(value)}
+			if _, err := NormalizeAnswers(schema, answers); err != nil {
+				t.Fatalf("значение отвергнуто: %v", err)
+			}
+		})
+	}
+	bad := func(name, value string) {
+		t.Helper()
+		t.Run(name, func(t *testing.T) {
+			answers := map[string]json.RawMessage{"s1": json.RawMessage(value)}
+			if _, err := NormalizeAnswers(schema, answers); err == nil {
+				t.Fatal("значение принято, ожидался отказ")
+			}
+		})
+	}
+	ok("id брони от респондента", `"01937b1e-7c2a-7c9a-9d3e-4f5a6b7c8d9e"`)
+	ok("время, записанное сервером", `"2026-09-11T08:00:00Z"`)
+	bad("произвольная строка", `"четверг после обеда"`)
+	bad("объект", `{"bookingId":"x"}`)
+	bad("пусто при обязательном вопросе", `""`)
+}

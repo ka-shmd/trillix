@@ -22,6 +22,11 @@ type fakeStore struct {
 	personalWS  uuid.UUID
 	personalErr error
 
+	// Расписание записи (фаза 27): что вернёт проверка принадлежности и что унесла
+	// последняя привязка.
+	scheduleInWorkspace bool
+	lastScheduleID      *uuid.UUID
+
 	form   Form
 	getErr error
 
@@ -160,6 +165,18 @@ func (f *fakeStore) UpdateFormNotifyRespondent(_ context.Context, _ postgres.DBT
 	f.updated = true
 	f.lastRespondentOn = enabled
 	return Form{ID: id, WorkspaceID: workspaceID, NotifyRespondent: enabled}, nil
+}
+
+// Расписание записи (фаза 27): фейк принимает любое из «того же» пространства —
+// проверку членства проверяют интеграционные тесты против настоящей базы.
+func (f *fakeStore) UpdateFormSchedule(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, scheduleID *uuid.UUID) (Form, error) {
+	f.updated = true
+	f.lastScheduleID = scheduleID
+	return Form{ID: id, WorkspaceID: workspaceID, ScheduleID: scheduleID}, nil
+}
+
+func (f *fakeStore) ScheduleInWorkspace(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (bool, error) {
+	return f.scheduleInWorkspace, nil
 }
 
 func (f *fakeStore) UpdateFormPassword(_ context.Context, _ postgres.DBTX, id, workspaceID uuid.UUID, sealed []byte) (Form, error) {
@@ -1957,5 +1974,74 @@ func TestPasswordWithoutSecret(t *testing.T) {
 	}
 	if err := svc.VerifyUnlock(store.form.ID, []byte("шифротекст"), "любой токен"); !errors.Is(err, domain.ErrFormLocked) {
 		t.Fatalf("без секрета форма под паролем открылась: %v", err)
+	}
+}
+
+// Гейт публикации: вопрос о записи есть, расписание не выбрано (фаза 27, решение
+// владельца 2026-09-03). Черновик при этом сохраняется — стена стоит только здесь.
+func TestPublish_SlotWithoutSchedule(t *testing.T) {
+	schema := json.RawMessage(`{"blocks":[{"id":"s1","groupId":"g1","type":"slot","settings":{}}]}`)
+	store := &fakeStore{form: Form{
+		ID: uuid.New(), WorkspaceID: uuid.New(), DraftSchema: schema, Status: "draft",
+	}}
+	svc := newTestService(store)
+
+	_, err := svc.Publish(context.Background(), uuid.New(), store.form.ID)
+	if err == nil {
+		t.Fatal("форма с вопросом о записи и без расписания опубликована")
+	}
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка не ErrValidation: %v", err)
+	}
+	if !strings.Contains(err.Error(), "расписание не выбрано") {
+		t.Fatalf("текст отказа %q — автору нужно сказать, что делать", err.Error())
+	}
+}
+
+// То же расписание, но выбранное: публикация проходит.
+func TestPublish_SlotWithSchedule(t *testing.T) {
+	scheduleID := uuid.New()
+	schema := json.RawMessage(`{"blocks":[{"id":"s1","groupId":"g1","type":"slot","settings":{}}]}`)
+	store := &fakeStore{form: Form{
+		ID: uuid.New(), WorkspaceID: uuid.New(), DraftSchema: schema, Status: "draft",
+		ScheduleID: &scheduleID,
+	}}
+	svc := newTestService(store)
+
+	if _, err := svc.Publish(context.Background(), uuid.New(), store.form.ID); err != nil {
+		t.Fatalf("публикация с выбранным расписанием отвергнута: %v", err)
+	}
+}
+
+// Чужое расписание формой не привязывается: id приезжает телом запроса и правом
+// доступа не является (инвариант 1). Отказ — 404, а не 403: существование чужого
+// расписания не раскрывается.
+func TestUpdateSchedule_ForeignScheduleNotFound(t *testing.T) {
+	store := &fakeStore{
+		form:                Form{ID: uuid.New(), WorkspaceID: uuid.New()},
+		scheduleInWorkspace: false,
+	}
+	svc := newTestService(store)
+	foreign := uuid.New()
+
+	_, err := svc.UpdateSchedule(context.Background(), uuid.New(), store.form.ID, &foreign)
+	if !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("ошибка %v, ожидался ErrNotFound", err)
+	}
+	if store.lastScheduleID != nil {
+		t.Fatal("привязка дошла до базы, хотя расписание чужое")
+	}
+}
+
+// Снятие расписания (null) в пространство не ходит вовсе: проверять нечего.
+func TestUpdateSchedule_ClearSkipsCheck(t *testing.T) {
+	store := &fakeStore{form: Form{ID: uuid.New(), WorkspaceID: uuid.New()}}
+	svc := newTestService(store)
+
+	if _, err := svc.UpdateSchedule(context.Background(), uuid.New(), store.form.ID, nil); err != nil {
+		t.Fatalf("снятие расписания отвергнуто: %v", err)
+	}
+	if !store.updated {
+		t.Fatal("снятие до базы не дошло")
 	}
 }
