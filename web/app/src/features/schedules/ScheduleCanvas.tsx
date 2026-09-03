@@ -49,18 +49,21 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
   // обратно из `datesSet`. Второй счётчик недель рядом с библиотечным разъехался бы
   // с ним на первой же навигации мимо кнопок — стрелками клавиатуры, например.
   const [firstDate, setFirstDate] = useState(() => weekStart(todayIn(schedule.timezone)))
+  // Сколько дней в видимом отрезке — тоже от календаря: на узком экране их один, и
+  // считать слой приёма на семь означало бы рисовать шесть невидимых колонок.
+  const [visibleDays, setVisibleDays] = useState(7)
   const [anchor, setAnchor] = useState<Anchor | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Документ ДО жеста: чип переключает область действия пересчётом от него.
   const beforeGesture = useRef<Schedule | null>(null)
 
-  const dates = useMemo(() => dateKeys(firstDate, 7), [firstDate])
+  const dates = useMemo(() => dateKeys(firstDate, visibleDays), [firstDate, visibleDays])
   const window = useMemo(
     () => ({
       from: zonedToUTC(firstDate, '00:00', schedule.timezone),
-      to: zonedToUTC(shiftDate(firstDate, 7), '00:00', schedule.timezone),
+      to: zonedToUTC(shiftDate(firstDate, visibleDays), '00:00', schedule.timezone),
     }),
-    [firstDate, schedule.timezone],
+    [firstDate, visibleDays, schedule.timezone],
   )
   const busy = useQuery(calendarQueryOptions(schedule.id, window.from, window.to))
 
@@ -152,6 +155,15 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
           <Button variant="ghost" size="sm" onClick={() => controller.today()}>
             Сегодня
           </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() =>
+              controller.changeView(visibleDays === 1 ? 'timeGridWeek' : 'timeGridDay')
+            }
+          >
+            {visibleDays === 1 ? 'Неделя' : 'День'}
+          </Button>
           <span className="ml-2 text-base font-semibold">{weekTitle(dates)}</span>
         </div>
         <p className="text-sm text-muted-foreground">
@@ -169,7 +181,7 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
         <Calendar
           controller={controller}
           plugins={[timeGridPlugin, interactionPlugin]}
-          initialView="timeGridWeek"
+          initialView={narrowScreen() ? 'timeGridDay' : 'timeGridWeek'}
           initialDate={firstDate}
           timeZone={schedule.timezone}
           locale={ruLocale}
@@ -182,7 +194,10 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
           slotDuration={{ minutes: 30 }}
           snapDuration={{ minutes: SNAP_MINUTES }}
           scrollTime="08:00"
-          datesSet={(info) => setFirstDate(dateOfNaive(info.startStr))}
+          datesSet={(info) => {
+            setFirstDate(dateOfNaive(info.startStr))
+            setVisibleDays(daysBetween(info.startStr, info.endStr))
+          }}
           selectable
           selectMirror
           editable
@@ -398,6 +413,25 @@ function todayIn(timeZone: string): string {
   }).format(new Date())
 }
 
+// daysBetween — сколько календарных дней в видимом отрезке. Через наивные даты, а
+// не через разницу моментов: в сутки перевода часов их 23 или 25, и деление на 24
+// давало бы шесть дней вместо семи.
+function daysBetween(startStr: string, endStr: string): number {
+  const from = dateOfNaive(startStr)
+  const to = dateOfNaive(endStr)
+  let days = 0
+  for (let d = from; d < to && days < 31; d = shiftDate(d, 1)) days++
+  return Math.max(days, 1)
+}
+
+// narrowScreen — открывать ли полотно днём вместо недели. Семь колонок на телефоне
+// нечитаемы, а вид переключается кнопкой рядом.
+function narrowScreen(): boolean {
+  return typeof globalThis.matchMedia === 'function'
+    ? globalThis.matchMedia('(max-width: 48rem)').matches
+    : false
+}
+
 function weekTitle(dates: string[]): string {
   const first = dates[0]
   const last = dates[dates.length - 1]
@@ -408,6 +442,7 @@ function weekTitle(dates: string[]): string {
       day: 'numeric',
       ...(withMonth ? { month: 'long' } : {}),
     })
+  if (first === last) return fmt(first, true)
   const sameMonth = first.slice(0, 7) === last.slice(0, 7)
   return `${fmt(first, !sameMonth)} — ${fmt(last, true)}`
 }

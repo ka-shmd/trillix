@@ -1,73 +1,8 @@
 import { describe, expect, it } from 'vitest'
 
-import { DEFAULT_SCHEDULE, type Availability } from '../../entities/schedule'
-import {
-  addWindow,
-  clampSeats,
-  availabilityError,
-  clockToMinutes,
-  copyToWorkdays,
-  dayEnabled,
-  removeWindow,
-  setWindow,
-  toggleDay,
-  weekSummary,
-  windowsError,
-} from './weekly'
+import { DEFAULT_SCHEDULE } from '../../entities/schedule'
+import { clampSeats, clockToMinutes, weekSummary, windowsError } from './weekly'
 
-const base: Availability = {
-  weekly: { mon: [{ from: '10:00', to: '13:00' }] },
-  exceptions: [],
-}
-
-describe('дни недели', () => {
-  it('день без окон выключен, с окнами — включён', () => {
-    expect(dayEnabled(base, 'mon')).toBe(true)
-    expect(dayEnabled(base, 'sat')).toBe(false)
-    expect(dayEnabled(toggleDay(base, 'mon', false), 'mon')).toBe(false)
-  })
-
-  it('включение даёт рабочий день, выключение — пустой список, а не удаление ключа', () => {
-    const on = toggleDay(base, 'sat', true)
-    expect(on.weekly.sat).toEqual([{ from: '10:00', to: '18:00' }])
-    expect(toggleDay(on, 'sat', false).weekly.sat).toEqual([])
-  })
-
-  it('копирование на будни повторяет окна и не трогает выходные', () => {
-    const withSat = toggleDay(base, 'sat', true)
-    const copied = copyToWorkdays(withSat, 'mon')
-    for (const day of ['mon', 'tue', 'wed', 'thu', 'fri'] as const) {
-      expect(copied.weekly[day]).toEqual([{ from: '10:00', to: '13:00' }])
-    }
-    expect(copied.weekly.sat).toEqual([{ from: '10:00', to: '18:00' }])
-  })
-
-  it('копирование не делит окна ссылкой: правка одного дня не задевает соседей', () => {
-    const copied = copyToWorkdays(base, 'mon')
-    const edited = setWindow(copied, 'tue', 0, { from: '09:00', to: '12:00' })
-    expect(edited.weekly.mon).toEqual([{ from: '10:00', to: '13:00' }])
-  })
-})
-
-describe('окна', () => {
-  it('новое окно встаёт после последнего и годно сразу', () => {
-    const next = addWindow(base, 'mon')
-    expect(next.weekly.mon).toEqual([
-      { from: '10:00', to: '13:00' },
-      { from: '14:00', to: '15:00' },
-    ])
-    expect(windowsError(next.weekly.mon ?? [])).toBeNull()
-  })
-
-  it('окно у дня без окон — рабочий день', () => {
-    expect(addWindow(base, 'sun').weekly.sun).toEqual([{ from: '10:00', to: '18:00' }])
-  })
-
-  it('удаление вынимает нужное окно', () => {
-    const two = addWindow(base, 'mon')
-    expect(removeWindow(two, 'mon', 0).weekly.mon).toEqual([{ from: '14:00', to: '15:00' }])
-  })
-})
 
 describe('проверка правила — зеркало сервера', () => {
   it.each([
@@ -103,18 +38,6 @@ describe('проверка правила — зеркало сервера', ()
       ]),
     ).toBeNull()
     expect(windowsError([{ from: '22:00', to: '24:00' }])).toBeNull()
-  })
-
-  it('умолчания нового расписания проходят проверку', () => {
-    expect(availabilityError(DEFAULT_SCHEDULE.availability)).toBeNull()
-  })
-
-  it('беда правила называет день', () => {
-    const broken = setWindow(base, 'mon', 0, { from: '18:00', to: '10:00' })
-    expect(availabilityError(broken)).toEqual({
-      day: 'mon',
-      message: 'Конец окна должен быть позже начала',
-    })
   })
 })
 

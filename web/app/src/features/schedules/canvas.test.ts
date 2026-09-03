@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import type { Availability } from '../../entities/schedule'
+import { DEFAULT_SCHEDULE, type Availability } from '../../entities/schedule'
 import {
   dateKeys,
   effectiveWindows,
@@ -180,6 +180,16 @@ describe('жест мышью', () => {
     )
     expect(next.exceptions).toEqual([{ date: '2026-09-15', windows: [] }])
     expect(next.weekly.tue).toEqual([{ from: '10:00', to: '11:00' }])
+  })
+
+  it('умолчания нового расписания проходят проверку', () => {
+    expect(docError(DEFAULT_SCHEDULE.availability)).toBeNull()
+  })
+
+  it('вывернутое окно названо человеческими словами', () => {
+    expect(docError({ weekly: { mon: [{ from: '18:00', to: '10:00' }] }, exceptions: [] })).toBe(
+      'Конец окна должен быть позже начала',
+    )
   })
 
   it('переполненный день назван человеческими словами', () => {
