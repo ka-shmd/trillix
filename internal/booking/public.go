@@ -239,8 +239,13 @@ func (s *PublicService) freeSlots(
 // offered — предлагает ли расписание это время прямо сейчас. Считается тем же кодом,
 // что и выдача: два разных ответа на вопрос «свободно ли» разошлись бы молча.
 func (s *PublicService) offered(ctx context.Context, sch Schedule, at time.Time, clientID uuid.UUID, seats int) error {
-	// Окно в одну точку: считать весь горизонт ради одного слота незачем.
-	slots, err := s.freeSlots(ctx, sch, at, at.Add(time.Minute), clientID)
+	// Окно — ВЕСЬ СЛОТ, а не точка старта: блокировка, начинающаяся внутри него
+	// (обед с 10:30 при часовом приёме), слот пересекает, но в минутное окно не
+	// попадает — и холд проходил бы поверх времени, которое автор закрыл, а выдача
+	// уже не показывает. Правого края слота окно не включает, поэтому соседний старт
+	// в счёт занятого не попадает.
+	end := at.Add(time.Duration(sch.SlotMinutes) * time.Minute)
+	slots, err := s.freeSlots(ctx, sch, at, end, clientID)
 	if err != nil {
 		return err
 	}

@@ -39,7 +39,7 @@ export function UpcomingSection({
   return (
     <Section
       title="Ближайшие записи"
-      description="Подтверждённые встречи начиная с текущего момента."
+      description={`Подтверждённые встречи начиная с текущего момента. Время — в поясе расписания (${timezone}).`}
     >
       {bookings.isPending && <LoadingRows rows={2} />}
       {bookings.isError && (

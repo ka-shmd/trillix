@@ -113,6 +113,10 @@ type printPayload struct {
 	// принтера наш api — весь мир: раздачи Caddy он не видит, поэтому обложка,
 	// логотип и картинки блоков едут через /internal/print/media (internal/media).
 	MediaBase string `json:"mediaBase"`
+	// Timezone — пояс расписания формы (пусто = записи нет). Время записи на бумаге
+	// пишется в нём: у контейнера печати своего пояса нет, и без этой строки лист
+	// вставал бы в UTC.
+	Timezone string `json:"timezone"`
 }
 
 type printFile struct {
@@ -166,6 +170,7 @@ func (h *PrintPageHandler) document(w http.ResponseWriter, r *http.Request) {
 		Answers:      doc.Answers,
 		Files:        make(map[string]printFile, len(doc.Files)),
 		MediaBase:    printMediaBase,
+		Timezone:     doc.Timezone,
 	}
 	for id, f := range doc.Files {
 		payload.Files[id] = printFile{Name: f.Name, Size: f.Size}

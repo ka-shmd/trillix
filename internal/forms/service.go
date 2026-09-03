@@ -1044,11 +1044,6 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 // вовсе — она означает «снять пароль» (nil).
 const MaxFormPasswordLen = 128
 
-// UpdatePassword ставит или снимает пароль формы (0047). nil = снять.
-//
-// Тарифа здесь НЕТ вовсе: пароль бесплатен на всех планах (решение владельца
-// 2026-09-01, design/form-password.md §2.2) — он про приватность, а не про объём.
-// Живая колонка: и постановка, и снятие действуют без перепубликации.
 // UpdateSchedule ставит или снимает расписание записи у формы (фаза 27). Живая
 // колонка: смена действует со следующего же ответа, без перепубликации.
 //
@@ -1082,6 +1077,11 @@ func (s *Service) UpdateSchedule(ctx context.Context, userID, formID uuid.UUID, 
 	return updated, nil
 }
 
+// UpdatePassword ставит или снимает пароль формы (0047). nil = снять.
+//
+// Тарифа здесь НЕТ вовсе: пароль бесплатен на всех планах (решение владельца
+// 2026-09-01, design/form-password.md §2.2) — он про приватность, а не про объём.
+// Живая колонка: и постановка, и снятие действуют без перепубликации.
 func (s *Service) UpdatePassword(ctx context.Context, userID, formID uuid.UUID, password *string) (Form, error) {
 	var sealed []byte
 	if password != nil {

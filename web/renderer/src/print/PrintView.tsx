@@ -2,6 +2,7 @@ import { useEffect } from 'react'
 
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
+import { SlotZoneProvider } from '@fields/booking'
 import { customStyleSheet } from '@fields/customCss'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { KnownFilesProvider } from '@fields/fileUpload'
@@ -65,64 +66,72 @@ export function PrintView({ data }: { data: PrintData }) {
 
   return (
     <KnownFilesProvider value={fileMap(data)}>
-      <MentionContext.Provider value={mentions}>
-        {/* CSS автора — текстовым узлом, как в рендерере (инвариант 4). Своё
+      {/* Пояс расписания — данными из документа: у контейнера печати своего нет, и
+        время записи иначе встало бы на бумагу в UTC. */}
+      <SlotZoneProvider value={data.timezone}>
+        <MentionContext.Provider value={mentions}>
+          {/* CSS автора — текстовым узлом, как в рендерере (инвариант 4). Своё
           оформление действует и на бумаге: это та же форма. */}
-        {customCss ? <style>{customCss}</style> : null}
-        <CoverBand cover={schema.cover} />
-        <main className={pageClass(schema.cover)}>
-          <LogoMark logo={schema.logo} over={Boolean(schema.cover)} />
-          {formTitle && <BlockField block={formTitle} />}
-          <div className="rf-form">
-            {packRows(groupBlocks(rest)).map((row) => {
-              const renderGroup = (group: (typeof row)[number][number]) => (
-                <div key={group.id} className={groupClass(group.blocks)}>
-                  {packGroupRows(group.blocks).map((innerRow) => {
-                    const render = (block: (typeof innerRow)[number][number]) => (
-                      <BlockField
-                        key={block.id}
-                        block={block}
-                        captionText={groups.get(block.groupId)?.caption}
-                        captionRequired={groups.get(block.groupId)?.required}
-                        value={answers[block.id]}
-                        disabled
-                        readOnly
-                      />
-                    )
-                    const innerWidths = blockRowWidths(innerRow)
-                    return innerRow.length > 1 ? (
-                      <div key={innerRow[0]![0]!.id} className="rf-row">
-                        {innerRow.map((cell, i) => (
-                          <div key={cell[0]!.id} className="rf-cell" style={cellVars(innerWidths, i)}>
-                            {cell.map(render)}
-                          </div>
-                        ))}
+          {customCss ? <style>{customCss}</style> : null}
+          <CoverBand cover={schema.cover} />
+          <main className={pageClass(schema.cover)}>
+            <LogoMark logo={schema.logo} over={Boolean(schema.cover)} />
+            {formTitle && <BlockField block={formTitle} />}
+            <div className="rf-form">
+              {packRows(groupBlocks(rest)).map((row) => {
+                const renderGroup = (group: (typeof row)[number][number]) => (
+                  <div key={group.id} className={groupClass(group.blocks)}>
+                    {packGroupRows(group.blocks).map((innerRow) => {
+                      const render = (block: (typeof innerRow)[number][number]) => (
+                        <BlockField
+                          key={block.id}
+                          block={block}
+                          captionText={groups.get(block.groupId)?.caption}
+                          captionRequired={groups.get(block.groupId)?.required}
+                          value={answers[block.id]}
+                          disabled
+                          readOnly
+                        />
+                      )
+                      const innerWidths = blockRowWidths(innerRow)
+                      return innerRow.length > 1 ? (
+                        <div key={innerRow[0]![0]!.id} className="rf-row">
+                          {innerRow.map((cell, i) => (
+                            <div
+                              key={cell[0]!.id}
+                              className="rf-cell"
+                              style={cellVars(innerWidths, i)}
+                            >
+                              {cell.map(render)}
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        render(innerRow[0]![0]!)
+                      )
+                    })}
+                  </div>
+                )
+                const first = row[0]?.[0]
+                if (!first) return null
+                const widths = groupRowWidths(row)
+                return row.length > 1 ? (
+                  <div key={first.id} className="rf-row">
+                    {row.map((cell, i) => (
+                      <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
+                        {cell.map(renderGroup)}
                       </div>
-                    ) : (
-                      render(innerRow[0]![0]!)
-                    )
-                  })}
-                </div>
-              )
-              const first = row[0]?.[0]
-              if (!first) return null
-              const widths = groupRowWidths(row)
-              return row.length > 1 ? (
-                <div key={first.id} className="rf-row">
-                  {row.map((cell, i) => (
-                    <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
-                      {cell.map(renderGroup)}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                renderGroup(first)
-              )
-            })}
-          </div>
-          <PrintFooter data={data} />
-        </main>
-      </MentionContext.Provider>
+                    ))}
+                  </div>
+                ) : (
+                  renderGroup(first)
+                )
+              })}
+            </div>
+            <PrintFooter data={data} />
+          </main>
+        </MentionContext.Provider>
+      </SlotZoneProvider>
     </KnownFilesProvider>
   )
 }

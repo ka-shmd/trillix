@@ -238,8 +238,11 @@ func TestRenderBookingConfirmed(t *testing.T) {
 	}
 	// Ссылка отмены обязательна: без неё респондент не вернёт место в оборот, а
 	// подвал обязан объяснить, откуда письмо взялось (адрес ввели в форму).
-	for _, want := range []string{"Стрижка", "11:00 (Europe/Moscow)",
-		"https://f.trillix.ru/cancel/abc", "https://f.trillix.ru/r/anketa"} {
+	parts := []string{
+		"Стрижка", "11:00 (Europe/Moscow)",
+		"https://f.trillix.ru/cancel/abc", "https://f.trillix.ru/r/anketa",
+	}
+	for _, want := range parts {
 		if !strings.Contains(body, want) {
 			t.Errorf("тело письма не содержит %q:\n%s", want, body)
 		}

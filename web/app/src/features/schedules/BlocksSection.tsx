@@ -12,6 +12,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { humanError } from '../../shared/api/errors'
 import { LOCALE } from '../../shared/format'
+import { zonedToUTC } from './zone'
 
 // Занятое время, закрытое руками: отпуск, свои дела, «сегодня обед на час позже».
 //
@@ -19,7 +20,7 @@ import { LOCALE } from '../../shared/format'
 // (design/booking.md §4.1): личная встреча, поставленная автором в Яндексе, форму не
 // закроет — закрывает её эта запись. Говорим это прямо: узнавать такое опытным путём
 // автору придётся на живом клиенте.
-export function BlocksSection({ scheduleId }: { scheduleId: string }) {
+export function BlocksSection({ scheduleId, timezone }: { scheduleId: string; timezone: string }) {
   const blocks = useQuery(blocksQueryOptions(scheduleId))
   const add = useAddBlock(scheduleId)
   const remove = useRemoveBlock(scheduleId)
@@ -30,10 +31,10 @@ export function BlocksSection({ scheduleId }: { scheduleId: string }) {
     if (!ready) return
     add.mutate(
       {
-        // Время местное для БРАУЗЕРА автора — то же, что он видит в поле. В UTC его
-        // переводит `Date`, а сервер хранит точку на оси времени.
-        startsAt: new Date(`${draft.date}T${draft.from}`).toISOString(),
-        endsAt: new Date(`${draft.date}T${draft.to}`).toISOString(),
+        // Введённое время — время РАСПИСАНИЯ, а не устройства автора (zone.ts):
+        // закрывает он свой рабочий час, а не час на часах ноутбука в поездке.
+        startsAt: zonedToUTC(draft.date, draft.from, timezone),
+        endsAt: zonedToUTC(draft.date, draft.to, timezone),
         note: draft.note,
       },
       { onSuccess: () => setDraft({ date: '', from: '', to: '', note: '' }) },
@@ -43,7 +44,7 @@ export function BlocksSection({ scheduleId }: { scheduleId: string }) {
   return (
     <Section
       title="Занятое время"
-      description="Личные дела в вашем календаре нашу форму не закрывают — закрывает эта запись."
+      description={`Личные дела в вашем календаре нашу форму не закрывают — закрывает эта запись. Время — в поясе расписания (${timezone}).`}
     >
       {blocks.isPending && <LoadingRows rows={2} />}
       {blocks.isError && (
@@ -63,7 +64,7 @@ export function BlocksSection({ scheduleId }: { scheduleId: string }) {
           {blocks.data.map((b) => (
             <li key={b.id} className="flex items-center justify-between gap-3 rounded-lg border p-3">
               <div className="min-w-0">
-                <p className="truncate text-base font-semibold">{blockRange(b)}</p>
+                <p className="truncate text-base font-semibold">{blockRange(b, timezone)}</p>
                 {b.note && <p className="truncate text-sm text-muted-foreground">{b.note}</p>}
               </div>
               <Button
@@ -113,15 +114,20 @@ export function BlocksSection({ scheduleId }: { scheduleId: string }) {
   )
 }
 
-function blockRange(b: ScheduleBlock): string {
+// Показ — в поясе РАСПИСАНИЯ, тем же, каким блокировка вводилась: прочитай её
+// поясом браузера, и автор в поездке увидел бы «07:00 — 08:00» там, где закрывал
+// десять утра.
+function blockRange(b: ScheduleBlock, timezone: string): string {
   const from = new Date(b.startsAt)
   const to = new Date(b.endsAt)
-  const day = from.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long' })
-  const time = (d: Date) => d.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' })
+  const dayOpts = { timeZone: timezone, day: 'numeric', month: 'long' } as const
+  const timeOpts = { timeZone: timezone, hour: '2-digit', minute: '2-digit' } as const
+  const day = from.toLocaleDateString(LOCALE, dayOpts)
+  const time = (d: Date) => d.toLocaleTimeString(LOCALE, timeOpts)
   // Блокировка через полночь — редкость (отпуск), но она бывает, и «14 сентября,
-  // 22:00 — 06:00» без второй даты читалось бы как ошибка.
-  const sameDay = from.toDateString() === to.toDateString()
-  if (sameDay) return `${day}, ${time(from)} — ${time(to)}`
-  const toDay = to.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long' })
+  // 22:00 — 06:00» без второй даты читалось бы как ошибка. Сутки считаются в поясе
+  // расписания, поэтому сравниваются подписи дней, а не Date.toDateString().
+  const toDay = to.toLocaleDateString(LOCALE, dayOpts)
+  if (day === toDay) return `${day}, ${time(from)} — ${time(to)}`
   return `${day}, ${time(from)} — ${toDay}, ${time(to)}`
 }

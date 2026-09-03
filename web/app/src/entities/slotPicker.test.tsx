@@ -64,6 +64,30 @@ describe('выбор времени', () => {
     expect(screen.getByRole('button', { name: 'Выбрать другое время' })).toBeTruthy()
   })
 
+  it('«выбрать другое время» очищает ответ, а не только показ', async () => {
+    // РЕГРЕССИЯ. Первая редакция гасила только показ: значение оставалось прежним id
+    // брони. Респондент, передумавший и не выбравший ничего взамен, отправлял форму со
+    // старой бронью — экран показывал список, а сервер подтверждал живой холд.
+    const seen: string[] = []
+    function Spy({ src }: { src: SlotSource }) {
+      const [value, setValue] = useState('')
+      seen.push(value)
+      return (
+        <SlotPicker source={src} value={value} onChange={setValue} label="Время" invalid={false} />
+      )
+    }
+    render(<Spy src={source({ hold: () => Promise.resolve({ bookingId: 'bk-9' }) })} />)
+    await settle()
+
+    fireEvent.click(screen.getByRole('button', { name: at('2026-09-10T08:00:00Z') }))
+    await settle()
+    expect(seen.at(-1)).toBe('bk-9')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Выбрать другое время' }))
+    await settle()
+    expect(seen.at(-1)).toBe('')
+  })
+
   it('занятое время объясняется словами сервиса, а не кодом ошибки', async () => {
     const hold = vi.fn(() => Promise.reject(new Error(HOLD_CONFLICT)))
     render(<Harness src={source({ hold })} />)

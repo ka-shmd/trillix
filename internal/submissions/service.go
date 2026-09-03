@@ -1555,6 +1555,12 @@ type PrintDoc struct {
 	// файла нет ссылки (подпись хранилища живёт минуту, а лист живёт годы) —
 	// печатается имя, поэтому карта нужна и здесь, как в таблице и выгрузке.
 	Files map[string]domain.AnswerFile
+	// Timezone — пояс расписания формы; пусто = записи у формы нет. ПРИЕЗЖАЕТ
+	// ДАННЫМИ, а не берётся у браузера (design/booking.md §4.9): лист печатает
+	// headless-контейнер, у которого пояса нет вовсе, и время записи вставало бы на
+	// бумагу в UTC — на три часа мимо у московского расписания, без единого признака
+	// ошибки на самом листе.
+	Timezone string
 }
 
 // PrintAccess — что известно об ответе тому, кто ИМЕЕТ ПРАВО его печатать: имя
@@ -1641,6 +1647,10 @@ func (s *Service) PrintDocFor(ctx context.Context, formID, submissionID uuid.UUI
 			return PrintDoc{}, err
 		}
 		doc.Files = files
+	}
+	// Пояс — тем же путём, что у выгрузок: у стража записи.
+	if s.bookingGuard != nil {
+		doc.Timezone = s.bookingGuard.ZoneOfForm(ctx, formID)
 	}
 	return doc, nil
 }

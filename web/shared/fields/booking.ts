@@ -47,3 +47,15 @@ export function useSlotSource(): SlotSource | null {
 export const HOLD_CONFLICT = 'slot_taken'
 // HOLD_NO_SEATS — мест меньше, чем запросили.
 export const HOLD_NO_SEATS = 'slot_seats'
+
+// ПОЯС ДЛЯ ПОВЕРХНОСТЕЙ БЕЗ ЖИВОГО ВЫБОРА. Пикер берёт пояс у своего источника, а
+// плашке (печать) брать его негде: источника там нет по построению. Пусто — время
+// пишется в поясе читателя, как в живой форме; заполнено — в названном и с его
+// именем, как в письме о записи.
+const SlotZoneContext = createContext('')
+
+export const SlotZoneProvider = SlotZoneContext.Provider
+
+export function useSlotZone(): string {
+  return useContext(SlotZoneContext)
+}

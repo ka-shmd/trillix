@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType } from 'react'
 
-import { useSlotSource } from '../booking'
+import { useSlotSource, useSlotZone } from '../booking'
 import { LOCALE } from '../locale'
 import { type SlotPickerProps } from '../slots/SlotPicker'
 import { type Control, type ControlProps, textValue } from './contract'
@@ -73,7 +73,7 @@ function SlotField(p: ControlProps) {
 // ради последней: полотно обязано показывать ровно то, что увидит респондент, а вторая
 // копия этих шести строк разъехалась бы с первой при первой же правке вида.
 export function SlotPlate({ value, className = '' }: { value: string; className?: string }) {
-  const at = readTime(value)
+  const at = readTime(value, useSlotZone())
   return (
     <div className={className === '' ? 'rf-slot' : `rf-slot ${className}`}>
       {at ? (
@@ -85,16 +85,24 @@ export function SlotPlate({ value, className = '' }: { value: string; className?
   )
 }
 
-function readTime(raw: string): string | null {
+// readTime — время записи словами. Пояс задаёт SlotZoneProvider: пусто — читаем в
+// поясе смотрящего (живая форма, полотно), названный — пишем в нём и НАЗЫВАЕМ его,
+// как письмо о записи. Лист печати читает никто не знает где, и «11:00» без пояса
+// на бумаге — это утверждение, которое нечем проверить.
+function readTime(raw: string, timeZone: string): string | null {
   if (raw === '') return null
   const at = new Date(raw)
   if (Number.isNaN(at.getTime())) return null
-  return at.toLocaleString(LOCALE, {
+  // Пустой пояс отдаём как undefined — для Intl это «пояс читателя», то же, что
+  // было до печатного листа.
+  const text = at.toLocaleString(LOCALE, {
     day: 'numeric',
     month: 'long',
     hour: '2-digit',
     minute: '2-digit',
+    timeZone: timeZone || undefined,
   })
+  return timeZone === '' ? text : `${text} (${timeZone})`
 }
 
 // ControlProps здесь не разворачивается в свой тип: контрол обязан принимать ровно то,

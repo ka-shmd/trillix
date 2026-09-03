@@ -7,7 +7,9 @@ import {
   clearAnswers,
   loadAnswers,
   loadPage,
+  loadSubmissionId,
   savePage,
+  saveSubmissionId,
   saveAnswers,
   type Answers,
 } from './answers'
@@ -110,5 +112,35 @@ describe('loadPage/savePage', () => {
     savePage('form', 3, 2)
     clearAnswers('form', 3)
     expect(loadPage('form', 3, 4)).toBe(0)
+  })
+})
+
+describe('id попытки отправки', () => {
+  // РЕГРЕССИЯ (фаза 27). Первая редакция рождала id при каждом монтировании, а
+  // черновик переживал F5 вместе с выбранным временем. После перезагрузки человек
+  // становился чужим собственной броне: своё время видел занятым, а отправка старого
+  // ответа упиралась в «время записи не выбрано».
+  it('переживает перезагрузку', () => {
+    saveSubmissionId('form', 3, '0192f0a0-1c2d-7e3f-8a4b-5c6d7e8f9012')
+    expect(loadSubmissionId('form', 3)).toBe('0192f0a0-1c2d-7e3f-8a4b-5c6d7e8f9012')
+  })
+
+  it('мусор в хранилище за id не принимается', () => {
+    sessionStorage.setItem('trillix:submission:form:3', 'не-uuid')
+    expect(loadSubmissionId('form', 3)).toBeNull()
+  })
+
+  it('привязан к версии и форме', () => {
+    saveSubmissionId('form', 3, '0192f0a0-1c2d-7e3f-8a4b-5c6d7e8f9012')
+    expect(loadSubmissionId('form', 4)).toBeNull()
+    expect(loadSubmissionId('form2', 3)).toBeNull()
+  })
+
+  // Иначе второй ответ на ту же форму уехал бы под тем же id, и сервер отбросил бы
+  // его как повтор (ON CONFLICT DO NOTHING) — молча.
+  it('чистится вместе с черновиком после отправки', () => {
+    saveSubmissionId('form', 3, '0192f0a0-1c2d-7e3f-8a4b-5c6d7e8f9012')
+    clearAnswers('form', 3)
+    expect(loadSubmissionId('form', 3)).toBeNull()
   })
 })

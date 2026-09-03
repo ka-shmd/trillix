@@ -70,9 +70,41 @@ export function clearAnswers(slug: string, version: number): void {
     for (const s of [store(false), store(true)]) {
       s?.removeItem(storageKey(slug, version))
       s?.removeItem(pageKey(slug, version))
+      // Id отправки — вместе с ними: ответ принят, и второй под тем же id сервер
+      // молча отбросит как повтор (ON CONFLICT DO NOTHING).
+      s?.removeItem(submissionKey(slug, version))
     }
   } catch {
     // Недоступный sessionStorage — ничего не делаем, черновик и так не сохранялся.
+  }
+}
+
+// Id попытки отправки — рядом с черновиком и по тем же правилам (фаза 27).
+//
+// ⚠ ОН ЖЕ КЛИЕНТ БРОНИ (bookings.client_id), и рождаться заново на F5 ему нельзя.
+// Черновик переживает перезагрузку вместе с выбранным временем, а новый id делает
+// человека ЧУЖИМ собственному холду: своё время он увидит занятым до конца TTL
+// («это время только что заняли»), а отправка старого ответа упрётся в «время записи
+// не выбрано», хотя на экране вопрос выглядит незаполненным.
+const submissionKey = (slug: string, version: number) => `trillix:submission:${slug}:${version}`
+
+export function loadSubmissionId(slug: string, version: number, local = false): string | null {
+  try {
+    const raw = store(local)?.getItem(submissionKey(slug, version)) ?? null
+    // Длина вместо разбора: чужая строка (другая вкладка, ручная правка) id не
+    // является, а полная проверка uuid стоит бандлу больше, чем даёт — настоящую
+    // проверку делает сервер, и мусор здесь означал бы 422 вместо нового id.
+    return raw !== null && raw.length === 36 ? raw : null
+  } catch {
+    return null
+  }
+}
+
+export function saveSubmissionId(slug: string, version: number, id: string, local = false): void {
+  try {
+    store(local)?.setItem(submissionKey(slug, version), id)
+  } catch {
+    // Недоступное хранилище — id проживёт до перезагрузки, как было до фазы 27.
   }
 }
 

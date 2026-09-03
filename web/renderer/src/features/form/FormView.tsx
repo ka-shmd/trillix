@@ -47,8 +47,10 @@ import {
   clearAnswers,
   loadAnswers,
   loadPage,
+  loadSubmissionId,
   saveAnswers,
   savePage,
+  saveSubmissionId,
 } from './answers'
 import { firstErrorPage, firstQuestionIndex } from './pages'
 import { makeSlotSource } from './slots'
@@ -187,7 +189,17 @@ export function FormView({
   // держит бронь времени (bookings.client_id), а бронь берётся задолго до кнопки
   // «Отправить». Ленивое рождение в ref'е к тому же читалось на рендере — то есть
   // ровно там, где рефы читать нельзя.
-  const [submissionId] = useState(uuidv7)
+  //
+  // ⚠ И ПЕРЕЖИВАЕТ F5 ВМЕСТЕ С ЧЕРНОВИКОМ: черновик возвращает выбранное время, а
+  // новый id сделал бы человека чужим собственной броне. Чистится вместе с черновиком
+  // после успешной отправки — второй ответ под тем же id сервер считает повтором.
+  const [submissionId] = useState(() => {
+    const saved = loadSubmissionId(slug, form.version, form.saveLocally)
+    if (saved !== null) return saved
+    const fresh = uuidv7()
+    saveSubmissionId(slug, form.version, fresh, form.saveLocally)
+    return fresh
+  })
   // Источник свободного времени: нет расписания у формы — нет и живого выбора, вопрос
   // о записи рисуется плашкой. В предпросмотре его тоже нет (token === null): холд из
   // предпросмотра занял бы настоящее время у настоящих клиентов.

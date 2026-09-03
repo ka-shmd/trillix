@@ -395,6 +395,39 @@ func TestHold_RaceForTheLastSeat(t *testing.T) {
 	}
 }
 
+// РЕГРЕССИЯ. Блокировка, начинающаяся ВНУТРИ слота, закрывает его целиком — и для
+// выдачи, и для холда. Проверка перед холдом спрашивала блокировки окном в одну минуту
+// от старта, поэтому обеденный перерыв с 10:30 при часовом приёме в неё не попадал:
+// выдача слот 10:00 уже не показывала, а холд на него проходил, и запись садилась
+// поверх закрытого автором времени.
+func TestHold_RefusesSlotCutByBlockInside(t *testing.T) {
+	resetDB(t)
+	srv := newPublicStack(t, permissive(), permissive())
+	slug, scheduleID := seedForm(t, seedOpts{})
+	const at = "2026-09-07T07:00:00Z" // понедельник, 10:00 МСК — приём длится час
+
+	// Обед с 10:30 до 11:00 МСК: старта слота он не задевает, но слот пересекает.
+	if _, err := testPool.Exec(context.Background(),
+		`INSERT INTO schedule_blocks (id, schedule_id, starts_at, ends_at, note)
+		 VALUES ($1, $2, '2026-09-07T07:30:00Z', '2026-09-07T08:00:00Z', 'обед')`,
+		uuid.New(), scheduleID); err != nil {
+		t.Fatalf("insert block: %v", err)
+	}
+
+	_, body := getSlots(t, srv, slug, "")
+	for _, it := range body.Items {
+		if it.StartsAt == at {
+			t.Fatal("выдача предлагает время, перекрытое блокировкой")
+		}
+	}
+
+	r := postHold(t, srv, slug, at, 1, uuid.New().String())
+	closeBody(t, r)
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("статус %d, ожидалось 409: холд прошёл поверх блокировки", r.StatusCode)
+	}
+}
+
 // Время вне окон приёма не придерживается: «свободное» считает сервер, а не браузер.
 func TestHold_RefusesTimeOutsideSchedule(t *testing.T) {
 	resetDB(t)

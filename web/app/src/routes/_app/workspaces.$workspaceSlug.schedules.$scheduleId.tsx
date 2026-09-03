@@ -128,7 +128,7 @@ function SchedulePage() {
             error={update.isError ? humanError(update.error) : undefined}
             onSave={(input) => update.mutate(input)}
           />
-          <BlocksSection scheduleId={scheduleId} />
+          <BlocksSection scheduleId={scheduleId} timezone={schedule.timezone} />
           <UpcomingSection scheduleId={scheduleId} timezone={schedule.timezone} />
         </div>
       </PageContainer>
