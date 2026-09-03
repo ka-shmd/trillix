@@ -101,6 +101,13 @@ type Form struct {
 	// колонка; заполняют только Get/GetBySlug — та же мина, что у Branding.
 	// Расшифровывает его service (Password ниже), repo байты не трогает.
 	PasswordSealed []byte
+	// WorkspaceSlug — короткий ключ пространства формы. Кабинет адресует им
+	// пространство, и попапу блока «Запись» он нужен, чтобы увести автора в
+	// расписания ЕГО пространства (TD-69). Заполняют только Get/GetBySlug.
+	WorkspaceSlug string
+	// ScheduleID — расписание записи на время (0050); nil = у формы нет записи.
+	// Живая колонка, как настройки закрытия: заполняют только Get/GetBySlug.
+	ScheduleID *uuid.UUID
 	// Password — расшифрованный пароль формы (nil = пароля нет). Заполняет ТОЛЬКО
 	// service.Get/GetBySlug, то есть путь автора: он свой пароль видит и копирует
 	// (design/form-password.md §2.1).
@@ -184,11 +191,16 @@ type PublicForm struct {
 	// выданные токены (Service.VerifyUnlock).
 	//
 	// ⚠ МИНА: спросить его обязан КАЖДЫЙ публичный вход по slug — отдача формы,
-	// приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
+	// приём ответа, автосохранение, выдача слота файла, выдача свободного времени и
+	// холд (фаза 27). Общего middleware нет и быть
 	// не может: решение принимается по строке формы, а не по маршруту. Забытая
 	// проверка означает форму, которая спрашивает пароль на экране и пускает мимо
 	// него; список входов — design/form-password.md §3.3.
 	PasswordSealed []byte
+	// ScheduleID — расписание записи (0050); nil = у формы нет записи. Публичный путь
+	// берёт по нему само расписание: вопрос о времени в форме без расписания отвечает
+	// 404, как и не существующая вовсе (design/booking.md §7).
+	ScheduleID *uuid.UUID
 	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
@@ -429,6 +441,8 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		NotifyRespondent:      row.NotifyRespondent,
 		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
 		PasswordSealed:        row.Password,
+		WorkspaceSlug:         row.WorkspaceSlug,
+		ScheduleID:            ptrUUID(row.ScheduleID),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -472,6 +486,8 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		NotifyRespondent:      row.NotifyRespondent,
 		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
 		PasswordSealed:        row.Password,
+		WorkspaceSlug:         row.WorkspaceSlug,
+		ScheduleID:            ptrUUID(row.ScheduleID),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
 	}, nil
@@ -620,6 +636,10 @@ type Owner struct {
 	WorkspaceID uuid.UUID
 	// NotifyEmail — свой текст письма (nil = дефолтный шаблон).
 	NotifyEmail *domain.NotifyEmail
+	// Slug — публичный адрес формы. Нужен ПОДВАЛУ писем респонденту: и квитанция,
+	// и письмо о записи уходят на адрес, введённый в форму, и обязаны сказать
+	// получателю, откуда взялись. Больше его на этом пути взять негде.
+	Slug string
 	// PublicTitle — как форма называется ДЛЯ РЕСПОНДЕНТА (колонка title). Отдельно
 	// от Title: тот несёт внутреннее имя из кабинета («Анкета (копия 2)»), и в
 	// подвале письма респонденту оно читалось бы как чужая кухня.
@@ -642,6 +662,7 @@ func (Repo) GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uui
 		Email:           row.Email,
 		Title:           row.Title,
 		PublicTitle:     row.PublicTitle,
+		Slug:            row.Slug,
 		WorkspaceID:     row.WorkspaceID,
 		NotifyEmail:     notifyEmailFromJSON(row.NotifyEmail),
 		RespondentEmail: respondentEmailFromJSON(row.RespondentEmail),
@@ -736,6 +757,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		AutoJump:           row.AutoJump,
 		SaveLocally:        row.SaveLocally,
 		PasswordSealed:     row.Password,
+		ScheduleID:         ptrUUID(row.ScheduleID),
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }
@@ -971,6 +993,46 @@ func (Repo) UpdateFormNotifyRespondent(ctx context.Context, db postgres.DBTX, id
 // UpdateFormPassword ставит или снимает пароль формы (0047): sealed — шифротекст,
 // nil — снять. Шифрует service; repo и БД видят только байты. В пределах воркспейса
 // (анти-IDOR); pgx.ErrNoRows (чужая/нет формы) пробрасывается — service вернёт 404.
+// ScheduleInWorkspace — принадлежит ли расписание пространству формы.
+func (Repo) ScheduleInWorkspace(ctx context.Context, db postgres.DBTX, scheduleID, workspaceID uuid.UUID) (bool, error) {
+	ok, err := postgres.New(db).ScheduleInWorkspace(ctx, postgres.ScheduleInWorkspaceParams{
+		ID:          scheduleID,
+		WorkspaceID: workspaceID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("check schedule %s in workspace %s: %w", scheduleID, workspaceID, err)
+	}
+	return ok, nil
+}
+
+// UpdateFormSchedule ставит или снимает расписание записи у формы. Проверку «то же
+// пространство» делает service — ключу её не выразить.
+func (Repo) UpdateFormSchedule(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, scheduleID *uuid.UUID) (Form, error) {
+	arg := pgtype.UUID{}
+	if scheduleID != nil {
+		arg = pgtype.UUID{Bytes: *scheduleID, Valid: true}
+	}
+	row, err := postgres.New(db).UpdateFormSchedule(ctx, postgres.UpdateFormScheduleParams{
+		ID:          id,
+		WorkspaceID: workspaceID,
+		ScheduleID:  arg,
+	})
+	if err != nil {
+		return Form{}, fmt.Errorf("update form schedule: %w", err)
+	}
+	return Form{
+		ID:                 row.ID,
+		WorkspaceID:        row.WorkspaceID,
+		Name:               ptrStr(row.Name),
+		Title:              row.Title,
+		Slug:               row.Slug,
+		Status:             row.Status,
+		PublishedVersionID: ptrUUID(row.PublishedVersionID),
+		CreatedAt:          row.CreatedAt.Time,
+		UpdatedAt:          row.UpdatedAt.Time,
+	}, nil
+}
+
 func (Repo) UpdateFormPassword(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, sealed []byte) (Form, error) {
 	row, err := postgres.New(db).UpdateFormPassword(ctx, postgres.UpdateFormPasswordParams{
 		ID:          id,

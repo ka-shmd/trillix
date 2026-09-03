@@ -12,6 +12,48 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const blocksInRange = `-- name: BlocksInRange :many
+SELECT id, schedule_id, starts_at, ends_at, note, created_at
+FROM schedule_blocks
+WHERE schedule_id = $1 AND starts_at < $3 AND ends_at > $2
+ORDER BY starts_at, id
+`
+
+type BlocksInRangeParams struct {
+	ScheduleID uuid.UUID
+	EndsAt     pgtype.Timestamptz
+	StartsAt   pgtype.Timestamptz
+}
+
+// Блокировки, задевающие отрезок. Условие пересечения, а не вхождения: блокировка
+// на неделю обязана попасть в выдачу любого дня этой недели.
+func (q *Queries) BlocksInRange(ctx context.Context, arg BlocksInRangeParams) ([]ScheduleBlock, error) {
+	rows, err := q.db.Query(ctx, blocksInRange, arg.ScheduleID, arg.EndsAt, arg.StartsAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ScheduleBlock
+	for rows.Next() {
+		var i ScheduleBlock
+		if err := rows.Scan(
+			&i.ID,
+			&i.ScheduleID,
+			&i.StartsAt,
+			&i.EndsAt,
+			&i.Note,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const bumpAIGenerations = `-- name: BumpAIGenerations :exec
 INSERT INTO workspace_usage (workspace_id, period, ai_generations)
 VALUES ($1, $2, 1)
@@ -34,6 +76,44 @@ type BumpAIGenerationsParams struct {
 func (q *Queries) BumpAIGenerations(ctx context.Context, arg BumpAIGenerationsParams) error {
 	_, err := q.db.Exec(ctx, bumpAIGenerations, arg.WorkspaceID, arg.Period)
 	return err
+}
+
+const cancelBookingByAuthor = `-- name: CancelBookingByAuthor :execrows
+UPDATE bookings SET status = 'canceled', canceled_at = now()
+WHERE id = $1 AND schedule_id = $2 AND status <> 'canceled'
+`
+
+type CancelBookingByAuthorParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+}
+
+// Отмена записи автором из кабинета. Место освобождается тем же утверждением:
+// строка перестаёт считаться занятой в тот же момент, когда меняется статус.
+//
+// Повторная отмена даёт 0 строк — для вызывающего это «уже отменена», а не ошибка.
+func (q *Queries) CancelBookingByAuthor(ctx context.Context, arg CancelBookingByAuthorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelBookingByAuthor, arg.ID, arg.ScheduleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const cancelBookingByID = `-- name: CancelBookingByID :execrows
+UPDATE bookings SET status = 'canceled', canceled_at = now()
+WHERE id = $1 AND status <> 'canceled'
+`
+
+// Отмена по ссылке из письма. Право предъявляет сам токен (подпись покрывает id и
+// срок), поэтому в условии только id и «ещё не отменена»: повторный переход по той же
+// ссылке даёт 0 строк, и для человека это «уже отменено», а не ошибка.
+func (q *Queries) CancelBookingByID(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelBookingByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const claimSubmissionFile = `-- name: ClaimSubmissionFile :execrows
@@ -90,6 +170,31 @@ WHERE id = $1
 func (q *Queries) ClearFormIntegrationError(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, clearFormIntegrationError, id)
 	return err
+}
+
+const confirmBooking = `-- name: ConfirmBooking :execrows
+UPDATE bookings
+SET status = 'confirmed', submission_id = $2, hold_expires_at = NULL
+WHERE id = $1 AND status IN ('held', 'confirmed')
+`
+
+type ConfirmBookingParams struct {
+	ID           uuid.UUID
+	SubmissionID pgtype.UUID
+}
+
+// Холд становится записью. hold_expires_at гасится: подтверждённая бронь срока не
+// имеет, и оставленное время однажды прочиталось бы чисткой как «протухла».
+//
+// status IN ('held','confirmed') делает утверждение ИДЕМПОТЕНТНЫМ: ретрай отправки с
+// тем же id ответа проходит по второй ветке и ничего не меняет. Отменённую бронь
+// утверждение не воскрешает — 0 строк, и это разбирает сервис.
+func (q *Queries) ConfirmBooking(ctx context.Context, arg ConfirmBookingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, confirmBooking, arg.ID, arg.SubmissionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const confirmTOTP = `-- name: ConfirmTOTP :exec
@@ -205,6 +310,65 @@ func (q *Queries) ConsumeRecoveryCode(ctx context.Context, arg ConsumeRecoveryCo
 	return result.RowsAffected(), nil
 }
 
+const countFutureBookings = `-- name: CountFutureBookings :one
+SELECT count(*)::bigint FROM bookings
+WHERE schedule_id = $1 AND status = 'confirmed' AND starts_at >= $2
+`
+
+type CountFutureBookingsParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+}
+
+// Стоп-кран удаления: сколько живых БУДУЩИХ записей у расписания.
+//
+// Считаются только подтверждённые: холд — ещё не договорённость (ни ответа, ни
+// письма записавшемуся), и держать им расписание значило бы отдавать право
+// удаления брошенной вкладке на четверть часа.
+func (q *Queries) CountFutureBookings(ctx context.Context, arg CountFutureBookingsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFutureBookings, arg.ScheduleID, arg.StartsAt)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countFutureBookingsOfForm = `-- name: CountFutureBookingsOfForm :one
+SELECT count(*)::bigint FROM bookings
+WHERE form_id = $1 AND status = 'confirmed' AND starts_at >= $2
+`
+
+type CountFutureBookingsOfFormParams struct {
+	FormID   uuid.UUID
+	StartsAt pgtype.Timestamptz
+}
+
+// Живые будущие записи формы — стоп-кран её удаления (design/booking.md §4.10).
+// Считаются только подтверждённые: холд ещё не договорённость.
+func (q *Queries) CountFutureBookingsOfForm(ctx context.Context, arg CountFutureBookingsOfFormParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFutureBookingsOfForm, arg.FormID, arg.StartsAt)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countFutureBookingsOfSubmission = `-- name: CountFutureBookingsOfSubmission :one
+SELECT count(*)::bigint FROM bookings
+WHERE submission_id = $1 AND status = 'confirmed' AND starts_at >= $2
+`
+
+type CountFutureBookingsOfSubmissionParams struct {
+	SubmissionID pgtype.UUID
+	StartsAt     pgtype.Timestamptz
+}
+
+// То же для одного ответа: удаление ответа не имеет права молча снести встречу.
+func (q *Queries) CountFutureBookingsOfSubmission(ctx context.Context, arg CountFutureBookingsOfSubmissionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFutureBookingsOfSubmission, arg.SubmissionID, arg.StartsAt)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countPartials = `-- name: CountPartials :one
 SELECT count(*)::bigint FROM partial_submissions WHERE form_id = $1
 `
@@ -213,6 +377,19 @@ SELECT count(*)::bigint FROM partial_submissions WHERE form_id = $1
 // число показывается и тому, кому разбивка закрыта.
 func (q *Queries) CountPartials(ctx context.Context, formID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countPartials, formID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countSchedulesByForm = `-- name: CountSchedulesByForm :one
+SELECT count(*)::bigint FROM forms WHERE schedule_id = $1
+`
+
+// Сколько форм ссылается на расписание. Нужен отказу с человеческим текстом:
+// ошибка внешнего ключа сама по себе автору ничего не объясняет.
+func (q *Queries) CountSchedulesByForm(ctx context.Context, scheduleID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSchedulesByForm, scheduleID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -600,6 +777,111 @@ func (q *Queries) CreateRecoveryCode(ctx context.Context, arg CreateRecoveryCode
 	return err
 }
 
+const createSchedule = `-- name: CreateSchedule :one
+
+INSERT INTO schedules (
+    id, workspace_id, name, timezone, availability,
+    slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+    capacity, max_seats_per_booking, show_remaining
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, workspace_id, name, timezone, availability,
+          slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+          capacity, max_seats_per_booking, show_remaining, created_at, updated_at
+`
+
+type CreateScheduleParams struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               string
+	Timezone           string
+	Availability       []byte
+	SlotMinutes        int32
+	BufferMinutes      int32
+	HorizonDays        int32
+	LeadMinutes        int32
+	Capacity           int32
+	MaxSeatsPerBooking int32
+	ShowRemaining      bool
+}
+
+// Запросы модуля booking. Схема — migrations/0050_booking. Генерация: `make sqlc`.
+//
+// Права здесь НЕ проверяются условием запроса, в отличие от интеграций: расписание
+// принадлежит ПРОСТРАНСТВУ, и доступ к нему решает членство спрашивающего
+// (workspaces.Can). Поэтому чтение отдаёт workspace_id, а охрана стоит первой
+// строкой сервис-метода — тот же приём, что у форм.
+// Заведение расписания. Параметры нарезки приезжают уже проверенными
+// (domain.ValidateSchedule); CHECK'и схемы — второй рубеж, а не первый.
+func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) (Schedule, error) {
+	row := q.db.QueryRow(ctx, createSchedule,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.Timezone,
+		arg.Availability,
+		arg.SlotMinutes,
+		arg.BufferMinutes,
+		arg.HorizonDays,
+		arg.LeadMinutes,
+		arg.Capacity,
+		arg.MaxSeatsPerBooking,
+		arg.ShowRemaining,
+	)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Timezone,
+		&i.Availability,
+		&i.SlotMinutes,
+		&i.BufferMinutes,
+		&i.HorizonDays,
+		&i.LeadMinutes,
+		&i.Capacity,
+		&i.MaxSeatsPerBooking,
+		&i.ShowRemaining,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createScheduleBlock = `-- name: CreateScheduleBlock :one
+INSERT INTO schedule_blocks (id, schedule_id, starts_at, ends_at, note)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, schedule_id, starts_at, ends_at, note, created_at
+`
+
+type CreateScheduleBlockParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	EndsAt     pgtype.Timestamptz
+	Note       string
+}
+
+// Ручная блокировка: отпуск, свои дела, «сегодня обед на час позже».
+func (q *Queries) CreateScheduleBlock(ctx context.Context, arg CreateScheduleBlockParams) (ScheduleBlock, error) {
+	row := q.db.QueryRow(ctx, createScheduleBlock,
+		arg.ID,
+		arg.ScheduleID,
+		arg.StartsAt,
+		arg.EndsAt,
+		arg.Note,
+	)
+	var i ScheduleBlock
+	err := row.Scan(
+		&i.ID,
+		&i.ScheduleID,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.Note,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createSession = `-- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)
@@ -737,6 +1019,26 @@ DELETE FROM email_verification_tokens WHERE expires_at <= now()
 // Фоновая чистка истёкших токенов подтверждения (использованные истекают за 24 часа).
 func (q *Queries) DeleteExpiredEmailVerificationTokens(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteExpiredEmailVerificationTokens)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteExpiredHolds = `-- name: DeleteExpiredHolds :execrows
+DELETE FROM bookings WHERE status = 'held' AND hold_expires_at < $1
+`
+
+// Чистка протухших холдов (internal/periodic).
+//
+// Занятость она НЕ решает: счёт занятого сам отсекает истёкшие (hold_expires_at >
+// now()), поэтому место возвращается в оборот в тот же миг, а не когда добежит задача.
+// Здесь убирается мусор — строки брошенных вкладок, которые иначе копились бы вечно.
+//
+// Отсрочка ($1 — момент, старее которого чистим) даёт запас на перезанятие: холд,
+// истёкший минуту назад, ещё может стать записью на отправке длинной анкеты.
+func (q *Queries) DeleteExpiredHolds(ctx context.Context, holdExpiresAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredHolds, holdExpiresAt)
 	if err != nil {
 		return 0, err
 	}
@@ -963,6 +1265,43 @@ DELETE FROM totp_recovery_codes WHERE user_id = $1
 func (q *Queries) DeleteRecoveryCodes(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteRecoveryCodes, userID)
 	return err
+}
+
+const deleteSchedule = `-- name: DeleteSchedule :execrows
+DELETE FROM schedules WHERE id = $1
+`
+
+// Удаление расписания. Стоп-кран (живые будущие записи) сервис проверяет ДО
+// вызова: ключ CASCADE его не выражает, а RESTRICT держал бы расписание вечно
+// из-за прошлогодней брони (0050).
+//
+// Форма, ссылающаяся на расписание, удалить его не даст: FK forms.schedule_id
+// отвергнет DELETE ошибкой БД, и сервис переведёт её в понятный отказ.
+func (q *Queries) DeleteSchedule(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSchedule, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteScheduleBlock = `-- name: DeleteScheduleBlock :execrows
+DELETE FROM schedule_blocks WHERE id = $1 AND schedule_id = $2
+`
+
+type DeleteScheduleBlockParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+}
+
+// schedule_id в условии не украшение: id блокировки приезжает из адреса и правом
+// доступа не является. Чужую блокировку этим запросом не снять.
+func (q *Queries) DeleteScheduleBlock(ctx context.Context, arg DeleteScheduleBlockParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteScheduleBlock, arg.ID, arg.ScheduleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteSession = `-- name: DeleteSession :exec
@@ -1260,6 +1599,99 @@ func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) 
 	return i, err
 }
 
+const getBookingForCancel = `-- name: GetBookingForCancel :one
+SELECT b.id, b.form_id, b.submission_id, b.starts_at, b.duration_minutes, b.seats, b.status,
+       coalesce(f.name, f.title) AS form_title, s.timezone
+FROM bookings b
+JOIN forms f ON f.id = b.form_id
+JOIN schedules s ON s.id = b.schedule_id
+WHERE b.id = $1
+`
+
+type GetBookingForCancelRow struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	FormTitle       string
+	Timezone        string
+}
+
+// Что показать на странице отмены: время, длительность, число мест и название формы.
+// Имени и контактов записавшегося здесь нет — их знает только ответ формы, и страница
+// отмены к нему не ходит (спека §13).
+func (q *Queries) GetBookingForCancel(ctx context.Context, id uuid.UUID) (GetBookingForCancelRow, error) {
+	row := q.db.QueryRow(ctx, getBookingForCancel, id)
+	var i GetBookingForCancelRow
+	err := row.Scan(
+		&i.ID,
+		&i.FormID,
+		&i.SubmissionID,
+		&i.StartsAt,
+		&i.DurationMinutes,
+		&i.Seats,
+		&i.Status,
+		&i.FormTitle,
+		&i.Timezone,
+	)
+	return i, err
+}
+
+const getBookingForConfirm = `-- name: GetBookingForConfirm :one
+SELECT b.id, b.schedule_id, b.starts_at, b.duration_minutes, b.seats, b.status,
+       b.hold_expires_at, b.submission_id, s.timezone
+FROM bookings b
+JOIN schedules s ON s.id = b.schedule_id
+WHERE b.id = $1 AND b.form_id = $2 AND b.client_id = $3
+`
+
+type GetBookingForConfirmParams struct {
+	ID       uuid.UUID
+	FormID   uuid.UUID
+	ClientID uuid.UUID
+}
+
+type GetBookingForConfirmRow struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	HoldExpiresAt   pgtype.Timestamptz
+	SubmissionID    pgtype.UUID
+	Timezone        string
+}
+
+// Бронь, которую подтверждает приём ответа. Три условия сразу, и все три несущие:
+// id брони приезжает в ОТВЕТЕ респондента, то есть недоверенным вводом, а форма и
+// клиент — то, что о нём уже известно. Без них можно было бы подтвердить чужую бронь
+// по угаданному id (инвариант 1).
+//
+// client_id совпадает с id ответа по устройству: тем же id браузер брал холд.
+//
+// Пояс расписания едет тем же джойном: письму о записи он нужен, чтобы написать время
+// в обоих поясах, а второй запрос ради одной строки — плата на каждом принятом ответе.
+func (q *Queries) GetBookingForConfirm(ctx context.Context, arg GetBookingForConfirmParams) (GetBookingForConfirmRow, error) {
+	row := q.db.QueryRow(ctx, getBookingForConfirm, arg.ID, arg.FormID, arg.ClientID)
+	var i GetBookingForConfirmRow
+	err := row.Scan(
+		&i.ID,
+		&i.ScheduleID,
+		&i.StartsAt,
+		&i.DurationMinutes,
+		&i.Seats,
+		&i.Status,
+		&i.HoldExpiresAt,
+		&i.SubmissionID,
+		&i.Timezone,
+	)
+	return i, err
+}
+
 const getEmailByUserID = `-- name: GetEmailByUserID :one
 SELECT email FROM users WHERE id = $1
 `
@@ -1438,6 +1870,54 @@ func (q *Queries) GetEntitlementsWithMembers(ctx context.Context, arg GetEntitle
 	return i, err
 }
 
+const getEntitlementsWithSchedules = `-- name: GetEntitlementsWithSchedules :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       coalesce(u.ai_generations, 0)::bigint AS ai_generations_used,
+       (SELECT count(*) FROM schedules sc
+         WHERE sc.workspace_id = o.workspace_id)::bigint AS schedules_count
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
+JOIN plans p ON p.code = s.plan_code
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
+`
+
+type GetEntitlementsWithSchedulesParams struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+}
+
+type GetEntitlementsWithSchedulesRow struct {
+	PlanCode          string
+	PlanTitle         string
+	Limits            []byte
+	SubmissionsUsed   int64
+	AiGenerationsUsed int64
+	SchedulesCount    int64
+}
+
+// То же состояние плюс счётчик расписаний — для гейта записи на время (фаза 27).
+// Отдельным запросом по тому же доводу, что счётчики участников и хранилища: он
+// нужен одной редкой операции (заведению расписания) и не должен ложиться на приём
+// ответа.
+func (q *Queries) GetEntitlementsWithSchedules(ctx context.Context, arg GetEntitlementsWithSchedulesParams) (GetEntitlementsWithSchedulesRow, error) {
+	row := q.db.QueryRow(ctx, getEntitlementsWithSchedules, arg.WorkspaceID, arg.Period)
+	var i GetEntitlementsWithSchedulesRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.SubmissionsUsed,
+		&i.AiGenerationsUsed,
+		&i.SchedulesCount,
+	)
+	return i, err
+}
+
 const getEntitlementsWithStorage = `-- name: GetEntitlementsWithStorage :one
 SELECT p.code AS plan_code,
        p.title AS plan_title,
@@ -1520,8 +2000,18 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- design/form-password.md §2.1), расшифровывает его service. Публичному пути
     -- шифротекст не нужен — GetPublicFormBySlug берёт только признак.
     f.password,
+    -- w.slug: КОРОТКИЙ КЛЮЧ ПРОСТРАНСТВА. Кабинет адресует пространство им (URL
+    -- вида /workspaces/{slug}/…), а знать его форма обязана: попап блока «Запись»
+    -- ведёт автора в расписания ЕЁ пространства, и вывод контекста из адреса здесь
+    -- однажды уже увёл расписание не туда (TD-69, отчёт владельца 2026-09-03).
+    w.slug AS workspace_slug,
+    -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
+    -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
+    -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
+    f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
+JOIN workspaces w ON w.id = f.workspace_id
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.id = $1
 `
@@ -1555,6 +2045,8 @@ type GetFormRow struct {
 	NotifyRespondent      bool
 	RespondentEmail       []byte
 	Password              []byte
+	WorkspaceSlug         string
+	ScheduleID            pgtype.UUID
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1594,6 +2086,8 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
 		&i.Password,
+		&i.WorkspaceSlug,
+		&i.ScheduleID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1620,8 +2114,18 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
     f.password,
+    -- w.slug: КОРОТКИЙ КЛЮЧ ПРОСТРАНСТВА. Кабинет адресует пространство им (URL
+    -- вида /workspaces/{slug}/…), а знать его форма обязана: попап блока «Запись»
+    -- ведёт автора в расписания ЕЁ пространства, и вывод контекста из адреса здесь
+    -- однажды уже увёл расписание не туда (TD-69, отчёт владельца 2026-09-03).
+    w.slug AS workspace_slug,
+    -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
+    -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
+    -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
+    f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
+JOIN workspaces w ON w.id = f.workspace_id
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.slug = $1
 `
@@ -1655,6 +2159,8 @@ type GetFormBySlugRow struct {
 	NotifyRespondent      bool
 	RespondentEmail       []byte
 	Password              []byte
+	WorkspaceSlug         string
+	ScheduleID            pgtype.UUID
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
 }
@@ -1696,6 +2202,8 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
 		&i.Password,
+		&i.WorkspaceSlug,
+		&i.ScheduleID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
@@ -1786,6 +2294,23 @@ func (q *Queries) GetFormPasswordBySlug(ctx context.Context, slug string) (GetFo
 	var i GetFormPasswordBySlugRow
 	err := row.Scan(&i.FormID, &i.Password)
 	return i, err
+}
+
+const getFormScheduleZone = `-- name: GetFormScheduleZone :one
+SELECT s.timezone
+FROM forms f
+JOIN schedules s ON s.id = f.schedule_id
+WHERE f.id = $1
+`
+
+// Пояс расписания формы — для выгрузок (CSV, лист интеграции): время записи автор
+// читает в своём рабочем поясе, а не в UTC и не в поясе того, кто открыл файл.
+// Нет строки — у формы нет записи, и колонки времени в выгрузке не встретится.
+func (q *Queries) GetFormScheduleZone(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getFormScheduleZone, id)
+	var timezone string
+	err := row.Scan(&timezone)
+	return timezone, err
 }
 
 const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one
@@ -1979,6 +2504,14 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
     -- не может: решение принимается по строке формы (design/form-password.md §3.3).
     f.password,
+    -- schedule_id: расписание записи (0050); NULL = у формы нет записи. Публичному
+    -- пути он нужен ЦЕЛИКОМ, а не признаком: по нему выдача свободного времени берёт
+    -- само расписание, а вопрос о времени в форме без расписания отвечает 404.
+    --
+    -- ⚠ МИНА ТА ЖЕ, ЧТО У ПАРОЛЯ: публичных входов записи три (свободное время, холд
+    -- и приём ответа с бронью), и каждый обязан пройти те же четыре отказа, что
+    -- отдача формы (design/booking.md §7).
+    f.schedule_id,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -2010,6 +2543,7 @@ type GetPublicFormBySlugRow struct {
 	AutoJump           bool
 	SaveLocally        bool
 	Password           []byte
+	ScheduleID         pgtype.UUID
 	SubmissionCount    int64
 }
 
@@ -2053,9 +2587,55 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.AutoJump,
 		&i.SaveLocally,
 		&i.Password,
+		&i.ScheduleID,
 		&i.SubmissionCount,
 	)
 	return i, err
+}
+
+const getSchedule = `-- name: GetSchedule :one
+SELECT id, workspace_id, name, timezone, availability,
+       slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+       capacity, max_seats_per_booking, show_remaining, created_at, updated_at
+FROM schedules
+WHERE id = $1
+`
+
+// Одно расписание по id. Отдаёт workspace_id — по нему сервис и спрашивает право
+// (id из адреса правом доступа не является, инвариант 1).
+func (q *Queries) GetSchedule(ctx context.Context, id uuid.UUID) (Schedule, error) {
+	row := q.db.QueryRow(ctx, getSchedule, id)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Timezone,
+		&i.Availability,
+		&i.SlotMinutes,
+		&i.BufferMinutes,
+		&i.HorizonDays,
+		&i.LeadMinutes,
+		&i.Capacity,
+		&i.MaxSeatsPerBooking,
+		&i.ShowRemaining,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const getScheduleCapacity = `-- name: GetScheduleCapacity :one
+SELECT capacity FROM schedules WHERE id = $1
+`
+
+// Вместимость слота — одно число для подтверждения брони. Всю строку читать незачем:
+// документ правила это килобайты JSONB на каждом принятом ответе.
+func (q *Queries) GetScheduleCapacity(ctx context.Context, id uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, getScheduleCapacity, id)
+	var capacity int32
+	err := row.Scan(&capacity)
+	return capacity, err
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
@@ -2240,7 +2820,7 @@ func (q *Queries) GetSubmissionForPrint(ctx context.Context, arg GetSubmissionFo
 
 const getSubmissionOwner = `-- name: GetSubmissionOwner :one
 SELECT u.email, coalesce(f.name, f.title) AS title, f.title AS public_title,
-    f.workspace_id, f.notify_email, f.respondent_email
+    f.slug, f.workspace_id, f.notify_email, f.respondent_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id
@@ -2251,6 +2831,7 @@ type GetSubmissionOwnerRow struct {
 	Email           string
 	Title           string
 	PublicTitle     string
+	Slug            string
 	WorkspaceID     uuid.UUID
 	NotifyEmail     []byte
 	RespondentEmail []byte
@@ -2266,7 +2847,9 @@ type GetSubmissionOwnerRow struct {
 // отрабатывает на каждом открытии формы — лишний JSONB на самом горячем запросе
 // продукта не бесплатен. Заголовков два и они разные: `title` — внутреннее имя
 // (name ?? title), его видит владелец; `public_title` — то, как форма называется
-// для респондента, и в подвале его письма стоит именно оно.
+// для респондента, и в подвале его письма стоит именно оно. slug — адрес формы
+// для того же подвала: письма респонденту и о записи обязаны сказать, откуда
+// они взялись, а адрес известен только здесь.
 func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubmissionOwnerRow, error) {
 	row := q.db.QueryRow(ctx, getSubmissionOwner, id)
 	var i GetSubmissionOwnerRow
@@ -2274,6 +2857,7 @@ func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubm
 		&i.Email,
 		&i.Title,
 		&i.PublicTitle,
+		&i.Slug,
 		&i.WorkspaceID,
 		&i.NotifyEmail,
 		&i.RespondentEmail,
@@ -2435,6 +3019,55 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id uuid.UUID) (GetWorksp
 		&i.IsPersonal,
 	)
 	return i, err
+}
+
+const holdSlot = `-- name: HoldSlot :one
+INSERT INTO bookings (
+    id, schedule_id, form_id, starts_at, duration_minutes, seats, status, hold_expires_at, client_id
+) VALUES ($1, $2, $3, $4, $5, $6, 'held', $7, $8)
+ON CONFLICT (form_id, client_id) WHERE status <> 'canceled'
+DO UPDATE SET
+    schedule_id      = EXCLUDED.schedule_id,
+    starts_at        = EXCLUDED.starts_at,
+    duration_minutes = EXCLUDED.duration_minutes,
+    seats            = EXCLUDED.seats,
+    hold_expires_at  = EXCLUDED.hold_expires_at
+WHERE bookings.status = 'held'
+RETURNING id
+`
+
+type HoldSlotParams struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	HoldExpiresAt   pgtype.Timestamptz
+	ClientID        uuid.UUID
+}
+
+// Придержать время. Одна бронь на клиента в форме (частичный уникальный индекс), и
+// поэтому передумавший респондент ПЕРЕНОСИТ свою бронь, а не заводит вторую.
+//
+// Оговорка DO UPDATE ... WHERE несущая: переносится только ХОЛД. Строка, уже ставшая
+// подтверждённой записью, остаётся на месте — иначе повторный холд после отправки
+// молча переписал бы состоявшуюся встречу, и ответ ссылался бы на другое время.
+// Ноль строк в этом случае — не ошибка запроса, а состояние, которое разбирает сервис.
+func (q *Queries) HoldSlot(ctx context.Context, arg HoldSlotParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, holdSlot,
+		arg.ID,
+		arg.ScheduleID,
+		arg.FormID,
+		arg.StartsAt,
+		arg.DurationMinutes,
+		arg.Seats,
+		arg.HoldExpiresAt,
+		arg.ClientID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const insertFormIntegration = `-- name: InsertFormIntegration :exec
@@ -3556,6 +4189,53 @@ func (q *Queries) ListPendingOutbox(ctx context.Context, limit int32) ([]ListPen
 	return items, nil
 }
 
+const listSchedules = `-- name: ListSchedules :many
+SELECT id, workspace_id, name, timezone, availability,
+       slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+       capacity, max_seats_per_booking, show_remaining, created_at, updated_at
+FROM schedules
+WHERE workspace_id = $1
+ORDER BY created_at DESC, id DESC
+`
+
+// Список расписаний пространства. Порядок — от свежего к старому, id в хвосте
+// как tie-break: два расписания, заведённые в одну миллисекунду, не должны
+// прыгать местами при перерисовке.
+func (q *Queries) ListSchedules(ctx context.Context, workspaceID uuid.UUID) ([]Schedule, error) {
+	rows, err := q.db.Query(ctx, listSchedules, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Schedule
+	for rows.Next() {
+		var i Schedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Timezone,
+			&i.Availability,
+			&i.SlotMinutes,
+			&i.BufferMinutes,
+			&i.HorizonDays,
+			&i.LeadMinutes,
+			&i.Capacity,
+			&i.MaxSeatsPerBooking,
+			&i.ShowRemaining,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSubmissionFiles = `-- name: ListSubmissionFiles :many
 SELECT id, submission_id, block_id, object_key, original_name, size_bytes, content_type
 FROM submission_files
@@ -3789,6 +4469,75 @@ func (q *Queries) ListSubmissionsForBackfill(ctx context.Context, arg ListSubmis
 	return items, nil
 }
 
+const listUpcomingBookings = `-- name: ListUpcomingBookings :many
+SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
+       b.starts_at, b.duration_minutes, b.seats, b.status,
+       b.hold_expires_at, b.created_at,
+       coalesce(f.name, f.title) AS form_title
+FROM bookings b
+JOIN forms f ON f.id = b.form_id
+WHERE b.schedule_id = $1 AND b.status = 'confirmed' AND b.starts_at >= $2
+ORDER BY b.starts_at, b.id
+LIMIT $3
+`
+
+type ListUpcomingBookingsParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	Limit      int32
+}
+
+type ListUpcomingBookingsRow struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	HoldExpiresAt   pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	FormTitle       string
+}
+
+// Ближайшие записи для экрана расписания. Отменённые не показываются: экран
+// отвечает на вопрос «кто придёт», а не «что происходило».
+//
+// Название формы джойном: без него список записей — это столбик времён, по
+// которому не понять, откуда запись взялась.
+func (q *Queries) ListUpcomingBookings(ctx context.Context, arg ListUpcomingBookingsParams) ([]ListUpcomingBookingsRow, error) {
+	rows, err := q.db.Query(ctx, listUpcomingBookings, arg.ScheduleID, arg.StartsAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUpcomingBookingsRow
+	for rows.Next() {
+		var i ListUpcomingBookingsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ScheduleID,
+			&i.FormID,
+			&i.SubmissionID,
+			&i.StartsAt,
+			&i.DurationMinutes,
+			&i.Seats,
+			&i.Status,
+			&i.HoldExpiresAt,
+			&i.CreatedAt,
+			&i.FormTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceFileKeys = `-- name: ListWorkspaceFileKeys :many
 SELECT id, object_key
 FROM submission_files
@@ -3993,6 +4742,21 @@ func (q *Queries) LockIdentities(ctx context.Context, userID uuid.UUID) ([]strin
 		return nil, err
 	}
 	return items, nil
+}
+
+const lockSlot = `-- name: LockSlot :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Транзакционный advisory-lock по паре «расписание + начало слота» (ADR §10).
+//
+// Уникальным индексом гонка здесь не закрывается: при вместимости больше единицы
+// уникальна не строка, а СУММА мест. Приём тот же, что у жёсткого капа лимита ответов;
+// ключ — текст пары, чтобы разные слоты одного расписания не сериализовались друг о
+// друга.
+func (q *Queries) LockSlot(ctx context.Context, dollar_1 string) error {
+	_, err := q.db.Exec(ctx, lockSlot, dollar_1)
+	return err
 }
 
 const markEmailVerified = `-- name: MarkEmailVerified :exec
@@ -4224,6 +4988,24 @@ func (q *Queries) RevealHiddenSubmissions(ctx context.Context, workspaceID uuid.
 	return result.RowsAffected(), nil
 }
 
+const scheduleInWorkspace = `-- name: ScheduleInWorkspace :one
+SELECT EXISTS (SELECT 1 FROM schedules WHERE id = $1 AND workspace_id = $2)
+`
+
+type ScheduleInWorkspaceParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+// Есть ли такое расписание в этом пространстве. Вопрос задаёт привязка формы к
+// расписанию: id приезжает телом запроса и правом доступа не является (инвариант 1).
+func (q *Queries) ScheduleInWorkspace(ctx context.Context, arg ScheduleInWorkspaceParams) (bool, error) {
+	row := q.db.QueryRow(ctx, scheduleInWorkspace, arg.ID, arg.WorkspaceID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const setFormClosed = `-- name: SetFormClosed :one
 UPDATE forms
 SET status = 'closed', updated_at = now()
@@ -4441,6 +5223,83 @@ type StartFormIntegrationBackfillParams struct {
 func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFormIntegrationBackfillParams) error {
 	_, err := q.db.Exec(ctx, startFormIntegrationBackfill, arg.ID, arg.BackfillBefore)
 	return err
+}
+
+const takenSeatsAt = `-- name: TakenSeatsAt :one
+SELECT coalesce(sum(seats), 0)::bigint
+FROM bookings
+WHERE schedule_id = $1 AND starts_at = $2 AND client_id <> $3
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+`
+
+type TakenSeatsAtParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	ClientID   uuid.UUID
+}
+
+// То же для ОДНОЙ точки — счёт под advisory-lock перед взятием холда.
+func (q *Queries) TakenSeatsAt(ctx context.Context, arg TakenSeatsAtParams) (int64, error) {
+	row := q.db.QueryRow(ctx, takenSeatsAt, arg.ScheduleID, arg.StartsAt, arg.ClientID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const takenSeatsInRange = `-- name: TakenSeatsInRange :many
+SELECT starts_at, sum(seats)::bigint AS seats
+FROM bookings
+WHERE schedule_id = $1
+  AND starts_at >= $2 AND starts_at < $3
+  AND client_id <> $4
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+GROUP BY starts_at
+`
+
+type TakenSeatsInRangeParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	StartsAt_2 pgtype.Timestamptz
+	ClientID   uuid.UUID
+}
+
+type TakenSeatsInRangeRow struct {
+	StartsAt pgtype.Timestamptz
+	Seats    int64
+}
+
+// Сколько мест занято в каждой точке отрезка. Публичная выдача свободного времени
+// вычитает это из вместимости.
+//
+// Считаются подтверждённые и НЕИСТЁКШИЕ холды: протухший холд место не держит, и
+// ждать чистки (internal/periodic) выдача не обязана — та убирает мусор, а не решает.
+//
+// Свой холд спрашивающего исключается ($4): человек, передумавший и вернувшийся к
+// списку, обязан снова увидеть время, которое сам же и держит, — иначе при вместимости
+// 1 только что отпущенный слот пропадал бы у него на четверть часа.
+func (q *Queries) TakenSeatsInRange(ctx context.Context, arg TakenSeatsInRangeParams) ([]TakenSeatsInRangeRow, error) {
+	rows, err := q.db.Query(ctx, takenSeatsInRange,
+		arg.ScheduleID,
+		arg.StartsAt,
+		arg.StartsAt_2,
+		arg.ClientID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TakenSeatsInRangeRow
+	for rows.Next() {
+		var i TakenSeatsInRangeRow
+		if err := rows.Scan(&i.StartsAt, &i.Seats); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateFormBehavior = `-- name: UpdateFormBehavior :one
@@ -5166,6 +6025,53 @@ func (q *Queries) UpdateFormRespondentEmail(ctx context.Context, arg UpdateFormR
 	return i, err
 }
 
+const updateFormSchedule = `-- name: UpdateFormSchedule :one
+UPDATE forms
+SET schedule_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
+`
+
+type UpdateFormScheduleParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	ScheduleID  pgtype.UUID
+}
+
+type UpdateFormScheduleRow struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               pgtype.Text
+	Title              string
+	Slug               string
+	Status             string
+	PublishedVersionID pgtype.UUID
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+// Расписание записи у формы (0050). Живая колонка: смена действует со следующего же
+// ответа, без перепубликации. NULL снимает запись.
+//
+// Проверку «расписание из ТОГО ЖЕ пространства» делает service: ключу её не выразить,
+// а без неё форма ссылалась бы на чужое расписание по угаданному id (инвариант 1).
+func (q *Queries) UpdateFormSchedule(ctx context.Context, arg UpdateFormScheduleParams) (UpdateFormScheduleRow, error) {
+	row := q.db.QueryRow(ctx, updateFormSchedule, arg.ID, arg.WorkspaceID, arg.ScheduleID)
+	var i UpdateFormScheduleRow
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Title,
+		&i.Slug,
+		&i.Status,
+		&i.PublishedVersionID,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const updateIntegrationAccountToken = `-- name: UpdateIntegrationAccountToken :exec
 UPDATE integration_accounts SET refresh_token = $2 WHERE id = $1
 `
@@ -5181,6 +6087,71 @@ type UpdateIntegrationAccountTokenParams struct {
 func (q *Queries) UpdateIntegrationAccountToken(ctx context.Context, arg UpdateIntegrationAccountTokenParams) error {
 	_, err := q.db.Exec(ctx, updateIntegrationAccountToken, arg.ID, arg.RefreshToken)
 	return err
+}
+
+const updateSchedule = `-- name: UpdateSchedule :one
+UPDATE schedules SET
+    name = $2, timezone = $3, availability = $4,
+    slot_minutes = $5, buffer_minutes = $6, horizon_days = $7, lead_minutes = $8,
+    capacity = $9, max_seats_per_booking = $10, show_remaining = $11,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, name, timezone, availability,
+          slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+          capacity, max_seats_per_booking, show_remaining, created_at, updated_at
+`
+
+type UpdateScheduleParams struct {
+	ID                 uuid.UUID
+	Name               string
+	Timezone           string
+	Availability       []byte
+	SlotMinutes        int32
+	BufferMinutes      int32
+	HorizonDays        int32
+	LeadMinutes        int32
+	Capacity           int32
+	MaxSeatsPerBooking int32
+	ShowRemaining      bool
+}
+
+// Правка расписания целиком: экран сохраняет форму настроек одним куском, и
+// частичные патчи означали бы «не трогать» и «очистить» одним значением.
+//
+// Уже назначенные встречи правка НЕ трогает: длительность копируется в бронь при
+// создании (0050), поэтому смена приёма с 60 минут на 30 не сжимает договорённое.
+func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) (Schedule, error) {
+	row := q.db.QueryRow(ctx, updateSchedule,
+		arg.ID,
+		arg.Name,
+		arg.Timezone,
+		arg.Availability,
+		arg.SlotMinutes,
+		arg.BufferMinutes,
+		arg.HorizonDays,
+		arg.LeadMinutes,
+		arg.Capacity,
+		arg.MaxSeatsPerBooking,
+		arg.ShowRemaining,
+	)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Timezone,
+		&i.Availability,
+		&i.SlotMinutes,
+		&i.BufferMinutes,
+		&i.HorizonDays,
+		&i.LeadMinutes,
+		&i.Capacity,
+		&i.MaxSeatsPerBooking,
+		&i.ShowRemaining,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateUserEmail = `-- name: UpdateUserEmail :one

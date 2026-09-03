@@ -19,6 +19,7 @@ import { phone } from './phone'
 import { scale } from './scale'
 import { shortText } from './shortText'
 import { singleChoice } from './singleChoice'
+import { slot } from './slot'
 import { text } from './text'
 import { title } from './title'
 
@@ -42,6 +43,7 @@ export const BLOCK_KINDS: Record<BlockType, BlockKindContract> = {
   date,
   consent,
   file,
+  slot,
   title,
   label,
   heading,

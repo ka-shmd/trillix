@@ -30,6 +30,11 @@ export const printDataSchema = z.object({
   files: z
     .record(z.string(), z.object({ name: z.string(), size: z.number().int() }))
     .default({}),
+  // Пояс расписания формы (пусто = записи у формы нет). ПРИЕЗЖАЕТ ДАННЫМИ: лист
+  // печатает headless-контейнер, у которого своего пояса нет, и время записи без
+  // этой строки встало бы на бумагу в UTC — мимо на три часа у московского
+  // расписания, и без единого признака ошибки на самом листе.
+  timezone: z.string().default(''),
 })
 
 export type PrintData = z.infer<typeof printDataSchema>

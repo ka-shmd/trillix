@@ -76,7 +76,32 @@ type PublicHandler struct {
 	// файл перечитывается на лету при подмене на диске: читатели идут без блокировки,
 	// подмена — одной записью указателя.
 	index atomic.Pointer[indexDoc]
-	now   func() time.Time // подменяется в тестах
+	// booking — факты расписания записи (фаза 27). Сеттером, а не аргументом
+	// конструктора: у форм без записи (подавляющее большинство) его вообще нет, а
+	// цепочка зависимостей публичной формы и без того длинная. nil = записи на
+	// контуре нет, поле booking всегда null.
+	booking ScheduleFacts
+	now     func() time.Time // подменяется в тестах
+}
+
+// ScheduleFacts — то, что публичная отдача формы спрашивает у модуля записи.
+// Реализация — *booking.PublicService.
+type ScheduleFacts interface {
+	FactsFor(ctx context.Context, scheduleID *uuid.UUID) (*BookingFacts, error)
+}
+
+// BookingFacts — факты расписания в терминах forms: чужой тип сюда не тянем, иначе
+// forms начнёт зависеть от booking (а booking уже зависит от forms).
+type BookingFacts struct {
+	Timezone      string
+	MaxSeats      int
+	ShowRemaining bool
+}
+
+// WithBooking подключает факты расписания.
+func (h *PublicHandler) WithBooking(f ScheduleFacts) *PublicHandler {
+	h.booking = f
+	return h
 }
 
 // NewPublicHandler создаёт публичный транспорт форм. indexHTMLPath — путь к
@@ -143,6 +168,9 @@ func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	}
 	if h.indexPath != "" {
 		mux.HandleFunc("GET /r/{slug}", h.getHTML)
+		// Страница отмены записи (фаза 27) — та же оболочка рендерера, без головы
+		// формы: до разбора токена о форме ничего не известно.
+		mux.HandleFunc("GET /cancel/{token}", h.getCancelHTML)
 	}
 }
 
@@ -177,6 +205,20 @@ type publicFormResponse struct {
 	// дольше сессии. Как и Progress — чистое намерение автора, без тарифа.
 	AutoJump    bool `json:"autoJump"`
 	SaveLocally bool `json:"saveLocally"`
+	// Booking — факты расписания записи (фаза 27): пояс, сколько мест можно взять
+	// одной записью и показывать ли остаток. null = у формы нет расписания, и вопрос
+	// о времени (если он в схеме) живого выбора не получает.
+	//
+	// Полем, а не выводом клиента из схемы, по той же причине, что CollectPartial:
+	// расписание живёт колонкой формы, и в снапшоте версии его нет вовсе.
+	Booking *bookingFacts `json:"booking"`
+}
+
+// bookingFacts — то, что рендерер знает о расписании формы, не зная самого расписания.
+type bookingFacts struct {
+	Timezone      string `json:"timezone"`
+	MaxSeats      int    `json:"maxSeats"`
+	ShowRemaining bool   `json:"showRemaining"`
 }
 
 // closedFormResponse — тело GET /public/v1/forms/{slug} для ЗАКРЫТОЙ формы (HTTP
@@ -394,7 +436,28 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		Progress:       pf.Progress,
 		AutoJump:       pf.AutoJump,
 		SaveLocally:    pf.SaveLocally,
+		Booking:        h.bookingFacts(r, pf.ScheduleID),
 	})
+}
+
+// bookingFacts — факты расписания формы для рендерера. nil, если записи нет.
+//
+// Сбой опроса расписания живого выбора НЕ включает: вопрос о времени тогда рисуется
+// плашкой, а форма остаётся отправляемой. Обратный выбор (показать пикер и не дать ему
+// данных) означал бы вопрос, который нельзя ни заполнить, ни пропустить.
+func (h *PublicHandler) bookingFacts(r *http.Request, scheduleID *uuid.UUID) *bookingFacts {
+	if scheduleID == nil || h.booking == nil {
+		return nil
+	}
+	f, err := h.booking.FactsFor(r.Context(), scheduleID)
+	if err != nil || f == nil {
+		if err != nil {
+			httpserver.LoggerFrom(r.Context()).Warn("schedule facts not read, booking hidden",
+				slog.String("schedule_id", scheduleID.String()), slog.String("error", err.Error()))
+		}
+		return nil
+	}
+	return &bookingFacts{Timezone: f.Timezone, MaxSeats: f.MaxSeats, ShowRemaining: f.ShowRemaining}
 }
 
 // collectPartial — решение «собирать ли черновики» для этой выдачи. Сбой опроса

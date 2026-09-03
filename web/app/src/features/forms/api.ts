@@ -141,6 +141,17 @@ export function updateFormPassword(id: string, password: string | null): Promise
   })
 }
 
+// Расписание записи у формы (фасет schedule). Обёртка вокруг value — по той же
+// причине, что у пароля: null значит «снять запись», а отсутствие фасета — «не
+// трогать». Чужое расписание сервер отвергнет 404 (проверка пространства).
+export function setFormSchedule(id: string, scheduleId: string | null): Promise<Form> {
+  return apiRequest(`/forms/${id}`, {
+    method: 'PATCH',
+    body: { schedule: { value: scheduleId } },
+    schema: formSchema,
+  })
+}
+
 // Раздел «Поведение» (фасет behavior): автопереход и хранение ответов в браузере
 // респондента. Набором, а не по тумблеру: это один раздел экрана. Гейта нет.
 export function updateBehavior(id: string, behavior: BehaviorInput): Promise<Form> {

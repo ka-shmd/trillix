@@ -3,6 +3,7 @@ import { z } from 'zod'
 import { formSchemaSchema } from '@entities/formSchema'
 
 import { type Answers } from './answers'
+import { bookingFactsSchema } from './slots'
 import { unlockHeaders, unlockToken } from './unlock'
 
 // Тело GET /public/v1/forms/{slug} (см. docs/API.md). schema валидируется тем же
@@ -37,6 +38,11 @@ const publicFormSchema = z.object({
   // тело прошлой версии из кеша не имеет права включить ни то, ни другое.
   autoJump: z.boolean().default(false),
   saveLocally: z.boolean().default(false),
+  // booking — факты расписания записи (фаза 27). Поля нет — у формы нет расписания, и
+  // вопрос о времени (если он в схеме) живого выбора не получит. Дефолт null, а не
+  // объект из пустых строк: «записи нет» и «запись есть, но пустая» — разные вещи, и
+  // второго не бывает.
+  booking: bookingFactsSchema.nullable().default(null),
 })
 export type PublicForm = z.infer<typeof publicFormSchema>
 

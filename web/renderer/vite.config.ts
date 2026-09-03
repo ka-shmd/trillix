@@ -95,6 +95,25 @@ export default defineConfig({
       zod: zodPkg,
     },
   },
+  build: {
+    // Полифилл modulepreload не подключается: динамический импорт в форме один
+    // (пикер времени), и цена полифилла с его рантаймом больше того, что уносит чанк.
+    modulePreload: false,
+    rollupOptions: {
+      output: {
+        chunkFileNames: (chunk) => {
+          if (chunk.facadeModuleId?.includes('/fields/slots/')) return 'slots/[name]-[hash].js'
+          if (chunk.facadeModuleId?.includes('/features/cancel/')) return 'cancel/[name]-[hash].js'
+          return 'assets/[name]-[hash].js'
+        },
+        assetFileNames: (asset) => {
+          if (asset.names?.some((n) => n.startsWith('SlotPicker'))) return 'slots/[name]-[hash][extname]'
+          if (asset.names?.some((n) => n.startsWith('CancelScreen'))) return 'cancel/[name]-[hash][extname]'
+          return 'assets/[name]-[hash][extname]'
+        },
+      },
+    },
+  },
   // Имена ассетов — дефолтные хешированные (assets/index-[hash].js/css). HTML-страницу
   // формы /r/{slug} Go отдаёт из собранного index.html, где vite сам проставил эти
   // хеши, — Go ассеты не перечисляет и не знает их имён, поэтому стабильные имена не

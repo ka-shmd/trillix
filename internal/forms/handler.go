@@ -57,6 +57,7 @@ type formsService interface {
 	UpdateNotifyRespondent(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	// UpdatePassword ставит пароль на форму или снимает его (nil = снять, 0047).
 	UpdatePassword(ctx context.Context, userID, formID uuid.UUID, password *string) (Form, error)
+	UpdateSchedule(ctx context.Context, userID, formID uuid.UUID, scheduleID *uuid.UUID) (Form, error)
 	UpdateRespondentEmail(ctx context.Context, userID, formID uuid.UUID, r *domain.RespondentEmail) (Form, error)
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
@@ -235,6 +236,20 @@ type formDetailResponse struct {
 	// null при включённом пароле возможен и означает ровно одно: секрет приложения
 	// сменили, и старый шифротекст больше не читается (service.withPassword).
 	Password *string `json:"password"`
+	// WorkspaceID — пространство формы. Кабинету нужно, чтобы спросить расписания
+	// ЭТОГО пространства (фаза 27): до сих пор он выводил контекст из адреса
+	// (`?w=`), и прямая ссылка без параметра читалась как личное пространство —
+	// TD-69. Здесь дефект закрыт для того, кто спрашивает деталь формы; крошка и
+	// подсветка сайдбара по-прежнему читают адрес.
+	WorkspaceID string `json:"workspaceId"`
+	// WorkspaceSlug — короткий ключ пространства: им кабинет адресует пространство
+	// в своих URL. Нужен попапу блока «Запись», чтобы увести автора в расписания
+	// ЕГО пространства.
+	WorkspaceSlug string `json:"workspaceSlug"`
+	// ScheduleID — расписание записи на время (0050); null = у формы нет записи.
+	// Кабинету нужен, чтобы попап блока «Запись» показал выбранное расписание и
+	// красную строку, когда его нет.
+	ScheduleID *string `json:"scheduleId"`
 	// NotifyMail — письмо о новом ответе БЕЗ авторских правок: как его отправит
 	// сервис, если в notifyEmail пусто. Нужно бланку письма в настройках формы: он
 	// показывает автору настоящие адреса и настоящий текст, а не описание того, чем
@@ -320,6 +335,15 @@ type patchRequest struct {
 	RespondentEmail    *respondentEmailBody `json:"respondentEmail"`
 	LinkPreview        *linkPreviewBody     `json:"linkPreview"`
 	Password           *passwordBody        `json:"password"`
+	// Schedule — расписание записи на время (фаза 27). Обёртка, как у пароля, и по
+	// той же причине: `null` внутри значит «снять», а отсутствие поля — «не трогать»,
+	// и один указатель эти два случая не различает.
+	Schedule *scheduleBody `json:"schedule"`
+}
+
+// scheduleBody — id расписания либо null (снять запись у формы).
+type scheduleBody struct {
+	Value *string `json:"value"`
 }
 
 // passwordBody — фасет пароля на форму. Обёртка вокруг одного поля, а не голый
@@ -479,7 +503,19 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		NotifyEmail:        toNotifyEmailBody(f.NotifyEmail),
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
 		Password:           f.Password,
+		WorkspaceID:        f.WorkspaceID.String(),
+		WorkspaceSlug:      f.WorkspaceSlug,
+		ScheduleID:         uuidStr(f.ScheduleID),
 	}
+}
+
+// uuidStr — id наружу строкой; nil остаётся null.
+func uuidStr(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	s := id.String()
+	return &s
 }
 
 // toLinkPreviewBody — карточка ссылки в тело ответа; nil (не настраивали) остаётся
@@ -718,6 +754,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		req.RespondentEmail != nil,
 		req.LinkPreview != nil,
 		req.Password != nil,
+		req.Schedule != nil,
 	}
 	for _, present := range facets {
 		if present {
@@ -725,7 +762,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if set != 1 {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/behavior/notifyEmail/notifyRespondent/respondentEmail/linkPreview/password", domain.ErrValidation))
+		httpserver.WriteError(w, r, fmt.Errorf("%w: за один запрос меняется ровно одно из name/draftSchema/closeSettings/notifyOnSubmission/collectPartial/branding/progress/behavior/notifyEmail/notifyRespondent/respondentEmail/linkPreview/password/schedule", domain.ErrValidation))
 		return
 	}
 
@@ -756,6 +793,17 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 		form, err = h.svc.UpdateNotifyRespondent(r.Context(), userID, formID, *req.NotifyRespondent)
 	case req.Password != nil:
 		form, err = h.svc.UpdatePassword(r.Context(), userID, formID, req.Password.Value)
+	case req.Schedule != nil:
+		var scheduleID *uuid.UUID
+		if v := req.Schedule.Value; v != nil {
+			parsed, e := uuid.Parse(*v)
+			if e != nil {
+				httpserver.WriteError(w, r, fmt.Errorf("%w: расписание указано неверно", domain.ErrValidation))
+				return
+			}
+			scheduleID = &parsed
+		}
+		form, err = h.svc.UpdateSchedule(r.Context(), userID, formID, scheduleID)
 	case req.RespondentEmail != nil:
 		re := *req.RespondentEmail
 		form, err = h.svc.UpdateRespondentEmail(r.Context(), userID, formID, &domain.RespondentEmail{

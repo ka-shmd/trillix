@@ -47,9 +47,14 @@ var planKinds = map[BlockType]PlanKind{
 	BlockDate:         {Title: "Дата", Hint: "дата визита, рождения, мероприятия"},
 	BlockConsent:      {Title: "Согласие", Hint: "галочка с текстом согласия; текст согласия кладётся в text"},
 	BlockFile:         {Title: "Файл", Hint: "респондент прикладывает документ или фото"},
-	BlockText:         {Title: "Пояснение", Hint: "абзац текста без вопроса: что за форма, как её заполнять"},
-	BlockHeading:      {Title: "Раздел", Hint: "заголовок группы вопросов; ответа не собирает"},
-	BlockPageBreak:    {Title: "Разрыв страницы", Hint: "делит длинную анкету на шаги; text не нужен"},
+	// Запись на время. Модель ставит САМ ВОПРОС, но расписание не выбирает — оно
+	// живёт в пространстве, его заводит человек, а форма ссылается на него живой
+	// колонкой. Недонастроенную форму держит гейт публикации, а не молчание модели
+	// (решение владельца 2026-09-03).
+	BlockSlot:      {Title: "Запись на время", Hint: "выбор свободного времени приёма по расписанию автора: запись к мастеру, врачу, на занятие. Ставится не больше одного на форму"},
+	BlockText:      {Title: "Пояснение", Hint: "абзац текста без вопроса: что за форма, как её заполнять"},
+	BlockHeading:   {Title: "Раздел", Hint: "заголовок группы вопросов; ответа не собирает"},
+	BlockPageBreak: {Title: "Разрыв страницы", Hint: "делит длинную анкету на шаги; text не нужен"},
 }
 
 // planExcluded — отвечаемые типы, которые модель НЕ предлагает, и почему. Пусто —
@@ -63,7 +68,7 @@ var planExcluded = map[BlockType]string{}
 var planTypeOrder = []BlockType{
 	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber,
 	BlockScale, BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate,
-	BlockConsent, BlockFile, BlockText, BlockHeading, BlockPageBreak,
+	BlockConsent, BlockFile, BlockSlot, BlockText, BlockHeading, BlockPageBreak,
 }
 
 // PlaceholderTypes — типы, у которых подсказка внутри поля видна. Считается из

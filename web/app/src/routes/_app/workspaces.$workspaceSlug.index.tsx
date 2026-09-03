@@ -17,7 +17,7 @@ import { Skeleton } from '@/components/ui/skeleton'
 // уже прочитан сайдбаром на каждом экране, и второй запрос ради имени и числа форм
 // был бы лишним. Отсюда же и «нет такого»: список отдаёт только те пространства, где
 // человек состоит, поэтому чужое и несуществующее здесь неотличимы — как и на сервере.
-export const Route = createFileRoute('/_app/workspaces/$workspaceSlug')({
+export const Route = createFileRoute('/_app/workspaces/$workspaceSlug/')({
   component: WorkspacePage,
 })
 

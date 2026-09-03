@@ -122,6 +122,15 @@ const (
 	// Безлимита у этого ключа не бывает ни на одном плане — null означал бы
 	// открытый счёт у провайдера, оплачиваемый нами.
 	AIGenerations Key = "ai_generations"
+
+	// BookingSchedulesMax — сколько расписаний записи можно завести в пространстве
+	// (фаза 27, миграция 0051). Квота, а не тумблер: сама запись на время тарифом
+	// не закрыта — это не объём, а способ работы, — а вот число независимых потоков
+	// занятости («Мария», «Пётр», «второй кабинет») растёт вместе с бизнесом.
+	//
+	// Приезжает ОТКРЫТЫМ (null) на всех планах: гейт заведён заранее, чтобы
+	// включаться одним UPDATE без выкатки, а не переделкой сервиса.
+	BookingSchedulesMax Key = "booking_schedules_max"
 )
 
 // Kind — как читать значение ключа в plans.limits.
@@ -173,6 +182,10 @@ const (
 	// один), но считают разное, и общая колонка означала бы, что ответы съедают
 	// генерации.
 	AIGenerationsMeter
+	// SchedulesMeter — израсходовано = сколько расписаний в пространстве СЕЙЧАС.
+	// Периода нет, как у мест и хранилища: удалил расписание — место освободилось
+	// сразу, ждать первого числа не нужно.
+	SchedulesMeter
 )
 
 // Feature — описание возможности.
@@ -206,6 +219,7 @@ var CatalogOrder = []Key{
 	FormRespondentEmail,
 	StoragePerWorkspace,
 	AIGenerations,
+	BookingSchedulesMax,
 	Workspaces,
 }
 
@@ -224,4 +238,5 @@ var Catalog = map[Key]Feature{
 	FormNotifyEmail:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё письмо о новом ответе"},
 	FormRespondentEmail: {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Письмо респонденту"},
 	AIGenerations:       {Kind: Quota, Scope: WorkspaceScope, Meter: AIGenerationsMeter, Title: "Сообщений ассистенту в месяц"},
+	BookingSchedulesMax: {Kind: Quota, Scope: WorkspaceScope, Meter: SchedulesMeter, Title: "Расписаний записи"},
 }

@@ -1,6 +1,7 @@
 import {
   AlignLeft,
   Calendar,
+  CalendarClock,
   CaseSensitive,
   CheckSquare,
   ChevronDown,
@@ -39,7 +40,7 @@ import { type BlockType } from '@entities/formSchema'
 // зависимость одна, lucide, и цикла нет вовсе.
 //
 // НЕ в `@entities`: тот каталог общий с рендерером, а лишний импорт lucide в публичной
-// форме — это её бюджет в 45 КиБ gzip.
+// форме — это её бюджет в 60 КиБ gzip.
 //
 // Компонент, который его рисует, лежит ОТДЕЛЬНО (`BlockTypeIcon.tsx`): не-компонентный
 // экспорт из файла компонента ломает fast-refresh.
@@ -61,6 +62,7 @@ export const BLOCK_ICONS: Record<BlockType, LucideIcon> = {
   date: Calendar,
   consent: ShieldCheck,
   file: Paperclip,
+  slot: CalendarClock,
   title: Type,
   label: Tag,
   // Общий «Heading», а не Heading1: тот занят заголовком ФОРМЫ.

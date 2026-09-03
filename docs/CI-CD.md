@@ -66,7 +66,7 @@ fail-closed: прогон пропускается, только если в и�
 Postgres поднимается testcontainers'ом).
 
 **Job `web`** (матрица `app` / `renderer`): `tsc --noEmit`, `eslint`, `vitest`, сборка.
-У рендерера дополнительно: **бюджет бандла 45 КиБ gzip** (`scripts/check-bundle.mjs`)
+У рендерера дополнительно: **бюджет бандла 60 КиБ gzip** (`scripts/check-bundle.mjs`)
 и **Lighthouse mobile Performance ≥ 90**.
 
 `npm run build` рендерера делает **два прохода**: обычную сборку формы и загрузчик

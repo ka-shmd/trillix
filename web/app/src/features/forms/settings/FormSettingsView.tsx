@@ -37,7 +37,7 @@ import {
 
 import { TimeField } from '../../../shared/TimeField'
 
-import { LazyCalendar } from './lazyCalendar'
+import { LazyCalendar } from '../../../shared/lazyCalendar'
 import {
   closeSettingsValue,
   firstEmailQuestion,

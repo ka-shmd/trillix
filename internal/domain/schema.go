@@ -139,6 +139,18 @@ const (
 	// всё это утверждения клиента, а правда о файле лежит в submission_files и
 	// проверена у хранилища.
 	BlockFile BlockType = "file"
+
+	// Запись на время (фаза 27): вопрос «когда вам удобно» с выбором свободного
+	// слота. Отвечаемый тип, но не такой, как остальные, и это записано здесь,
+	// потому что дальше по коду разница выглядит мелочью.
+	//
+	// НАСТРОЕК В СХЕМЕ У НЕГО НЕТ ВОВСЕ: расписание, к которому он относится, живёт
+	// живой колонкой forms.schedule_id (ADR §10). Схема замерзает при публикации, и
+	// ссылка в ней потребовала бы перепубликации на смену расписания.
+	//
+	// Блоков slot в форме НЕ БОЛЬШЕ ОДНОГО (validateSlot): одна отправка — одна
+	// запись. Зеркалит 'slot' в contract.ts.
+	BlockSlot BlockType = "slot"
 	// Подписи (текст вопроса в группе).
 	BlockTitle BlockType = "title"
 	BlockLabel BlockType = "label"
@@ -183,6 +195,7 @@ var blockTypes = []BlockType{
 	// отвечаемые
 	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
 	BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent, BlockFile,
+	BlockSlot,
 	// подписи
 	BlockTitle, BlockLabel,
 	// контент, разрыв страницы, условная логика и заголовок формы
@@ -508,6 +521,9 @@ func ValidateSchema(raw json.RawMessage) (FormSchema, error) {
 	if err := validateFormTitle(s.Blocks); err != nil {
 		return FormSchema{}, err
 	}
+	if err := validateSlot(s.Blocks); err != nil {
+		return FormSchema{}, err
+	}
 
 	seen := make(map[string]struct{}, len(s.Blocks))
 	for i := range s.Blocks {
@@ -609,6 +625,44 @@ func validateGroups(blocks []Block) error {
 				return schemaErr("блок #%d: в группе %q больше одного отвечаемого блока", i, b.GroupID)
 			}
 		}
+	}
+	return nil
+}
+
+// HasSlot — есть ли в схеме вопрос о записи на время. Одной функцией, а не обходом по
+// месту: спрашивают её двое (гейт публикации и отдача публичной формы), и разойтись им
+// нельзя.
+func HasSlot(s FormSchema) bool {
+	for _, b := range s.Blocks {
+		if b.Type == BlockSlot {
+			return true
+		}
+	}
+	return false
+}
+
+// validateSlot — блок записи на время в форме не больше одного (фаза 27,
+// design/booking.md §4.3).
+//
+// Правило продуктовое, а не техническое: одна отправка формы = одна запись, и второй
+// вопрос о времени означал бы либо две брони на один ответ, либо молча
+// проигнорированную. Проверка здесь, а не в validateBlock: она про ДОКУМЕНТ, а не про
+// блок, — как и «заголовок формы один».
+//
+// Расписание тут не спрашивается вовсе: оно живёт живой колонкой forms.schedule_id, и
+// схема о нём не знает. Форму с блоком и без выбранного расписания сохранять можно —
+// отказывает ПУБЛИКАЦИЯ (forms.Publish): черновик в промежуточном состоянии законен,
+// как и вопрос без подписи.
+func validateSlot(blocks []Block) error {
+	seen := false
+	for i, b := range blocks {
+		if b.Type != BlockSlot {
+			continue
+		}
+		if seen {
+			return schemaErr("блок #%d: вопрос о записи может быть только один", i)
+		}
+		seen = true
 	}
 	return nil
 }

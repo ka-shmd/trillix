@@ -251,6 +251,14 @@ type Service struct {
 	// коллабораторов, и девятый позиционный аргумент — это способ однажды
 	// перепутать два соседних интерфейса местами.
 	files AnswerFiles
+	// bookings — подтверждение записи на время (фаза 27); nil = записи на контуре
+	// нет, и ответ с бронью отвергается.
+	bookings Bookings
+	// bookingGuard — стоп-кран удаления ответа с живой будущей записью (фаза 27).
+	bookingGuard BookingGuard
+	// bookingOrganizer — адрес отправителя контура: он уезжает ORGANIZER'ом в
+	// приглашение календаря. Пусто — письма о записи нет (bookingmail.go).
+	bookingOrganizer string
 	// integrations — доставка ответа во внешние системы (фаза 25). Тем же
 	// сеттером и по той же причине, что files; nil = интеграций в сборке нет.
 	integrations Integrations
@@ -298,6 +306,46 @@ type Integrations interface {
 // сервис, и в конструктор его передать было бы нечем.
 func (s *Service) WithIntegrations(i Integrations) *Service {
 	s.integrations = i
+	return s
+}
+
+// Bookings — подтверждение брони внутри транзакции приёма (фаза 27). Реализация —
+// *booking.Confirmer. Интерфейс объявлен здесь, у потребителя: приём ответа знает про
+// бронь ровно две вещи — придержать место и привязать его к ответу.
+type Bookings interface {
+	// Reserve проверяет бронь и держит место ДО вставки строки ответа: время записи
+	// уезжает в сам ответ, и узнать его надо раньше.
+	Reserve(ctx context.Context, tx pgx.Tx, bookingID, formID, submissionID uuid.UUID) (domain.SlotHold, error)
+	// Attach привязывает бронь к принятому ответу — ПОСЛЕ вставки: внешний ключ
+	// требует, чтобы строка ответа уже существовала.
+	Attach(ctx context.Context, tx pgx.Tx, bookingID, submissionID uuid.UUID) error
+	// CancelLink — адрес страницы отмены для этой брони. Спрашивается у модуля
+	// записи, а не собирается здесь: подпись ссылки требует секрета, и знать его
+	// приёму ответа незачем.
+	CancelLink(bookingID uuid.UUID) string
+}
+
+// BookingGuard — сколько живых будущих записей держит ответ (фаза 27). Реализация —
+// *booking.Guard; nil = записи на контуре нет, и стоп-кран не спрашивается.
+type BookingGuard interface {
+	FutureOfSubmission(ctx context.Context, submissionID uuid.UUID) (int64, error)
+	// ZoneOfForm — пояс расписания формы для выгрузок; пусто = записи у формы нет.
+	// Время записи автор читает в своём рабочем поясе, а не в UTC (решение владельца
+	// 2026-09-03).
+	ZoneOfForm(ctx context.Context, formID uuid.UUID) string
+}
+
+// WithBookingGuard подключает стоп-кран удаления ответа.
+func (s *Service) WithBookingGuard(g BookingGuard) *Service {
+	s.bookingGuard = g
+	return s
+}
+
+// WithBookings подключает подтверждение записи. Без него форма с вопросом о времени
+// отвергает ответ с бронью: молча принять ссылку на бронь, которую некому проверить,
+// нельзя — ровно как с файлами.
+func (s *Service) WithBookings(b Bookings) *Service {
+	s.bookings = b
 	return s
 }
 
@@ -376,6 +424,17 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		}
 	}
 
+	// Бронь, названная в ответе. Как и файлы, она сверяется с базой ДО записи: та ли
+	// форма, тот ли клиент, не отменена ли, — иначе в ответе оказалась бы ссылка на
+	// чужую или несуществующую запись.
+	booking, err := slotAnswer(schema, clean)
+	if err != nil {
+		return err
+	}
+	if booking.BlockID != "" && s.bookings == nil {
+		return fmt.Errorf("%w: форма не принимает запись на время", domain.ErrValidation)
+	}
+
 	answersJSON, err := json.Marshal(clean)
 	if err != nil {
 		return fmt.Errorf("marshal answers: %w", err)
@@ -420,65 +479,83 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// (тот же id): ответ уже принят, повторно ни считать лимит, ни слать письмо не надо.
 	var inserted bool
 
-	switch {
-	// Без лимита и без файлов — прежний путь без блокировки: одна вставка на пуле.
-	case pf.ResponseLimit == nil && len(files) == 0:
+	// ТРАНЗАКЦИЯ НУЖНА НЕ ВСЕГДА, и это не микрооптимизация: приём ответа — самый
+	// нагруженный путь продукта, а у формы без лимита, файлов и записи вставка одна.
+	//
+	// До фазы 27 здесь стоял switch по парам «лимит × файлы». Третья причина открывать
+	// транзакцию превратила бы его в восемь веток с повторами внутри, поэтому ветвление
+	// снято: причины перечислены, шаги внутри — под своими условиями.
+	needsTx := pf.ResponseLimit != nil || len(files) > 0 || booking.BlockID != ""
+	if !needsTx {
 		n, err := s.repo.InsertSubmission(ctx, s.db, in)
 		if err != nil {
 			return err
 		}
 		inserted = n > 0
-
-	// Есть файлы, но нет лимита: транзакция нужна не ради счёта, а ради атомарности
-	// «ответ + заявленные файлы». Разъехавшись, эти две записи дают либо ответ со
-	// ссылками на сирот, либо файлы, привязанные к ответу, которого нет.
-	case pf.ResponseLimit == nil:
-		if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
-			n, err := s.repo.InsertSubmission(ctx, tx, in)
-			if err != nil {
-				return err
-			}
-			// n == 0 — идемпотентный ретрай: заявление всё равно повторяем, оно
-			// узнаёт свои же файлы (условие submission_id в запросе Claim).
-			inserted = n > 0
-			return s.files.Claim(ctx, tx, id, pf.FormID, files)
-		}); err != nil {
-			return err
-		}
-
-	default:
-		// Жёсткий кап (ADR §10): advisory-lock по форме сериализует конкурентные приёмы,
-		// поэтому счёт точен и перебор невозможен. Порядок «вставка → счёт» держит
-		// идемпотентность: ретрай даёт n == 0 (конфликт по PK) и проходит МИМО лимита
-		// (ответ уже принят); новая вставка сверх лимита откатывается (счёт с учётом
-		// только что вставленной строки превышает лимит) — форма как раз заполнилась.
-		limit := int64(*pf.ResponseLimit)
-		if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+	} else if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		// ⚠ ПОРЯДОК ЛОКОВ ФИКСИРОВАН: сначала форма (жёсткий кап лимита), потом слот
+		// (подтверждение брони). Два лока, взятых в обратном порядке двумя приёмами,
+		// дают дедлок — и увидеть его можно только под нагрузкой.
+		if pf.ResponseLimit != nil {
 			if err := s.repo.LockFormForSubmit(ctx, tx, pf.FormID); err != nil {
 				return err
 			}
-			n, err := s.repo.InsertSubmission(ctx, tx, in)
+		}
+
+		// Бронь придерживается ДО вставки: время записи уезжает В САМ ОТВЕТ, и
+		// узнать его надо раньше, чем строка ответа уйдёт в базу.
+		if booking.BlockID != "" {
+			held, err := s.bookings.Reserve(ctx, tx, booking.BookingID, pf.FormID, id)
 			if err != nil {
 				return err
 			}
-			if n == 0 {
-				return nil // идемпотентный ретрай — ответ уже принят, лимит ни при чём
+			// ⚠ ЗНАЧЕНИЕ ОТВЕТА ПЕРЕПИСЫВАЕТСЯ СЕРВЕРОМ: на проводе приезжал id
+			// брони, в базе лежит ВРЕМЯ (design/booking.md §5.6). Поверить телу
+			// запроса значило бы позволить записаться на время, которого никто не
+			// бронировал.
+			slotValue, err := json.Marshal(held.StartsAt.UTC().Format(time.RFC3339))
+			if err != nil {
+				return fmt.Errorf("marshal slot answer: %w", err)
 			}
+			clean[booking.BlockID] = slotValue
+			if in.Answers, err = json.Marshal(clean); err != nil {
+				return fmt.Errorf("marshal answers: %w", err)
+			}
+			booking.StartsAt = held.StartsAt
+			booking.DurationMinutes, booking.Timezone = held.DurationMinutes, held.Timezone
+		}
+
+		n, err := s.repo.InsertSubmission(ctx, tx, in)
+		if err != nil {
+			return err
+		}
+		// n == 0 — идемпотентный ретрай: ответ уже принят. Заявление файлов и
+		// привязка брони всё равно повторяются — оба узнают свой же ответ и второго
+		// места не занимают; лимит же проходит МИМО (форма уже приняла этот ответ).
+		inserted = n > 0
+
+		if pf.ResponseLimit != nil && inserted {
 			count, err := s.repo.CountSubmissions(ctx, tx, pf.FormID)
 			if err != nil {
 				return err
 			}
-			if count > limit {
+			if count > int64(*pf.ResponseLimit) {
 				return domain.ErrFormClosed // откат вставки: форма только что заполнилась
 			}
-			inserted = true
-			if len(files) > 0 {
-				return s.files.Claim(ctx, tx, id, pf.FormID, files)
-			}
-			return nil
-		}); err != nil {
-			return err
 		}
+		if len(files) > 0 {
+			if err := s.files.Claim(ctx, tx, id, pf.FormID, files); err != nil {
+				return err
+			}
+		}
+		if booking.BlockID != "" {
+			if err := s.bookings.Attach(ctx, tx, booking.BookingID, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// Побочные эффекты — ПОСЛЕ приёма и best-effort (ни один не имеет права уронить
@@ -488,6 +565,11 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	s.dropPartial(ctx, pf.FormID, meta.VisitID)
 	if inserted && (pf.NotifyOnSubmission || pf.NotifyRespondent) {
 		s.notifyMail(ctx, pf, id, slug, schema, clean)
+	}
+	// Письмо о записи НЕ зависит от тумблеров уведомлений и от тарифа: без него у
+	// респондента нет ссылки отмены, а значит, место не вернуть в оборот (§4.8 спеки).
+	if inserted && booking.BlockID != "" {
+		s.notifyBooking(ctx, pf.FormID, id, slug, schema, clean, booking)
 	}
 	if inserted {
 		s.enqueueIntegration(ctx, pf.FormID, id)
@@ -555,6 +637,7 @@ func (s *Service) SheetRow(ctx context.Context, formID, submissionID uuid.UUID) 
 	}
 
 	builder := domain.NewCSVBuilder(vs)
+	builder.WithSchedule(s.scheduleZone(ctx, formID))
 	// Имена файлов — только если у формы вообще есть вопрос-файл: та же
 	// экономия, что в выгрузке.
 	if s.files != nil && hasFileBlock(vs) {
@@ -605,6 +688,7 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.T
 	}
 
 	builder := domain.NewCSVBuilder(vs)
+	builder.WithSchedule(s.scheduleZone(ctx, formID))
 	if s.files != nil && hasFileBlock(vs) {
 		files, err := s.files.InfoByForm(ctx, formID)
 		if err != nil {
@@ -1293,6 +1377,7 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 	}
 
 	builder := domain.NewCSVBuilder(vs)
+	builder.WithSchedule(s.scheduleZone(ctx, formID))
 	// Имена файлов — только если у формы вообще есть вопрос-файл: у остальных (а
 	// это подавляющее большинство) выгрузка не платит ни запросом, ни памятью.
 	if s.files != nil && hasFileBlock(vs) {
@@ -1420,6 +1505,21 @@ func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionI
 	if _, err := s.forms.GetForAction(ctx, userID, formID, domain.ActionSubmissionDelete); err != nil {
 		return err
 	}
+	// СТОП-КРАН ЗАПИСИ (фаза 27, ADR §10): у ответа есть живая будущая встреча.
+	// Удалить его молча — значит либо снести бронь, не предупредив клиента (его адрес
+	// лежит в этом же ответе), либо оставить в расписании занятое время, о котором
+	// больше ничего не известно. Сначала отмена, и это тот шаг, на котором уходит
+	// письмо. Прошлые записи не держат ничего.
+	if s.bookingGuard != nil {
+		n, err := s.bookingGuard.FutureOfSubmission(ctx, submissionID)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return fmt.Errorf("%w: на этот ответ есть будущая запись — сначала отмените её в расписании",
+				domain.ErrConflict)
+		}
+	}
 	// Файлы — первыми: строка ответа уносит каскадом строки загрузок, а с ними и
 	// ключи объектов. Сбой здесь ОСТАНАВЛИВАЕТ удаление: лучше отказать автору
 	// (он повторит), чем оставить в бакете чужие персональные данные, о которых
@@ -1455,6 +1555,12 @@ type PrintDoc struct {
 	// файла нет ссылки (подпись хранилища живёт минуту, а лист живёт годы) —
 	// печатается имя, поэтому карта нужна и здесь, как в таблице и выгрузке.
 	Files map[string]domain.AnswerFile
+	// Timezone — пояс расписания формы; пусто = записи у формы нет. ПРИЕЗЖАЕТ
+	// ДАННЫМИ, а не берётся у браузера (design/booking.md §4.9): лист печатает
+	// headless-контейнер, у которого пояса нет вовсе, и время записи вставало бы на
+	// бумагу в UTC — на три часа мимо у московского расписания, без единого признака
+	// ошибки на самом листе.
+	Timezone string
 }
 
 // PrintAccess — что известно об ответе тому, кто ИМЕЕТ ПРАВО его печатать: имя
@@ -1542,6 +1648,10 @@ func (s *Service) PrintDocFor(ctx context.Context, formID, submissionID uuid.UUI
 		}
 		doc.Files = files
 	}
+	// Пояс — тем же путём, что у выгрузок: у стража записи.
+	if s.bookingGuard != nil {
+		doc.Timezone = s.bookingGuard.ZoneOfForm(ctx, formID)
+	}
 	return doc, nil
 }
 
@@ -1574,4 +1684,68 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+// slotBooking — что приём ответа знает о записи на время из самого ответа.
+type slotBooking struct {
+	// BlockID — id вопроса о записи; пусто = записи в этом ответе нет (вопроса нет в
+	// схеме или на него не ответили).
+	BlockID   string
+	BookingID uuid.UUID
+	// Ниже — то, что известно ТОЛЬКО ПОСЛЕ подтверждения: время из строки брони, её
+	// длительность и пояс расписания. Ими живёт письмо о записи (bookingmail.go).
+	StartsAt        time.Time
+	DurationMinutes int
+	Timezone        string
+}
+
+// slotAnswer достаёт бронь из ответа. На проводе у вопроса о записи лежит id брони —
+// и только он (design/booking.md §5.6); всё остальное о записи знает база.
+//
+// Пустой ответ на необязательный вопрос — не ошибка: вопрос о времени можно не
+// заполнить, как любой другой. Обязательность уже проверена NormalizeAnswers.
+func slotAnswer(schema domain.FormSchema, answers map[string]json.RawMessage) (slotBooking, error) {
+	for i := range schema.Blocks {
+		b := schema.Blocks[i]
+		if b.Type != domain.BlockSlot {
+			continue
+		}
+		raw, ok := answers[b.ID]
+		if !ok || len(raw) == 0 {
+			return slotBooking{}, nil
+		}
+		var v string
+		if json.Unmarshal(raw, &v) != nil || v == "" {
+			return slotBooking{}, nil
+		}
+		id, err := uuid.Parse(v)
+		if err != nil {
+			// Строка не id брони: либо мусор, либо уже записанное время (повторная
+			// проверка сохранённого). Второе сюда не приходит — ответ принимается
+			// один раз, — а первое подтверждать нечем.
+			return slotBooking{}, fmt.Errorf("%w: время записи не выбрано", domain.ErrValidation)
+		}
+		return slotBooking{BlockID: b.ID, BookingID: id}, nil
+	}
+	return slotBooking{}, nil
+}
+
+// scheduleZone — пояс расписания формы для выгрузок. Нет записи или страж не
+// подключён — nil, и время (которого тогда и не бывает) осталось бы в UTC.
+func (s *Service) scheduleZone(ctx context.Context, formID uuid.UUID) *time.Location {
+	if s.bookingGuard == nil {
+		return nil
+	}
+	zone := s.bookingGuard.ZoneOfForm(ctx, formID)
+	if zone == "" {
+		return nil
+	}
+	loc, err := domain.LoadScheduleLocation(zone)
+	if err != nil {
+		// Зона в базе есть, а в базе зон её нет: печатаем в UTC, но говорим об этом.
+		httpserver.LoggerFrom(ctx).Warn("schedule zone not loaded, export stays in UTC",
+			slog.String("form_id", formID.String()), slog.String("zone", zone))
+		return nil
+	}
+	return loc
 }

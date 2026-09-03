@@ -71,7 +71,13 @@ func (m SMTPMailer) Send(ctx context.Context, msg EmailMessage) error {
 	if msg.FromName != "" {
 		header = (&netmail.Address{Name: msg.FromName, Address: from.Address}).String()
 	}
-	raw, err := buildMessage(header, msg.To, subject, body, senderDomain(from.Address, m.Host), msg.ReplyTo, msg.Files)
+	// Inline-вложения идут вместе с добытыми: для транспорта разницы нет, она есть
+	// только в том, где они появились (payload против резолвера).
+	files := msg.Files
+	if len(msg.Inline) > 0 {
+		files = append(append([]File{}, files...), msg.Inline...)
+	}
+	raw, err := buildMessage(header, msg.To, subject, body, senderDomain(from.Address, m.Host), msg.ReplyTo, files)
 	if err != nil {
 		return err
 	}

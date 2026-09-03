@@ -24,6 +24,7 @@ import {
 } from '@fields/groups'
 import { customStyleSheet } from '@fields/customCss'
 import { UploaderProvider } from '@fields/fileUpload'
+import { SlotSourceProvider } from '@fields/booking'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { planForm, stripHiddenAnswers, withVisibleOptions } from '@fields/logic'
 import { AUTO_JUMP_DELAY, shouldAutoJump } from './autoJump'
@@ -46,10 +47,13 @@ import {
   clearAnswers,
   loadAnswers,
   loadPage,
+  loadSubmissionId,
   saveAnswers,
   savePage,
+  saveSubmissionId,
 } from './answers'
 import { firstErrorPage, firstQuestionIndex } from './pages'
+import { makeSlotSource } from './slots'
 import { uuidv7 } from './submissionId'
 import { makeUploader } from './uploads'
 import { holdUntilAccepted, type FormToken } from './formToken'
@@ -179,6 +183,33 @@ export function FormView({
   // не принимает. Иначе автор, разглядывая свою форму, засорял бы бакет
   // загрузками, которые никогда не станут ответом.
   const uploader = useMemo(() => (token === null ? null : makeUploader(slug, token)), [slug, token])
+  // Один id на всё время жизни экрана: любые повторы (авто и ручные) идут под ним.
+  //
+  // Рождается ПРИ МОНТИРОВАНИИ, а не при первой отправке (фаза 27): тем же id клиент
+  // держит бронь времени (bookings.client_id), а бронь берётся задолго до кнопки
+  // «Отправить». Ленивое рождение в ref'е к тому же читалось на рендере — то есть
+  // ровно там, где рефы читать нельзя.
+  //
+  // ⚠ И ПЕРЕЖИВАЕТ F5 ВМЕСТЕ С ЧЕРНОВИКОМ: черновик возвращает выбранное время, а
+  // новый id сделал бы человека чужим собственной броне. Чистится вместе с черновиком
+  // после успешной отправки — второй ответ под тем же id сервер считает повтором.
+  const [submissionId] = useState(() => {
+    const saved = loadSubmissionId(slug, form.version, form.saveLocally)
+    if (saved !== null) return saved
+    const fresh = uuidv7()
+    saveSubmissionId(slug, form.version, fresh, form.saveLocally)
+    return fresh
+  })
+  // Источник свободного времени: нет расписания у формы — нет и живого выбора, вопрос
+  // о записи рисуется плашкой. В предпросмотре его тоже нет (token === null): холд из
+  // предпросмотра занял бы настоящее время у настоящих клиентов.
+  const slotSource = useMemo(
+    () =>
+      token === null || form.booking === null
+        ? null
+        : makeSlotSource(slug, form.booking, submissionId),
+    [slug, token, form.booking, submissionId],
+  )
   const pages = plan.pages
   const lastPage = pages.length - 1
   const multi = pages.length > 1
@@ -197,8 +228,6 @@ export function FormView({
   // notice — отказ отправки, не привязанный к полю (антиспам, закрытая форма, сеть).
   const [notice, setNotice] = useState<string | null>(null)
 
-  // Один id на всё время жизни экрана: любые повторы (авто и ручные) идут под ним.
-  const submissionId = useRef<string>('')
   // Защита от setState после размонтирования во время долгого ретрая. Флаг ставится
   // в true при монтировании и в false при размонтировании — под StrictMode (dev
   // делает mount→unmount→mount) инициализации useRef(true) недостаточно: cleanup
@@ -522,7 +551,6 @@ export function FormView({
       return
     }
 
-    if (submissionId.current === '') submissionId.current = uuidv7()
     setPhase('submitting')
 
     let outcome: SubmitOutcome
@@ -533,7 +561,7 @@ export function FormView({
       // 'submitting' — кнопка занята, отдельного экрана ожидания не нужно.
       await holdUntilAccepted(token)
       outcome = await submitWithRetry(slug, {
-        submissionId: submissionId.current,
+        submissionId,
         token: token.value,
         // Ответы на скрытые вопросы не отправляются: они остались в стейте (человек
         // переключил источник, и введённое ждёт возврата), но формой не собраны.
@@ -554,7 +582,7 @@ export function FormView({
         clearAnswers(slug, form.version)
         // Хост узнаёт об успехе тем же сообщением, каким пользуется онбординг внутри
         // чужого приложения: по нему оно продолжает свой сценарий (design/embed.md §5).
-        bridge?.submitted(submissionId.current)
+        bridge?.submitted(submissionId)
         setPhase('done')
         return
       case 'invalid': {
@@ -617,6 +645,7 @@ export function FormView({
     // Обложка — вне .rf-page (во всю ширину), логотип — внутри (по левому краю
     // колонки). Оба из схемы ТОЙ версии, по которой респондент открыл форму.
     <UploaderProvider value={uploader}>
+      <SlotSourceProvider value={slotSource}>
       <MentionContext.Provider value={mentions}>
         {/* CSS АВТОРА — текстовым узлом, а не dangerouslySetInnerHTML (инвариант 4), и
           ПОСЛЕ наших правил: в каскаде выигрывает последний при равной специфичности,
@@ -782,6 +811,7 @@ export function FormView({
           )}
         </main>
       </MentionContext.Provider>
+      </SlotSourceProvider>
     </UploaderProvider>
   )
 }

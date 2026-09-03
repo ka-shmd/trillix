@@ -109,6 +109,26 @@ func (Repo) EntitlementsWithStorage(ctx context.Context, db postgres.DBTX, works
 	}, nil
 }
 
+// EntitlementsWithSchedules — состояние тарифа плюс счётчик расписаний (гейт
+// записи на время, фаза 27).
+func (Repo) EntitlementsWithSchedules(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error) {
+	row, err := postgres.New(db).GetEntitlementsWithSchedules(ctx, postgres.GetEntitlementsWithSchedulesParams{
+		WorkspaceID: workspaceID,
+		Period:      pgtype.Date{Time: period, Valid: true},
+	})
+	if err != nil {
+		return Row{}, fmt.Errorf("get entitlements with schedules of workspace %s: %w", workspaceID, err)
+	}
+	return Row{
+		PlanCode:          row.PlanCode,
+		PlanTitle:         row.PlanTitle,
+		Limits:            row.Limits,
+		SubmissionsUsed:   row.SubmissionsUsed,
+		AIGenerationsUsed: row.AiGenerationsUsed,
+		SchedulesCount:    row.SchedulesCount,
+	}, nil
+}
+
 // BumpAIGenerations списывает одну генерацию формы в периоде (фаза 26). UPSERT:
 // строки периода может ещё не быть.
 func (Repo) BumpAIGenerations(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) error {

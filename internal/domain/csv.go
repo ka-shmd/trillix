@@ -42,6 +42,22 @@ type blockView struct {
 	// files — та же карта, что у строителя: ячейка резолвит id в имя, а вида
 	// блока для этого достаточно (тип уже здесь).
 	files map[string]AnswerFile
+	// zone — пояс расписания формы (фаза 27): в нём пишется время записи. Пусто —
+	// у формы нет записи, и ячейка времени не встретится вовсе.
+	zone *time.Location
+}
+
+// slotTime — время записи человеческим видом в поясе расписания. Неразобранное
+// значение отдаётся как есть: ячейка выгрузки не место, где теряют данные.
+func (v blockView) slotTime(raw string) string {
+	at, err := time.Parse(time.RFC3339, raw)
+	if err != nil {
+		return raw
+	}
+	if v.zone != nil {
+		at = at.In(v.zone)
+	}
+	return at.Format("02.01.2006 15:04")
 }
 
 // CSVBuilder строит заголовок и строки CSV по набору версий схемы. Собирается один
@@ -54,6 +70,16 @@ type CSVBuilder struct {
 	// автору нужно ИМЯ, а не id, и уж точно не подпись хранилища: та живёт минуту
 	// и протухла бы раньше, чем он откроет скачанный файл.
 	files map[string]AnswerFile
+	// zone — пояс расписания формы (фаза 27). Отдельным вызовом по тому же доводу,
+	// что и файлы: выгрузка формы без записи не должна платить ни запросом, ни
+	// памятью.
+	zone *time.Location
+}
+
+// WithSchedule задаёт пояс, в котором пишется время записи.
+func (b *CSVBuilder) WithSchedule(zone *time.Location) *CSVBuilder {
+	b.zone = zone
+	return b
 }
 
 // WithFiles подмешивает имена файлов. Отдельным вызовом, а не аргументом
@@ -158,6 +184,7 @@ func (b *CSVBuilder) row(id string, createdAt time.Time, version int, answers ma
 			continue
 		}
 		view.files = b.files
+		view.zone = b.zone
 		row = append(row, formatCell(view, raw))
 	}
 	return row
@@ -200,6 +227,16 @@ func formatCell(view blockView, raw json.RawMessage) string {
 			}
 		}
 		return strings.Join(names, "; ")
+	case BlockSlot:
+		// Время записи — снапшот RFC3339, записанный сервером. В выгрузку идёт
+		// человеческим видом в поясе РАСПИСАНИЯ: автор читает свой распорядок, и
+		// один и тот же файл, открытый из другого пояса, обязан давать те же числа
+		// (решение владельца 2026-09-03).
+		var v string
+		if json.Unmarshal(raw, &v) != nil {
+			return ""
+		}
+		return view.slotTime(v)
 	case BlockConsent:
 		// «yes»/пусто — внутренняя кодировка ответа; в выгрузке владельцу нужен
 		// человеческий текст.

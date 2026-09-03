@@ -9,6 +9,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // Валидатор ответа респондента — самая ветвистая функция проекта (ARCHITECTURE
@@ -135,7 +137,63 @@ func validateAnswer(b Block, raw json.RawMessage, required bool) string {
 	if b.Type == BlockFile {
 		return validateFileAnswer(b, raw, required)
 	}
+	if b.Type == BlockSlot {
+		return validateSlotAnswer(raw, required)
+	}
 	return validateTextAnswer(b, raw, required)
+}
+
+// validateSlotAnswer — запись на время (фаза 27).
+//
+// ⚠ У ЭТОГО ТИПА ДВА ФОРМАТА ЗНАЧЕНИЯ, И ПУТАТЬ ИХ НЕЛЬЗЯ.
+//
+//	НА ПРОВОДЕ — id брони, которую респондент придержал, выбрав время. Больше от
+//	клиента не приезжает ничего: поверить присланному времени значило бы позволить
+//	записаться на слот, которого никто не бронировал (инвариант 3).
+//	В БАЗЕ — время начала строкой RFC3339, которое ПИШЕТ СЕРВЕР из строки bookings
+//	при подтверждении. Ответ хранит снапшот, а не ссылку: время брони после
+//	подтверждения не меняется, а таблица ответов, CSV и лист интеграции читают его
+//	без единого джойна.
+//
+// Здесь проверяется первый формат — тот, что приходит с ответом. Существует ли бронь,
+// той ли она формы и не отменена ли — вопросы к базе, и их задаёт приём ответа
+// (submissions), как он же заявляет файлы. Этот файл остаётся чистой функцией.
+func validateSlotAnswer(raw json.RawMessage, required bool) string {
+	if len(raw) == 0 {
+		if required {
+			return msgRequired
+		}
+		return ""
+	}
+	var v string
+	if err := json.Unmarshal(raw, &v); err != nil {
+		return "ожидалось выбранное время"
+	}
+	if v == "" {
+		if required {
+			return msgRequired
+		}
+		return ""
+	}
+	// Годен и id брони (пришёл от респондента), и время (уже записано сервером):
+	// валидатор зовут оба пути — приём ответа и повторная проверка сохранённого.
+	//
+	// Id проверяется как UUID, а не через validateID: тот сторожит идентификаторы
+	// БЛОКОВ (любая строка автора), а здесь значение обязано быть тем, что выдал
+	// сервер, — иначе «четверг после обеда» проходит за бронь.
+	if _, err := uuid.Parse(v); err == nil {
+		return ""
+	}
+	if validRFC3339(v) {
+		return ""
+	}
+	return "время записи не выбрано"
+}
+
+// validRFC3339 — время в том виде, в каком его пишет сервер (UTC, RFC3339).
+func validRFC3339(v string) bool {
+	_, err := time.Parse(time.RFC3339, v)
+	return err == nil
 }
 
 // validateFileAnswer — файлы: ответ приходит массивом id загрузок, выданных

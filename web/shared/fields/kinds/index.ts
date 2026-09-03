@@ -13,6 +13,7 @@ import { phoneControl } from './phone'
 import { scaleControl } from './scale'
 import { shortTextControl } from './shortText'
 import { singleChoiceControl } from './singleChoice'
+import { slotControl } from './slot'
 
 // Реестр контролов — как каждый тип выглядит у респондента (этап 16.1б).
 //
@@ -35,6 +36,7 @@ export const CONTROLS: Record<BlockType, Control | null> = {
   date: dateControl,
   consent: consentControl,
   file: fileControl,
+  slot: slotControl,
   // Неотвечаемые: рисуются как статический контент (ContentBlock в BlockField), контрола
   // не имеют по устройству.
   title: null,

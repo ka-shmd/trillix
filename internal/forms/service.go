@@ -87,6 +87,11 @@ type Store interface {
 	UpdateFormNotifyRespondent(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
 	UpdateFormRespondentEmail(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, r *domain.RespondentEmail) (Form, error)
 	UpdateFormPassword(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, sealed []byte) (Form, error)
+	// UpdateFormSchedule — расписание записи у формы (фаза 27), живая колонка.
+	UpdateFormSchedule(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, scheduleID *uuid.UUID) (Form, error)
+	// ScheduleInWorkspace — принадлежит ли расписание пространству формы: id
+	// приезжает телом запроса и правом доступа не является.
+	ScheduleInWorkspace(ctx context.Context, db postgres.DBTX, scheduleID, workspaceID uuid.UUID) (bool, error)
 	GetFormPasswordBySlug(ctx context.Context, db postgres.DBTX, slug string) (uuid.UUID, []byte, error)
 	SetFormReopened(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
 	UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error)
@@ -184,6 +189,9 @@ type Service struct {
 	// nil = «модуля файлов в этой сборке нет» (юнит-тесты): удаление формы тогда
 	// работает как раньше.
 	files AnswerFiles
+	// bookingGuard — стоп-кран удаления формы с живыми будущими записями (фаза 27);
+	// nil = записи на контуре нет.
+	bookingGuard BookingGuard
 	// secret — секрет токена формы (FORM_TOKEN_SECRET). Из него выводятся ключ
 	// шифрования пароля формы и секрет подписи токенов разблокировки (0047).
 	// Подключается сеттером, как files: конструктор зовут из полусотни тестов, и
@@ -792,11 +800,36 @@ func (s *Service) UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUI
 	return updated, nil
 }
 
+// BookingGuard — сколько живых будущих записей держит форма (фаза 27). Реализация —
+// *booking.Guard; nil = записи на контуре нет, и стоп-кран не спрашивается.
+type BookingGuard interface {
+	FutureOfForm(ctx context.Context, formID uuid.UUID) (int64, error)
+}
+
+// WithBookingGuard подключает стоп-кран удаления.
+func (s *Service) WithBookingGuard(g BookingGuard) *Service {
+	s.bookingGuard = g
+	return s
+}
+
 // Delete удаляет форму (после проверки доступа).
 func (s *Service) Delete(ctx context.Context, userID, formID uuid.UUID) error {
 	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormDelete)
 	if err != nil {
 		return err
+	}
+	// СТОП-КРАН ЗАПИСИ (ADR §10): у формы есть живые будущие встречи. Молча снести
+	// чужие договорённости нельзя — сначала отмена, и это тот шаг, на котором
+	// записавшимся уходит письмо. Прошлые записи удалению не мешают.
+	if s.bookingGuard != nil {
+		n, err := s.bookingGuard.FutureOfForm(ctx, form.ID)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return fmt.Errorf("%w: у формы %s — сначала отмените их в расписании",
+				domain.ErrConflict, domain.Plural(n, "будущая запись", "будущие записи", "будущих записей"))
+		}
 	}
 	// Файлы ответов — ПЕРЕД строкой формы: каскад унесёт строки загрузок вместе с
 	// ключами объектов, и найти оставшееся в бакете будет уже нечем. Сбой
@@ -833,6 +866,20 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 	parsed, err := domain.ValidateSchema(form.DraftSchema)
 	if err != nil {
 		return Form{}, err
+	}
+
+	// ГЕЙТ ЗАПИСИ НА ВРЕМЯ: блок «Запись» есть, а расписание не выбрано (фаза 27,
+	// решение владельца 2026-09-03). Здесь, а не на сохранении, и по тому же доводу,
+	// что у гейта оформления: черновик в промежуточном состоянии обязан сохраняться,
+	// иначе автосейв отвечает 422 посреди работы.
+	//
+	// Молча опубликовать такую форму нельзя: респондент увидел бы вопрос о времени,
+	// который ничего не предлагает, — то есть форму, которая обещает распорядок и не
+	// имеет его. Обратный перекос (расписание выбрано, блока нет) публикацию не
+	// держит: это законное состояние, о нём предупреждает экран настроек.
+	if form.ScheduleID == nil && domain.HasSlot(parsed) {
+		return Form{}, fmt.Errorf("%w: в форме есть вопрос о записи, но расписание не выбрано — выберите его в блоке «Запись»",
+			domain.ErrValidation)
 	}
 
 	// ГЕЙТ ОФОРМЛЕНИЯ — ЗДЕСЬ, А НЕ НА СОХРАНЕНИИ (спека design/theme.md §9.3).
@@ -996,6 +1043,39 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 // символов и цифру» для опроса среди коллег незачем. Пустая строка сюда не доходит
 // вовсе — она означает «снять пароль» (nil).
 const MaxFormPasswordLen = 128
+
+// UpdateSchedule ставит или снимает расписание записи у формы (фаза 27). Живая
+// колонка: смена действует со следующего же ответа, без перепубликации.
+//
+// РАСПИСАНИЕ ОБЯЗАНО БЫТЬ ИЗ ТОГО ЖЕ ПРОСТРАНСТВА, и проверяет это сервис: id
+// приезжает из тела запроса и правом доступа не является (инвариант 1). Без проверки
+// форма ссылалась бы на чужое расписание по угаданному id, а публичная выдача
+// показывала бы чужую занятость.
+func (s *Service) UpdateSchedule(ctx context.Context, userID, formID uuid.UUID, scheduleID *uuid.UUID) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if scheduleID != nil {
+		ok, err := s.repo.ScheduleInWorkspace(ctx, s.db, *scheduleID, form.WorkspaceID)
+		if err != nil {
+			return Form{}, err
+		}
+		if !ok {
+			// 404, а не 403: чужое расписание для этой формы неотличимо от
+			// несуществующего — существование чужого не раскрывается (инвариант 5).
+			return Form{}, domain.ErrNotFound
+		}
+	}
+	updated, err := s.repo.UpdateFormSchedule(ctx, s.db, form.ID, form.WorkspaceID, scheduleID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrNotFound
+		}
+		return Form{}, err
+	}
+	return updated, nil
+}
 
 // UpdatePassword ставит или снимает пароль формы (0047). nil = снять.
 //

@@ -12,11 +12,24 @@ import (
 	"syscall"
 	"time"
 
+	// База часовых поясов ВНУТРЬ БИНАРНИКА (фаза 27, ADR §10).
+	//
+	// ⚠ МИНА: продуктовый образ — gcr.io/distroless/static (deploy/Dockerfile), в
+	// нём нет ни /usr/share/zoneinfo, ни пакета tzdata, и без этой строки
+	// time.LoadLocation("Europe/Moscow") падает ТОЛЬКО НА ПРОДЕ: на машине
+	// разработчика и в CI зоны читаются из системы. Расписания записи хранят пояс
+	// автора (schedules.timezone) и обязаны знать переходы на летнее время, поэтому
+	// обход через time.FixedZone, сделанный в internal/entitlements, здесь не годится.
+	// Цена — около 450 КиБ размера бинарника.
+	_ "time/tzdata"
+
 	"github.com/ka-shmd/trillix/internal/ai"
 	"github.com/ka-shmd/trillix/internal/answerfiles"
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/blob"
+	"github.com/ka-shmd/trillix/internal/booking"
 	"github.com/ka-shmd/trillix/internal/config"
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/geo"
@@ -89,6 +102,30 @@ const (
 	// адреса, то есть его выбирает клиент.
 	unlockIPRatePerSec = 1.0 / 5.0
 	unlockIPBurst      = 20
+
+	// Вёдра записи на время (фаза 27). Выдача свободного времени — ведро по IP:
+	// ручка читающая, но дешёвой её не назвать — это счёт занятого по диапазону плюс
+	// расчёт сетки на горизонт. Двадцать запросов и один новый в секунду: листание дат
+	// в пикере укладывается с запасом, обход горизонта пачкой — нет.
+	slotsRatePerSec = 1.0
+	slotsBurst      = 20
+
+	// Ведро ХОЛДА — по паре «IP + slug», как у попыток пароля, и по той же причине:
+	// по одному IP перебор одной формы закрывал бы человеку остальные, по одному slug
+	// один атакующий закрывал бы форму всем.
+	//
+	// ⚠ СПИСЫВАЕТСЯ ДО ЛЮБОЙ ПРОВЕРКИ (design/booking.md §7): иначе перебором холдов
+	// чужую форму можно заблокировать целиком — отказы стоили бы атакующему ничего.
+	// Десять попыток и одна новая в 15 секунд: передумать и выбрать другое время
+	// человек успевает, а занять весь день ботом — нет.
+	holdRatePerSec = 1.0 / 15.0
+	holdBurst      = 10
+
+	// Ведро страницы отмены — по IP. Токен неперебираем (подпись HMAC), но подбор
+	// всё равно должен упираться в стену, а сама страница дважды за минуту никому не
+	// нужна: открыть, прочитать, нажать.
+	cancelRatePerSec = 1.0 / 3.0
+	cancelBurst      = 10
 
 	// Жёсткий лимит на выдачу слота загрузки по IP (фаза 24, своё ведро). Ведро
 	// уже, чем у приёма ответа, и это осознанно: каждый слот — строка в базе и
@@ -464,6 +501,33 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	}
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey)
+	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
+	// числа расписаний — у entitlements; своей транзакции у модуля нет.
+	bookingSvc := booking.NewService(pool, booking.Repo{}, workspacesSvc, entitlementsSvc)
+	bookingHandler := booking.NewHandler(bookingSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	// Подтверждение брони в приёме ответа: работает внутри транзакции submissions,
+	// поэтому ни пула, ни своих часов ему не даётся.
+	// Ссылка отмены живёт у подтверждения: подпись требует секрета, и раздавать его
+	// приёму ответа незачем. Адрес — публичного рендерера: страницу отмены отдаёт он.
+	bookingConfirmer := booking.NewConfirmer(booking.Repo{}).
+		WithCancelLinks(booking.DeriveCancelSecret(cfg.FormTokenSecret), cfg.PublicRendererBaseURL)
+	// Стоп-кран удаления: живая будущая запись держит и ответ, и форму (ADR §10).
+	bookingGuard := booking.NewGuard(pool, booking.Repo{})
+	// Отмена по ссылке из письма. Секрет производный — с отдельной меткой назначения,
+	// как у разблокировки формы и токена печати; ротация FORM_TOKEN_SECRET гасит все
+	// выданные ссылки (раннбук ротации).
+	bookingCancelSvc := booking.NewCancelService(pool, booking.Repo{},
+		booking.DeriveCancelSecret(cfg.FormTokenSecret))
+	// Публичная половина записи: свободное время и холд. Своя транзакция ей нужна —
+	// лок слота, счёт занятого и вставка обязаны быть одной.
+	bookingPublicSvc := booking.NewPublicService(pool, postgres.TxRunner{Pool: pool}, booking.Repo{}, formsSvc)
+	bookingPublic := booking.NewPublicHandler(
+		bookingPublicSvc,
+		ratelimit.NewTokenBucket(slotsRatePerSec, slotsBurst),
+		ratelimit.NewTokenBucket(holdRatePerSec, holdBurst),
+		cfg.TrustedProxy,
+	).WithCancel(bookingCancelSvc, ratelimit.NewTokenBucket(cancelRatePerSec, cancelBurst))
+
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
 		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
 	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
@@ -477,6 +541,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	unlockLimiter := ratelimit.NewTokenBucket(unlockRatePerSec, unlockBurst)
 	unlockIPLimiter := ratelimit.NewTokenBucket(unlockIPRatePerSec, unlockIPBurst)
 	formsPublic = formsPublic.WithUnlockLimiter(unlockLimiter, unlockIPLimiter)
+	// Факты расписания в теле публичной формы (фаза 27): пояс, число мест и показ
+	// остатка. Без них пикер собрать не из чего, а с формой они едут одним запросом.
+	formsPublic = formsPublic.WithBooking(bookingPublicSvc)
 
 	blobClient := blob.New(blob.Config{
 		Endpoint:  cfg.S3Endpoint,
@@ -510,6 +577,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// доступ, forms зовёт answerfiles при удалении формы. Обратный импорт замкнул
 	// бы цикл.
 	formsSvc.WithFiles(filesSvc)
+	formsSvc.WithBookingGuard(bookingGuard)
 	// Пространству файлы нужны по той же причине: его удаление уносит каскадом
 	// формы, а с ними — записи о загрузках вместе с ключами объектов.
 	workspacesSvc.WithFiles(filesSvc)
@@ -543,6 +611,13 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	respondentMailLimiter := ratelimit.NewTokenBucket(respondentMailRatePerSec, respondentMailBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin).
 		WithFiles(filesSvc).
+		// Подтверждение записи (фаза 27): холд становится бронью в той же
+		// транзакции, что принимает ответ, — время записи уезжает в сам ответ.
+		WithBookings(bookingConfirmer).
+		WithBookingGuard(bookingGuard).
+		// Организатор приглашения — адрес отправителя контура: приглашение без
+		// ORGANIZER часть клиентов не показывает вовсе.
+		WithBookingMail(cfg.MailFrom).
 		// Адрес публичного рендерера нужен подвалу письма респонденту: в нём стоит
 		// ссылка на саму форму, а собрать её из origin кабинета нельзя.
 		WithRespondentMail(cfg.PublicRendererBaseURL, respondentMailLimiter)
@@ -550,6 +625,12 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// собирается сеттерами — каждый нужен другому, и в конструкторе такую пару
 	// не собрать. Транспорт канала подключается к диспетчеру outbox ДО старта
 	// периодической задачи, иначе канал без транспорта копил бы ретраи.
+	// Письмо об отмене записи: адрес получателя живёт в ОТВЕТЕ формы, поэтому его
+	// ставит модуль ответов, а зовёт — тот, кто отменяет (ссылка из письма и кабинет).
+	// Сеттеры мутируют сам сервис и возвращают его же: хендлеры, собранные выше,
+	// держат тот же указатель, поэтому присваивать результат не надо.
+	bookingCancelSvc.WithNotifier(submissionsSvc)
+	bookingSvc.WithNotifier(submissionsSvc)
 	submissionsSvc = submissionsSvc.WithIntegrations(integrationsSvc)
 	integrationsSvc = integrationsSvc.WithDelivery(mailSvc, submissionsSvc)
 	mailSvc = mailSvc.WithTransport(integrations.ChannelSheets, integrationsSvc)
@@ -590,7 +671,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
-		integrationsHandler.Routes,
+		integrationsHandler.Routes, bookingHandler.Routes, bookingPublic.Routes,
 	}
 
 	// Печатная страница ответа (ADR §10). Путь задаётся явно на каждом контуре
@@ -655,6 +736,30 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("spent invitations purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	// Протухшие холды записи (фаза 27). ЭТО УБОРКА, А НЕ ОСВОБОЖДЕНИЕ ВРЕМЕНИ: место
+	// возвращается в оборот само — счёт занятого не считает истёкшие холды, — и
+	// заминка задачи ни на что не влияет. Здесь убираются строки брошенных вкладок,
+	// которые иначе копились бы вечно.
+	//
+	// Отсрочка вдвое больше срока холда: истёкший холд ещё может стать записью на
+	// отправке длинной анкеты (перезанятие, ADR §10), и сносить его в ту же секунду
+	// значило бы гарантированно отказать тому, кто как раз дописывает ответ.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "booking-hold-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
+			defer cancel()
+			n, err := bookingCancelSvc.PurgeHolds(ctx, 2*domain.HoldTTL)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired booking holds purged", slog.Int64("count", n))
 			}
 			return nil
 		},

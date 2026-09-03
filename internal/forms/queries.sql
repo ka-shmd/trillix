@@ -63,8 +63,18 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- design/form-password.md §2.1), расшифровывает его service. Публичному пути
     -- шифротекст не нужен — GetPublicFormBySlug берёт только признак.
     f.password,
+    -- w.slug: КОРОТКИЙ КЛЮЧ ПРОСТРАНСТВА. Кабинет адресует пространство им (URL
+    -- вида /workspaces/{slug}/…), а знать его форма обязана: попап блока «Запись»
+    -- ведёт автора в расписания ЕЁ пространства, и вывод контекста из адреса здесь
+    -- однажды уже увёл расписание не туда (TD-69, отчёт владельца 2026-09-03).
+    w.slug AS workspace_slug,
+    -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
+    -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
+    -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
+    f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
+JOIN workspaces w ON w.id = f.workspace_id
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.id = $1;
 
@@ -93,8 +103,18 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
     f.password,
+    -- w.slug: КОРОТКИЙ КЛЮЧ ПРОСТРАНСТВА. Кабинет адресует пространство им (URL
+    -- вида /workspaces/{slug}/…), а знать его форма обязана: попап блока «Запись»
+    -- ведёт автора в расписания ЕЁ пространства, и вывод контекста из адреса здесь
+    -- однажды уже увёл расписание не туда (TD-69, отчёт владельца 2026-09-03).
+    w.slug AS workspace_slug,
+    -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
+    -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
+    -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
+    f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
+JOIN workspaces w ON w.id = f.workspace_id
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.slug = $1;
 
@@ -306,9 +326,11 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- отрабатывает на каждом открытии формы — лишний JSONB на самом горячем запросе
 -- продукта не бесплатен. Заголовков два и они разные: `title` — внутреннее имя
 -- (name ?? title), его видит владелец; `public_title` — то, как форма называется
--- для респондента, и в подвале его письма стоит именно оно.
+-- для респондента, и в подвале его письма стоит именно оно. slug — адрес формы
+-- для того же подвала: письма респонденту и о записи обязаны сказать, откуда
+-- они взялись, а адрес известен только здесь.
 SELECT u.email, coalesce(f.name, f.title) AS title, f.title AS public_title,
-    f.workspace_id, f.notify_email, f.respondent_email
+    f.slug, f.workspace_id, f.notify_email, f.respondent_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id
@@ -395,6 +417,14 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
     -- не может: решение принимается по строке формы (design/form-password.md §3.3).
     f.password,
+    -- schedule_id: расписание записи (0050); NULL = у формы нет записи. Публичному
+    -- пути он нужен ЦЕЛИКОМ, а не признаком: по нему выдача свободного времени берёт
+    -- само расписание, а вопрос о времени в форме без расписания отвечает 404.
+    --
+    -- ⚠ МИНА ТА ЖЕ, ЧТО У ПАРОЛЯ: публичных входов записи три (свободное время, холд
+    -- и приём ответа с бронью), и каждый обязан пройти те же четыре отказа, что
+    -- отдача формы (design/booking.md §7).
+    f.schedule_id,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -460,3 +490,19 @@ UPDATE forms
 SET status = 'closed', updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: UpdateFormSchedule :one
+-- Расписание записи у формы (0050). Живая колонка: смена действует со следующего же
+-- ответа, без перепубликации. NULL снимает запись.
+--
+-- Проверку «расписание из ТОГО ЖЕ пространства» делает service: ключу её не выразить,
+-- а без неё форма ссылалась бы на чужое расписание по угаданному id (инвариант 1).
+UPDATE forms
+SET schedule_id = $3, updated_at = now()
+WHERE id = $1 AND workspace_id = $2
+RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at;
+
+-- name: ScheduleInWorkspace :one
+-- Есть ли такое расписание в этом пространстве. Вопрос задаёт привязка формы к
+-- расписанию: id приезжает телом запроса и правом доступа не является (инвариант 1).
+SELECT EXISTS (SELECT 1 FROM schedules WHERE id = $1 AND workspace_id = $2);
