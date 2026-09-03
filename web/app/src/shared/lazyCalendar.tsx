@@ -8,7 +8,8 @@ import type { Calendar } from '@/components/ui/calendar'
 import { Skeleton } from '@/components/ui/skeleton'
 
 // ГРАНИЦА ЗАГРУЗКИ react-day-picker — та же мера и по тому же доводу, что у recharts
-// (features/insights/lazyCharts.tsx). Библиотека весит около 22 КиБ gzip, а нужна на
+// (features/insights/lazyCharts.tsx). Живёт в shared, а не в фиче: календарь нужен
+// двум фичам (дата закрытия формы и даты расписания), а импорт фичи из фичи запрещён. Библиотека весит около 22 КиБ gzip, а нужна на
 // ОДНОЙ строке настроек, и открывается она по клику: до этого клика грузить её
 // незачем ни на дашборде, ни в редакторе, ни на самой странице настроек.
 //

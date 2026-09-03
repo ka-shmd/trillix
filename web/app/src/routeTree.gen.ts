@@ -24,10 +24,12 @@ import { Route as AuthLinkAccountRouteImport } from './routes/_auth/link-account
 import { Route as AuthForgotPasswordRouteImport } from './routes/_auth/forgot-password'
 import { Route as AppTemplatesRouteImport } from './routes/_app/templates'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
+import { Route as AppSchedulesIndexRouteImport } from './routes/_app/schedules.index'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppWorkspacesWorkspaceSlugRouteImport } from './routes/_app/workspaces.$workspaceSlug'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
 import { Route as AppSettingsAccountRouteImport } from './routes/_app/settings.account'
+import { Route as AppSchedulesScheduleIdRouteImport } from './routes/_app/schedules.$scheduleId'
 import { Route as AppFormsSlugEmbedRouteImport } from './routes/_app/forms.$slug.embed'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
@@ -121,6 +123,11 @@ const AppWorkspacesIndexRoute = AppWorkspacesIndexRouteImport.update({
   path: '/workspaces/',
   getParentRoute: () => AppRoute,
 } as any)
+const AppSchedulesIndexRoute = AppSchedulesIndexRouteImport.update({
+  id: '/schedules/',
+  path: '/schedules/',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
   id: '/forms/',
   path: '/forms/',
@@ -140,6 +147,11 @@ const AppSettingsPlanRoute = AppSettingsPlanRouteImport.update({
 const AppSettingsAccountRoute = AppSettingsAccountRouteImport.update({
   id: '/settings/account',
   path: '/settings/account',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSchedulesScheduleIdRoute = AppSchedulesScheduleIdRouteImport.update({
+  id: '/schedules/$scheduleId',
+  path: '/schedules/$scheduleId',
   getParentRoute: () => AppRoute,
 } as any)
 const AppFormsSlugEmbedRoute = AppFormsSlugEmbedRouteImport.update({
@@ -266,10 +278,12 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof AuthResetPasswordRoute
   '/two-factor': typeof AuthTwoFactorRoute
   '/oauth/done': typeof OauthDoneRoute
+  '/schedules/$scheduleId': typeof AppSchedulesScheduleIdRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/workspaces/$workspaceSlug': typeof AppWorkspacesWorkspaceSlugRoute
   '/forms/': typeof AppFormsIndexRoute
+  '/schedules/': typeof AppSchedulesIndexRoute
   '/workspaces/': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
@@ -304,10 +318,12 @@ export interface FileRoutesByTo {
   '/reset-password': typeof AuthResetPasswordRoute
   '/two-factor': typeof AuthTwoFactorRoute
   '/oauth/done': typeof OauthDoneRoute
+  '/schedules/$scheduleId': typeof AppSchedulesScheduleIdRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/workspaces/$workspaceSlug': typeof AppWorkspacesWorkspaceSlugRoute
   '/forms': typeof AppFormsIndexRoute
+  '/schedules': typeof AppSchedulesIndexRoute
   '/workspaces': typeof AppWorkspacesIndexRoute
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
@@ -343,10 +359,12 @@ export interface FileRoutesById {
   '/_auth/two-factor': typeof AuthTwoFactorRoute
   '/oauth/done': typeof OauthDoneRoute
   '/_app/': typeof AppIndexRoute
+  '/_app/schedules/$scheduleId': typeof AppSchedulesScheduleIdRoute
   '/_app/settings/account': typeof AppSettingsAccountRoute
   '/_app/settings/plan': typeof AppSettingsPlanRoute
   '/_app/workspaces/$workspaceSlug': typeof AppWorkspacesWorkspaceSlugRoute
   '/_app/forms/': typeof AppFormsIndexRoute
+  '/_app/schedules/': typeof AppSchedulesIndexRoute
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
   '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
@@ -383,10 +401,12 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/two-factor'
     | '/oauth/done'
+    | '/schedules/$scheduleId'
     | '/settings/account'
     | '/settings/plan'
     | '/workspaces/$workspaceSlug'
     | '/forms/'
+    | '/schedules/'
     | '/workspaces/'
     | '/forms/$slug'
     | '/forms/$slug/edit'
@@ -421,10 +441,12 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/two-factor'
     | '/oauth/done'
+    | '/schedules/$scheduleId'
     | '/settings/account'
     | '/settings/plan'
     | '/workspaces/$workspaceSlug'
     | '/forms'
+    | '/schedules'
     | '/workspaces'
     | '/forms/$slug'
     | '/forms/$slug/edit'
@@ -459,10 +481,12 @@ export interface FileRouteTypes {
     | '/_auth/two-factor'
     | '/oauth/done'
     | '/_app/'
+    | '/_app/schedules/$scheduleId'
     | '/_app/settings/account'
     | '/_app/settings/plan'
     | '/_app/workspaces/$workspaceSlug'
     | '/_app/forms/'
+    | '/_app/schedules/'
     | '/_app/workspaces/'
     | '/_app/forms/$slug/_manage'
     | '/_app/forms/$slug/edit'
@@ -601,6 +625,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/schedules/': {
+      id: '/_app/schedules/'
+      path: '/schedules'
+      fullPath: '/schedules/'
+      preLoaderRoute: typeof AppSchedulesIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/forms/': {
       id: '/_app/forms/'
       path: '/forms'
@@ -627,6 +658,13 @@ declare module '@tanstack/react-router' {
       path: '/settings/account'
       fullPath: '/settings/account'
       preLoaderRoute: typeof AppSettingsAccountRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/schedules/$scheduleId': {
+      id: '/_app/schedules/$scheduleId'
+      path: '/schedules/$scheduleId'
+      fullPath: '/schedules/$scheduleId'
+      preLoaderRoute: typeof AppSchedulesScheduleIdRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/forms/$slug/embed': {
@@ -841,10 +879,12 @@ const AppFormsSlugManageRouteWithChildren =
 interface AppRouteChildren {
   AppTemplatesRoute: typeof AppTemplatesRoute
   AppIndexRoute: typeof AppIndexRoute
+  AppSchedulesScheduleIdRoute: typeof AppSchedulesScheduleIdRoute
   AppSettingsAccountRoute: typeof AppSettingsAccountRoute
   AppSettingsPlanRoute: typeof AppSettingsPlanRoute
   AppWorkspacesWorkspaceSlugRoute: typeof AppWorkspacesWorkspaceSlugRoute
   AppFormsIndexRoute: typeof AppFormsIndexRoute
+  AppSchedulesIndexRoute: typeof AppSchedulesIndexRoute
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
   AppFormsSlugManageRoute: typeof AppFormsSlugManageRouteWithChildren
   AppFormsSlugEditRoute: typeof AppFormsSlugEditRoute
@@ -854,10 +894,12 @@ interface AppRouteChildren {
 const AppRouteChildren: AppRouteChildren = {
   AppTemplatesRoute: AppTemplatesRoute,
   AppIndexRoute: AppIndexRoute,
+  AppSchedulesScheduleIdRoute: AppSchedulesScheduleIdRoute,
   AppSettingsAccountRoute: AppSettingsAccountRoute,
   AppSettingsPlanRoute: AppSettingsPlanRoute,
   AppWorkspacesWorkspaceSlugRoute: AppWorkspacesWorkspaceSlugRoute,
   AppFormsIndexRoute: AppFormsIndexRoute,
+  AppSchedulesIndexRoute: AppSchedulesIndexRoute,
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
   AppFormsSlugManageRoute: AppFormsSlugManageRouteWithChildren,
   AppFormsSlugEditRoute: AppFormsSlugEditRoute,
