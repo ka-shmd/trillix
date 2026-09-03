@@ -101,6 +101,10 @@ type Form struct {
 	// колонка; заполняют только Get/GetBySlug — та же мина, что у Branding.
 	// Расшифровывает его service (Password ниже), repo байты не трогает.
 	PasswordSealed []byte
+	// WorkspaceSlug — короткий ключ пространства формы. Кабинет адресует им
+	// пространство, и попапу блока «Запись» он нужен, чтобы увести автора в
+	// расписания ЕГО пространства (TD-69). Заполняют только Get/GetBySlug.
+	WorkspaceSlug string
 	// ScheduleID — расписание записи на время (0050); nil = у формы нет записи.
 	// Живая колонка, как настройки закрытия: заполняют только Get/GetBySlug.
 	ScheduleID *uuid.UUID
@@ -437,6 +441,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		NotifyRespondent:      row.NotifyRespondent,
 		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
 		PasswordSealed:        row.Password,
+		WorkspaceSlug:         row.WorkspaceSlug,
 		ScheduleID:            ptrUUID(row.ScheduleID),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,
@@ -481,6 +486,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		NotifyRespondent:      row.NotifyRespondent,
 		RespondentEmail:       respondentEmailFromJSON(row.RespondentEmail),
 		PasswordSealed:        row.Password,
+		WorkspaceSlug:         row.WorkspaceSlug,
 		ScheduleID:            ptrUUID(row.ScheduleID),
 		CreatedAt:             row.CreatedAt.Time,
 		UpdatedAt:             row.UpdatedAt.Time,

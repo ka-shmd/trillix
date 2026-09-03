@@ -2000,12 +2000,18 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- design/form-password.md §2.1), расшифровывает его service. Публичному пути
     -- шифротекст не нужен — GetPublicFormBySlug берёт только признак.
     f.password,
+    -- w.slug: КОРОТКИЙ КЛЮЧ ПРОСТРАНСТВА. Кабинет адресует пространство им (URL
+    -- вида /workspaces/{slug}/…), а знать его форма обязана: попап блока «Запись»
+    -- ведёт автора в расписания ЕЁ пространства, и вывод контекста из адреса здесь
+    -- однажды уже увёл расписание не туда (TD-69, отчёт владельца 2026-09-03).
+    w.slug AS workspace_slug,
     -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
     -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
     -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
     f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
+JOIN workspaces w ON w.id = f.workspace_id
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.id = $1
 `
@@ -2039,6 +2045,7 @@ type GetFormRow struct {
 	NotifyRespondent      bool
 	RespondentEmail       []byte
 	Password              []byte
+	WorkspaceSlug         string
 	ScheduleID            pgtype.UUID
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
@@ -2079,6 +2086,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
 		&i.Password,
+		&i.WorkspaceSlug,
 		&i.ScheduleID,
 		&i.CreatedAt,
 		&i.UpdatedAt,
@@ -2106,12 +2114,18 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
     f.notify_respondent, f.respondent_email,
     f.password,
+    -- w.slug: КОРОТКИЙ КЛЮЧ ПРОСТРАНСТВА. Кабинет адресует пространство им (URL
+    -- вида /workspaces/{slug}/…), а знать его форма обязана: попап блока «Запись»
+    -- ведёт автора в расписания ЕЁ пространства, и вывод контекста из адреса здесь
+    -- однажды уже увёл расписание не туда (TD-69, отчёт владельца 2026-09-03).
+    w.slug AS workspace_slug,
     -- schedule_id: расписание записи на время (0050); NULL = у формы нет записи.
     -- Живая колонка, как настройки закрытия: смена расписания действует со следующего
     -- же ответа, без перепубликации (ADR §10). Выбирает его автор в блоке «Запись».
     f.schedule_id,
     f.created_at, f.updated_at
 FROM forms f
+JOIN workspaces w ON w.id = f.workspace_id
 LEFT JOIN form_versions fv ON fv.id = f.published_version_id
 WHERE f.slug = $1
 `
@@ -2145,6 +2159,7 @@ type GetFormBySlugRow struct {
 	NotifyRespondent      bool
 	RespondentEmail       []byte
 	Password              []byte
+	WorkspaceSlug         string
 	ScheduleID            pgtype.UUID
 	CreatedAt             pgtype.Timestamptz
 	UpdatedAt             pgtype.Timestamptz
@@ -2187,6 +2202,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
 		&i.Password,
+		&i.WorkspaceSlug,
 		&i.ScheduleID,
 		&i.CreatedAt,
 		&i.UpdatedAt,

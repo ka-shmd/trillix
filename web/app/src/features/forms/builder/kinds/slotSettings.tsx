@@ -75,10 +75,17 @@ export function SlotSettings() {
           Пока расписание не выбрано, форму нельзя опубликовать.
         </p>
       )}
+      {/* ⚠ ССЫЛКА ВЕДЁТ В ПРОСТРАНСТВО ФОРМЫ, а не «в расписания вообще». Пока она
+          вела на общий адрес, автор заводил расписание в ЛИЧНОМ пространстве и не
+          находил его в форме команды (отчёт владельца 2026-09-03). */}
       {empty && (
         <p className="px-2 pb-1 text-xs text-muted-foreground">
           В этом пространстве ещё нет расписаний.{' '}
-          <Link to="/schedules" className="underline">
+          <Link
+            to="/workspaces/$workspaceSlug/schedules"
+            params={{ workspaceSlug: form.workspaceSlug }}
+            className="underline"
+          >
             Завести расписание
           </Link>
         </p>

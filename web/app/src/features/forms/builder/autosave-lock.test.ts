@@ -23,6 +23,7 @@ function seedDetail(qc: QueryClient) {
   qc.setQueryData<FormDetail>(formKeys.detail(formId), {
     id: formId,
     workspaceId: 'ws-1',
+    workspaceSlug: 'ws-one',
     scheduleId: null,
     name: null,
     title: 'Старое имя',

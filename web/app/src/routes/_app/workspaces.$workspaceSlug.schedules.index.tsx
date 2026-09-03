@@ -2,13 +2,11 @@ import { useState } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { CalendarClock, Plus } from 'lucide-react'
-import { z } from 'zod'
 
 import { DEFAULT_SCHEDULE, MAX_SCHEDULE_NAME_LEN } from '../../entities/schedule'
 import { schedulesQueryOptions, useCreateSchedule } from '../../shared/schedules/queries'
 import { weekSummary } from '../../features/schedules/weekly'
-import { useCurrentWorkspace } from '../../features/workspaces/current'
-import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
+import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { humanError } from '../../shared/api/errors'
 import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
@@ -26,22 +24,24 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 
-// Расписания записи на время (/schedules) — список пространства.
+// Расписания записи на время — раздел ПРОСТРАНСТВА (/workspaces/{slug}/schedules).
 //
-// Пространство названо в адресе SLUG'ом (`?w=`, пусто = личное) — общее правило
-// кабинета; в id его переводит useCurrentWorkspace. Пока перевод не сделан, запрос
-// не включается: с пустым id он показал бы расписания ЛИЧНОГО пространства под
-// адресом командного.
-const searchSchema = z.object({ w: z.string().optional().catch(undefined) })
-
-export const Route = createFileRoute('/_app/schedules/')({
-  validateSearch: searchSchema,
+// ⚠ ПРОСТРАНСТВО В ПУТИ, А НЕ В ПАРАМЕТРЕ `?w=`, и это не косметика. Пока экран стоял
+// в верхнем ярусе сайдбара, ссылка на него параметра не несла, поэтому расписание,
+// заведённое с командной страницы, молча уходило в ЛИЧНОЕ пространство — а форма
+// команды потом не находила его в списке (отчёт владельца 2026-09-03). Адрес, который
+// не может не назвать пространство, делает это состояние недостижимым; подписи и
+// умолчания лечили бы симптом.
+export const Route = createFileRoute('/_app/workspaces/$workspaceSlug/schedules/')({
   component: SchedulesPage,
 })
 
 function SchedulesPage() {
-  const workspace = useCurrentWorkspace()
-  const crumb = useWorkspaceCrumb()
+  const { workspaceSlug } = Route.useParams()
+  // Пространство резолвится ИЗ СПИСКА, как и везде в кабинете: он уже прочитан
+  // сайдбаром, а запросы API ждут id (features/workspaces/current.ts).
+  const workspaces = useQuery(workspacesQueryOptions)
+  const workspace = workspaces.data?.find((w) => w.slug === workspaceSlug)
   const schedules = useQuery({
     ...schedulesQueryOptions(workspace?.id ?? ''),
     enabled: workspace !== undefined,
@@ -50,11 +50,22 @@ function SchedulesPage() {
 
   return (
     <>
-      <PageCrumbs items={[crumb, 'Расписания']} />
+      <PageCrumbs
+        items={[
+          <Link key="ws" to="/workspaces/$workspaceSlug" params={{ workspaceSlug }}>
+            {workspace?.name ?? '…'}
+          </Link>,
+          'Расписания',
+        ]}
+      />
       <PageContainer>
         <PageHeader
           title="Расписания"
-          description="Часы, в которые к вам можно записаться через форму."
+          description={
+            workspace
+              ? `Часы приёма пространства «${workspace.name}». Форма этого пространства сможет выбрать любое из них.`
+              : 'Часы, в которые к вам можно записаться через форму.'
+          }
           actions={
             <Button onClick={() => setCreating(true)} disabled={workspace === undefined}>
               <Plus className="size-4" />
@@ -64,7 +75,20 @@ function SchedulesPage() {
         />
 
         <div className="mt-8 flex flex-col gap-3">
-          {schedules.isPending && <LoadingRows rows={2} />}
+          {(workspaces.isPending || schedules.isPending) && <LoadingRows rows={2} />}
+          {workspaces.isError && (
+            <ErrorState
+              title="Не удалось загрузить пространство."
+              onRetry={() => void workspaces.refetch()}
+              retryLabel="Повторить"
+            />
+          )}
+          {workspaces.data && !workspace && (
+            <ErrorState
+              title="Такого пространства нет или доступ к нему закрыт."
+              description="Список пространств отдаёт только те, где вы состоите."
+            />
+          )}
           {schedules.isError && (
             <ErrorState
               title="Не удалось загрузить расписания."
@@ -77,7 +101,7 @@ function SchedulesPage() {
             <EmptyState
               icon={CalendarClock}
               title="Расписаний пока нет"
-              description="Расписание — это один поток занятости: один мастер, один кабинет, одна группа. Заведите его, и в форме появится вопрос о времени."
+              description="Расписание — это один поток занятости: один мастер, один кабинет, одна группа. Заведите его, и форма этого пространства сможет спрашивать время."
               action={<Button onClick={() => setCreating(true)}>Новое расписание</Button>}
             />
           )}
@@ -85,9 +109,8 @@ function SchedulesPage() {
           {schedules.data?.map((s) => (
             <Link
               key={s.id}
-              to="/schedules/$scheduleId"
-              params={{ scheduleId: s.id }}
-              search={(prev) => prev}
+              to="/workspaces/$workspaceSlug/schedules/$scheduleId"
+              params={{ workspaceSlug, scheduleId: s.id }}
               className="flex flex-col gap-1 rounded-lg border p-4 transition-colors hover:bg-accent/50"
             >
               <span className="text-base font-semibold">{s.name}</span>
@@ -104,6 +127,8 @@ function SchedulesPage() {
         <CreateDialog
           open={creating}
           workspaceId={workspace.id}
+          workspaceName={workspace.name}
+          workspaceSlug={workspaceSlug}
           onOpenChange={setCreating}
         />
       )}
@@ -118,10 +143,14 @@ function SchedulesPage() {
 function CreateDialog({
   open,
   workspaceId,
+  workspaceName,
+  workspaceSlug,
   onOpenChange,
 }: {
   open: boolean
   workspaceId: string
+  workspaceName: string
+  workspaceSlug: string
   onOpenChange: (open: boolean) => void
 }) {
   const [name, setName] = useState('')
@@ -137,9 +166,8 @@ function CreateDialog({
           onOpenChange(false)
           setName('')
           void navigate({
-            to: '/schedules/$scheduleId',
-            params: { scheduleId: s.id },
-            search: (prev) => prev,
+            to: '/workspaces/$workspaceSlug/schedules/$scheduleId',
+            params: { workspaceSlug, scheduleId: s.id },
           })
         },
       },
@@ -151,12 +179,16 @@ function CreateDialog({
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Новое расписание</DialogTitle>
-          {/* Имя называет ТОГО, КТО ПРИНИМАЕТ, и это не педантизм: разные расписания
-              друг о друге не знают, поэтому человек, ведущий и рисование, и пение,
-              обязан быть ОДНИМ расписанием. Правильное имя подскажет это само. */}
+          {/* Пространство названо ВСЛУХ, хотя оно и в адресе: расписание видно только
+              формам своего пространства, и узнавать об этом опытным путём — потерянный
+              вечер (отчёт владельца 2026-09-03).
+
+              Имя расписания называет ТОГО, КТО ПРИНИМАЕТ, и это не педантизм: разные
+              расписания друг о друге не знают, поэтому человек, ведущий и рисование, и
+              пение, обязан быть ОДНИМ расписанием. */}
           <DialogDescription>
-            Называйте по тому, кто принимает: «Мария — рисование». Появится второй мастер — заведёте
-            ему своё расписание, и занятость не перепутается.
+            Появится в пространстве «{workspaceName}» и будет доступно его формам.
+            Называйте по тому, кто принимает: «Мария — рисование».
           </DialogDescription>
         </DialogHeader>
 

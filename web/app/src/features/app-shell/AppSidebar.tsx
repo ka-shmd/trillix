@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { CalendarClock, CreditCard, FileText, LayoutTemplate, LogOut, Settings } from 'lucide-react'
+import { CreditCard, FileText, LayoutTemplate, LogOut, Settings } from 'lucide-react'
 import {
   Sidebar,
   SidebarContent,
@@ -62,7 +62,6 @@ export function AppSidebar({
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const formsActive = pathname === '/forms' || pathname.startsWith('/forms/')
   const templatesActive = pathname.startsWith('/templates')
-  const schedulesActive = pathname.startsWith('/schedules')
 
   return (
     <Sidebar>
@@ -99,17 +98,6 @@ export function AppSidebar({
                   <Link to="/templates">
                     <LayoutTemplate className="size-4" />
                     <span>Шаблоны</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-              {/* «Расписания» — верхний ярус, к «Формам» и «Шаблонам»: это работа, а
-                  не контекст и не аккаунт. Пространство берётся из адреса (`?w=`),
-                  как у форм. */}
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={schedulesActive} tooltip="Расписания">
-                  <Link to="/schedules">
-                    <CalendarClock className="size-4" />
-                    <span>Расписания</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>

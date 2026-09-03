@@ -242,6 +242,10 @@ type formDetailResponse struct {
 	// TD-69. Здесь дефект закрыт для того, кто спрашивает деталь формы; крошка и
 	// подсветка сайдбара по-прежнему читают адрес.
 	WorkspaceID string `json:"workspaceId"`
+	// WorkspaceSlug — короткий ключ пространства: им кабинет адресует пространство
+	// в своих URL. Нужен попапу блока «Запись», чтобы увести автора в расписания
+	// ЕГО пространства.
+	WorkspaceSlug string `json:"workspaceSlug"`
 	// ScheduleID — расписание записи на время (0050); null = у формы нет записи.
 	// Кабинету нужен, чтобы попап блока «Запись» показал выбранное расписание и
 	// красную строку, когда его нет.
@@ -500,6 +504,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
 		Password:           f.Password,
 		WorkspaceID:        f.WorkspaceID.String(),
+		WorkspaceSlug:      f.WorkspaceSlug,
 		ScheduleID:         uuidStr(f.ScheduleID),
 	}
 }

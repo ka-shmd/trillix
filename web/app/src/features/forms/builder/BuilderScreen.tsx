@@ -139,6 +139,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
   const formFacts: FormFacts = {
     id: uploadTo,
     workspaceId: detail.workspaceId,
+    workspaceSlug: detail.workspaceSlug,
     scheduleId: detail.scheduleId,
   }
 

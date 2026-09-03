@@ -1,13 +1,16 @@
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { MoreHorizontal, Trash2 } from 'lucide-react'
-import { z } from 'zod'
 
-import { scheduleQueryOptions, useDeleteSchedule, useUpdateSchedule } from '../../shared/schedules/queries'
+import {
+  scheduleQueryOptions,
+  useDeleteSchedule,
+  useUpdateSchedule,
+} from '../../shared/schedules/queries'
 import { ScheduleEditor } from '../../features/schedules/ScheduleEditor'
 import { BlocksSection } from '../../features/schedules/BlocksSection'
 import { UpcomingSection } from '../../features/schedules/UpcomingSection'
-import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
+import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { humanError } from '../../shared/api/errors'
 import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
@@ -24,28 +27,40 @@ import {
 // Страница одного расписания: правило приёма, параметры, исключения, занятое время
 // и ближайшие записи.
 //
-// Расписание адресуется ID, а не slug'ом: slug'ов у него нет — он публичной сущностью
-// не является, наружу уезжает только свободное время формы.
-const searchSchema = z.object({ w: z.string().optional().catch(undefined) })
-
-export const Route = createFileRoute('/_app/schedules/$scheduleId')({
-  validateSearch: searchSchema,
+// Расписание адресуется ID, а не slug'ом: slug'ов у него нет — публичной сущностью
+// оно не является, наружу уезжает только свободное время формы. Пространство при этом
+// стоит в пути (см. соседний index): так адрес не может умолчать, чьё это расписание.
+export const Route = createFileRoute('/_app/workspaces/$workspaceSlug/schedules/$scheduleId')({
   component: SchedulePage,
 })
 
 function SchedulePage() {
-  const { scheduleId } = Route.useParams()
+  const { workspaceSlug, scheduleId } = Route.useParams()
   const navigate = useNavigate()
-  const crumb = useWorkspaceCrumb()
+  const workspaces = useQuery(workspacesQueryOptions)
+  const workspace = workspaces.data?.find((w) => w.slug === workspaceSlug)
   const query = useQuery(scheduleQueryOptions(scheduleId))
   const workspaceId = query.data?.workspaceId ?? ''
   const update = useUpdateSchedule(scheduleId, workspaceId)
   const remove = useDeleteSchedule(scheduleId, workspaceId)
 
+  const crumbs = [
+    <Link key="ws" to="/workspaces/$workspaceSlug" params={{ workspaceSlug }}>
+      {workspace?.name ?? '…'}
+    </Link>,
+    <Link
+      key="schedules"
+      to="/workspaces/$workspaceSlug/schedules"
+      params={{ workspaceSlug }}
+    >
+      Расписания
+    </Link>,
+  ]
+
   if (query.isPending || query.isError) {
     return (
       <>
-        <PageCrumbs items={[crumb, 'Расписания']} />
+        <PageCrumbs items={crumbs} />
         <PageContainer>
           {query.isError ? (
             <ErrorState
@@ -64,19 +79,11 @@ function SchedulePage() {
 
   return (
     <>
-      <PageCrumbs
-        items={[
-          crumb,
-          <Link key="schedules" to="/schedules" search={(prev) => prev}>
-            Расписания
-          </Link>,
-          schedule.name,
-        ]}
-      />
+      <PageCrumbs items={[...crumbs, schedule.name]} />
       <PageContainer>
         <PageHeader
           title={schedule.name}
-          description="Форма покажет только свободное время этого расписания."
+          description="Форма этого пространства покажет только свободное время расписания."
           actions={
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
@@ -92,7 +99,11 @@ function SchedulePage() {
                   variant="destructive"
                   onSelect={() =>
                     remove.mutate(undefined, {
-                      onSuccess: () => void navigate({ to: '/schedules', search: (prev) => prev }),
+                      onSuccess: () =>
+                        void navigate({
+                          to: '/workspaces/$workspaceSlug/schedules',
+                          params: { workspaceSlug },
+                        }),
                     })
                   }
                 >

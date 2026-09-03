@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { MoreHorizontal, Pencil, Trash2, Users } from 'lucide-react'
+import { Link } from '@tanstack/react-router'
+import { CalendarClock, MoreHorizontal, Pencil, Trash2, Users } from 'lucide-react'
 import { toast } from 'sonner'
 import type { Workspace } from '../../entities/workspace'
 import { membersQueryOptions, useDeleteWorkspace } from './queries'
@@ -90,6 +91,18 @@ export function WorkspaceMenu({
           <DropdownMenuItem onClick={onMembers}>
             <Users className="size-4" />
             Участники
+          </DropdownMenuItem>
+          {/* Расписания записи принадлежат ПРОСТРАНСТВУ, поэтому и вход к ним —
+              отсюда, а не из верхнего яруса сайдбара (отчёт владельца 2026-09-03:
+              пункт без пространства в адресе молча заводил расписания в личное). */}
+          <DropdownMenuItem asChild>
+            <Link
+              to="/workspaces/$workspaceSlug/schedules"
+              params={{ workspaceSlug: workspace.slug }}
+            >
+              <CalendarClock className="size-4" />
+              Расписания
+            </Link>
           </DropdownMenuItem>
           {/* Личное не удаляется: человеку негде было бы жить, а его формы
               и подписка остались бы без места. Сервер отвергает это и сам

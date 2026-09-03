@@ -38,6 +38,7 @@ export function newFormDetail(): FormDetail {
     // Пространство и расписание у несозданной формы неизвестны: первое приедет с
     // ответом POST, второго нет по устройству — записи у новой формы не бывает.
     workspaceId: '',
+    workspaceSlug: '',
     scheduleId: null,
     name: null,
     title: DEFAULT_FORM_TITLE,
