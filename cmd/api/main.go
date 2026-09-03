@@ -12,6 +12,17 @@ import (
 	"syscall"
 	"time"
 
+	// База часовых поясов ВНУТРЬ БИНАРНИКА (фаза 27, ADR §10).
+	//
+	// ⚠ МИНА: продуктовый образ — gcr.io/distroless/static (deploy/Dockerfile), в
+	// нём нет ни /usr/share/zoneinfo, ни пакета tzdata, и без этой строки
+	// time.LoadLocation("Europe/Moscow") падает ТОЛЬКО НА ПРОДЕ: на машине
+	// разработчика и в CI зоны читаются из системы. Расписания записи хранят пояс
+	// автора (schedules.timezone) и обязаны знать переходы на летнее время, поэтому
+	// обход через time.FixedZone, сделанный в internal/entitlements, здесь не годится.
+	// Цена — около 450 КиБ размера бинарника.
+	_ "time/tzdata"
+
 	"github.com/ka-shmd/trillix/internal/ai"
 	"github.com/ka-shmd/trillix/internal/answerfiles"
 	"github.com/ka-shmd/trillix/internal/auth"
