@@ -62,6 +62,14 @@ type Booking struct {
 	CreatedAt       time.Time
 }
 
+// Calendar — два слоя полотна недели, которые лежат в базе. Одним типом, потому
+// что экран берёт их одним запросом: два отдельных обхода означали бы две картины
+// занятости, снятые в разные моменты.
+type Calendar struct {
+	Blocks   []Block
+	Bookings []Booking
+}
+
 func (Repo) CreateSchedule(ctx context.Context, db postgres.DBTX, s Schedule) (Schedule, error) {
 	raw, err := json.Marshal(s.Availability)
 	if err != nil {
@@ -230,6 +238,41 @@ func (Repo) UpcomingBookings(ctx context.Context, db postgres.DBTX, scheduleID u
 	})
 	if err != nil {
 		return nil, fmt.Errorf("upcoming bookings of schedule %s: %w", scheduleID, err)
+	}
+	out := make([]Booking, 0, len(rows))
+	for _, r := range rows {
+		b := Booking{
+			ID:              r.ID,
+			FormID:          r.FormID,
+			FormTitle:       r.FormTitle,
+			StartsAt:        r.StartsAt.Time.UTC(),
+			DurationMinutes: int(r.DurationMinutes),
+			Seats:           int(r.Seats),
+			Status:          r.Status,
+			CreatedAt:       r.CreatedAt.Time,
+		}
+		if r.SubmissionID.Valid {
+			id := uuid.UUID(r.SubmissionID.Bytes)
+			b.SubmissionID = &id
+		}
+		out = append(out, b)
+	}
+	return out, nil
+}
+
+// BookingsInRange — подтверждённые записи, задевающие отрезок: полотну недели.
+//
+// Имена полей параметров сгенерированы по столбцу, а не по смыслу: StartsAt — это
+// НАЧАЛО отрезка ($2, сравнивается с концом брони), StartsAt_2 — его КОНЕЦ ($3).
+// Перепутать их местами компилятор не помешает, а выдача станет пустой.
+func (Repo) BookingsInRange(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time) ([]Booking, error) {
+	rows, err := postgres.New(db).BookingsInRange(ctx, postgres.BookingsInRangeParams{
+		ScheduleID: scheduleID,
+		StartsAt:   pgtype.Timestamptz{Time: from, Valid: true},
+		StartsAt_2: pgtype.Timestamptz{Time: to, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("bookings of schedule %s in range: %w", scheduleID, err)
 	}
 	out := make([]Booking, 0, len(rows))
 	for _, r := range rows {

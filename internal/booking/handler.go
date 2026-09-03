@@ -33,6 +33,7 @@ type bookingService interface {
 	AddBlock(ctx context.Context, userID, scheduleID uuid.UUID, startsAt, endsAt time.Time, note string) (Block, error)
 	RemoveBlock(ctx context.Context, userID, scheduleID, blockID uuid.UUID) error
 	Upcoming(ctx context.Context, userID, scheduleID uuid.UUID) ([]Booking, error)
+	Calendar(ctx context.Context, userID, scheduleID uuid.UUID, from, to time.Time) (Calendar, error)
 	CancelBooking(ctx context.Context, userID, scheduleID, bookingID uuid.UUID) error
 }
 
@@ -65,6 +66,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.update))))
 	mux.Handle("DELETE /api/v1/schedules/{id}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.remove))))
+
+	mux.Handle("GET /api/v1/schedules/{id}/calendar",
+		h.requireAuth(http.HandlerFunc(h.calendar)))
 
 	mux.Handle("GET /api/v1/schedules/{id}/blocks",
 		h.requireAuth(http.HandlerFunc(h.blocks)))
@@ -143,6 +147,22 @@ type bookingView struct {
 	// SubmissionID — ссылка на ответ формы, из которого пришла запись. Пусто, если
 	// ответ удалили: бронь его переживает (0050, ON DELETE SET NULL).
 	SubmissionID *string `json:"submissionId"`
+}
+
+func toBookingView(b Booking) bookingView {
+	v := bookingView{
+		ID:              b.ID.String(),
+		FormID:          b.FormID.String(),
+		FormTitle:       b.FormTitle,
+		StartsAt:        b.StartsAt,
+		DurationMinutes: b.DurationMinutes,
+		Seats:           b.Seats,
+	}
+	if b.SubmissionID != nil {
+		id := b.SubmissionID.String()
+		v.SubmissionID = &id
+	}
+	return v
 }
 
 // scheduleRequest — тело заведения и правки. Указатели у необязательных полей не
@@ -300,6 +320,35 @@ func (h *Handler) removeBlock(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
+// calendar — занятое время и записи отрезка: полотну недели. Границы обязательны
+// обе, и это не придирка: запрос без них означал бы обход всей истории расписания.
+func (h *Handler) calendar(w http.ResponseWriter, r *http.Request) {
+	user, scheduleID, ok := h.userAndID(w, r, "id")
+	if !ok {
+		return
+	}
+	q := r.URL.Query()
+	period, err := domain.ParsePeriod(q.Get("from"), q.Get("to"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	cal, err := h.svc.Calendar(r.Context(), user.ID, scheduleID, period.From, period.To)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	blocks := make([]blockView, 0, len(cal.Blocks))
+	for _, b := range cal.Blocks {
+		blocks = append(blocks, blockView{ID: b.ID.String(), StartsAt: b.StartsAt, EndsAt: b.EndsAt, Note: b.Note})
+	}
+	bookings := make([]bookingView, 0, len(cal.Bookings))
+	for _, b := range cal.Bookings {
+		bookings = append(bookings, toBookingView(b))
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{"blocks": blocks, "bookings": bookings})
+}
+
 func (h *Handler) upcoming(w http.ResponseWriter, r *http.Request) {
 	user, scheduleID, ok := h.userAndID(w, r, "id")
 	if !ok {
@@ -312,19 +361,7 @@ func (h *Handler) upcoming(w http.ResponseWriter, r *http.Request) {
 	}
 	out := make([]bookingView, 0, len(items))
 	for _, b := range items {
-		v := bookingView{
-			ID:              b.ID.String(),
-			FormID:          b.FormID.String(),
-			FormTitle:       b.FormTitle,
-			StartsAt:        b.StartsAt,
-			DurationMinutes: b.DurationMinutes,
-			Seats:           b.Seats,
-		}
-		if b.SubmissionID != nil {
-			id := b.SubmissionID.String()
-			v.SubmissionID = &id
-		}
-		out = append(out, v)
+		out = append(out, toBookingView(b))
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{"items": out})
 }

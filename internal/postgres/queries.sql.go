@@ -54,6 +54,79 @@ func (q *Queries) BlocksInRange(ctx context.Context, arg BlocksInRangeParams) ([
 	return items, nil
 }
 
+const bookingsInRange = `-- name: BookingsInRange :many
+SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
+       b.starts_at, b.duration_minutes, b.seats, b.status,
+       b.hold_expires_at, b.created_at,
+       coalesce(f.name, f.title) AS form_title
+FROM bookings b
+JOIN forms f ON f.id = b.form_id
+WHERE b.schedule_id = $1
+  AND b.status = 'confirmed'
+  AND b.starts_at < $3
+  AND b.starts_at + make_interval(mins => b.duration_minutes) > $2
+ORDER BY b.starts_at, b.id
+`
+
+type BookingsInRangeParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	StartsAt_2 pgtype.Timestamptz
+}
+
+type BookingsInRangeRow struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	HoldExpiresAt   pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	FormTitle       string
+}
+
+// Записи, задевающие отрезок, — полотну недели. Условие пересечения считается по
+// ДЛИТЕЛЬНОСТИ САМОЙ БРОНИ, а не по нынешней длительности приёма: автор поменяет
+// час на полчаса, и уже назначенные встречи от этого не должны съехать (0050).
+//
+// Отменённые не показываются по той же причине, что и в списке ближайших: полотно
+// отвечает на вопрос «что занято», а не «что происходило». Холды тоже не показываются
+// — они живут пятнадцать минут, и мигающее на полотне занятое время автору врёт.
+func (q *Queries) BookingsInRange(ctx context.Context, arg BookingsInRangeParams) ([]BookingsInRangeRow, error) {
+	rows, err := q.db.Query(ctx, bookingsInRange, arg.ScheduleID, arg.StartsAt, arg.StartsAt_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BookingsInRangeRow
+	for rows.Next() {
+		var i BookingsInRangeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ScheduleID,
+			&i.FormID,
+			&i.SubmissionID,
+			&i.StartsAt,
+			&i.DurationMinutes,
+			&i.Seats,
+			&i.Status,
+			&i.HoldExpiresAt,
+			&i.CreatedAt,
+			&i.FormTitle,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const bumpAIGenerations = `-- name: BumpAIGenerations :exec
 INSERT INTO workspace_usage (workspace_id, period, ai_generations)
 VALUES ($1, $2, 1)

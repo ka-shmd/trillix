@@ -43,6 +43,7 @@ type Store interface {
 	BlocksInRange(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time) ([]Block, error)
 	DeleteBlock(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int64, error)
 	UpcomingBookings(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from time.Time, limit int32) ([]Booking, error)
+	BookingsInRange(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time) ([]Booking, error)
 	CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int64, error)
 	// BookingForCancel — карточка записи: письму об отмене нужны время и ответ.
 	BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error)
@@ -53,6 +54,11 @@ var _ Store = Repo{}
 // UpcomingLimit — сколько ближайших записей отдаётся экрану расписания. Список,
 // а не таблица с листанием: он отвечает на вопрос «кто придёт на неделе».
 const UpcomingLimit = 100
+
+// CalendarWindowMaxDays — потолок окна полотна. Полотно листается неделями, и
+// запрос шире двух месяцев означает не «показать», а «выгрузить»: границу ставим
+// здесь, а не полагаемся на то, что клиент попросит по-божески.
+const CalendarWindowMaxDays = 62
 
 // BlocksHorizonDays — на сколько дней вперёд экран показывает блокировки. Отпуск
 // ставят за месяцы, но список на годы вперёд перестаёт читаться.
@@ -217,6 +223,36 @@ func (s *Service) Blocks(ctx context.Context, userID, scheduleID uuid.UUID) ([]B
 	}
 	now := s.now()
 	return s.repo.BlocksInRange(ctx, s.db, scheduleID, now, now.AddDate(0, 0, BlocksHorizonDays))
+}
+
+// Calendar — занятое время и записи, задевающие отрезок: два слоя полотна недели,
+// которые лежат в базе. Третий и четвёртый (часы приёма и исключения) не считаются
+// сервером вовсе — они целиком лежат в правиле расписания, которое экран уже держит.
+//
+// Ручка ранжированная, а не «от сейчас», потому что полотно листается и назад:
+// прошлая неделя, показанная пустой, была бы враньём, а не экономией.
+func (s *Service) Calendar(ctx context.Context, userID, scheduleID uuid.UUID, from, to time.Time) (Calendar, error) {
+	if _, err := s.forAction(ctx, userID, scheduleID, domain.ActionFormRead); err != nil {
+		return Calendar{}, err
+	}
+	if from.IsZero() || to.IsZero() {
+		return Calendar{}, fmt.Errorf("%w: нужны обе границы отрезка", domain.ErrValidation)
+	}
+	if !from.Before(to) {
+		return Calendar{}, fmt.Errorf("%w: from не раньше to", domain.ErrValidation)
+	}
+	if to.Sub(from) > CalendarWindowMaxDays*24*time.Hour {
+		return Calendar{}, fmt.Errorf("%w: отрезок длиннее %d дней", domain.ErrValidation, CalendarWindowMaxDays)
+	}
+	blocks, err := s.repo.BlocksInRange(ctx, s.db, scheduleID, from, to)
+	if err != nil {
+		return Calendar{}, err
+	}
+	bookings, err := s.repo.BookingsInRange(ctx, s.db, scheduleID, from, to)
+	if err != nil {
+		return Calendar{}, err
+	}
+	return Calendar{Blocks: blocks, Bookings: bookings}, nil
 }
 
 // AddBlock закрывает время руками.
