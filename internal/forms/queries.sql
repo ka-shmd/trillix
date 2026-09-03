@@ -403,6 +403,14 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
     -- не может: решение принимается по строке формы (design/form-password.md §3.3).
     f.password,
+    -- schedule_id: расписание записи (0050); NULL = у формы нет записи. Публичному
+    -- пути он нужен ЦЕЛИКОМ, а не признаком: по нему выдача свободного времени берёт
+    -- само расписание, а вопрос о времени в форме без расписания отвечает 404.
+    --
+    -- ⚠ МИНА ТА ЖЕ, ЧТО У ПАРОЛЯ: публичных входов записи три (свободное время, холд
+    -- и приём ответа с бронью), и каждый обязан пройти те же четыре отказа, что
+    -- отдача формы (design/booking.md §7).
+    f.schedule_id,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count

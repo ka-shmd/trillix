@@ -118,3 +118,58 @@ LIMIT $3;
 -- Повторная отмена даёт 0 строк — для вызывающего это «уже отменена», а не ошибка.
 UPDATE bookings SET status = 'canceled', canceled_at = now()
 WHERE id = $1 AND schedule_id = $2 AND status <> 'canceled';
+
+-- name: TakenSeatsInRange :many
+-- Сколько мест занято в каждой точке отрезка. Публичная выдача свободного времени
+-- вычитает это из вместимости.
+--
+-- Считаются подтверждённые и НЕИСТЁКШИЕ холды: протухший холд место не держит, и
+-- ждать чистки (internal/periodic) выдача не обязана — та убирает мусор, а не решает.
+--
+-- Свой холд спрашивающего исключается ($4): человек, передумавший и вернувшийся к
+-- списку, обязан снова увидеть время, которое сам же и держит, — иначе при вместимости
+-- 1 только что отпущенный слот пропадал бы у него на четверть часа.
+SELECT starts_at, sum(seats)::bigint AS seats
+FROM bookings
+WHERE schedule_id = $1
+  AND starts_at >= $2 AND starts_at < $3
+  AND client_id <> $4
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+GROUP BY starts_at;
+
+-- name: TakenSeatsAt :one
+-- То же для ОДНОЙ точки — счёт под advisory-lock перед взятием холда.
+SELECT coalesce(sum(seats), 0)::bigint
+FROM bookings
+WHERE schedule_id = $1 AND starts_at = $2 AND client_id <> $3
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()));
+
+-- name: LockSlot :exec
+-- Транзакционный advisory-lock по паре «расписание + начало слота» (ADR §10).
+--
+-- Уникальным индексом гонка здесь не закрывается: при вместимости больше единицы
+-- уникальна не строка, а СУММА мест. Приём тот же, что у жёсткого капа лимита ответов;
+-- ключ — текст пары, чтобы разные слоты одного расписания не сериализовались друг о
+-- друга.
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
+
+-- name: HoldSlot :one
+-- Придержать время. Одна бронь на клиента в форме (частичный уникальный индекс), и
+-- поэтому передумавший респондент ПЕРЕНОСИТ свою бронь, а не заводит вторую.
+--
+-- Оговорка DO UPDATE ... WHERE несущая: переносится только ХОЛД. Строка, уже ставшая
+-- подтверждённой записью, остаётся на месте — иначе повторный холд после отправки
+-- молча переписал бы состоявшуюся встречу, и ответ ссылался бы на другое время.
+-- Ноль строк в этом случае — не ошибка запроса, а состояние, которое разбирает сервис.
+INSERT INTO bookings (
+    id, schedule_id, form_id, starts_at, duration_minutes, seats, status, hold_expires_at, client_id
+) VALUES ($1, $2, $3, $4, $5, $6, 'held', $7, $8)
+ON CONFLICT (form_id, client_id) WHERE status <> 'canceled'
+DO UPDATE SET
+    schedule_id      = EXCLUDED.schedule_id,
+    starts_at        = EXCLUDED.starts_at,
+    duration_minutes = EXCLUDED.duration_minutes,
+    seats            = EXCLUDED.seats,
+    hold_expires_at  = EXCLUDED.hold_expires_at
+WHERE bookings.status = 'held'
+RETURNING id;

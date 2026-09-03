@@ -102,6 +102,24 @@ const (
 	unlockIPRatePerSec = 1.0 / 5.0
 	unlockIPBurst      = 20
 
+	// Вёдра записи на время (фаза 27). Выдача свободного времени — ведро по IP:
+	// ручка читающая, но дешёвой её не назвать — это счёт занятого по диапазону плюс
+	// расчёт сетки на горизонт. Двадцать запросов и один новый в секунду: листание дат
+	// в пикере укладывается с запасом, обход горизонта пачкой — нет.
+	slotsRatePerSec = 1.0
+	slotsBurst      = 20
+
+	// Ведро ХОЛДА — по паре «IP + slug», как у попыток пароля, и по той же причине:
+	// по одному IP перебор одной формы закрывал бы человеку остальные, по одному slug
+	// один атакующий закрывал бы форму всем.
+	//
+	// ⚠ СПИСЫВАЕТСЯ ДО ЛЮБОЙ ПРОВЕРКИ (design/booking.md §7): иначе перебором холдов
+	// чужую форму можно заблокировать целиком — отказы стоили бы атакующему ничего.
+	// Десять попыток и одна новая в 15 секунд: передумать и выбрать другое время
+	// человек успевает, а занять весь день ботом — нет.
+	holdRatePerSec = 1.0 / 15.0
+	holdBurst      = 10
+
 	// Жёсткий лимит на выдачу слота загрузки по IP (фаза 24, своё ведро). Ведро
 	// уже, чем у приёма ответа, и это осознанно: каждый слот — строка в базе и
 	// право записи в наш бакет, то есть чужие байты за наш счёт. Запас 10,
@@ -480,6 +498,15 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// числа расписаний — у entitlements; своей транзакции у модуля нет.
 	bookingSvc := booking.NewService(pool, booking.Repo{}, workspacesSvc, entitlementsSvc)
 	bookingHandler := booking.NewHandler(bookingSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	// Публичная половина записи: свободное время и холд. Своя транзакция ей нужна —
+	// лок слота, счёт занятого и вставка обязаны быть одной.
+	bookingPublicSvc := booking.NewPublicService(pool, postgres.TxRunner{Pool: pool}, booking.Repo{}, formsSvc)
+	bookingPublic := booking.NewPublicHandler(
+		bookingPublicSvc,
+		ratelimit.NewTokenBucket(slotsRatePerSec, slotsBurst),
+		ratelimit.NewTokenBucket(holdRatePerSec, holdBurst),
+		cfg.TrustedProxy,
+	)
 
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
 		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
@@ -494,6 +521,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	unlockLimiter := ratelimit.NewTokenBucket(unlockRatePerSec, unlockBurst)
 	unlockIPLimiter := ratelimit.NewTokenBucket(unlockIPRatePerSec, unlockIPBurst)
 	formsPublic = formsPublic.WithUnlockLimiter(unlockLimiter, unlockIPLimiter)
+	// Факты расписания в теле публичной формы (фаза 27): пояс, число мест и показ
+	// остатка. Без них пикер собрать не из чего, а с формой они едут одним запросом.
+	formsPublic = formsPublic.WithBooking(bookingPublicSvc)
 
 	blobClient := blob.New(blob.Config{
 		Endpoint:  cfg.S3Endpoint,
@@ -607,7 +637,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
-		integrationsHandler.Routes, bookingHandler.Routes,
+		integrationsHandler.Routes, bookingHandler.Routes, bookingPublic.Routes,
 	}
 
 	// Печатная страница ответа (ADR §10). Путь задаётся явно на каждом контуре

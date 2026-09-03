@@ -3,10 +3,12 @@ package booking
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ka-shmd/trillix/internal/domain"
@@ -281,4 +283,82 @@ func scheduleFrom(row postgres.Schedule) (Schedule, error) {
 		CreatedAt: row.CreatedAt.Time,
 		UpdatedAt: row.UpdatedAt.Time,
 	}, nil
+}
+
+// TakenSeats — занятые места на отрезке: ключ — Unix-секунда старта (domain.Taken).
+// Свой холд спрашивающего не считается: он его и держит.
+func (Repo) TakenSeats(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time, clientID uuid.UUID) (domain.Taken, error) {
+	rows, err := postgres.New(db).TakenSeatsInRange(ctx, postgres.TakenSeatsInRangeParams{
+		ScheduleID: scheduleID,
+		StartsAt:   pgtype.Timestamptz{Time: from, Valid: true},
+		StartsAt_2: pgtype.Timestamptz{Time: to, Valid: true},
+		ClientID:   clientID,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("taken seats of schedule %s: %w", scheduleID, err)
+	}
+	out := make(domain.Taken, len(rows))
+	for _, r := range rows {
+		out[r.StartsAt.Time.Unix()] = int(r.Seats)
+	}
+	return out, nil
+}
+
+// LockSlot берёт транзакционный advisory-lock по паре «расписание + начало слота».
+// Зовётся ТОЛЬКО внутри транзакции: вне её лок снимается сразу же и не значит ничего.
+func (Repo) LockSlot(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time) error {
+	key := scheduleID.String() + "@" + startsAt.UTC().Format(time.RFC3339)
+	if err := postgres.New(db).LockSlot(ctx, key); err != nil {
+		return fmt.Errorf("lock slot %s: %w", key, err)
+	}
+	return nil
+}
+
+// TakenAt — занятые места в одной точке (счёт под локом).
+func (Repo) TakenAt(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, clientID uuid.UUID) (int, error) {
+	n, err := postgres.New(db).TakenSeatsAt(ctx, postgres.TakenSeatsAtParams{
+		ScheduleID: scheduleID,
+		StartsAt:   pgtype.Timestamptz{Time: startsAt, Valid: true},
+		ClientID:   clientID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("taken seats at %s: %w", startsAt, err)
+	}
+	return int(n), nil
+}
+
+// Hold придерживает время. Второе значение — false, если строка клиента уже стала
+// подтверждённой записью: переносить состоявшуюся встречу нельзя.
+func (Repo) Hold(ctx context.Context, db postgres.DBTX, h NewHold) (uuid.UUID, bool, error) {
+	id, err := postgres.New(db).HoldSlot(ctx, postgres.HoldSlotParams{
+		ID:              h.ID,
+		ScheduleID:      h.ScheduleID,
+		FormID:          h.FormID,
+		StartsAt:        pgtype.Timestamptz{Time: h.StartsAt, Valid: true},
+		DurationMinutes: int32(h.DurationMinutes),
+		Seats:           int32(h.Seats),
+		HoldExpiresAt:   pgtype.Timestamptz{Time: h.ExpiresAt, Valid: true},
+		ClientID:        h.ClientID,
+	})
+	if errors.Is(err, pgx.ErrNoRows) {
+		// Ноль строк даёт оговорка DO UPDATE ... WHERE bookings.status = 'held':
+		// у клиента уже есть ПОДТВЕРЖДЁННАЯ запись в этой форме.
+		return uuid.Nil, false, nil
+	}
+	if err != nil {
+		return uuid.Nil, false, fmt.Errorf("hold slot: %w", err)
+	}
+	return id, true, nil
+}
+
+// NewHold — что нужно, чтобы придержать время.
+type NewHold struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	ClientID        uuid.UUID
+	StartsAt        time.Time
+	DurationMinutes int
+	Seats           int
+	ExpiresAt       time.Time
 }

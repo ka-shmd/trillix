@@ -2280,6 +2280,14 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
     -- не может: решение принимается по строке формы (design/form-password.md §3.3).
     f.password,
+    -- schedule_id: расписание записи (0050); NULL = у формы нет записи. Публичному
+    -- пути он нужен ЦЕЛИКОМ, а не признаком: по нему выдача свободного времени берёт
+    -- само расписание, а вопрос о времени в форме без расписания отвечает 404.
+    --
+    -- ⚠ МИНА ТА ЖЕ, ЧТО У ПАРОЛЯ: публичных входов записи три (свободное время, холд
+    -- и приём ответа с бронью), и каждый обязан пройти те же четыре отказа, что
+    -- отдача формы (design/booking.md §7).
+    f.schedule_id,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -2311,6 +2319,7 @@ type GetPublicFormBySlugRow struct {
 	AutoJump           bool
 	SaveLocally        bool
 	Password           []byte
+	ScheduleID         pgtype.UUID
 	SubmissionCount    int64
 }
 
@@ -2354,6 +2363,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.AutoJump,
 		&i.SaveLocally,
 		&i.Password,
+		&i.ScheduleID,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -2768,6 +2778,55 @@ func (q *Queries) GetWorkspaceByID(ctx context.Context, id uuid.UUID) (GetWorksp
 		&i.IsPersonal,
 	)
 	return i, err
+}
+
+const holdSlot = `-- name: HoldSlot :one
+INSERT INTO bookings (
+    id, schedule_id, form_id, starts_at, duration_minutes, seats, status, hold_expires_at, client_id
+) VALUES ($1, $2, $3, $4, $5, $6, 'held', $7, $8)
+ON CONFLICT (form_id, client_id) WHERE status <> 'canceled'
+DO UPDATE SET
+    schedule_id      = EXCLUDED.schedule_id,
+    starts_at        = EXCLUDED.starts_at,
+    duration_minutes = EXCLUDED.duration_minutes,
+    seats            = EXCLUDED.seats,
+    hold_expires_at  = EXCLUDED.hold_expires_at
+WHERE bookings.status = 'held'
+RETURNING id
+`
+
+type HoldSlotParams struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	HoldExpiresAt   pgtype.Timestamptz
+	ClientID        uuid.UUID
+}
+
+// Придержать время. Одна бронь на клиента в форме (частичный уникальный индекс), и
+// поэтому передумавший респондент ПЕРЕНОСИТ свою бронь, а не заводит вторую.
+//
+// Оговорка DO UPDATE ... WHERE несущая: переносится только ХОЛД. Строка, уже ставшая
+// подтверждённой записью, остаётся на месте — иначе повторный холд после отправки
+// молча переписал бы состоявшуюся встречу, и ответ ссылался бы на другое время.
+// Ноль строк в этом случае — не ошибка запроса, а состояние, которое разбирает сервис.
+func (q *Queries) HoldSlot(ctx context.Context, arg HoldSlotParams) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, holdSlot,
+		arg.ID,
+		arg.ScheduleID,
+		arg.FormID,
+		arg.StartsAt,
+		arg.DurationMinutes,
+		arg.Seats,
+		arg.HoldExpiresAt,
+		arg.ClientID,
+	)
+	var id uuid.UUID
+	err := row.Scan(&id)
+	return id, err
 }
 
 const insertFormIntegration = `-- name: InsertFormIntegration :exec
@@ -4444,6 +4503,21 @@ func (q *Queries) LockIdentities(ctx context.Context, userID uuid.UUID) ([]strin
 	return items, nil
 }
 
+const lockSlot = `-- name: LockSlot :exec
+SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0))
+`
+
+// Транзакционный advisory-lock по паре «расписание + начало слота» (ADR §10).
+//
+// Уникальным индексом гонка здесь не закрывается: при вместимости больше единицы
+// уникальна не строка, а СУММА мест. Приём тот же, что у жёсткого капа лимита ответов;
+// ключ — текст пары, чтобы разные слоты одного расписания не сериализовались друг о
+// друга.
+func (q *Queries) LockSlot(ctx context.Context, dollar_1 string) error {
+	_, err := q.db.Exec(ctx, lockSlot, dollar_1)
+	return err
+}
+
 const markEmailVerified = `-- name: MarkEmailVerified :exec
 UPDATE users SET email_verified_at = now() WHERE id = $1
 `
@@ -4908,6 +4982,83 @@ type StartFormIntegrationBackfillParams struct {
 func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFormIntegrationBackfillParams) error {
 	_, err := q.db.Exec(ctx, startFormIntegrationBackfill, arg.ID, arg.BackfillBefore)
 	return err
+}
+
+const takenSeatsAt = `-- name: TakenSeatsAt :one
+SELECT coalesce(sum(seats), 0)::bigint
+FROM bookings
+WHERE schedule_id = $1 AND starts_at = $2 AND client_id <> $3
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+`
+
+type TakenSeatsAtParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	ClientID   uuid.UUID
+}
+
+// То же для ОДНОЙ точки — счёт под advisory-lock перед взятием холда.
+func (q *Queries) TakenSeatsAt(ctx context.Context, arg TakenSeatsAtParams) (int64, error) {
+	row := q.db.QueryRow(ctx, takenSeatsAt, arg.ScheduleID, arg.StartsAt, arg.ClientID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const takenSeatsInRange = `-- name: TakenSeatsInRange :many
+SELECT starts_at, sum(seats)::bigint AS seats
+FROM bookings
+WHERE schedule_id = $1
+  AND starts_at >= $2 AND starts_at < $3
+  AND client_id <> $4
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+GROUP BY starts_at
+`
+
+type TakenSeatsInRangeParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	StartsAt_2 pgtype.Timestamptz
+	ClientID   uuid.UUID
+}
+
+type TakenSeatsInRangeRow struct {
+	StartsAt pgtype.Timestamptz
+	Seats    int64
+}
+
+// Сколько мест занято в каждой точке отрезка. Публичная выдача свободного времени
+// вычитает это из вместимости.
+//
+// Считаются подтверждённые и НЕИСТЁКШИЕ холды: протухший холд место не держит, и
+// ждать чистки (internal/periodic) выдача не обязана — та убирает мусор, а не решает.
+//
+// Свой холд спрашивающего исключается ($4): человек, передумавший и вернувшийся к
+// списку, обязан снова увидеть время, которое сам же и держит, — иначе при вместимости
+// 1 только что отпущенный слот пропадал бы у него на четверть часа.
+func (q *Queries) TakenSeatsInRange(ctx context.Context, arg TakenSeatsInRangeParams) ([]TakenSeatsInRangeRow, error) {
+	rows, err := q.db.Query(ctx, takenSeatsInRange,
+		arg.ScheduleID,
+		arg.StartsAt,
+		arg.StartsAt_2,
+		arg.ClientID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []TakenSeatsInRangeRow
+	for rows.Next() {
+		var i TakenSeatsInRangeRow
+		if err := rows.Scan(&i.StartsAt, &i.Seats); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const updateFormBehavior = `-- name: UpdateFormBehavior :one

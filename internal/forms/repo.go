@@ -187,11 +187,16 @@ type PublicForm struct {
 	// выданные токены (Service.VerifyUnlock).
 	//
 	// ⚠ МИНА: спросить его обязан КАЖДЫЙ публичный вход по slug — отдача формы,
-	// приём ответа, автосохранение, выдача слота файла. Общего middleware нет и быть
+	// приём ответа, автосохранение, выдача слота файла, выдача свободного времени и
+	// холд (фаза 27). Общего middleware нет и быть
 	// не может: решение принимается по строке формы, а не по маршруту. Забытая
 	// проверка означает форму, которая спрашивает пароль на экране и пускает мимо
 	// него; список входов — design/form-password.md §3.3.
 	PasswordSealed []byte
+	// ScheduleID — расписание записи (0050); nil = у формы нет записи. Публичный путь
+	// берёт по нему само расписание: вопрос о времени в форме без расписания отвечает
+	// 404, как и не существующая вовсе (design/booking.md §7).
+	ScheduleID *uuid.UUID
 	// LinkPreview — намерение автора по карточке ссылки (nil = не настраивал).
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
@@ -741,6 +746,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		AutoJump:           row.AutoJump,
 		SaveLocally:        row.SaveLocally,
 		PasswordSealed:     row.Password,
+		ScheduleID:         ptrUUID(row.ScheduleID),
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 	}, nil
 }
