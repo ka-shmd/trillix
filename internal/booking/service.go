@@ -262,8 +262,8 @@ func (s *Service) Upcoming(ctx context.Context, userID, scheduleID uuid.UUID) ([
 // CancelBooking отменяет запись из кабинета: место возвращается в оборот тем же
 // утверждением, что меняет статус.
 //
-// Письмо записавшемуся здесь НЕ уходит: доставка приезжает слайсом I. До неё
-// отмена из кабинета молчалива, и это записано, чтобы не считать её сделанной.
+// Записавшемуся уходит письмо об отмене — то же, что и при отмене по ссылке, и с
+// тем же гашением события календаря.
 func (s *Service) CancelBooking(ctx context.Context, userID, scheduleID, bookingID uuid.UUID) error {
 	if _, err := s.forAction(ctx, userID, scheduleID, domain.ActionFormWrite); err != nil {
 		return err

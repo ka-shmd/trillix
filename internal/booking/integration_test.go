@@ -480,8 +480,8 @@ func patchSchedule(t *testing.T, c *http.Client, srv *httptest.Server, id, body 
 	return got
 }
 
-// seedBooking кладёт бронь напрямую: публичного пути её создания в этом слайсе
-// ещё нет (он приезжает слайсами F и G), а кабинету бронь нужна уже сейчас.
+// seedBooking кладёт бронь напрямую: тесты кабинетной половины проверяют её чтение
+// и отмену, а не то, как она возникла (публичный путь — public_integration_test.go).
 func seedBooking(t *testing.T, scheduleID, formID string, startsAt time.Time, status string) string {
 	t.Helper()
 	id := uuid.New()
