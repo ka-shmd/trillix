@@ -1,0 +1,118 @@
+/* Вид пикера времени. Живёт ОТДЕЛЬНЫМ файлом, а не в fields.css: модуль уезжает в
+   ленивый чанк, и его стили обязаны уехать вместе с ним — иначе полкилобайта CSS
+   качал бы каждый респондент любой формы.
+
+   Токены — те же --rf-*, что у остальных полей: пикер часть формы, а не виджет со
+   своим языком. */
+
+.rf-slots {
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+}
+
+/* Лента дат: горизонтальная прокрутка со snap'ом — на телефоне её ведут пальцем. */
+.rf-slots-days {
+  display: flex;
+  gap: 0.375rem;
+  overflow-x: auto;
+  scroll-snap-type: x proximity;
+  padding-bottom: 0.25rem;
+}
+
+.rf-slots-day {
+  flex: 0 0 auto;
+  scroll-snap-align: start;
+  padding: 0.375rem 0.75rem;
+  border: 0;
+  border-radius: var(--rf-radius);
+  font: inherit;
+  font-size: calc(var(--rf-font-size) * 0.875);
+  color: var(--rf-text);
+  background: var(--rf-field-bg);
+  box-shadow: var(--rf-field-shadow);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.rf-slots-day--on {
+  color: var(--rf-primary-foreground);
+  background: var(--rf-primary);
+  box-shadow: none;
+}
+
+/* Времена — сетка автозаполнения: на телефоне два-три столбца, на широком экране
+   шесть, и это решает браузер, а не медиазапрос. */
+.rf-slots-times {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  gap: 0.375rem;
+}
+
+.rf-slots-time {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 0.125rem;
+  min-height: var(--rf-control-h);
+  padding: 0.25rem 0.5rem;
+  border: 0;
+  border-radius: var(--rf-radius);
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  color: var(--rf-text);
+  background: var(--rf-field-bg);
+  box-shadow: var(--rf-field-shadow);
+  cursor: pointer;
+}
+
+.rf-slots-time:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+/* Остаток мест — служебная строка под временем, кегль как у подсказки. */
+.rf-slots-left {
+  font-size: calc(var(--rf-font-size) * 0.75);
+  color: var(--rf-muted);
+}
+
+.rf-slots-seats {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: calc(var(--rf-font-size) * 0.875);
+  color: var(--rf-muted);
+}
+
+.rf-slots-select {
+  min-height: var(--rf-control-h);
+  padding: 0 0.5rem;
+  border: 0;
+  border-radius: var(--rf-radius);
+  font: inherit;
+  color: var(--rf-text);
+  background: var(--rf-field-bg);
+  box-shadow: var(--rf-field-shadow);
+}
+
+.rf-slots-note {
+  font-size: calc(var(--rf-font-size) * 0.875);
+  color: var(--rf-muted);
+}
+
+.rf-slots-note--bad {
+  color: var(--rf-danger);
+}
+
+/* Кнопка-ссылка: «повторить» и «выбрать другое время» — действия внутри поля, и
+   выглядеть кнопкой формы они не должны. */
+.rf-slots-link {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  color: var(--rf-accent);
+  text-decoration: underline;
+  cursor: pointer;
+}

@@ -35,6 +35,20 @@ const EMBED_PREFIX = 'embed/'
 const PRINT_BUDGET_BYTES = 60 * 1024
 const PRINT_PREFIX = 'print/'
 
+// Выбор времени записи (dist/slots/, фаза 27, ADR §10) — ЧЕТВЁРТЫЙ порог, и снова
+// отдельный по тому же доводу: его качает только респондент формы, где есть запись, а
+// таких форм меньшинство. Сложенный с формой, он съел бы весь её остаток: запаса до
+// порога было 1.18 КиБ, а пикер весит около двух.
+//
+// Порог 12 КиБ — с запасом на рост: сегодня занято ~1.9, но пикеру предстоит выбор
+// числа мест, остаток и разбор отказов, и упереться он должен не сразу.
+//
+// ⚠ ПРЕФИКС ОБЯЗАТЕЛЕН, И ЕГО ДЕРЖИТ КОНФИГ СБОРКИ (vite.config.ts, chunkFileNames):
+// сторож считает весь .js в dist/, кроме известных префиксов, — чанк, попавший в
+// assets/, молча войдёт в бюджет формы, и это не будет видно ничем, кроме числа.
+const SLOTS_BUDGET_BYTES = 12 * 1024
+const SLOTS_PREFIX = 'slots/'
+
 // Шрифты формы (фаза 22) — ТРЕТИЙ порог, снова отдельный, и снова потому, что
 // складывать разное значит не мерить ничего. Шрифт не в бандле: он не парсится и не
 // исполняется, приезжает параллельно и только тем респондентам, чьей форме он
@@ -83,10 +97,14 @@ function filesUnder(dir, ext, prefix = '') {
 const allFiles = filesUnder(distDir, '.js')
 const jsFiles =
   allFiles?.filter(
-    (f) => !f.label.startsWith(EMBED_PREFIX) && !f.label.startsWith(PRINT_PREFIX),
+    (f) =>
+      !f.label.startsWith(EMBED_PREFIX) &&
+      !f.label.startsWith(PRINT_PREFIX) &&
+      !f.label.startsWith(SLOTS_PREFIX),
   ) ?? null
 const embedFiles = allFiles?.filter((f) => f.label.startsWith(EMBED_PREFIX)) ?? []
 const printFiles = allFiles?.filter((f) => f.label.startsWith(PRINT_PREFIX)) ?? []
+const slotFiles = allFiles?.filter((f) => f.label.startsWith(SLOTS_PREFIX)) ?? []
 if (jsFiles === null) {
   console.error(`✗ нет собранной сборки в ${distDir} — сначала 'npm run build'`)
   process.exit(1)
@@ -158,6 +176,25 @@ if (printFiles.length > 0) {
     process.exit(1)
   }
   console.log('✓ печатная страница в пределах бюджета')
+}
+
+if (slotFiles.length > 0) {
+  let slotTotal = 0
+  console.log('')
+  for (const f of slotFiles) {
+    const size = gzipSync(readFileSync(f.path)).length
+    slotTotal += size
+    console.log(`  ${f.label}  ${kib(size)} gzip`)
+  }
+  console.log(`Выбор времени: ${kib(slotTotal)} gzip · бюджет ${kib(SLOTS_BUDGET_BYTES)}`)
+  if (slotTotal > SLOTS_BUDGET_BYTES) {
+    console.error(
+      `✗ бюджет выбора времени превышен на ${kib(slotTotal - SLOTS_BUDGET_BYTES)}. ` +
+        `Он грузится к форме сверху — режь код, а не порог.`,
+    )
+    process.exit(1)
+  }
+  console.log('✓ выбор времени в пределах бюджета')
 }
 
 // Загрузчик собирается вторым проходом (vite.embed.config.ts), печатная страница —
