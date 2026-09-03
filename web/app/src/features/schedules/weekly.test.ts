@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_SCHEDULE, type Availability } from '../../entities/schedule'
 import {
   addWindow,
+  clampSeats,
   availabilityError,
   clockToMinutes,
   copyToWorkdays,
@@ -161,5 +162,23 @@ describe('правило одной строкой', () => {
 
   it('пустое правило говорит об этом словами', () => {
     expect(weekSummary({ weekly: {}, exceptions: [] })).toBe('Приём не ведётся')
+  })
+})
+
+describe('места в одной записи', () => {
+  it.each([
+    [3, 8, 3],
+    [8, 3, 3],
+    [3, 1, 1],
+    [0, 5, 1],
+  ])('просят %i при вместимости %i → %i', (seats, capacity, expected) => {
+    expect(clampSeats(seats, capacity)).toBe(expected)
+  })
+
+  // Поле скрыто при вместимости 1, поэтому значение обязано зажиматься само:
+  // иначе снижение вместимости оставило бы в документе невыразимое состояние, а
+  // сервер отказал бы, показав ошибку у поля, которого на экране уже нет.
+  it('снижение вместимости до одного приводит запись к одному месту', () => {
+    expect(clampSeats(3, 1)).toBe(1)
   })
 })

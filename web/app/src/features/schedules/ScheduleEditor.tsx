@@ -7,7 +7,7 @@ import {
   type Schedule,
   type ScheduleInput,
 } from '../../entities/schedule'
-import { availabilityError } from './weekly'
+import { availabilityError, clampSeats } from './weekly'
 import { WeekEditor } from './WeekEditor'
 import { ExceptionsEditor } from './ExceptionsEditor'
 import { Section } from '../../shared/page/Section'
@@ -132,26 +132,45 @@ export function ScheduleEditor({
             />
           </Field>
 
-          <Field label="Мест в одном приёме" hint="Больше одного — это групповое занятие.">
+          <Field
+            label="Мест в одном приёме"
+            hint="Сколько человек помещается в одно время. Больше одного — это групповое занятие."
+          >
             <NumberInput
               value={draft.capacity}
               min={1}
-              onChange={(capacity) => patch({ capacity })}
+              // Вместимость ЗАЖИМАЕТ второе поле: иначе снижение восьми мест до одного
+              // оставляло бы в документе «до трёх мест в записи» — невыразимое
+              // состояние, о котором сервер отказал бы, показав ошибку у поля,
+              // которого на экране уже нет.
+              onChange={(capacity) =>
+                patch({
+                  capacity,
+                  maxSeatsPerBooking: clampSeats(draft.maxSeatsPerBooking, capacity),
+                })
+              }
             />
           </Field>
 
-          <Field
-            label="Мест в одной записи"
-            hint="Сколько мест человек может занять сразу — «приду с двумя детьми»."
-            error={seatsError}
-          >
-            <NumberInput
-              value={draft.maxSeatsPerBooking}
-              min={1}
-              invalid={seatsError !== null}
-              onChange={(maxSeatsPerBooking) => patch({ maxSeatsPerBooking })}
-            />
-          </Field>
+          {/* ПОЛЕ ЕСТЬ ТОЛЬКО У ГРУППЫ (решение владельца 2026-09-03): при вместимости
+              1 «взять два места из одного» невыразимо, и строка стоит на экране
+              мёртвой. У подавляющего большинства авторов настройки тут не будет
+              вовсе. */}
+          {draft.capacity > 1 && (
+            <Field
+              label="Мест в одной записи"
+              hint="Сколько мест один человек может занять сразу — «приду с двумя детьми»."
+              error={seatsError}
+            >
+              <NumberInput
+                value={draft.maxSeatsPerBooking}
+                min={1}
+                max={draft.capacity}
+                invalid={seatsError !== null}
+                onChange={(maxSeatsPerBooking) => patch({ maxSeatsPerBooking })}
+              />
+            </Field>
+          )}
         </div>
 
         <label className="flex items-start justify-between gap-4 rounded-lg border p-4">
