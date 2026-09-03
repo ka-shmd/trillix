@@ -12,6 +12,48 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+const blocksInRange = `-- name: BlocksInRange :many
+SELECT id, schedule_id, starts_at, ends_at, note, created_at
+FROM schedule_blocks
+WHERE schedule_id = $1 AND starts_at < $3 AND ends_at > $2
+ORDER BY starts_at, id
+`
+
+type BlocksInRangeParams struct {
+	ScheduleID uuid.UUID
+	EndsAt     pgtype.Timestamptz
+	StartsAt   pgtype.Timestamptz
+}
+
+// Блокировки, задевающие отрезок. Условие пересечения, а не вхождения: блокировка
+// на неделю обязана попасть в выдачу любого дня этой недели.
+func (q *Queries) BlocksInRange(ctx context.Context, arg BlocksInRangeParams) ([]ScheduleBlock, error) {
+	rows, err := q.db.Query(ctx, blocksInRange, arg.ScheduleID, arg.EndsAt, arg.StartsAt)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ScheduleBlock
+	for rows.Next() {
+		var i ScheduleBlock
+		if err := rows.Scan(
+			&i.ID,
+			&i.ScheduleID,
+			&i.StartsAt,
+			&i.EndsAt,
+			&i.Note,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const bumpAIGenerations = `-- name: BumpAIGenerations :exec
 INSERT INTO workspace_usage (workspace_id, period, ai_generations)
 VALUES ($1, $2, 1)
@@ -34,6 +76,28 @@ type BumpAIGenerationsParams struct {
 func (q *Queries) BumpAIGenerations(ctx context.Context, arg BumpAIGenerationsParams) error {
 	_, err := q.db.Exec(ctx, bumpAIGenerations, arg.WorkspaceID, arg.Period)
 	return err
+}
+
+const cancelBookingByAuthor = `-- name: CancelBookingByAuthor :execrows
+UPDATE bookings SET status = 'canceled', canceled_at = now()
+WHERE id = $1 AND schedule_id = $2 AND status <> 'canceled'
+`
+
+type CancelBookingByAuthorParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+}
+
+// Отмена записи автором из кабинета. Место освобождается тем же утверждением:
+// строка перестаёт считаться занятой в тот же момент, когда меняется статус.
+//
+// Повторная отмена даёт 0 строк — для вызывающего это «уже отменена», а не ошибка.
+func (q *Queries) CancelBookingByAuthor(ctx context.Context, arg CancelBookingByAuthorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelBookingByAuthor, arg.ID, arg.ScheduleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const claimSubmissionFile = `-- name: ClaimSubmissionFile :execrows
@@ -205,6 +269,28 @@ func (q *Queries) ConsumeRecoveryCode(ctx context.Context, arg ConsumeRecoveryCo
 	return result.RowsAffected(), nil
 }
 
+const countFutureBookings = `-- name: CountFutureBookings :one
+SELECT count(*)::bigint FROM bookings
+WHERE schedule_id = $1 AND status = 'confirmed' AND starts_at >= $2
+`
+
+type CountFutureBookingsParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+}
+
+// Стоп-кран удаления: сколько живых БУДУЩИХ записей у расписания.
+//
+// Считаются только подтверждённые: холд — ещё не договорённость (ни ответа, ни
+// письма записавшемуся), и держать им расписание значило бы отдавать право
+// удаления брошенной вкладке на четверть часа.
+func (q *Queries) CountFutureBookings(ctx context.Context, arg CountFutureBookingsParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFutureBookings, arg.ScheduleID, arg.StartsAt)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
 const countPartials = `-- name: CountPartials :one
 SELECT count(*)::bigint FROM partial_submissions WHERE form_id = $1
 `
@@ -213,6 +299,19 @@ SELECT count(*)::bigint FROM partial_submissions WHERE form_id = $1
 // число показывается и тому, кому разбивка закрыта.
 func (q *Queries) CountPartials(ctx context.Context, formID uuid.UUID) (int64, error) {
 	row := q.db.QueryRow(ctx, countPartials, formID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countSchedulesByForm = `-- name: CountSchedulesByForm :one
+SELECT count(*)::bigint FROM forms WHERE schedule_id = $1
+`
+
+// Сколько форм ссылается на расписание. Нужен отказу с человеческим текстом:
+// ошибка внешнего ключа сама по себе автору ничего не объясняет.
+func (q *Queries) CountSchedulesByForm(ctx context.Context, scheduleID pgtype.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countSchedulesByForm, scheduleID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -600,6 +699,111 @@ func (q *Queries) CreateRecoveryCode(ctx context.Context, arg CreateRecoveryCode
 	return err
 }
 
+const createSchedule = `-- name: CreateSchedule :one
+
+INSERT INTO schedules (
+    id, workspace_id, name, timezone, availability,
+    slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+    capacity, max_seats_per_booking, show_remaining
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING id, workspace_id, name, timezone, availability,
+          slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+          capacity, max_seats_per_booking, show_remaining, created_at, updated_at
+`
+
+type CreateScheduleParams struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               string
+	Timezone           string
+	Availability       []byte
+	SlotMinutes        int32
+	BufferMinutes      int32
+	HorizonDays        int32
+	LeadMinutes        int32
+	Capacity           int32
+	MaxSeatsPerBooking int32
+	ShowRemaining      bool
+}
+
+// Запросы модуля booking. Схема — migrations/0050_booking. Генерация: `make sqlc`.
+//
+// Права здесь НЕ проверяются условием запроса, в отличие от интеграций: расписание
+// принадлежит ПРОСТРАНСТВУ, и доступ к нему решает членство спрашивающего
+// (workspaces.Can). Поэтому чтение отдаёт workspace_id, а охрана стоит первой
+// строкой сервис-метода — тот же приём, что у форм.
+// Заведение расписания. Параметры нарезки приезжают уже проверенными
+// (domain.ValidateSchedule); CHECK'и схемы — второй рубеж, а не первый.
+func (q *Queries) CreateSchedule(ctx context.Context, arg CreateScheduleParams) (Schedule, error) {
+	row := q.db.QueryRow(ctx, createSchedule,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.Timezone,
+		arg.Availability,
+		arg.SlotMinutes,
+		arg.BufferMinutes,
+		arg.HorizonDays,
+		arg.LeadMinutes,
+		arg.Capacity,
+		arg.MaxSeatsPerBooking,
+		arg.ShowRemaining,
+	)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Timezone,
+		&i.Availability,
+		&i.SlotMinutes,
+		&i.BufferMinutes,
+		&i.HorizonDays,
+		&i.LeadMinutes,
+		&i.Capacity,
+		&i.MaxSeatsPerBooking,
+		&i.ShowRemaining,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
+const createScheduleBlock = `-- name: CreateScheduleBlock :one
+INSERT INTO schedule_blocks (id, schedule_id, starts_at, ends_at, note)
+VALUES ($1, $2, $3, $4, $5)
+RETURNING id, schedule_id, starts_at, ends_at, note, created_at
+`
+
+type CreateScheduleBlockParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	EndsAt     pgtype.Timestamptz
+	Note       string
+}
+
+// Ручная блокировка: отпуск, свои дела, «сегодня обед на час позже».
+func (q *Queries) CreateScheduleBlock(ctx context.Context, arg CreateScheduleBlockParams) (ScheduleBlock, error) {
+	row := q.db.QueryRow(ctx, createScheduleBlock,
+		arg.ID,
+		arg.ScheduleID,
+		arg.StartsAt,
+		arg.EndsAt,
+		arg.Note,
+	)
+	var i ScheduleBlock
+	err := row.Scan(
+		&i.ID,
+		&i.ScheduleID,
+		&i.StartsAt,
+		&i.EndsAt,
+		&i.Note,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const createSession = `-- name: CreateSession :exec
 INSERT INTO sessions (token_hash, user_id, expires_at)
 VALUES ($1, $2, $3)
@@ -963,6 +1167,43 @@ DELETE FROM totp_recovery_codes WHERE user_id = $1
 func (q *Queries) DeleteRecoveryCodes(ctx context.Context, userID uuid.UUID) error {
 	_, err := q.db.Exec(ctx, deleteRecoveryCodes, userID)
 	return err
+}
+
+const deleteSchedule = `-- name: DeleteSchedule :execrows
+DELETE FROM schedules WHERE id = $1
+`
+
+// Удаление расписания. Стоп-кран (живые будущие записи) сервис проверяет ДО
+// вызова: ключ CASCADE его не выражает, а RESTRICT держал бы расписание вечно
+// из-за прошлогодней брони (0050).
+//
+// Форма, ссылающаяся на расписание, удалить его не даст: FK forms.schedule_id
+// отвергнет DELETE ошибкой БД, и сервис переведёт её в понятный отказ.
+func (q *Queries) DeleteSchedule(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteSchedule, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteScheduleBlock = `-- name: DeleteScheduleBlock :execrows
+DELETE FROM schedule_blocks WHERE id = $1 AND schedule_id = $2
+`
+
+type DeleteScheduleBlockParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+}
+
+// schedule_id в условии не украшение: id блокировки приезжает из адреса и правом
+// доступа не является. Чужую блокировку этим запросом не снять.
+func (q *Queries) DeleteScheduleBlock(ctx context.Context, arg DeleteScheduleBlockParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteScheduleBlock, arg.ID, arg.ScheduleID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteSession = `-- name: DeleteSession :exec
@@ -1434,6 +1675,54 @@ func (q *Queries) GetEntitlementsWithMembers(ctx context.Context, arg GetEntitle
 		&i.SubmissionsUsed,
 		&i.AiGenerationsUsed,
 		&i.MembersCount,
+	)
+	return i, err
+}
+
+const getEntitlementsWithSchedules = `-- name: GetEntitlementsWithSchedules :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       coalesce(u.ai_generations, 0)::bigint AS ai_generations_used,
+       (SELECT count(*) FROM schedules sc
+         WHERE sc.workspace_id = o.workspace_id)::bigint AS schedules_count
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
+JOIN plans p ON p.code = s.plan_code
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner'
+`
+
+type GetEntitlementsWithSchedulesParams struct {
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+}
+
+type GetEntitlementsWithSchedulesRow struct {
+	PlanCode          string
+	PlanTitle         string
+	Limits            []byte
+	SubmissionsUsed   int64
+	AiGenerationsUsed int64
+	SchedulesCount    int64
+}
+
+// То же состояние плюс счётчик расписаний — для гейта записи на время (фаза 27).
+// Отдельным запросом по тому же доводу, что счётчики участников и хранилища: он
+// нужен одной редкой операции (заведению расписания) и не должен ложиться на приём
+// ответа.
+func (q *Queries) GetEntitlementsWithSchedules(ctx context.Context, arg GetEntitlementsWithSchedulesParams) (GetEntitlementsWithSchedulesRow, error) {
+	row := q.db.QueryRow(ctx, getEntitlementsWithSchedules, arg.WorkspaceID, arg.Period)
+	var i GetEntitlementsWithSchedulesRow
+	err := row.Scan(
+		&i.PlanCode,
+		&i.PlanTitle,
+		&i.Limits,
+		&i.SubmissionsUsed,
+		&i.AiGenerationsUsed,
+		&i.SchedulesCount,
 	)
 	return i, err
 }
@@ -2054,6 +2343,38 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.SaveLocally,
 		&i.Password,
 		&i.SubmissionCount,
+	)
+	return i, err
+}
+
+const getSchedule = `-- name: GetSchedule :one
+SELECT id, workspace_id, name, timezone, availability,
+       slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+       capacity, max_seats_per_booking, show_remaining, created_at, updated_at
+FROM schedules
+WHERE id = $1
+`
+
+// Одно расписание по id. Отдаёт workspace_id — по нему сервис и спрашивает право
+// (id из адреса правом доступа не является, инвариант 1).
+func (q *Queries) GetSchedule(ctx context.Context, id uuid.UUID) (Schedule, error) {
+	row := q.db.QueryRow(ctx, getSchedule, id)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Timezone,
+		&i.Availability,
+		&i.SlotMinutes,
+		&i.BufferMinutes,
+		&i.HorizonDays,
+		&i.LeadMinutes,
+		&i.Capacity,
+		&i.MaxSeatsPerBooking,
+		&i.ShowRemaining,
+		&i.CreatedAt,
+		&i.UpdatedAt,
 	)
 	return i, err
 }
@@ -3556,6 +3877,53 @@ func (q *Queries) ListPendingOutbox(ctx context.Context, limit int32) ([]ListPen
 	return items, nil
 }
 
+const listSchedules = `-- name: ListSchedules :many
+SELECT id, workspace_id, name, timezone, availability,
+       slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+       capacity, max_seats_per_booking, show_remaining, created_at, updated_at
+FROM schedules
+WHERE workspace_id = $1
+ORDER BY created_at DESC, id DESC
+`
+
+// Список расписаний пространства. Порядок — от свежего к старому, id в хвосте
+// как tie-break: два расписания, заведённые в одну миллисекунду, не должны
+// прыгать местами при перерисовке.
+func (q *Queries) ListSchedules(ctx context.Context, workspaceID uuid.UUID) ([]Schedule, error) {
+	rows, err := q.db.Query(ctx, listSchedules, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []Schedule
+	for rows.Next() {
+		var i Schedule
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.Name,
+			&i.Timezone,
+			&i.Availability,
+			&i.SlotMinutes,
+			&i.BufferMinutes,
+			&i.HorizonDays,
+			&i.LeadMinutes,
+			&i.Capacity,
+			&i.MaxSeatsPerBooking,
+			&i.ShowRemaining,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSubmissionFiles = `-- name: ListSubmissionFiles :many
 SELECT id, submission_id, block_id, object_key, original_name, size_bytes, content_type
 FROM submission_files
@@ -3778,6 +4146,75 @@ func (q *Queries) ListSubmissionsForBackfill(ctx context.Context, arg ListSubmis
 			&i.Answers,
 			&i.CreatedAt,
 			&i.FormVersion,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listUpcomingBookings = `-- name: ListUpcomingBookings :many
+SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
+       b.starts_at, b.duration_minutes, b.seats, b.status,
+       b.hold_expires_at, b.created_at,
+       coalesce(f.name, f.title) AS form_title
+FROM bookings b
+JOIN forms f ON f.id = b.form_id
+WHERE b.schedule_id = $1 AND b.status = 'confirmed' AND b.starts_at >= $2
+ORDER BY b.starts_at, b.id
+LIMIT $3
+`
+
+type ListUpcomingBookingsParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	Limit      int32
+}
+
+type ListUpcomingBookingsRow struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	HoldExpiresAt   pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	FormTitle       string
+}
+
+// Ближайшие записи для экрана расписания. Отменённые не показываются: экран
+// отвечает на вопрос «кто придёт», а не «что происходило».
+//
+// Название формы джойном: без него список записей — это столбик времён, по
+// которому не понять, откуда запись взялась.
+func (q *Queries) ListUpcomingBookings(ctx context.Context, arg ListUpcomingBookingsParams) ([]ListUpcomingBookingsRow, error) {
+	rows, err := q.db.Query(ctx, listUpcomingBookings, arg.ScheduleID, arg.StartsAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListUpcomingBookingsRow
+	for rows.Next() {
+		var i ListUpcomingBookingsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ScheduleID,
+			&i.FormID,
+			&i.SubmissionID,
+			&i.StartsAt,
+			&i.DurationMinutes,
+			&i.Seats,
+			&i.Status,
+			&i.HoldExpiresAt,
+			&i.CreatedAt,
+			&i.FormTitle,
 		); err != nil {
 			return nil, err
 		}
@@ -5181,6 +5618,71 @@ type UpdateIntegrationAccountTokenParams struct {
 func (q *Queries) UpdateIntegrationAccountToken(ctx context.Context, arg UpdateIntegrationAccountTokenParams) error {
 	_, err := q.db.Exec(ctx, updateIntegrationAccountToken, arg.ID, arg.RefreshToken)
 	return err
+}
+
+const updateSchedule = `-- name: UpdateSchedule :one
+UPDATE schedules SET
+    name = $2, timezone = $3, availability = $4,
+    slot_minutes = $5, buffer_minutes = $6, horizon_days = $7, lead_minutes = $8,
+    capacity = $9, max_seats_per_booking = $10, show_remaining = $11,
+    updated_at = now()
+WHERE id = $1
+RETURNING id, workspace_id, name, timezone, availability,
+          slot_minutes, buffer_minutes, horizon_days, lead_minutes,
+          capacity, max_seats_per_booking, show_remaining, created_at, updated_at
+`
+
+type UpdateScheduleParams struct {
+	ID                 uuid.UUID
+	Name               string
+	Timezone           string
+	Availability       []byte
+	SlotMinutes        int32
+	BufferMinutes      int32
+	HorizonDays        int32
+	LeadMinutes        int32
+	Capacity           int32
+	MaxSeatsPerBooking int32
+	ShowRemaining      bool
+}
+
+// Правка расписания целиком: экран сохраняет форму настроек одним куском, и
+// частичные патчи означали бы «не трогать» и «очистить» одним значением.
+//
+// Уже назначенные встречи правка НЕ трогает: длительность копируется в бронь при
+// создании (0050), поэтому смена приёма с 60 минут на 30 не сжимает договорённое.
+func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) (Schedule, error) {
+	row := q.db.QueryRow(ctx, updateSchedule,
+		arg.ID,
+		arg.Name,
+		arg.Timezone,
+		arg.Availability,
+		arg.SlotMinutes,
+		arg.BufferMinutes,
+		arg.HorizonDays,
+		arg.LeadMinutes,
+		arg.Capacity,
+		arg.MaxSeatsPerBooking,
+		arg.ShowRemaining,
+	)
+	var i Schedule
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.Name,
+		&i.Timezone,
+		&i.Availability,
+		&i.SlotMinutes,
+		&i.BufferMinutes,
+		&i.HorizonDays,
+		&i.LeadMinutes,
+		&i.Capacity,
+		&i.MaxSeatsPerBooking,
+		&i.ShowRemaining,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
 }
 
 const updateUserEmail = `-- name: UpdateUserEmail :one

@@ -166,6 +166,10 @@ func (stubStore) EntitlementsWithStorage(context.Context, postgres.DBTX, uuid.UU
 	return Row{}, nil
 }
 
+func (stubStore) EntitlementsWithSchedules(context.Context, postgres.DBTX, uuid.UUID, time.Time) (Row, error) {
+	return Row{}, nil
+}
+
 func (stubStore) BumpAIGenerations(context.Context, postgres.DBTX, uuid.UUID, time.Time) error {
 	return nil
 }

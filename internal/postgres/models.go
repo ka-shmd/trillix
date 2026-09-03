@@ -9,6 +9,21 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type Booking struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	HoldExpiresAt   pgtype.Timestamptz
+	ClientID        uuid.UUID
+	CreatedAt       pgtype.Timestamptz
+	CanceledAt      pgtype.Timestamptz
+}
+
 type EmailChangeToken struct {
 	TokenHash []byte
 	UserID    uuid.UUID
@@ -52,6 +67,7 @@ type Form struct {
 	NotifyRespondent   bool
 	RespondentEmail    []byte
 	Password           []byte
+	ScheduleID         pgtype.UUID
 }
 
 type FormIntegration struct {
@@ -155,6 +171,32 @@ type Plan struct {
 	Limits      []byte
 	IsPublic    bool
 	CreatedAt   pgtype.Timestamptz
+}
+
+type Schedule struct {
+	ID                 uuid.UUID
+	WorkspaceID        uuid.UUID
+	Name               string
+	Timezone           string
+	Availability       []byte
+	SlotMinutes        int32
+	BufferMinutes      int32
+	HorizonDays        int32
+	LeadMinutes        int32
+	Capacity           int32
+	MaxSeatsPerBooking int32
+	ShowRemaining      bool
+	CreatedAt          pgtype.Timestamptz
+	UpdatedAt          pgtype.Timestamptz
+}
+
+type ScheduleBlock struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	EndsAt     pgtype.Timestamptz
+	Note       string
+	CreatedAt  pgtype.Timestamptz
 }
 
 type Session struct {

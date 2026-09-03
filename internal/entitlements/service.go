@@ -44,6 +44,10 @@ type Row struct {
 	// Читается из той же строки usage, что и SubmissionsUsed, поэтому отдельного
 	// запроса (как у мест и хранилища) ему не нужно: колонка соседняя.
 	AIGenerationsUsed int64
+	// SchedulesCount — сколько расписаний записи в пространстве СЕЙЧАС. Как и
+	// MembersCount, считается только там, где спрашивают: приём ответа за этим
+	// не ходит.
+	SchedulesCount int64
 }
 
 // Store — доступ к данным, объявленный на стороне потребителя. Реализация — Repo.
@@ -60,6 +64,9 @@ type Store interface {
 	// (гейт файлов). Отдельным запросом по тому же доводу, что и счётчик
 	// участников: сумма по submission_files нужна одной операции.
 	EntitlementsWithStorage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error)
+	// EntitlementsWithSchedules — то же со счётчиком расписаний (гейт записи на
+	// время, фаза 27).
+	EntitlementsWithSchedules(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error)
 	// EntitlementsWithMembers — то же, что Entitlements, плюс счётчик участников.
 	// ОТДЕЛЬНЫМ запросом, а не колонкой в основном: тот стоит на горячем пути
 	// приёма ответа, и подсчёт участников там был бы платой за то, что нужно
@@ -144,6 +151,8 @@ func (s *Service) CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key
 		fetch = s.repo.EntitlementsWithMembers
 	case StorageMeter:
 		fetch = s.repo.EntitlementsWithStorage
+	case SchedulesMeter:
+		fetch = s.repo.EntitlementsWithSchedules
 	}
 	row, err := fetch(ctx, s.db, workspaceID, period)
 	if err != nil {
@@ -282,6 +291,8 @@ func decide(f Feature, row Row, key Key) (Decision, error) {
 		used = row.StorageUsed
 	case AIGenerationsMeter:
 		used = row.AIGenerationsUsed
+	case SchedulesMeter:
+		used = row.SchedulesCount
 	case NoMeter:
 		// Расход не считается: у Toggle его нет по смыслу.
 	}

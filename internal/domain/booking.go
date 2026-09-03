@@ -168,6 +168,24 @@ func ValidateSchedule(s Schedule) error {
 	return ValidateAvailability(s.Availability)
 }
 
+// ValidateScheduleBlock — проверка ручной блокировки: непустой отрезок и подпись
+// в пределах потолка. Чистая функция, как и остальная валидация расписания.
+//
+// «Не в прошлом» здесь НЕ требуется: закрыть задним числом законно — автор
+// отмечает, что во вторник его не было, и это не мешает никому.
+func ValidateScheduleBlock(startsAt, endsAt time.Time, note string) error {
+	if startsAt.IsZero() || endsAt.IsZero() {
+		return schemaErr("блокировка: нужны начало и конец")
+	}
+	if !endsAt.After(startsAt) {
+		return schemaErr("блокировка: конец должен быть позже начала")
+	}
+	if n := utf8.RuneCountInString(note); n > MaxScheduleNoteLen {
+		return schemaErr("note длиннее %d символов", MaxScheduleNoteLen)
+	}
+	return nil
+}
+
 // ValidateAvailability проверяет документ правила: ключи дней, формат времени,
 // порядок и непересечение окон, даты исключений.
 func ValidateAvailability(a Availability) error {

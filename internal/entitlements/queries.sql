@@ -129,3 +129,22 @@ INSERT INTO workspace_usage (workspace_id, period, ai_generations)
 VALUES ($1, $2, 1)
 ON CONFLICT (workspace_id, period)
 DO UPDATE SET ai_generations = workspace_usage.ai_generations + 1;
+
+-- То же состояние плюс счётчик расписаний — для гейта записи на время (фаза 27).
+-- Отдельным запросом по тому же доводу, что счётчики участников и хранилища: он
+-- нужен одной редкой операции (заведению расписания) и не должен ложиться на приём
+-- ответа.
+-- name: GetEntitlementsWithSchedules :one
+SELECT p.code AS plan_code,
+       p.title AS plan_title,
+       p.limits,
+       coalesce(u.submissions, 0)::bigint AS submissions_used,
+       coalesce(u.ai_generations, 0)::bigint AS ai_generations_used,
+       (SELECT count(*) FROM schedules sc
+         WHERE sc.workspace_id = o.workspace_id)::bigint AS schedules_count
+FROM workspace_members o
+JOIN subscriptions s ON s.user_id = o.user_id
+JOIN plans p ON p.code = s.plan_code
+LEFT JOIN workspace_usage u
+       ON u.workspace_id = o.workspace_id AND u.period = $2
+WHERE o.workspace_id = $1 AND o.role = 'owner';

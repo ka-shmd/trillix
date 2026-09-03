@@ -27,6 +27,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/answerfiles"
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/blob"
+	"github.com/ka-shmd/trillix/internal/booking"
 	"github.com/ka-shmd/trillix/internal/config"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
@@ -475,6 +476,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	}
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey)
+	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
+	// числа расписаний — у entitlements; своей транзакции у модуля нет.
+	bookingSvc := booking.NewService(pool, booking.Repo{}, workspacesSvc, entitlementsSvc)
+	bookingHandler := booking.NewHandler(bookingSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
 		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
 	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
@@ -601,7 +607,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		submissionsPublic.Routes, submissionsHandler.Routes, mediaHandler.Routes,
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
-		integrationsHandler.Routes,
+		integrationsHandler.Routes, bookingHandler.Routes,
 	}
 
 	// Печатная страница ответа (ADR §10). Путь задаётся явно на каждом контуре
