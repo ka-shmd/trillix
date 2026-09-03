@@ -18,6 +18,7 @@ import {
   AlertDialogTrigger,
 } from '@/components/ui/alert-dialog'
 import { humanError } from '../../shared/api/errors'
+import { LOCALE } from '../../shared/format'
 
 // Ближайшие записи: кто придёт и когда. Имени и контактов здесь нет — они живут в
 // ответе формы и подчиняются его правилам (152-ФЗ); отсюда ссылка на сам ответ.
@@ -109,7 +110,7 @@ export function UpcomingSection({
 
 function bookingTime(b: Booking, timezone: string): string {
   const at = new Date(b.startsAt)
-  return at.toLocaleString('ru-RU', {
+  return at.toLocaleString(LOCALE, {
     timeZone: timezone,
     day: 'numeric',
     month: 'long',

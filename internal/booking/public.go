@@ -124,20 +124,7 @@ func (s *PublicService) Slots(ctx context.Context, req SlotsRequest) ([]domain.S
 	}
 
 	from, to := s.window(req.From, req.To, sch)
-	blocks, err := s.repo.BlocksInRange(ctx, s.db, sch.ID, from, to)
-	if err != nil {
-		return nil, err
-	}
-	taken, err := s.repo.TakenSeats(ctx, s.db, sch.ID, from, to, req.ClientID)
-	if err != nil {
-		return nil, err
-	}
-
-	busy := make([]domain.Busy, 0, len(blocks))
-	for _, b := range blocks {
-		busy = append(busy, domain.Busy{StartsAt: b.StartsAt, EndsAt: b.EndsAt})
-	}
-	slots, err := domain.FreeSlots(sch.Schedule, busy, taken, s.now())
+	slots, err := s.freeSlots(ctx, sch, from, to, req.ClientID)
 	if err != nil {
 		return nil, err
 	}
@@ -224,24 +211,36 @@ func (s *PublicService) Hold(ctx context.Context, req HoldRequest) (uuid.UUID, t
 	return id, expires, nil
 }
 
-// offered — предлагает ли расписание это время прямо сейчас. Считается тем же кодом,
-// что и выдача: два разных ответа на вопрос «свободно ли» разошлись бы молча.
-func (s *PublicService) offered(ctx context.Context, sch Schedule, at time.Time, clientID uuid.UUID, seats int) error {
-	// Окно в одну точку: считать весь горизонт ради одного слота незачем.
-	from, to := at, at.Add(time.Minute)
+// freeSlots — свободное время расписания на отрезке: блокировки и занятое из базы,
+// счёт — в домене. Единственный путь к ответу «свободно ли»: и выдача времени (Slots),
+// и проверка перед холдом (offered) обязаны отвечать одинаково, а два одинаковых куска
+// отвечают одинаково только пока их правят вместе.
+//
+// Отрезок здесь НЕ режется по краям: домен считает горизонт целиком, обрезка — дело
+// вызывающего (Slots режет окном клиента, offered ищет в выдаче одну точку).
+func (s *PublicService) freeSlots(
+	ctx context.Context, sch Schedule, from, to time.Time, clientID uuid.UUID,
+) ([]domain.Slot, error) {
 	blocks, err := s.repo.BlocksInRange(ctx, s.db, sch.ID, from, to)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	taken, err := s.repo.TakenSeats(ctx, s.db, sch.ID, from, to, clientID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	busy := make([]domain.Busy, 0, len(blocks))
 	for _, b := range blocks {
 		busy = append(busy, domain.Busy{StartsAt: b.StartsAt, EndsAt: b.EndsAt})
 	}
-	slots, err := domain.FreeSlots(sch.Schedule, busy, taken, s.now())
+	return domain.FreeSlots(sch.Schedule, busy, taken, s.now())
+}
+
+// offered — предлагает ли расписание это время прямо сейчас. Считается тем же кодом,
+// что и выдача: два разных ответа на вопрос «свободно ли» разошлись бы молча.
+func (s *PublicService) offered(ctx context.Context, sch Schedule, at time.Time, clientID uuid.UUID, seats int) error {
+	// Окно в одну точку: считать весь горизонт ради одного слота незачем.
+	slots, err := s.freeSlots(ctx, sch, at, at.Add(time.Minute), clientID)
 	if err != nil {
 		return err
 	}

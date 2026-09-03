@@ -828,7 +828,7 @@ func (s *Service) Delete(ctx context.Context, userID, formID uuid.UUID) error {
 		}
 		if n > 0 {
 			return fmt.Errorf("%w: у формы %s — сначала отмените их в расписании",
-				domain.ErrConflict, pluralBookings(n))
+				domain.ErrConflict, domain.Plural(n, "будущая запись", "будущие записи", "будущих записей"))
 		}
 	}
 	// Файлы ответов — ПЕРЕД строкой формы: каскад унесёт строки загрузок вместе с
@@ -1384,19 +1384,4 @@ func clampLimit(limit int) int {
 	default:
 		return limit
 	}
-}
-
-// pluralBookings — «1 будущая запись», «2 будущие записи», «5 будущих записей».
-// Отказ читает живой человек, и число без согласования выглядит машинным сбоем.
-func pluralBookings(n int64) string {
-	word := "будущих записей"
-	if mod100 := n % 100; mod100 < 11 || mod100 > 14 {
-		switch n % 10 {
-		case 1:
-			word = "будущая запись"
-		case 2, 3, 4:
-			word = "будущие записи"
-		}
-	}
-	return fmt.Sprintf("%d %s", n, word)
 }

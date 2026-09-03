@@ -187,7 +187,7 @@ func (s *Service) Delete(ctx context.Context, userID, scheduleID uuid.UUID) erro
 	}
 	if future > 0 {
 		return fmt.Errorf("%w: у расписания %s — сначала отмените их",
-			domain.ErrConflict, plural(future, "будущая запись", "будущие записи", "будущих записей"))
+			domain.ErrConflict, domain.Plural(future, "будущая запись", "будущие записи", "будущих записей"))
 	}
 	// Форма со ссылкой на расписание — второй отказ, и он обязан быть отдельным:
 	// внешний ключ отвергнет удаление ошибкой БД, а она автору ничего не объясняет.
@@ -197,7 +197,7 @@ func (s *Service) Delete(ctx context.Context, userID, scheduleID uuid.UUID) erro
 	}
 	if forms > 0 {
 		return fmt.Errorf("%w: на расписание ссылается %s — сначала уберите запись из них",
-			domain.ErrConflict, plural(forms, "форма", "формы", "форм"))
+			domain.ErrConflict, domain.Plural(forms, "форма", "формы", "форм"))
 	}
 	n, err := s.repo.DeleteSchedule(ctx, s.db, scheduleID)
 	if err != nil {
@@ -305,21 +305,4 @@ func (s *Service) forAction(ctx context.Context, userID, scheduleID uuid.UUID, a
 		return Schedule{}, err
 	}
 	return sch, nil
-}
-
-// plural — «1 форма», «2 формы», «5 форм». Отказ читает живой человек, и число
-// без согласования выглядит машинным сбоем.
-func plural(n int64, one, few, many string) string {
-	word := many
-	switch mod100 := n % 100; {
-	case mod100 >= 11 && mod100 <= 14:
-	default:
-		switch n % 10 {
-		case 1:
-			word = one
-		case 2, 3, 4:
-			word = few
-		}
-	}
-	return fmt.Sprintf("%d %s", n, word)
 }

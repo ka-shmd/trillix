@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { z } from 'zod'
 
 import './cancel.css'
+import { LOCALE } from '@fields/locale'
 
 // Страница отмены записи (фаза 27, слайс H). Открывается по ссылке из письма; право
 // предъявляет подписанный токен в адресе — ни сессии, ни пароля у респондента нет.
@@ -113,18 +114,18 @@ function Note({ children }: { children: React.ReactNode }) {
 // лишняя строка объясняла бы то, чего никто не спрашивал.
 function whenLabel(card: Card): string {
   const at = new Date(card.startsAt)
-  const day = at.toLocaleString('ru-RU', {
+  const day = at.toLocaleString(LOCALE, {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
     hour: '2-digit',
     minute: '2-digit',
   })
-  const theirs = at.toLocaleTimeString('ru-RU', {
+  const theirs = at.toLocaleTimeString(LOCALE, {
     timeZone: card.timezone,
     hour: '2-digit',
     minute: '2-digit',
   })
-  const mine = at.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  const mine = at.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' })
   return theirs === mine ? day : `${day} (${theirs} у мастера)`
 }

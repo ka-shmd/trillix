@@ -1,4 +1,5 @@
 import { type FreeSlot } from '../booking'
+import { LOCALE } from '../locale'
 
 // Чистая часть пикера: как список свободных точек превращается в то, что видит
 // респондент. Отдельно от компонента, потому что проверяется таблицей, а не глазами.
@@ -16,7 +17,7 @@ export type SlotDay = {
 // своим календарём, и «четверг» для него — его четверг. Расписание при этом может быть
 // в другом поясе — тогда одна и та же точка попадёт у автора и у респондента в разные
 // дни, и это правильно.
-export function groupByDay(slots: FreeSlot[], locale = 'ru-RU'): SlotDay[] {
+export function groupByDay(slots: FreeSlot[]): SlotDay[] {
   const days: SlotDay[] = []
   const index = new Map<string, SlotDay>()
   for (const slot of slots) {
@@ -25,7 +26,7 @@ export function groupByDay(slots: FreeSlot[], locale = 'ru-RU'): SlotDay[] {
     const key = dayKey(at)
     let day = index.get(key)
     if (!day) {
-      day = { key, label: dayLabel(at, locale), slots: [] }
+      day = { key, label: dayLabel(at), slots: [] }
       index.set(key, day)
       days.push(day)
     }
@@ -47,13 +48,13 @@ function dayKey(at: Date): string {
   return `${at.getFullYear()}-${p(at.getMonth() + 1)}-${p(at.getDate())}`
 }
 
-function dayLabel(at: Date, locale: string): string {
-  return at.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'long' })
+function dayLabel(at: Date): string {
+  return at.toLocaleDateString(LOCALE, { weekday: 'short', day: 'numeric', month: 'long' })
 }
 
 // timeLabel — время точки в поясе читателя.
-export function timeLabel(startsAt: string, locale = 'ru-RU'): string {
-  return new Date(startsAt).toLocaleTimeString(locale, { hour: '2-digit', minute: '2-digit' })
+export function timeLabel(startsAt: string): string {
+  return new Date(startsAt).toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' })
 }
 
 // zoneNote — подпись «время в вашем поясе», и она называет ЧУЖОЙ пояс только когда он

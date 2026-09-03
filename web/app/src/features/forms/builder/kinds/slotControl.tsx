@@ -1,4 +1,5 @@
 import { type Block } from '@entities/formSchema'
+import { SlotPlate } from '@fields/kinds/slot'
 
 import { FieldWrap } from './fieldWrap'
 
@@ -7,15 +8,13 @@ import { FieldWrap } from './fieldWrap'
 // строки нечего — строка записи ОБЪЕКТ (каретка встаёт на неё саму, кольцом), как дата
 // и шкала.
 //
-// Плашка та же, что увидит респондент (`rf-slot` из fields.css): полотно остаётся
-// WYSIWYG. Расписание здесь не называется — оно свойство ФОРМЫ, а не вопроса, и живёт
-// в попапе строки.
+// Плашка — та же самая, что увидит респондент (SlotPlate из @fields): полотно остаётся
+// WYSIWYG не по совпадению разметки, а по общему коду. Расписание здесь не называется —
+// оно свойство ФОРМЫ, а не вопроса, и живёт в попапе строки.
 export function SlotControl({ block }: { block: Block }) {
   return (
     <FieldWrap block={block}>
-      <div className="rf-slot pointer-events-none">
-        <span className="rf-slot-empty">Выбор времени записи</span>
-      </div>
+      <SlotPlate value="" className="pointer-events-none" />
     </FieldWrap>
   )
 }

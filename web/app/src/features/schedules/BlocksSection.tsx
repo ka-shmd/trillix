@@ -11,6 +11,7 @@ import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { humanError } from '../../shared/api/errors'
+import { LOCALE } from '../../shared/format'
 
 // Занятое время, закрытое руками: отпуск, свои дела, «сегодня обед на час позже».
 //
@@ -115,12 +116,12 @@ export function BlocksSection({ scheduleId }: { scheduleId: string }) {
 function blockRange(b: ScheduleBlock): string {
   const from = new Date(b.startsAt)
   const to = new Date(b.endsAt)
-  const day = from.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
-  const time = (d: Date) => d.toLocaleTimeString('ru-RU', { hour: '2-digit', minute: '2-digit' })
+  const day = from.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long' })
+  const time = (d: Date) => d.toLocaleTimeString(LOCALE, { hour: '2-digit', minute: '2-digit' })
   // Блокировка через полночь — редкость (отпуск), но она бывает, и «14 сентября,
   // 22:00 — 06:00» без второй даты читалось бы как ошибка.
   const sameDay = from.toDateString() === to.toDateString()
   if (sameDay) return `${day}, ${time(from)} — ${time(to)}`
-  const toDay = to.toLocaleDateString('ru-RU', { day: 'numeric', month: 'long' })
+  const toDay = to.toLocaleDateString(LOCALE, { day: 'numeric', month: 'long' })
   return `${day}, ${time(from)} — ${toDay}, ${time(to)}`
 }

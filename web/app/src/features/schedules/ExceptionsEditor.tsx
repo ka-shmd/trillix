@@ -11,6 +11,7 @@ import { TimeField } from '../../shared/TimeField'
 import { Button } from '@/components/ui/button'
 import { EmptyState } from '../../shared/page/states'
 import { windowsError } from './weekly'
+import { LOCALE } from '../../shared/format'
 
 // Исключения по датам: «14 сентября не принимаю» и «20-го только с 10 до 12».
 //
@@ -81,7 +82,7 @@ function ExceptionRow({
     <div className="flex flex-col gap-2 rounded-lg border p-3">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="text-base font-semibold">
-          {new Date(`${exception.date}T00:00`).toLocaleDateString('ru-RU', {
+          {new Date(`${exception.date}T00:00`).toLocaleDateString(LOCALE, {
             day: 'numeric',
             month: 'long',
             year: 'numeric',

@@ -15,6 +15,7 @@ import {
   packRows,
   splitFormTitle,
 } from '@fields/groups'
+import { LOCALE } from '@fields/locale'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { groupClass } from '@fields/space'
@@ -154,7 +155,7 @@ function PrintFooter({ data }: { data: PrintData }) {
 function formatMoscow(iso: string): string {
   const at = new Date(iso)
   if (Number.isNaN(at.getTime())) return iso
-  const text = new Intl.DateTimeFormat('ru-RU', {
+  const text = new Intl.DateTimeFormat(LOCALE, {
     timeZone: 'Europe/Moscow',
     day: 'numeric',
     month: 'long',

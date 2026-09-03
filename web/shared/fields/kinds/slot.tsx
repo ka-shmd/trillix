@@ -1,6 +1,7 @@
 import { useEffect, useState, type ComponentType } from 'react'
 
 import { useSlotSource } from '../booking'
+import { LOCALE } from '../locale'
 import { type SlotPickerProps } from '../slots/SlotPicker'
 import { type Control, type ControlProps, textValue } from './contract'
 
@@ -67,10 +68,14 @@ function SlotField(p: ControlProps) {
   )
 }
 
-function SlotPlate({ value }: { value: string }) {
+// SlotPlate — вид вопроса ТАМ, ГДЕ ВЫБИРАТЬ НЕЧЕГО: пока едет пикер, в печатном листе
+// и на полотне редактора (builder/kinds/slotControl.tsx надевает её же). Экспортируется
+// ради последней: полотно обязано показывать ровно то, что увидит респондент, а вторая
+// копия этих шести строк разъехалась бы с первой при первой же правке вида.
+export function SlotPlate({ value, className = '' }: { value: string; className?: string }) {
   const at = readTime(value)
   return (
-    <div className="rf-slot">
+    <div className={className === '' ? 'rf-slot' : `rf-slot ${className}`}>
       {at ? (
         <span className="rf-slot-value">{at}</span>
       ) : (
@@ -84,7 +89,7 @@ function readTime(raw: string): string | null {
   if (raw === '') return null
   const at = new Date(raw)
   if (Number.isNaN(at.getTime())) return null
-  return at.toLocaleString('ru-RU', {
+  return at.toLocaleString(LOCALE, {
     day: 'numeric',
     month: 'long',
     hour: '2-digit',

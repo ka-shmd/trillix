@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { HOLD_CONFLICT, HOLD_NO_SEATS, type FreeSlot, type SlotSource } from '../booking'
+import { LOCALE } from '../locale'
 import { fits, groupByDay, timeLabel, zoneNote, type SlotDay } from './slotList'
 import './slots.css'
 
@@ -94,7 +95,7 @@ export default function SlotPicker(p: SlotPickerProps) {
       <div className="rf-slots" aria-label={p.label}>
         <div className="rf-slot">
           <span className="rf-slot-value">
-            {new Date(held.startsAt).toLocaleString('ru-RU', {
+            {new Date(held.startsAt).toLocaleString(LOCALE, {
               day: 'numeric',
               month: 'long',
               hour: '2-digit',
