@@ -156,6 +156,31 @@ func (q *Queries) ClearFormIntegrationError(ctx context.Context, id uuid.UUID) e
 	return err
 }
 
+const confirmBooking = `-- name: ConfirmBooking :execrows
+UPDATE bookings
+SET status = 'confirmed', submission_id = $2, hold_expires_at = NULL
+WHERE id = $1 AND status IN ('held', 'confirmed')
+`
+
+type ConfirmBookingParams struct {
+	ID           uuid.UUID
+	SubmissionID pgtype.UUID
+}
+
+// Холд становится записью. hold_expires_at гасится: подтверждённая бронь срока не
+// имеет, и оставленное время однажды прочиталось бы чисткой как «протухла».
+//
+// status IN ('held','confirmed') делает утверждение ИДЕМПОТЕНТНЫМ: ретрай отправки с
+// тем же id ответа проходит по второй ветке и ничего не меняет. Отменённую бронь
+// утверждение не воскрешает — 0 строк, и это разбирает сервис.
+func (q *Queries) ConfirmBooking(ctx context.Context, arg ConfirmBookingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, confirmBooking, arg.ID, arg.SubmissionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const confirmTOTP = `-- name: ConfirmTOTP :exec
 UPDATE user_totp SET confirmed_at = now(), last_step = $2 WHERE user_id = $1
 `
@@ -1501,6 +1526,51 @@ func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) 
 	return i, err
 }
 
+const getBookingForConfirm = `-- name: GetBookingForConfirm :one
+SELECT id, schedule_id, starts_at, duration_minutes, seats, status, hold_expires_at, submission_id
+FROM bookings
+WHERE id = $1 AND form_id = $2 AND client_id = $3
+`
+
+type GetBookingForConfirmParams struct {
+	ID       uuid.UUID
+	FormID   uuid.UUID
+	ClientID uuid.UUID
+}
+
+type GetBookingForConfirmRow struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	HoldExpiresAt   pgtype.Timestamptz
+	SubmissionID    pgtype.UUID
+}
+
+// Бронь, которую подтверждает приём ответа. Три условия сразу, и все три несущие:
+// id брони приезжает в ОТВЕТЕ респондента, то есть недоверенным вводом, а форма и
+// клиент — то, что о нём уже известно. Без них можно было бы подтвердить чужую бронь
+// по угаданному id (инвариант 1).
+//
+// client_id совпадает с id ответа по устройству: тем же id браузер брал холд.
+func (q *Queries) GetBookingForConfirm(ctx context.Context, arg GetBookingForConfirmParams) (GetBookingForConfirmRow, error) {
+	row := q.db.QueryRow(ctx, getBookingForConfirm, arg.ID, arg.FormID, arg.ClientID)
+	var i GetBookingForConfirmRow
+	err := row.Scan(
+		&i.ID,
+		&i.ScheduleID,
+		&i.StartsAt,
+		&i.DurationMinutes,
+		&i.Seats,
+		&i.Status,
+		&i.HoldExpiresAt,
+		&i.SubmissionID,
+	)
+	return i, err
+}
+
 const getEmailByUserID = `-- name: GetEmailByUserID :one
 SELECT email FROM users WHERE id = $1
 `
@@ -2399,6 +2469,19 @@ func (q *Queries) GetSchedule(ctx context.Context, id uuid.UUID) (Schedule, erro
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const getScheduleCapacity = `-- name: GetScheduleCapacity :one
+SELECT capacity FROM schedules WHERE id = $1
+`
+
+// Вместимость слота — одно число для подтверждения брони. Всю строку читать незачем:
+// документ правила это килобайты JSONB на каждом принятом ответе.
+func (q *Queries) GetScheduleCapacity(ctx context.Context, id uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, getScheduleCapacity, id)
+	var capacity int32
+	err := row.Scan(&capacity)
+	return capacity, err
 }
 
 const getSessionUser = `-- name: GetSessionUser :one

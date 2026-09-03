@@ -173,3 +173,30 @@ DO UPDATE SET
     hold_expires_at  = EXCLUDED.hold_expires_at
 WHERE bookings.status = 'held'
 RETURNING id;
+
+-- name: GetBookingForConfirm :one
+-- Бронь, которую подтверждает приём ответа. Три условия сразу, и все три несущие:
+-- id брони приезжает в ОТВЕТЕ респондента, то есть недоверенным вводом, а форма и
+-- клиент — то, что о нём уже известно. Без них можно было бы подтвердить чужую бронь
+-- по угаданному id (инвариант 1).
+--
+-- client_id совпадает с id ответа по устройству: тем же id браузер брал холд.
+SELECT id, schedule_id, starts_at, duration_minutes, seats, status, hold_expires_at, submission_id
+FROM bookings
+WHERE id = $1 AND form_id = $2 AND client_id = $3;
+
+-- name: ConfirmBooking :execrows
+-- Холд становится записью. hold_expires_at гасится: подтверждённая бронь срока не
+-- имеет, и оставленное время однажды прочиталось бы чисткой как «протухла».
+--
+-- status IN ('held','confirmed') делает утверждение ИДЕМПОТЕНТНЫМ: ретрай отправки с
+-- тем же id ответа проходит по второй ветке и ничего не меняет. Отменённую бронь
+-- утверждение не воскрешает — 0 строк, и это разбирает сервис.
+UPDATE bookings
+SET status = 'confirmed', submission_id = $2, hold_expires_at = NULL
+WHERE id = $1 AND status IN ('held', 'confirmed');
+
+-- name: GetScheduleCapacity :one
+-- Вместимость слота — одно число для подтверждения брони. Всю строку читать незачем:
+-- документ правила это килобайты JSONB на каждом принятом ответе.
+SELECT capacity FROM schedules WHERE id = $1;

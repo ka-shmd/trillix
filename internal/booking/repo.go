@@ -362,3 +362,58 @@ type NewHold struct {
 	Seats           int
 	ExpiresAt       time.Time
 }
+
+// BookingForConfirm — бронь для подтверждения приёмом ответа. Форма и клиент в
+// условии не украшение: id брони приезжает в ответе респондента, то есть недоверенным
+// вводом.
+func (Repo) BookingForConfirm(ctx context.Context, db postgres.DBTX, bookingID, formID, clientID uuid.UUID) (BookingRow, error) {
+	row, err := postgres.New(db).GetBookingForConfirm(ctx, postgres.GetBookingForConfirmParams{
+		ID:       bookingID,
+		FormID:   formID,
+		ClientID: clientID,
+	})
+	if err != nil {
+		// pgx.ErrNoRows пробрасывается как есть: «нет такой брони» разбирает
+		// вызывающий — для отвечающего это не ошибка запроса, а состояние.
+		return BookingRow{}, err
+	}
+	out := BookingRow{
+		ID:         row.ID,
+		ScheduleID: row.ScheduleID,
+		StartsAt:   row.StartsAt.Time,
+		Seats:      int(row.Seats),
+		Status:     row.Status,
+	}
+	if row.HoldExpiresAt.Valid {
+		at := row.HoldExpiresAt.Time
+		out.HoldExpires = &at
+	}
+	if row.SubmissionID.Valid {
+		id := uuid.UUID(row.SubmissionID.Bytes)
+		out.SubmissionID = &id
+	}
+	return out, nil
+}
+
+// ScheduleCapacity — вместимость слота расписания. Отдельным запросом, а не чтением
+// всей строки: подтверждению нужно одно число, а расписание с документом правила —
+// это килобайты JSONB на каждом принятом ответе.
+func (Repo) ScheduleCapacity(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID) (int, error) {
+	n, err := postgres.New(db).GetScheduleCapacity(ctx, scheduleID)
+	if err != nil {
+		return 0, fmt.Errorf("capacity of schedule %s: %w", scheduleID, err)
+	}
+	return int(n), nil
+}
+
+// AttachBooking привязывает бронь к ответу и делает её подтверждённой.
+func (Repo) AttachBooking(ctx context.Context, db postgres.DBTX, bookingID, submissionID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).ConfirmBooking(ctx, postgres.ConfirmBookingParams{
+		ID:           bookingID,
+		SubmissionID: pgtype.UUID{Bytes: submissionID, Valid: true},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("confirm booking %s: %w", bookingID, err)
+	}
+	return n, nil
+}

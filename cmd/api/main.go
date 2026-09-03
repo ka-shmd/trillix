@@ -498,6 +498,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// числа расписаний — у entitlements; своей транзакции у модуля нет.
 	bookingSvc := booking.NewService(pool, booking.Repo{}, workspacesSvc, entitlementsSvc)
 	bookingHandler := booking.NewHandler(bookingSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	// Подтверждение брони в приёме ответа: работает внутри транзакции submissions,
+	// поэтому ни пула, ни своих часов ему не даётся.
+	bookingConfirmer := booking.NewConfirmer(booking.Repo{})
 	// Публичная половина записи: свободное время и холд. Своя транзакция ей нужна —
 	// лок слота, счёт занятого и вставка обязаны быть одной.
 	bookingPublicSvc := booking.NewPublicService(pool, postgres.TxRunner{Pool: pool}, booking.Repo{}, formsSvc)
@@ -590,6 +593,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	respondentMailLimiter := ratelimit.NewTokenBucket(respondentMailRatePerSec, respondentMailBurst)
 	submissionsSvc := submissions.NewService(pool, postgres.TxRunner{Pool: pool}, formsSvc, visitsSvc, mailSvc, entitlementsSvc, submissions.Repo{}, cfg.AppOrigin).
 		WithFiles(filesSvc).
+		// Подтверждение записи (фаза 27): холд становится бронью в той же
+		// транзакции, что принимает ответ, — время записи уезжает в сам ответ.
+		WithBookings(bookingConfirmer).
 		// Адрес публичного рендерера нужен подвалу письма респонденту: в нём стоит
 		// ссылка на саму форму, а собрать её из origin кабинета нельзя.
 		WithRespondentMail(cfg.PublicRendererBaseURL, respondentMailLimiter)

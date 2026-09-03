@@ -251,6 +251,9 @@ type Service struct {
 	// коллабораторов, и девятый позиционный аргумент — это способ однажды
 	// перепутать два соседних интерфейса местами.
 	files AnswerFiles
+	// bookings — подтверждение записи на время (фаза 27); nil = записи на контуре
+	// нет, и ответ с бронью отвергается.
+	bookings Bookings
 	// integrations — доставка ответа во внешние системы (фаза 25). Тем же
 	// сеттером и по той же причине, что files; nil = интеграций в сборке нет.
 	integrations Integrations
@@ -298,6 +301,26 @@ type Integrations interface {
 // сервис, и в конструктор его передать было бы нечем.
 func (s *Service) WithIntegrations(i Integrations) *Service {
 	s.integrations = i
+	return s
+}
+
+// Bookings — подтверждение брони внутри транзакции приёма (фаза 27). Реализация —
+// *booking.Confirmer. Интерфейс объявлен здесь, у потребителя: приём ответа знает про
+// бронь ровно две вещи — придержать место и привязать его к ответу.
+type Bookings interface {
+	// Reserve проверяет бронь и держит место ДО вставки строки ответа: время записи
+	// уезжает в сам ответ, и узнать его надо раньше.
+	Reserve(ctx context.Context, tx pgx.Tx, bookingID, formID, submissionID uuid.UUID) (domain.SlotHold, error)
+	// Attach привязывает бронь к принятому ответу — ПОСЛЕ вставки: внешний ключ
+	// требует, чтобы строка ответа уже существовала.
+	Attach(ctx context.Context, tx pgx.Tx, bookingID, submissionID uuid.UUID) error
+}
+
+// WithBookings подключает подтверждение записи. Без него форма с вопросом о времени
+// отвергает ответ с бронью: молча принять ссылку на бронь, которую некому проверить,
+// нельзя — ровно как с файлами.
+func (s *Service) WithBookings(b Bookings) *Service {
+	s.bookings = b
 	return s
 }
 
@@ -376,6 +399,17 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		}
 	}
 
+	// Бронь, названная в ответе. Как и файлы, она сверяется с базой ДО записи: та ли
+	// форма, тот ли клиент, не отменена ли, — иначе в ответе оказалась бы ссылка на
+	// чужую или несуществующую запись.
+	booking, err := slotAnswer(schema, clean)
+	if err != nil {
+		return err
+	}
+	if booking.BlockID != "" && s.bookings == nil {
+		return fmt.Errorf("%w: форма не принимает запись на время", domain.ErrValidation)
+	}
+
 	answersJSON, err := json.Marshal(clean)
 	if err != nil {
 		return fmt.Errorf("marshal answers: %w", err)
@@ -420,65 +454,82 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// (тот же id): ответ уже принят, повторно ни считать лимит, ни слать письмо не надо.
 	var inserted bool
 
-	switch {
-	// Без лимита и без файлов — прежний путь без блокировки: одна вставка на пуле.
-	case pf.ResponseLimit == nil && len(files) == 0:
+	// ТРАНЗАКЦИЯ НУЖНА НЕ ВСЕГДА, и это не микрооптимизация: приём ответа — самый
+	// нагруженный путь продукта, а у формы без лимита, файлов и записи вставка одна.
+	//
+	// До фазы 27 здесь стоял switch по парам «лимит × файлы». Третья причина открывать
+	// транзакцию превратила бы его в восемь веток с повторами внутри, поэтому ветвление
+	// снято: причины перечислены, шаги внутри — под своими условиями.
+	needsTx := pf.ResponseLimit != nil || len(files) > 0 || booking.BlockID != ""
+	if !needsTx {
 		n, err := s.repo.InsertSubmission(ctx, s.db, in)
 		if err != nil {
 			return err
 		}
 		inserted = n > 0
-
-	// Есть файлы, но нет лимита: транзакция нужна не ради счёта, а ради атомарности
-	// «ответ + заявленные файлы». Разъехавшись, эти две записи дают либо ответ со
-	// ссылками на сирот, либо файлы, привязанные к ответу, которого нет.
-	case pf.ResponseLimit == nil:
-		if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
-			n, err := s.repo.InsertSubmission(ctx, tx, in)
-			if err != nil {
-				return err
-			}
-			// n == 0 — идемпотентный ретрай: заявление всё равно повторяем, оно
-			// узнаёт свои же файлы (условие submission_id в запросе Claim).
-			inserted = n > 0
-			return s.files.Claim(ctx, tx, id, pf.FormID, files)
-		}); err != nil {
-			return err
-		}
-
-	default:
-		// Жёсткий кап (ADR §10): advisory-lock по форме сериализует конкурентные приёмы,
-		// поэтому счёт точен и перебор невозможен. Порядок «вставка → счёт» держит
-		// идемпотентность: ретрай даёт n == 0 (конфликт по PK) и проходит МИМО лимита
-		// (ответ уже принят); новая вставка сверх лимита откатывается (счёт с учётом
-		// только что вставленной строки превышает лимит) — форма как раз заполнилась.
-		limit := int64(*pf.ResponseLimit)
-		if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+	} else if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		// ⚠ ПОРЯДОК ЛОКОВ ФИКСИРОВАН: сначала форма (жёсткий кап лимита), потом слот
+		// (подтверждение брони). Два лока, взятых в обратном порядке двумя приёмами,
+		// дают дедлок — и увидеть его можно только под нагрузкой.
+		if pf.ResponseLimit != nil {
 			if err := s.repo.LockFormForSubmit(ctx, tx, pf.FormID); err != nil {
 				return err
 			}
-			n, err := s.repo.InsertSubmission(ctx, tx, in)
+		}
+
+		// Бронь придерживается ДО вставки: время записи уезжает В САМ ОТВЕТ, и
+		// узнать его надо раньше, чем строка ответа уйдёт в базу.
+		if booking.BlockID != "" {
+			held, err := s.bookings.Reserve(ctx, tx, booking.BookingID, pf.FormID, id)
 			if err != nil {
 				return err
 			}
-			if n == 0 {
-				return nil // идемпотентный ретрай — ответ уже принят, лимит ни при чём
+			// ⚠ ЗНАЧЕНИЕ ОТВЕТА ПЕРЕПИСЫВАЕТСЯ СЕРВЕРОМ: на проводе приезжал id
+			// брони, в базе лежит ВРЕМЯ (design/booking.md §5.6). Поверить телу
+			// запроса значило бы позволить записаться на время, которого никто не
+			// бронировал.
+			slotValue, err := json.Marshal(held.StartsAt.UTC().Format(time.RFC3339))
+			if err != nil {
+				return fmt.Errorf("marshal slot answer: %w", err)
 			}
+			clean[booking.BlockID] = slotValue
+			if in.Answers, err = json.Marshal(clean); err != nil {
+				return fmt.Errorf("marshal answers: %w", err)
+			}
+			booking.StartsAt = held.StartsAt
+		}
+
+		n, err := s.repo.InsertSubmission(ctx, tx, in)
+		if err != nil {
+			return err
+		}
+		// n == 0 — идемпотентный ретрай: ответ уже принят. Заявление файлов и
+		// привязка брони всё равно повторяются — оба узнают свой же ответ и второго
+		// места не занимают; лимит же проходит МИМО (форма уже приняла этот ответ).
+		inserted = n > 0
+
+		if pf.ResponseLimit != nil && inserted {
 			count, err := s.repo.CountSubmissions(ctx, tx, pf.FormID)
 			if err != nil {
 				return err
 			}
-			if count > limit {
+			if count > int64(*pf.ResponseLimit) {
 				return domain.ErrFormClosed // откат вставки: форма только что заполнилась
 			}
-			inserted = true
-			if len(files) > 0 {
-				return s.files.Claim(ctx, tx, id, pf.FormID, files)
-			}
-			return nil
-		}); err != nil {
-			return err
 		}
+		if len(files) > 0 {
+			if err := s.files.Claim(ctx, tx, id, pf.FormID, files); err != nil {
+				return err
+			}
+		}
+		if booking.BlockID != "" {
+			if err := s.bookings.Attach(ctx, tx, booking.BookingID, id); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	// Побочные эффекты — ПОСЛЕ приёма и best-effort (ни один не имеет права уронить
@@ -1574,4 +1625,45 @@ func truncate(s string, n int) string {
 		return s[:n]
 	}
 	return s
+}
+
+// slotBooking — что приём ответа знает о записи на время из самого ответа.
+type slotBooking struct {
+	// BlockID — id вопроса о записи; пусто = записи в этом ответе нет (вопроса нет в
+	// схеме или на него не ответили).
+	BlockID   string
+	BookingID uuid.UUID
+	// StartsAt заполняется ПОСЛЕ подтверждения — тем временем, что лежит в броне.
+	StartsAt time.Time
+}
+
+// slotAnswer достаёт бронь из ответа. На проводе у вопроса о записи лежит id брони —
+// и только он (design/booking.md §5.6); всё остальное о записи знает база.
+//
+// Пустой ответ на необязательный вопрос — не ошибка: вопрос о времени можно не
+// заполнить, как любой другой. Обязательность уже проверена NormalizeAnswers.
+func slotAnswer(schema domain.FormSchema, answers map[string]json.RawMessage) (slotBooking, error) {
+	for i := range schema.Blocks {
+		b := schema.Blocks[i]
+		if b.Type != domain.BlockSlot {
+			continue
+		}
+		raw, ok := answers[b.ID]
+		if !ok || len(raw) == 0 {
+			return slotBooking{}, nil
+		}
+		var v string
+		if json.Unmarshal(raw, &v) != nil || v == "" {
+			return slotBooking{}, nil
+		}
+		id, err := uuid.Parse(v)
+		if err != nil {
+			// Строка не id брони: либо мусор, либо уже записанное время (повторная
+			// проверка сохранённого). Второе сюда не приходит — ответ принимается
+			// один раз, — а первое подтверждать нечем.
+			return slotBooking{}, fmt.Errorf("%w: время записи не выбрано", domain.ErrValidation)
+		}
+		return slotBooking{BlockID: b.ID, BookingID: id}, nil
+	}
+	return slotBooking{}, nil
 }

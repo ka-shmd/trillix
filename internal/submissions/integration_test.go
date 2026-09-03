@@ -20,6 +20,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/ka-shmd/trillix/internal/auth"
+	"github.com/ka-shmd/trillix/internal/booking"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/pgtest"
@@ -72,7 +73,11 @@ func newServer(t *testing.T) *httptest.Server {
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc, pgtest.MailService(testPool), entSvc, submissions.Repo{}, "http://app.test").
 		// Потолок писем респондентам подменяется пермиссивным, а не ослабляется
 		// (инвариант 6): тесты проверяют путь письма, а не арифметику ведра.
-		WithRespondentMail("http://f.test", ratelimit.AllowAll{})
+		WithRespondentMail("http://f.test", ratelimit.AllowAll{}).
+		// Подтверждение записи (фаза 27): без него форма с вопросом о времени
+		// отвергает ответ с бронью — молча принять ссылку, которую некому проверить,
+		// нельзя.
+		WithBookings(booking.NewConfirmer(booking.Repo{}))
 	h := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
 
 	mux := http.NewServeMux()
@@ -106,6 +111,61 @@ func publishedForm(t *testing.T, schema string) (slug string, versionID uuid.UUI
 	if _, err := formsSvc.UpdateDraftSchema(ctx, user.ID, form.ID, json.RawMessage(schema), form.UpdatedAt); err != nil {
 		t.Fatalf("save schema: %v", err)
 	}
+	if _, err := formsSvc.Publish(ctx, user.ID, form.ID); err != nil {
+		t.Fatalf("publish: %v", err)
+	}
+	pf, err := formsSvc.PublicForm(ctx, form.Slug)
+	if err != nil {
+		t.Fatalf("resolve published: %v", err)
+	}
+	return form.Slug, pf.VersionID
+}
+
+// publishedFormWithSchedule — форма с вопросом о записи и расписанием, привязанным ДО
+// публикации: гейт фазы 27 не выпускает форму с вопросом о времени и пустым
+// расписанием.
+func publishedFormWithSchedule(t *testing.T, capacity int) (slug string, versionID uuid.UUID) {
+	t.Helper()
+	ctx := context.Background()
+	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
+			pgtest.MailService(testPool), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
+		WithSecret(testSecret)
+
+	user, _, err := authSvc.Register(ctx, "slot-"+uuid.NewString()[:8]+"@example.com", "supersecret1")
+	if err != nil {
+		t.Fatalf("register: %v", err)
+	}
+	form, err := formsSvc.Create(ctx, user.ID, "Запись", nil)
+	if err != nil {
+		t.Fatalf("create form: %v", err)
+	}
+	schema := `{"blocks":[
+		{"id":"t_s1","groupId":"g_s1","type":"title","text":[{"t":"Когда удобно"}]},
+		{"id":"s1","groupId":"g_s1","type":"slot","settings":{}}]}`
+	updated, err := formsSvc.UpdateDraftSchema(ctx, user.ID, form.ID, json.RawMessage(schema), form.UpdatedAt)
+	if err != nil {
+		t.Fatalf("save schema: %v", err)
+	}
+
+	scheduleID := uuid.New()
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO schedules (id, workspace_id, name, timezone, availability,
+		   slot_minutes, buffer_minutes, horizon_days, lead_minutes, capacity, max_seats_per_booking, show_remaining)
+		 SELECT $1, f.workspace_id, 'Мария', 'Europe/Moscow', '{"weekly":{},"exceptions":[]}'::jsonb,
+		        60, 0, 30, 0, $3, $3, false
+		 FROM forms f WHERE f.id = $2`,
+		scheduleID, form.ID, capacity); err != nil {
+		t.Fatalf("insert schedule: %v", err)
+	}
+	if _, err := formsSvc.UpdateSchedule(ctx, user.ID, form.ID, &scheduleID); err != nil {
+		t.Fatalf("attach schedule: %v", err)
+	}
+	_ = updated
+
 	if _, err := formsSvc.Publish(ctx, user.ID, form.ID); err != nil {
 		t.Fatalf("publish: %v", err)
 	}
