@@ -34,6 +34,7 @@
 | [`analytics-tally.md`](analytics-tally.md) | задача вне плана, аналитика формы в формате Tally: разделы Insights и Submissions, гео, уникальные посетители, частичные ответы | **на согласовании** — код не начат | [`ANALYTICS.md`](../ANALYTICS.md), [`BILLING.md`](../BILLING.md) |
 | [`respondent-email.md`](respondent-email.md) | задача вне плана, письмо респонденту после отправки формы: адресат из ответа, антиспам-обвязка, гейт тарифа | **не закрыта** — спека живая | [`BILLING.md`](../BILLING.md), [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
 | [`form-password.md`](form-password.md) | задача вне плана, пароль на форму: обратимое хранение, четыре публичных входа, экран ввода в рендерере | **не закрыта** — спека живая | [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
+| [`booking.md`](booking.md) | фаза 27 `DEV-PLAN`, запись на время: расписания пространства, слоты, группы, приглашение в письме | **не закрыта** — спека живая, код не начат | `BOOKING.md` (появится с кодом), [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
 
 Разбор по этапам всех этих работ — [`JOURNAL.md`](../JOURNAL.md) (append-only, читается
 грепом по номеру фазы).
