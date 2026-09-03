@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useMemo, useRef } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 
@@ -9,7 +9,7 @@ import { formKeys } from '../../features/forms/keys'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { type DraftCreation } from '../../features/forms/builder/useAutosave'
 import { BuilderScreen } from '../../features/forms/builder/BuilderScreen'
-import { resolveWorkspaceId } from '../../features/workspaces/current'
+import { resolveWorkspaceId, useCurrentWorkspace } from '../../features/workspaces/current'
 import { useCurrentWorkspaceSlug } from '../../shared/currentWorkspace'
 import { Button } from '@/components/ui/button'
 
@@ -47,7 +47,28 @@ function FormEditor() {
   // остаётся выключенным, но данные отдаёт — их кладёт в кэш onCreated, а дальше
   // двигает автосейв (бейдж «есть изменения», токен блокировки).
   const query = useQuery({ ...formDetailQueryOptions(slug), enabled: !isDraft })
-  const detail = query.data ?? draftDetail
+
+  // ⚠ У ТОЛЬКО ЧТО СОЗДАННОЙ ФОРМЫ В КЭШЕ НЕТ ПРОСТРАНСТВА, и это не мелочь.
+  //
+  // Деталь такой формы собирается из ответа `POST /forms` (onCreated ниже), а он —
+  // короткая карточка: ни workspaceId, ни workspaceSlug в ней нет, и остаются
+  // дефолты синтетической детали, то есть пустые строки. Запрос детали при этом
+  // выключен (форма «черновик» до конца сеанса), поэтому сами они не приедут.
+  //
+  // Видно это было ровно в одном месте и молча: попап блока «Запись» спрашивает
+  // расписания ПРОСТРАНСТВА формы, с пустым id запрос не включался, и автор видел
+  // пустой список — при заведённом расписании (отчёт владельца 2026-09-03).
+  //
+  // Достраиваем из того же источника, которым пользуется всё остальное полотно:
+  // пространство из адреса (`?w=`, пусто = личное). Для НОВОЙ формы это верно по
+  // построению — она заводится ровно туда; у существующей поле уже пришло с сервера
+  // и не трогается.
+  const workspace = useCurrentWorkspace()
+  const detail = useMemo(() => {
+    const base = query.data ?? draftDetail
+    if (!base || base.workspaceId !== '' || !workspace) return base
+    return { ...base, workspaceId: workspace.id, workspaceSlug: workspace.slug }
+  }, [query.data, draftDetail, workspace])
 
   // Живость экрана: сохранение досылается на размонтировании (useAutosave), и форма
   // может родиться уже после ухода автора с полотна. Кэш обновить в этот момент
