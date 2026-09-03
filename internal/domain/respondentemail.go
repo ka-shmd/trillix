@@ -144,3 +144,41 @@ func RespondentAddress(r *RespondentEmail, schema FormSchema, answers map[string
 	}
 	return value
 }
+
+// BookingAddress — куда слать СЛУЖЕБНОЕ письмо записи (фаза 27, design/booking.md
+// §4.8). Оно не настраивается автором вовсе, поэтому и адрес берётся не из бланка:
+//
+//  1. если автор указал источник для своей квитанции — тот же вопрос (два письма
+//     одному человеку обязаны идти на один адрес);
+//  2. иначе — ПЕРВЫЙ вопрос типа email в форме.
+//
+// Второе правило у квитанции отвергнуто намеренно («первый email-вопрос менял бы
+// получателя молча, при правке полотна»), и здесь оно принимается по другой причине:
+// у служебного письма нет настройки, которую можно было бы менять, а без адреса нет и
+// ссылки отмены — то есть место не вернуть в оборот. Выбор между «иногда не тот
+// вопрос» и «никогда никакой» решается в пользу первого.
+func BookingAddress(r *RespondentEmail, schema FormSchema, answers map[string]json.RawMessage) string {
+	if to := RespondentAddress(r, schema, answers); to != "" {
+		return to
+	}
+	for i := range schema.Blocks {
+		b := schema.Blocks[i]
+		if b.Type != BlockEmail {
+			continue
+		}
+		raw, ok := answers[b.ID]
+		if !ok {
+			continue
+		}
+		var value string
+		if err := json.Unmarshal(raw, &value); err != nil || value == "" {
+			continue
+		}
+		addr, err := mail.ParseAddress(value)
+		if err != nil || addr.Address != value || addr.Name != "" {
+			continue
+		}
+		return value
+	}
+	return ""
+}

@@ -44,6 +44,8 @@ type Store interface {
 	DeleteBlock(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int64, error)
 	UpcomingBookings(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from time.Time, limit int32) ([]Booking, error)
 	CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int64, error)
+	// BookingForCancel — карточка записи: письму об отмене нужны время и ответ.
+	BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error)
 }
 
 var _ Store = Repo{}
@@ -62,6 +64,8 @@ type Service struct {
 	repo   Store
 	access Access
 	plans  Plans
+	// notifier — письмо об отмене записи (фаза 27, слайс I).
+	notifier CancelNotifier
 	// now — часы сервиса. Инжектируются, потому что стоп-кран удаления и список
 	// ближайших записей отвечают «начиная с сейчас», и в тестах это «сейчас»
 	// должно быть управляемым.
@@ -75,6 +79,13 @@ func NewService(db postgres.DBTX, repo Store, access Access, plans Plans) *Servi
 // WithClock подменяет часы сервиса (тесты).
 func (s *Service) WithClock(now func() time.Time) *Service {
 	s.now = now
+	return s
+}
+
+// WithNotifier подключает письмо об отмене записи из кабинета. Без него отмена
+// молчалива: место возвращается, а записавшийся об этом не узнаёт.
+func (s *Service) WithNotifier(n CancelNotifier) *Service {
+	s.notifier = n
 	return s
 }
 
@@ -257,9 +268,18 @@ func (s *Service) CancelBooking(ctx context.Context, userID, scheduleID, booking
 	if _, err := s.forAction(ctx, userID, scheduleID, domain.ActionFormWrite); err != nil {
 		return err
 	}
+	// Карточка читается ДО отмены: письму нужны время, длительность и ответ, а после
+	// отмены статус уже другой, и отличить «отменил я» от «было отменено» нечем.
+	card, cardErr := s.repo.BookingForCancel(ctx, s.db, bookingID)
 	n, err := s.repo.CancelBooking(ctx, s.db, bookingID, scheduleID)
 	if err != nil {
 		return err
+	}
+	if n > 0 && cardErr == nil && s.notifier != nil && card.SubmissionID != nil {
+		// Best-effort, как и всё остальное вокруг отмены: сбой почты уже
+		// освобождённое место не занимает.
+		s.notifier.NotifyBookingCanceled(ctx, card.FormID, *card.SubmissionID, bookingID,
+			card.StartsAt, card.DurationMinutes, card.Timezone)
 	}
 	if n == 0 {
 		// Ноль строк — это и «нет такой записи», и «уже отменена». Для клиента

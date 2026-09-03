@@ -108,6 +108,25 @@ func submitWithSlot(t *testing.T, srv *httptest.Server, slug, subID string, book
 	return postSubmission(t, srv, slug, body)
 }
 
+// publishedBookingFormWithEmail — форма с вопросом о записи И вопросом про почту:
+// без адреса письма о записи не бывает, а значит, нет и ссылки отмены.
+func publishedBookingFormWithEmail(t *testing.T) (slug string, scheduleID, formID uuid.UUID) {
+	t.Helper()
+	slug, scheduleID, formID = publishedBookingForm(t, 1)
+	// Вопрос про почту дописывается в опубликованную версию напрямую: пройти билдер
+	// ради одного блока значило бы тестировать не то.
+	schema := `{"schemaVersion":1,"blocks":[
+		{"id":"t_s1","groupId":"g_s1","type":"title","text":[{"t":"Когда удобно"}]},
+		{"id":"s1","groupId":"g_s1","type":"slot","settings":{}},
+		{"id":"t_e1","groupId":"g_e1","type":"title","text":[{"t":"Почта"}]},
+		{"id":"e1","groupId":"g_e1","type":"email","settings":{}}]}`
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE form_versions SET schema = $1::jsonb WHERE form_id = $2`, schema, formID); err != nil {
+		t.Fatalf("update version schema: %v", err)
+	}
+	return slug, scheduleID, formID
+}
+
 // deleteStack — сервис приёма со стоп-краном и id владельца формы: удаление ответа
 // идёт сервисом, а не HTTP, — проверяется правило, а не транспорт.
 func deleteStack(t *testing.T, slug string) (*submissions.Service, uuid.UUID) {
@@ -120,7 +139,8 @@ func deleteStack(t *testing.T, slug string) (*submissions.Service, uuid.UUID) {
 	visitsSvc := visits.NewService(testPool, formsSvc, plans, visits.Repo{}, nil, nil)
 	svc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc,
 		pgtest.MailService(testPool), plans, submissions.Repo{}, "http://app.test").
-		WithBookingGuard(booking.NewGuard(testPool, booking.Repo{}))
+		WithBookingGuard(booking.NewGuard(testPool, booking.Repo{})).
+		WithBookingMail("Trillix <no-reply@trillix.test>")
 
 	var userID uuid.UUID
 	if err := testPool.QueryRow(context.Background(),
@@ -356,5 +376,102 @@ func TestDeleteSubmission_StopCraneOnFutureBooking(t *testing.T) {
 	}
 	if err := svc.DeleteForForm(context.Background(), userID, formID, subID); err != nil {
 		t.Fatalf("удаление после отмены отвергнуто: %v", err)
+	}
+}
+
+// ПИСЬМО О ЗАПИСИ: уходит после принятого ответа, несёт ссылку отмены и приглашение
+// календаря методом REQUEST. Не гейтится тарифом и не зависит от тумблеров
+// уведомлений — без него у респондента нет ссылки отмены (design/booking.md §4.8).
+func TestSubmit_BookingMailWithInvite(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, scheduleID, formID := publishedBookingFormWithEmail(t)
+
+	subID := uuid.New()
+	at := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Minute)
+	bookingID := seedHold(t, scheduleID, formID, subID, at, 1, time.Now().Add(10*time.Minute))
+
+	body := fmt.Sprintf(`{"submission_id":%q,"token":%q,"answers":{"s1":%q,"e1":"client@example.com"}}`,
+		subID, freshToken(), bookingID.String())
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("отправка: статус %d", resp.StatusCode)
+	}
+
+	var payload []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT payload FROM outbox WHERE payload::text LIKE '%booking_confirmed%' LIMIT 1`).Scan(&payload); err != nil {
+		t.Fatalf("письмо о записи не поставлено в очередь: %v", err)
+	}
+	var msg struct {
+		To     string            `json:"to"`
+		Data   map[string]string `json:"data"`
+		Inline []struct {
+			Name    string `json:"Name"`
+			MIME    string `json:"MIME"`
+			Content []byte `json:"Content"`
+		} `json:"inline"`
+	}
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		t.Fatalf("payload не разбирается: %v", err)
+	}
+	if msg.To != "client@example.com" {
+		t.Fatalf("адресат %q — ожидался ответ на вопрос-email", msg.To)
+	}
+	if !strings.Contains(msg.Data["cancel_link"], "/cancel/") {
+		t.Fatalf("ссылка отмены %q — без неё место не вернуть в оборот", msg.Data["cancel_link"])
+	}
+	if len(msg.Inline) != 1 {
+		t.Fatalf("вложений %d, ожидалось одно приглашение", len(msg.Inline))
+	}
+	if !strings.Contains(msg.Inline[0].MIME, "method=REQUEST") {
+		t.Fatalf("тип вложения %q — без method клиент не покажет кнопку «Принять»", msg.Inline[0].MIME)
+	}
+	ics := string(msg.Inline[0].Content)
+	if !strings.Contains(ics, "METHOD:REQUEST") || !strings.Contains(ics, "UID:booking-"+bookingID.String()) {
+		t.Fatalf("приглашение не то:\n%s", ics)
+	}
+}
+
+// ОТМЕНА ГАСИТ СОБЫТИЕ: письмо об отмене несёт тот же UID и БОЛЬШИЙ номер редакции —
+// иначе календарь заведёт второе событие вместо того, чтобы убрать первое.
+func TestCancel_MailCancelsTheEvent(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, scheduleID, formID := publishedBookingFormWithEmail(t)
+
+	subID := uuid.New()
+	at := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Minute)
+	bookingID := seedHold(t, scheduleID, formID, subID, at, 1, time.Now().Add(10*time.Minute))
+	body := fmt.Sprintf(`{"submission_id":%q,"token":%q,"answers":{"s1":%q,"e1":"client@example.com"}}`,
+		subID, freshToken(), bookingID.String())
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("отправка: статус %d", resp.StatusCode)
+	}
+
+	svc, _ := deleteStack(t, slug)
+	cancel := booking.NewCancelService(testPool, booking.Repo{},
+		booking.DeriveCancelSecret(testSecret)).WithNotifier(svc)
+	tok := booking.IssueCancelToken(booking.DeriveCancelSecret(testSecret), bookingID,
+		time.Now().Add(booking.CancelTTL))
+	if _, err := cancel.Cancel(context.Background(), tok); err != nil {
+		t.Fatalf("отмена: %v", err)
+	}
+
+	var payload []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT payload FROM outbox WHERE payload::text LIKE '%booking_canceled%' LIMIT 1`).Scan(&payload); err != nil {
+		t.Fatalf("письмо об отмене не поставлено: %v", err)
+	}
+	var msg struct {
+		Inline []struct{ Content []byte } `json:"inline"`
+	}
+	if err := json.Unmarshal(payload, &msg); err != nil || len(msg.Inline) != 1 {
+		t.Fatalf("вложение отмены не разобрано: %v", err)
+	}
+	ics := string(msg.Inline[0].Content)
+	for _, want := range []string{"METHOD:CANCEL", "SEQUENCE:1", "UID:booking-" + bookingID.String()} {
+		if !strings.Contains(ics, want) {
+			t.Fatalf("в отмене нет %q:\n%s", want, ics)
+		}
 	}
 }

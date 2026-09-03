@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -34,13 +35,17 @@ var _ ConfirmStore = Repo{}
 
 // BookingRow — строка брони в том виде, в каком её читает подтверждение.
 type BookingRow struct {
-	ID           uuid.UUID
-	ScheduleID   uuid.UUID
-	StartsAt     time.Time
-	Seats        int
-	Status       string
-	HoldExpires  *time.Time
-	SubmissionID *uuid.UUID
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	StartsAt        time.Time
+	DurationMinutes int
+	Seats           int
+	Status          string
+	HoldExpires     *time.Time
+	SubmissionID    *uuid.UUID
+	// Timezone — пояс расписания. Едет джойном вместе с бронью: письму о записи он
+	// нужен, чтобы написать время в обоих поясах.
+	Timezone string
 }
 
 // Confirmer — подтверждение брони. Отдельный тип, а не метод сервиса: его зовёт
@@ -49,6 +54,10 @@ type BookingRow struct {
 type Confirmer struct {
 	repo ConfirmStore
 	now  func() time.Time
+	// secret и baseURL — для ссылки отмены в письме о записи. Подпись требует
+	// секрета, и держать его здесь правильнее, чем раздавать приёму ответа.
+	secret  []byte
+	baseURL string
 }
 
 func NewConfirmer(repo ConfirmStore) *Confirmer {
@@ -59,6 +68,27 @@ func NewConfirmer(repo ConfirmStore) *Confirmer {
 func (c *Confirmer) WithClock(now func() time.Time) *Confirmer {
 	c.now = now
 	return c
+}
+
+// WithCancelLinks включает выдачу ссылок отмены. secret — производный секрет отмены
+// (DeriveCancelSecret), baseURL — адрес публичного рендерера.
+func (c *Confirmer) WithCancelLinks(secret []byte, baseURL string) *Confirmer {
+	c.secret, c.baseURL = secret, strings.TrimRight(baseURL, "/")
+	return c
+}
+
+// CancelLink — адрес страницы отмены этой брони. Пусто, если ссылки на контуре не
+// настроены: письмо тогда уходит без ссылки, а не не уходит вовсе.
+//
+// Путь ОБЯЗАН совпадать с тем, что отдаёт Go (forms: GET /cancel/{token}) и что читает
+// рендерер (main.tsx, CANCEL_PATH). Разъедутся — человек получит письмо со ссылкой на
+// пустую страницу.
+func (c *Confirmer) CancelLink(bookingID uuid.UUID) string {
+	if len(c.secret) == 0 || c.baseURL == "" {
+		return ""
+	}
+	tok := IssueCancelToken(c.secret, bookingID, c.now().Add(CancelTTL))
+	return c.baseURL + "/cancel/" + tok
 }
 
 // Reserve проверяет и придерживает место под ответ. Зовётся ВНУТРИ транзакции приёма,
@@ -86,7 +116,7 @@ func (c *Confirmer) Reserve(ctx context.Context, tx pgx.Tx, bookingID, formID, s
 		// Уже подтверждена ЭТИМ ЖЕ ответом — идемпотентный ретрай отправки. Второго
 		// места он не занимает и ничего не пересчитывает.
 		if b.SubmissionID != nil && *b.SubmissionID == submissionID {
-			return domain.SlotHold{StartsAt: b.StartsAt, Seats: b.Seats}, nil
+			return holdOf(b), nil
 		}
 		// Подтверждена другим ответом того же клиента: по этой форме запись уже есть.
 		return domain.SlotHold{}, fmt.Errorf("%w: по этой форме запись уже оформлена", domain.ErrConflict)
@@ -94,7 +124,7 @@ func (c *Confirmer) Reserve(ctx context.Context, tx pgx.Tx, bookingID, formID, s
 
 	// Живой холд место уже держит — пересчитывать нечего.
 	if b.HoldExpires != nil && b.HoldExpires.After(c.now()) {
-		return domain.SlotHold{StartsAt: b.StartsAt, Seats: b.Seats}, nil
+		return holdOf(b), nil
 	}
 
 	// Холд протух: место могли занять, и решает это счёт под локом — тем же, что у
@@ -114,7 +144,17 @@ func (c *Confirmer) Reserve(ctx context.Context, tx pgx.Tx, bookingID, formID, s
 	if taken+b.Seats > capacity {
 		return domain.SlotHold{}, fmt.Errorf("%w: это время только что заняли", domain.ErrConflict)
 	}
-	return domain.SlotHold{StartsAt: b.StartsAt, Seats: b.Seats}, nil
+	return holdOf(b), nil
+}
+
+// holdOf — строка брони в то, что приём ответа кладёт в ответ и в письмо.
+func holdOf(b BookingRow) domain.SlotHold {
+	return domain.SlotHold{
+		StartsAt:        b.StartsAt,
+		Seats:           b.Seats,
+		DurationMinutes: b.DurationMinutes,
+		Timezone:        b.Timezone,
+	}
 }
 
 // Attach привязывает бронь к принятому ответу. Зовётся ПОСЛЕ вставки строки ответа:

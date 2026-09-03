@@ -27,6 +27,7 @@ import (
 type GuardStore interface {
 	CountFutureBookingsOfForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID, from time.Time) (int64, error)
 	CountFutureBookingsOfSubmission(ctx context.Context, db postgres.DBTX, submissionID uuid.UUID, from time.Time) (int64, error)
+	FormScheduleZone(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (string, error)
 }
 
 var _ GuardStore = Repo{}
@@ -57,4 +58,18 @@ func (g *Guard) FutureOfForm(ctx context.Context, formID uuid.UUID) (int64, erro
 // FutureOfSubmission — живые будущие записи одного ответа.
 func (g *Guard) FutureOfSubmission(ctx context.Context, submissionID uuid.UUID) (int64, error) {
 	return g.repo.CountFutureBookingsOfSubmission(ctx, g.db, submissionID, g.now())
+}
+
+// ZoneOfForm — пояс расписания формы для выгрузок. Пусто, если записи у формы нет:
+// колонки времени в такой выгрузке не встретится вовсе.
+//
+// Живёт здесь, у стража, а не отдельным сервисом: у обоих один вопрос — «что модуль
+// записи знает про эту форму», и второй объект ради одной строки не окупается.
+func (g *Guard) ZoneOfForm(ctx context.Context, formID uuid.UUID) string {
+	zone, err := g.repo.FormScheduleZone(ctx, g.db, formID)
+	if err != nil {
+		// Нет расписания — не ошибка, а самый частый случай.
+		return ""
+	}
+	return zone
 }

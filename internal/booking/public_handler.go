@@ -107,11 +107,19 @@ type cardView struct {
 	Canceled bool   `json:"canceled"`
 }
 
-// writeCard — карточка на провод. Приведением, а не переписыванием полей: наборы
-// совпадают, и расхождение обязано ломать сборку, а не молча терять поле.
+// writeCard — карточка на провод. Перечислением, а не приведением: у Card есть
+// СЛУЖЕБНЫЕ поля (id формы и ответа), и наружу они не едут — страница отмены не
+// раскрывает ничего сверх того, что человеку и так прислали письмом.
 func writeCard(w http.ResponseWriter, r *http.Request, c Card) {
 	w.Header().Set("Cache-Control", "no-store")
-	httpserver.WriteJSON(w, r, http.StatusOK, cardView(c))
+	httpserver.WriteJSON(w, r, http.StatusOK, cardView{
+		StartsAt:        c.StartsAt,
+		DurationMinutes: c.DurationMinutes,
+		Seats:           c.Seats,
+		FormTitle:       c.FormTitle,
+		Timezone:        c.Timezone,
+		Canceled:        c.Canceled,
+	})
 }
 
 func (h *PublicHandler) slots(w http.ResponseWriter, r *http.Request) {

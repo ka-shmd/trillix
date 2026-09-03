@@ -29,12 +29,30 @@ type CancelStore interface {
 
 var _ CancelStore = Repo{}
 
+// CancelNotifier — письмо об отмене записи. Интерфейс объявлен здесь, у потребителя;
+// реализация — *submissions.Service: адрес получателя живёт в ОТВЕТЕ формы, и знает о
+// нём только модуль ответов.
+//
+// Зовётся best-effort: письмо не имеет права отменить отмену. Человек нажал кнопку,
+// место освободилось — сбой почты этого уже не отменяет.
+type CancelNotifier interface {
+	NotifyBookingCanceled(ctx context.Context, formID, submissionID, bookingID uuid.UUID,
+		startsAt time.Time, durationMinutes int, timezone string)
+}
+
 // CancelService — страница отмены и сама отмена.
 type CancelService struct {
-	db     postgres.DBTX
-	repo   CancelStore
-	secret []byte
-	now    func() time.Time
+	db       postgres.DBTX
+	repo     CancelStore
+	secret   []byte
+	notifier CancelNotifier
+	now      func() time.Time
+}
+
+// WithNotifier подключает письмо об отмене.
+func (s *CancelService) WithNotifier(n CancelNotifier) *CancelService {
+	s.notifier = n
+	return s
 }
 
 // NewCancelService собирает сервис отмены. secret — производный секрет отмены
@@ -60,6 +78,10 @@ type Card struct {
 	// Canceled — запись уже отменена. Не ошибка: по ссылке переходят дважды, и второй
 	// раз человек обязан увидеть «уже отменено», а не отказ.
 	Canceled bool
+	// Ниже — служебное: письму об отмене нужно знать, у какого ответа брать адрес.
+	// Наружу не отдаётся (см. cardView в public_handler.go).
+	formID       uuid.UUID
+	submissionID *uuid.UUID
 }
 
 // Show — карточка записи по ссылке отмены.
@@ -86,6 +108,8 @@ func (s *CancelService) Show(ctx context.Context, tok string) (Card, error) {
 		FormTitle:       b.FormTitle,
 		Timezone:        b.Timezone,
 		Canceled:        b.Status == domain.BookingCanceled,
+		formID:          b.FormID,
+		submissionID:    b.SubmissionID,
 	}, nil
 }
 
@@ -107,6 +131,12 @@ func (s *CancelService) Cancel(ctx context.Context, tok string) (Card, error) {
 		return Card{}, err
 	}
 	card.Canceled = true
+	// Письмо с отменой приглашения — ПОСЛЕ отмены и best-effort: календарь человека
+	// гасит событие тем же UID, а сбой почты уже освобождённое место не занимает.
+	if s.notifier != nil && card.formID != uuid.Nil && card.submissionID != nil {
+		s.notifier.NotifyBookingCanceled(ctx, card.formID, *card.submissionID, id,
+			card.StartsAt, card.DurationMinutes, card.Timezone)
+	}
 	return card, nil
 }
 

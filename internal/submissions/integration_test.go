@@ -77,7 +77,12 @@ func newServer(t *testing.T) *httptest.Server {
 		// Подтверждение записи (фаза 27): без него форма с вопросом о времени
 		// отвергает ответ с бронью — молча принять ссылку, которую некому проверить,
 		// нельзя.
-		WithBookings(booking.NewConfirmer(booking.Repo{}))
+		WithBookings(booking.NewConfirmer(booking.Repo{}).
+			WithCancelLinks(booking.DeriveCancelSecret(testSecret), "http://f.test")).
+		WithBookingGuard(booking.NewGuard(testPool, booking.Repo{})).
+		// Организатор приглашения: без него письма о записи не бывает — приглашение
+		// без ORGANIZER часть клиентов не показывает вовсе.
+		WithBookingMail("Trillix <no-reply@trillix.test>")
 	h := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
 
 	mux := http.NewServeMux()

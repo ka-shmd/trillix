@@ -256,6 +256,9 @@ type Service struct {
 	bookings Bookings
 	// bookingGuard — стоп-кран удаления ответа с живой будущей записью (фаза 27).
 	bookingGuard BookingGuard
+	// bookingOrganizer — адрес отправителя контура: он уезжает ORGANIZER'ом в
+	// приглашение календаря. Пусто — письма о записи нет (bookingmail.go).
+	bookingOrganizer string
 	// integrations — доставка ответа во внешние системы (фаза 25). Тем же
 	// сеттером и по той же причине, что files; nil = интеграций в сборке нет.
 	integrations Integrations
@@ -316,12 +319,20 @@ type Bookings interface {
 	// Attach привязывает бронь к принятому ответу — ПОСЛЕ вставки: внешний ключ
 	// требует, чтобы строка ответа уже существовала.
 	Attach(ctx context.Context, tx pgx.Tx, bookingID, submissionID uuid.UUID) error
+	// CancelLink — адрес страницы отмены для этой брони. Спрашивается у модуля
+	// записи, а не собирается здесь: подпись ссылки требует секрета, и знать его
+	// приёму ответа незачем.
+	CancelLink(bookingID uuid.UUID) string
 }
 
 // BookingGuard — сколько живых будущих записей держит ответ (фаза 27). Реализация —
 // *booking.Guard; nil = записи на контуре нет, и стоп-кран не спрашивается.
 type BookingGuard interface {
 	FutureOfSubmission(ctx context.Context, submissionID uuid.UUID) (int64, error)
+	// ZoneOfForm — пояс расписания формы для выгрузок; пусто = записи у формы нет.
+	// Время записи автор читает в своём рабочем поясе, а не в UTC (решение владельца
+	// 2026-09-03).
+	ZoneOfForm(ctx context.Context, formID uuid.UUID) string
 }
 
 // WithBookingGuard подключает стоп-кран удаления ответа.
@@ -511,6 +522,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 				return fmt.Errorf("marshal answers: %w", err)
 			}
 			booking.StartsAt = held.StartsAt
+			booking.DurationMinutes, booking.Timezone = held.DurationMinutes, held.Timezone
 		}
 
 		n, err := s.repo.InsertSubmission(ctx, tx, in)
@@ -553,6 +565,11 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	s.dropPartial(ctx, pf.FormID, meta.VisitID)
 	if inserted && (pf.NotifyOnSubmission || pf.NotifyRespondent) {
 		s.notifyMail(ctx, pf, id, slug, schema, clean)
+	}
+	// Письмо о записи НЕ зависит от тумблеров уведомлений и от тарифа: без него у
+	// респондента нет ссылки отмены, а значит, место не вернуть в оборот (§4.8 спеки).
+	if inserted && booking.BlockID != "" {
+		s.notifyBooking(ctx, pf.FormID, id, slug, schema, clean, booking)
 	}
 	if inserted {
 		s.enqueueIntegration(ctx, pf.FormID, id)
@@ -620,6 +637,7 @@ func (s *Service) SheetRow(ctx context.Context, formID, submissionID uuid.UUID) 
 	}
 
 	builder := domain.NewCSVBuilder(vs)
+	builder.WithSchedule(s.scheduleZone(ctx, formID))
 	// Имена файлов — только если у формы вообще есть вопрос-файл: та же
 	// экономия, что в выгрузке.
 	if s.files != nil && hasFileBlock(vs) {
@@ -670,6 +688,7 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.T
 	}
 
 	builder := domain.NewCSVBuilder(vs)
+	builder.WithSchedule(s.scheduleZone(ctx, formID))
 	if s.files != nil && hasFileBlock(vs) {
 		files, err := s.files.InfoByForm(ctx, formID)
 		if err != nil {
@@ -1358,6 +1377,7 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 	}
 
 	builder := domain.NewCSVBuilder(vs)
+	builder.WithSchedule(s.scheduleZone(ctx, formID))
 	// Имена файлов — только если у формы вообще есть вопрос-файл: у остальных (а
 	// это подавляющее большинство) выгрузка не платит ни запросом, ни памятью.
 	if s.files != nil && hasFileBlock(vs) {
@@ -1662,8 +1682,11 @@ type slotBooking struct {
 	// схеме или на него не ответили).
 	BlockID   string
 	BookingID uuid.UUID
-	// StartsAt заполняется ПОСЛЕ подтверждения — тем временем, что лежит в броне.
-	StartsAt time.Time
+	// Ниже — то, что известно ТОЛЬКО ПОСЛЕ подтверждения: время из строки брони, её
+	// длительность и пояс расписания. Ими живёт письмо о записи (bookingmail.go).
+	StartsAt        time.Time
+	DurationMinutes int
+	Timezone        string
 }
 
 // slotAnswer достаёт бронь из ответа. На проводе у вопроса о записи лежит id брони —
@@ -1695,4 +1718,24 @@ func slotAnswer(schema domain.FormSchema, answers map[string]json.RawMessage) (s
 		return slotBooking{BlockID: b.ID, BookingID: id}, nil
 	}
 	return slotBooking{}, nil
+}
+
+// scheduleZone — пояс расписания формы для выгрузок. Нет записи или страж не
+// подключён — nil, и время (которого тогда и не бывает) осталось бы в UTC.
+func (s *Service) scheduleZone(ctx context.Context, formID uuid.UUID) *time.Location {
+	if s.bookingGuard == nil {
+		return nil
+	}
+	zone := s.bookingGuard.ZoneOfForm(ctx, formID)
+	if zone == "" {
+		return nil
+	}
+	loc, err := domain.LoadScheduleLocation(zone)
+	if err != nil {
+		// Зона в базе есть, а в базе зон её нет: печатаем в UTC, но говорим об этом.
+		httpserver.LoggerFrom(ctx).Warn("schedule zone not loaded, export stays in UTC",
+			slog.String("form_id", formID.String()), slog.String("zone", zone))
+		return nil
+	}
+	return loc
 }

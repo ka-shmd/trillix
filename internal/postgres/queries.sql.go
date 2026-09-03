@@ -1600,7 +1600,7 @@ func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) 
 }
 
 const getBookingForCancel = `-- name: GetBookingForCancel :one
-SELECT b.id, b.starts_at, b.duration_minutes, b.seats, b.status,
+SELECT b.id, b.form_id, b.submission_id, b.starts_at, b.duration_minutes, b.seats, b.status,
        coalesce(f.name, f.title) AS form_title, s.timezone
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
@@ -1610,6 +1610,8 @@ WHERE b.id = $1
 
 type GetBookingForCancelRow struct {
 	ID              uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
 	StartsAt        pgtype.Timestamptz
 	DurationMinutes int32
 	Seats           int32
@@ -1626,6 +1628,8 @@ func (q *Queries) GetBookingForCancel(ctx context.Context, id uuid.UUID) (GetBoo
 	var i GetBookingForCancelRow
 	err := row.Scan(
 		&i.ID,
+		&i.FormID,
+		&i.SubmissionID,
 		&i.StartsAt,
 		&i.DurationMinutes,
 		&i.Seats,
@@ -1637,9 +1641,11 @@ func (q *Queries) GetBookingForCancel(ctx context.Context, id uuid.UUID) (GetBoo
 }
 
 const getBookingForConfirm = `-- name: GetBookingForConfirm :one
-SELECT id, schedule_id, starts_at, duration_minutes, seats, status, hold_expires_at, submission_id
-FROM bookings
-WHERE id = $1 AND form_id = $2 AND client_id = $3
+SELECT b.id, b.schedule_id, b.starts_at, b.duration_minutes, b.seats, b.status,
+       b.hold_expires_at, b.submission_id, s.timezone
+FROM bookings b
+JOIN schedules s ON s.id = b.schedule_id
+WHERE b.id = $1 AND b.form_id = $2 AND b.client_id = $3
 `
 
 type GetBookingForConfirmParams struct {
@@ -1657,6 +1663,7 @@ type GetBookingForConfirmRow struct {
 	Status          string
 	HoldExpiresAt   pgtype.Timestamptz
 	SubmissionID    pgtype.UUID
+	Timezone        string
 }
 
 // Бронь, которую подтверждает приём ответа. Три условия сразу, и все три несущие:
@@ -1665,6 +1672,9 @@ type GetBookingForConfirmRow struct {
 // по угаданному id (инвариант 1).
 //
 // client_id совпадает с id ответа по устройству: тем же id браузер брал холд.
+//
+// Пояс расписания едет тем же джойном: письму о записи он нужен, чтобы написать время
+// в обоих поясах, а второй запрос ради одной строки — плата на каждом принятом ответе.
 func (q *Queries) GetBookingForConfirm(ctx context.Context, arg GetBookingForConfirmParams) (GetBookingForConfirmRow, error) {
 	row := q.db.QueryRow(ctx, getBookingForConfirm, arg.ID, arg.FormID, arg.ClientID)
 	var i GetBookingForConfirmRow
@@ -1677,6 +1687,7 @@ func (q *Queries) GetBookingForConfirm(ctx context.Context, arg GetBookingForCon
 		&i.Status,
 		&i.HoldExpiresAt,
 		&i.SubmissionID,
+		&i.Timezone,
 	)
 	return i, err
 }
@@ -2267,6 +2278,23 @@ func (q *Queries) GetFormPasswordBySlug(ctx context.Context, slug string) (GetFo
 	var i GetFormPasswordBySlugRow
 	err := row.Scan(&i.FormID, &i.Password)
 	return i, err
+}
+
+const getFormScheduleZone = `-- name: GetFormScheduleZone :one
+SELECT s.timezone
+FROM forms f
+JOIN schedules s ON s.id = f.schedule_id
+WHERE f.id = $1
+`
+
+// Пояс расписания формы — для выгрузок (CSV, лист интеграции): время записи автор
+// читает в своём рабочем поясе, а не в UTC и не в поясе того, кто открыл файл.
+// Нет строки — у формы нет записи, и колонки времени в выгрузке не встретится.
+func (q *Queries) GetFormScheduleZone(ctx context.Context, id uuid.UUID) (string, error) {
+	row := q.db.QueryRow(ctx, getFormScheduleZone, id)
+	var timezone string
+	err := row.Scan(&timezone)
+	return timezone, err
 }
 
 const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one

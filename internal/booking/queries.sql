@@ -181,9 +181,14 @@ RETURNING id;
 -- по угаданному id (инвариант 1).
 --
 -- client_id совпадает с id ответа по устройству: тем же id браузер брал холд.
-SELECT id, schedule_id, starts_at, duration_minutes, seats, status, hold_expires_at, submission_id
-FROM bookings
-WHERE id = $1 AND form_id = $2 AND client_id = $3;
+--
+-- Пояс расписания едет тем же джойном: письму о записи он нужен, чтобы написать время
+-- в обоих поясах, а второй запрос ради одной строки — плата на каждом принятом ответе.
+SELECT b.id, b.schedule_id, b.starts_at, b.duration_minutes, b.seats, b.status,
+       b.hold_expires_at, b.submission_id, s.timezone
+FROM bookings b
+JOIN schedules s ON s.id = b.schedule_id
+WHERE b.id = $1 AND b.form_id = $2 AND b.client_id = $3;
 
 -- name: ConfirmBooking :execrows
 -- Холд становится записью. hold_expires_at гасится: подтверждённая бронь срока не
@@ -205,7 +210,7 @@ SELECT capacity FROM schedules WHERE id = $1;
 -- Что показать на странице отмены: время, длительность, число мест и название формы.
 -- Имени и контактов записавшегося здесь нет — их знает только ответ формы, и страница
 -- отмены к нему не ходит (спека §13).
-SELECT b.id, b.starts_at, b.duration_minutes, b.seats, b.status,
+SELECT b.id, b.form_id, b.submission_id, b.starts_at, b.duration_minutes, b.seats, b.status,
        coalesce(f.name, f.title) AS form_title, s.timezone
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
@@ -240,3 +245,12 @@ WHERE form_id = $1 AND status = 'confirmed' AND starts_at >= $2;
 -- То же для одного ответа: удаление ответа не имеет права молча снести встречу.
 SELECT count(*)::bigint FROM bookings
 WHERE submission_id = $1 AND status = 'confirmed' AND starts_at >= $2;
+
+-- name: GetFormScheduleZone :one
+-- Пояс расписания формы — для выгрузок (CSV, лист интеграции): время записи автор
+-- читает в своём рабочем поясе, а не в UTC и не в поясе того, кто открыл файл.
+-- Нет строки — у формы нет записи, и колонки времени в выгрузке не встретится.
+SELECT s.timezone
+FROM forms f
+JOIN schedules s ON s.id = f.schedule_id
+WHERE f.id = $1;

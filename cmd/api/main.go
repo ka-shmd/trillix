@@ -507,7 +507,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	bookingHandler := booking.NewHandler(bookingSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	// Подтверждение брони в приёме ответа: работает внутри транзакции submissions,
 	// поэтому ни пула, ни своих часов ему не даётся.
-	bookingConfirmer := booking.NewConfirmer(booking.Repo{})
+	// Ссылка отмены живёт у подтверждения: подпись требует секрета, и раздавать его
+	// приёму ответа незачем. Адрес — публичного рендерера: страницу отмены отдаёт он.
+	bookingConfirmer := booking.NewConfirmer(booking.Repo{}).
+		WithCancelLinks(booking.DeriveCancelSecret(cfg.FormTokenSecret), cfg.PublicRendererBaseURL)
 	// Стоп-кран удаления: живая будущая запись держит и ответ, и форму (ADR §10).
 	bookingGuard := booking.NewGuard(pool, booking.Repo{})
 	// Отмена по ссылке из письма. Секрет производный — с отдельной меткой назначения,
@@ -612,6 +615,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		// транзакции, что принимает ответ, — время записи уезжает в сам ответ.
 		WithBookings(bookingConfirmer).
 		WithBookingGuard(bookingGuard).
+		// Организатор приглашения — адрес отправителя контура: приглашение без
+		// ORGANIZER часть клиентов не показывает вовсе.
+		WithBookingMail(cfg.MailFrom).
 		// Адрес публичного рендерера нужен подвалу письма респонденту: в нём стоит
 		// ссылка на саму форму, а собрать её из origin кабинета нельзя.
 		WithRespondentMail(cfg.PublicRendererBaseURL, respondentMailLimiter)
@@ -619,6 +625,12 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// собирается сеттерами — каждый нужен другому, и в конструкторе такую пару
 	// не собрать. Транспорт канала подключается к диспетчеру outbox ДО старта
 	// периодической задачи, иначе канал без транспорта копил бы ретраи.
+	// Письмо об отмене записи: адрес получателя живёт в ОТВЕТЕ формы, поэтому его
+	// ставит модуль ответов, а зовёт — тот, кто отменяет (ссылка из письма и кабинет).
+	// Сеттеры мутируют сам сервис и возвращают его же: хендлеры, собранные выше,
+	// держат тот же указатель, поэтому присваивать результат не надо.
+	bookingCancelSvc.WithNotifier(submissionsSvc)
+	bookingSvc.WithNotifier(submissionsSvc)
 	submissionsSvc = submissionsSvc.WithIntegrations(integrationsSvc)
 	integrationsSvc = integrationsSvc.WithDelivery(mailSvc, submissionsSvc)
 	mailSvc = mailSvc.WithTransport(integrations.ChannelSheets, integrationsSvc)

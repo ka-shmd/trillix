@@ -172,3 +172,34 @@ func TestRespondentAddress(t *testing.T) {
 		t.Fatalf("настройки нет, а адрес %q", got)
 	}
 }
+
+// Адрес служебного письма записи: бланк квитанции, если он есть, иначе первый
+// email-вопрос формы. Без адреса нет ссылки отмены, то есть места не вернуть.
+func TestBookingAddress(t *testing.T) {
+	schema := FormSchema{Blocks: []Block{
+		{ID: "e1", GroupID: "g1", Type: BlockEmail},
+		{ID: "e2", GroupID: "g2", Type: BlockEmail},
+		{ID: "s1", GroupID: "g3", Type: BlockShortText},
+	}}
+	answers := map[string]json.RawMessage{
+		"e1": json.RawMessage(`"first@example.com"`),
+		"e2": json.RawMessage(`"second@example.com"`),
+	}
+
+	if got := BookingAddress(nil, schema, answers); got != "first@example.com" {
+		t.Fatalf("без бланка адрес %q, ожидался первый email-вопрос", got)
+	}
+	blank := &RespondentEmail{SourceBlockID: "e2"}
+	if got := BookingAddress(blank, schema, answers); got != "second@example.com" {
+		t.Fatalf("с бланком адрес %q, ожидался названный в нём вопрос", got)
+	}
+	// Ответа нет — письма нет, и это не ошибка: вопрос про почту необязателен.
+	if got := BookingAddress(nil, schema, map[string]json.RawMessage{}); got != "" {
+		t.Fatalf("адрес %q при пустых ответах", got)
+	}
+	// Мусор вместо адреса не отправляется: письмо уходит с нашего домена.
+	bad := map[string]json.RawMessage{"e1": json.RawMessage(`"Аня <a@example.com>"`)}
+	if got := BookingAddress(nil, schema, bad); got != "" {
+		t.Fatalf("адрес %q — строка с именем адресом не является", got)
+	}
+}

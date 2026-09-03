@@ -383,11 +383,13 @@ func (Repo) BookingForConfirm(ctx context.Context, db postgres.DBTX, bookingID, 
 		return BookingRow{}, err
 	}
 	out := BookingRow{
-		ID:         row.ID,
-		ScheduleID: row.ScheduleID,
-		StartsAt:   row.StartsAt.Time.UTC(),
-		Seats:      int(row.Seats),
-		Status:     row.Status,
+		ID:              row.ID,
+		ScheduleID:      row.ScheduleID,
+		StartsAt:        row.StartsAt.Time.UTC(),
+		DurationMinutes: int(row.DurationMinutes),
+		Seats:           int(row.Seats),
+		Status:          row.Status,
+		Timezone:        row.Timezone,
 	}
 	if row.HoldExpiresAt.Valid {
 		at := row.HoldExpiresAt.Time
@@ -425,7 +427,12 @@ func (Repo) AttachBooking(ctx context.Context, db postgres.DBTX, bookingID, subm
 
 // BookingCard — что показывает страница отмены.
 type BookingCard struct {
-	ID              uuid.UUID
+	ID     uuid.UUID
+	FormID uuid.UUID
+	// SubmissionID — ответ, которым запись оформлена; nil, если ответ удалили или
+	// бронь так и осталась холдом. Письмо об отмене без него не собрать: адрес
+	// получателя живёт в ответе.
+	SubmissionID    *uuid.UUID
 	StartsAt        time.Time
 	DurationMinutes int
 	Seats           int
@@ -440,15 +447,21 @@ func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID
 	if err != nil {
 		return BookingCard{}, err
 	}
-	return BookingCard{
+	card := BookingCard{
 		ID:              row.ID,
+		FormID:          row.FormID,
 		StartsAt:        row.StartsAt.Time.UTC(),
 		DurationMinutes: int(row.DurationMinutes),
 		Seats:           int(row.Seats),
 		Status:          row.Status,
 		FormTitle:       row.FormTitle,
 		Timezone:        row.Timezone,
-	}, nil
+	}
+	if row.SubmissionID.Valid {
+		id := uuid.UUID(row.SubmissionID.Bytes)
+		card.SubmissionID = &id
+	}
+	return card, nil
 }
 
 // CancelByID отменяет запись по ссылке из письма. Право предъявил токен.
@@ -493,4 +506,10 @@ func (Repo) CountFutureBookingsOfSubmission(ctx context.Context, db postgres.DBT
 		return 0, fmt.Errorf("count future bookings of submission %s: %w", submissionID, err)
 	}
 	return n, nil
+}
+
+// FormScheduleZone — пояс расписания формы. pgx.ErrNoRows пробрасывается: «у формы нет
+// записи» разбирает вызывающий, и для него это состояние, а не ошибка.
+func (Repo) FormScheduleZone(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (string, error) {
+	return postgres.New(db).GetFormScheduleZone(ctx, formID)
 }
