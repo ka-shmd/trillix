@@ -428,3 +428,170 @@ func TestHold_RateLimited(t *testing.T) {
 		t.Fatalf("второй холд: статус %d, ожидалось 429", second.StatusCode)
 	}
 }
+
+// newCancelStack — публичный контур с отменой по ссылке.
+func newCancelStack(t *testing.T) (*httptest.Server, []byte) {
+	t.Helper()
+	secret := booking.DeriveCancelSecret([]byte("dev-only-form-token-secret-not-a-real-key"))
+	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
+		pgtest.MailService(testPool), appOrigin)
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, plans)
+
+	svc := booking.NewPublicService(testPool, postgres.TxRunner{Pool: testPool}, booking.Repo{}, formsSvc).
+		WithClock(func() time.Time { return testNow })
+	cancel := booking.NewCancelService(testPool, booking.Repo{}, secret)
+	h := booking.NewPublicHandler(svc, permissive(), permissive(), false).
+		WithCancel(cancel, permissive())
+
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv, secret
+}
+
+type cancelCard struct {
+	StartsAt  string `json:"startsAt"`
+	Seats     int    `json:"seats"`
+	FormTitle string `json:"formTitle"`
+	Canceled  bool   `json:"canceled"`
+}
+
+// Отмена по ссылке из письма: страница показывает запись, кнопка её отменяет, место
+// возвращается в оборот, повторный переход по той же ссылке — «уже отменено».
+func TestCancel_ByLink(t *testing.T) {
+	resetDB(t)
+	srv, secret := newCancelStack(t)
+	slug, scheduleID := seedForm(t, seedOpts{})
+	const at = "2026-09-07T07:00:00Z"
+
+	client := uuid.New().String()
+	rh := postHold(t, srv, slug, at, 1, client)
+	closeBody(t, rh)
+	if rh.StatusCode != http.StatusCreated {
+		t.Fatalf("холд: статус %d", rh.StatusCode)
+	}
+	var bookingID uuid.UUID
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT id FROM bookings WHERE schedule_id = $1`, scheduleID).Scan(&bookingID); err != nil {
+		t.Fatalf("read booking: %v", err)
+	}
+	tok := booking.IssueCancelToken(secret, bookingID, time.Now().Add(booking.CancelTTL))
+
+	// Страница показывает время и название формы — и ничего сверх того, что человеку
+	// и так прислали письмом.
+	r, err := http.Get(srv.URL + "/public/v1/bookings/" + tok) //nolint:noctx // тестовый вызов
+	if err != nil {
+		t.Fatalf("GET card: %v", err)
+	}
+	var card cancelCard
+	if err := json.NewDecoder(r.Body).Decode(&card); err != nil {
+		t.Fatalf("decode card: %v", err)
+	}
+	closeBody(t, r)
+	if card.Canceled || card.StartsAt != at || card.FormTitle == "" {
+		t.Fatalf("карточка %+v — ожидалась живая запись с названием формы", card)
+	}
+
+	// Отмена.
+	rc, err := http.Post(srv.URL+"/public/v1/bookings/"+tok+"/cancel", "application/json", nil) //nolint:noctx // тестовый вызов
+	if err != nil {
+		t.Fatalf("POST cancel: %v", err)
+	}
+	if err := json.NewDecoder(rc.Body).Decode(&card); err != nil {
+		t.Fatalf("decode after cancel: %v", err)
+	}
+	closeBody(t, rc)
+	if !card.Canceled {
+		t.Fatal("после отмены запись не помечена отменённой")
+	}
+
+	// Время снова предлагается.
+	_, slots := getSlots(t, srv, slug, "")
+	free := false
+	for _, it := range slots.Items {
+		if it.StartsAt == at {
+			free = true
+		}
+	}
+	if !free {
+		t.Fatal("отменённое время не вернулось в выдачу")
+	}
+
+	// Повторный переход — «уже отменено», а не отказ: человек хотел отменить, и
+	// запись отменена.
+	r2, err := http.Get(srv.URL + "/public/v1/bookings/" + tok) //nolint:noctx // тестовый вызов
+	if err != nil {
+		t.Fatalf("GET card again: %v", err)
+	}
+	closeBody(t, r2)
+	if r2.StatusCode != http.StatusOK {
+		t.Fatalf("повторный переход: статус %d, ожидалось 200", r2.StatusCode)
+	}
+}
+
+// Негодная ссылка — 410, и причина наружу не различается: снаружи и подделка, и
+// протухшая ссылка означают одно.
+func TestCancel_BadTokenGone(t *testing.T) {
+	resetDB(t)
+	srv, secret := newCancelStack(t)
+
+	expired := booking.IssueCancelToken(secret, uuid.New(), time.Now().Add(-time.Minute))
+	for _, tok := range []string{"мусор", expired} {
+		r, err := http.Get(srv.URL + "/public/v1/bookings/" + tok) //nolint:noctx // тестовый вызов
+		if err != nil {
+			t.Fatalf("GET: %v", err)
+		}
+		closeBody(t, r)
+		if r.StatusCode != http.StatusGone {
+			t.Fatalf("токен %q: статус %d, ожидалось 410", tok, r.StatusCode)
+		}
+	}
+}
+
+// Чистка протухших холдов — уборка мусора: живой холд и подтверждённую запись она не
+// трогает, а место возвращается в оборот и без неё.
+func TestPurgeHolds(t *testing.T) {
+	resetDB(t)
+	_, secret := newCancelStack(t)
+	_ = secret
+	slug, scheduleID := seedForm(t, seedOpts{})
+	var formID uuid.UUID
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT id FROM forms WHERE slug = $1`, slug).Scan(&formID); err != nil {
+		t.Fatalf("read form: %v", err)
+	}
+
+	insert := func(status string, expires time.Time) uuid.UUID {
+		id := uuid.New()
+		if _, err := testPool.Exec(context.Background(),
+			`INSERT INTO bookings (id, schedule_id, form_id, starts_at, duration_minutes, seats, status, hold_expires_at, client_id)
+			 VALUES ($1, $2, $3, now() + interval '2 days', 60, 1, $4, $5, $6)`,
+			id, scheduleID, formID, status, expires, uuid.New()); err != nil {
+			t.Fatalf("insert booking: %v", err)
+		}
+		return id
+	}
+	stale := insert("held", time.Now().Add(-2*time.Hour))
+	fresh := insert("held", time.Now().Add(time.Hour))
+
+	svc := booking.NewCancelService(testPool, booking.Repo{}, nil)
+	n, err := svc.PurgeHolds(context.Background(), time.Hour)
+	if err != nil {
+		t.Fatalf("purge: %v", err)
+	}
+	if n != 1 {
+		t.Fatalf("убрано %d строк, ожидалась одна", n)
+	}
+	for id, want := range map[uuid.UUID]bool{stale: false, fresh: true} {
+		var exists bool
+		if err := testPool.QueryRow(context.Background(),
+			`SELECT EXISTS (SELECT 1 FROM bookings WHERE id = $1)`, id).Scan(&exists); err != nil {
+			t.Fatalf("check booking: %v", err)
+		}
+		if exists != want {
+			t.Fatalf("бронь %s: существует=%v, ожидалось %v", id, exists, want)
+		}
+	}
+}

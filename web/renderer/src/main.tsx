@@ -9,6 +9,10 @@ import '@fields/fields.css'
 // Встраивание (фаза 20) решается ДО первой отрисовки: вид зависит от атрибута на
 // <html>, и ставить его из эффекта значило бы показать чужому сайту кадр обычной
 // страницы с её десктопными полями.
+// Путь страницы отмены. Один и тот же у Go (он отдаёт оболочку) и здесь — расходиться
+// им нельзя: разъехавшись, страница получила бы оболочку и не получила экрана.
+const CANCEL_PATH = '/cancel/'
+
 const embed = readEmbed(window.location.search)
 if (embed) {
   document.documentElement.dataset.embed = embed.mode
@@ -28,8 +32,31 @@ const bridge: HostBridge | null =
     ? createHostBridge(embed.mode, (msg) => window.parent.postMessage(msg, '*'))
     : null
 
-createRoot(document.getElementById('root')!).render(
-  <StrictMode>
-    <App bridge={bridge} embed={embed} />
-  </StrictMode>,
-)
+// СТРАНИЦА ОТМЕНЫ ЗАПИСИ — не форма, и решается это ДО первой отрисовки (фаза 27).
+// Ветка здесь, а не в App: тот первым же хуком идёт грузить форму по slug'у, которого
+// на этом адресе нет вовсе.
+//
+// Экран уезжает отдельным чанком (префикс cancel/, свой бюджет в check-bundle):
+// качает его только тот, кто пришёл отменять, а у формы запаса до порога меньше
+// килобайта. Импорт обязан остаться ДИНАМИЧЕСКИМ — обычный вернёт экран в общий
+// бандл, и заметит это только замер сборки.
+const cancelToken = window.location.pathname.startsWith(CANCEL_PATH)
+  ? window.location.pathname.slice(CANCEL_PATH.length)
+  : ''
+
+const root = createRoot(document.getElementById('root')!)
+if (cancelToken !== '') {
+  void import('./features/cancel/CancelScreen.tsx').then(({ default: CancelScreen }) => {
+    root.render(
+      <StrictMode>
+        <CancelScreen token={cancelToken} />
+      </StrictMode>,
+    )
+  })
+} else {
+  root.render(
+    <StrictMode>
+      <App bridge={bridge} embed={embed} />
+    </StrictMode>,
+  )
+}

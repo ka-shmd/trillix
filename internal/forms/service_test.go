@@ -2045,3 +2045,46 @@ func TestUpdateSchedule_ClearSkipsCheck(t *testing.T) {
 		t.Fatal("снятие до базы не дошло")
 	}
 }
+
+// fakeGuard — стоп-кран записи в тестах: сколько живых будущих встреч у формы.
+type fakeGuard struct {
+	future int64
+	err    error
+}
+
+func (g fakeGuard) FutureOfForm(context.Context, uuid.UUID) (int64, error) {
+	return g.future, g.err
+}
+
+// Живая будущая запись держит удаление формы (фаза 27, ADR §10): молча снести чужие
+// договорённости нельзя.
+func TestDelete_BlockedByFutureBooking(t *testing.T) {
+	store := &fakeStore{form: Form{ID: uuid.New(), WorkspaceID: uuid.New()}}
+	svc := newTestService(store).WithBookingGuard(fakeGuard{future: 3})
+
+	err := svc.Delete(context.Background(), uuid.New(), store.form.ID)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("ошибка %v, ожидался ErrConflict", err)
+	}
+	// Число согласовано словами: отказ читает человек.
+	if !strings.Contains(err.Error(), "3 будущие записи") {
+		t.Fatalf("текст отказа %q — ожидалось согласованное число", err.Error())
+	}
+	if store.deleted {
+		t.Fatal("форма удалена, хотя на неё записаны люди")
+	}
+}
+
+// Прошлые записи не держат ничего: они уже состоялись.
+func TestDelete_PastBookingsDoNotBlock(t *testing.T) {
+	// deleteN: одна снесённая строка — иначе фейк отвечает «нет такой формы».
+	store := &fakeStore{form: Form{ID: uuid.New(), WorkspaceID: uuid.New()}, deleteN: 1}
+	svc := newTestService(store).WithBookingGuard(fakeGuard{future: 0})
+
+	if err := svc.Delete(context.Background(), uuid.New(), store.form.ID); err != nil {
+		t.Fatalf("удаление отвергнуто: %v", err)
+	}
+	if !store.deleted {
+		t.Fatal("форма не удалена")
+	}
+}

@@ -100,6 +100,22 @@ func (q *Queries) CancelBookingByAuthor(ctx context.Context, arg CancelBookingBy
 	return result.RowsAffected(), nil
 }
 
+const cancelBookingByID = `-- name: CancelBookingByID :execrows
+UPDATE bookings SET status = 'canceled', canceled_at = now()
+WHERE id = $1 AND status <> 'canceled'
+`
+
+// Отмена по ссылке из письма. Право предъявляет сам токен (подпись покрывает id и
+// срок), поэтому в условии только id и «ещё не отменена»: повторный переход по той же
+// ссылке даёт 0 строк, и для человека это «уже отменено», а не ошибка.
+func (q *Queries) CancelBookingByID(ctx context.Context, id uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, cancelBookingByID, id)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const claimSubmissionFile = `-- name: ClaimSubmissionFile :execrows
 UPDATE submission_files
 SET submission_id = $2, claimed_at = now()
@@ -311,6 +327,43 @@ type CountFutureBookingsParams struct {
 // удаления брошенной вкладке на четверть часа.
 func (q *Queries) CountFutureBookings(ctx context.Context, arg CountFutureBookingsParams) (int64, error) {
 	row := q.db.QueryRow(ctx, countFutureBookings, arg.ScheduleID, arg.StartsAt)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countFutureBookingsOfForm = `-- name: CountFutureBookingsOfForm :one
+SELECT count(*)::bigint FROM bookings
+WHERE form_id = $1 AND status = 'confirmed' AND starts_at >= $2
+`
+
+type CountFutureBookingsOfFormParams struct {
+	FormID   uuid.UUID
+	StartsAt pgtype.Timestamptz
+}
+
+// Живые будущие записи формы — стоп-кран её удаления (design/booking.md §4.10).
+// Считаются только подтверждённые: холд ещё не договорённость.
+func (q *Queries) CountFutureBookingsOfForm(ctx context.Context, arg CountFutureBookingsOfFormParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFutureBookingsOfForm, arg.FormID, arg.StartsAt)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const countFutureBookingsOfSubmission = `-- name: CountFutureBookingsOfSubmission :one
+SELECT count(*)::bigint FROM bookings
+WHERE submission_id = $1 AND status = 'confirmed' AND starts_at >= $2
+`
+
+type CountFutureBookingsOfSubmissionParams struct {
+	SubmissionID pgtype.UUID
+	StartsAt     pgtype.Timestamptz
+}
+
+// То же для одного ответа: удаление ответа не имеет права молча снести встречу.
+func (q *Queries) CountFutureBookingsOfSubmission(ctx context.Context, arg CountFutureBookingsOfSubmissionParams) (int64, error) {
+	row := q.db.QueryRow(ctx, countFutureBookingsOfSubmission, arg.SubmissionID, arg.StartsAt)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -972,6 +1025,26 @@ func (q *Queries) DeleteExpiredEmailVerificationTokens(ctx context.Context) (int
 	return result.RowsAffected(), nil
 }
 
+const deleteExpiredHolds = `-- name: DeleteExpiredHolds :execrows
+DELETE FROM bookings WHERE status = 'held' AND hold_expires_at < $1
+`
+
+// Чистка протухших холдов (internal/periodic).
+//
+// Занятость она НЕ решает: счёт занятого сам отсекает истёкшие (hold_expires_at >
+// now()), поэтому место возвращается в оборот в тот же миг, а не когда добежит задача.
+// Здесь убирается мусор — строки брошенных вкладок, которые иначе копились бы вечно.
+//
+// Отсрочка ($1 — момент, старее которого чистим) даёт запас на перезанятие: холд,
+// истёкший минуту назад, ещё может стать записью на отправке длинной анкеты.
+func (q *Queries) DeleteExpiredHolds(ctx context.Context, holdExpiresAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteExpiredHolds, holdExpiresAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteExpiredPasswordResetTokens = `-- name: DeleteExpiredPasswordResetTokens :execrows
 DELETE FROM password_reset_tokens WHERE expires_at <= now()
 `
@@ -1522,6 +1595,43 @@ func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) 
 		&i.PlanTitle,
 		&i.Limits,
 		&i.WorkspacesOwned,
+	)
+	return i, err
+}
+
+const getBookingForCancel = `-- name: GetBookingForCancel :one
+SELECT b.id, b.starts_at, b.duration_minutes, b.seats, b.status,
+       coalesce(f.name, f.title) AS form_title, s.timezone
+FROM bookings b
+JOIN forms f ON f.id = b.form_id
+JOIN schedules s ON s.id = b.schedule_id
+WHERE b.id = $1
+`
+
+type GetBookingForCancelRow struct {
+	ID              uuid.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	FormTitle       string
+	Timezone        string
+}
+
+// Что показать на странице отмены: время, длительность, число мест и название формы.
+// Имени и контактов записавшегося здесь нет — их знает только ответ формы, и страница
+// отмены к нему не ходит (спека §13).
+func (q *Queries) GetBookingForCancel(ctx context.Context, id uuid.UUID) (GetBookingForCancelRow, error) {
+	row := q.db.QueryRow(ctx, getBookingForCancel, id)
+	var i GetBookingForCancelRow
+	err := row.Scan(
+		&i.ID,
+		&i.StartsAt,
+		&i.DurationMinutes,
+		&i.Seats,
+		&i.Status,
+		&i.FormTitle,
+		&i.Timezone,
 	)
 	return i, err
 }

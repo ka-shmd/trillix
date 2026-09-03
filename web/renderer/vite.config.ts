@@ -101,14 +101,16 @@ export default defineConfig({
     modulePreload: false,
     rollupOptions: {
       output: {
-        chunkFileNames: (chunk) =>
-          chunk.facadeModuleId?.includes('/fields/slots/')
-            ? 'slots/[name]-[hash].js'
-            : 'assets/[name]-[hash].js',
-        assetFileNames: (asset) =>
-          asset.names?.some((n) => n.startsWith('SlotPicker'))
-            ? 'slots/[name]-[hash][extname]'
-            : 'assets/[name]-[hash][extname]',
+        chunkFileNames: (chunk) => {
+          if (chunk.facadeModuleId?.includes('/fields/slots/')) return 'slots/[name]-[hash].js'
+          if (chunk.facadeModuleId?.includes('/features/cancel/')) return 'cancel/[name]-[hash].js'
+          return 'assets/[name]-[hash].js'
+        },
+        assetFileNames: (asset) => {
+          if (asset.names?.some((n) => n.startsWith('SlotPicker'))) return 'slots/[name]-[hash][extname]'
+          if (asset.names?.some((n) => n.startsWith('CancelScreen'))) return 'cancel/[name]-[hash][extname]'
+          return 'assets/[name]-[hash][extname]'
+        },
       },
     },
   },

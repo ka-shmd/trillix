@@ -168,6 +168,9 @@ func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	}
 	if h.indexPath != "" {
 		mux.HandleFunc("GET /r/{slug}", h.getHTML)
+		// Страница отмены записи (фаза 27) — та же оболочка рендерера, без головы
+		// формы: до разбора токена о форме ничего не известно.
+		mux.HandleFunc("GET /cancel/{token}", h.getCancelHTML)
 	}
 }
 

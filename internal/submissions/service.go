@@ -254,6 +254,8 @@ type Service struct {
 	// bookings — подтверждение записи на время (фаза 27); nil = записи на контуре
 	// нет, и ответ с бронью отвергается.
 	bookings Bookings
+	// bookingGuard — стоп-кран удаления ответа с живой будущей записью (фаза 27).
+	bookingGuard BookingGuard
 	// integrations — доставка ответа во внешние системы (фаза 25). Тем же
 	// сеттером и по той же причине, что files; nil = интеграций в сборке нет.
 	integrations Integrations
@@ -314,6 +316,18 @@ type Bookings interface {
 	// Attach привязывает бронь к принятому ответу — ПОСЛЕ вставки: внешний ключ
 	// требует, чтобы строка ответа уже существовала.
 	Attach(ctx context.Context, tx pgx.Tx, bookingID, submissionID uuid.UUID) error
+}
+
+// BookingGuard — сколько живых будущих записей держит ответ (фаза 27). Реализация —
+// *booking.Guard; nil = записи на контуре нет, и стоп-кран не спрашивается.
+type BookingGuard interface {
+	FutureOfSubmission(ctx context.Context, submissionID uuid.UUID) (int64, error)
+}
+
+// WithBookingGuard подключает стоп-кран удаления ответа.
+func (s *Service) WithBookingGuard(g BookingGuard) *Service {
+	s.bookingGuard = g
+	return s
 }
 
 // WithBookings подключает подтверждение записи. Без него форма с вопросом о времени
@@ -1470,6 +1484,21 @@ func (s *Service) CountInPeriod(ctx context.Context, userID, formID uuid.UUID, p
 func (s *Service) DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error {
 	if _, err := s.forms.GetForAction(ctx, userID, formID, domain.ActionSubmissionDelete); err != nil {
 		return err
+	}
+	// СТОП-КРАН ЗАПИСИ (фаза 27, ADR §10): у ответа есть живая будущая встреча.
+	// Удалить его молча — значит либо снести бронь, не предупредив клиента (его адрес
+	// лежит в этом же ответе), либо оставить в расписании занятое время, о котором
+	// больше ничего не известно. Сначала отмена, и это тот шаг, на котором уходит
+	// письмо. Прошлые записи не держат ничего.
+	if s.bookingGuard != nil {
+		n, err := s.bookingGuard.FutureOfSubmission(ctx, submissionID)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return fmt.Errorf("%w: на этот ответ есть будущая запись — сначала отмените её в расписании",
+				domain.ErrConflict)
+		}
 	}
 	// Файлы — первыми: строка ответа уносит каскадом строки загрузок, а с ними и
 	// ключи объектов. Сбой здесь ОСТАНАВЛИВАЕТ удаление: лучше отказать автору

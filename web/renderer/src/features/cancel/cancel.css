@@ -1,0 +1,34 @@
+/* Страница отмены. Стили едут вместе со своим чанком: качает их только тот, кто пришёл
+   отменять. Токены — общие --rf-*, страница часть продукта, а не отдельный виджет. */
+
+.cx {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.75rem;
+  max-width: var(--rf-column);
+  margin: 0 auto;
+  padding: 4rem 1.5rem;
+}
+
+.cx-form {
+  font-size: calc(var(--rf-font-size) * 0.875);
+  color: var(--rf-muted);
+}
+
+.cx-when {
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-heading));
+  font-weight: 700;
+  line-height: 1.2;
+  color: var(--rf-text);
+}
+
+.cx-note {
+  font-size: calc(var(--rf-font-size) * 0.875);
+  color: var(--rf-muted);
+}
+
+.cx-done {
+  font-size: var(--rf-font-size);
+  color: var(--rf-text);
+}

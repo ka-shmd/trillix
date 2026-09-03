@@ -364,6 +364,40 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteHTML(w, r, http.StatusOK, buf.Bytes())
 }
 
+// getCancelHTML отдаёт оболочку рендерера для страницы отмены записи /cancel/{token}
+// (фаза 27). Тот же собранный index.html, что у формы, но БЕЗ её головы: ни OG-меты,
+// ни оформления, ни preload шрифта здесь нет и быть не может — до разбора токена
+// сервер не знает ни формы, ни автора, а знать бы и не следовало.
+//
+// Токен НЕ разбирается: страница спрашивает о записи сама, своей ручкой. Отдай мы 404
+// на негодной ссылке, страница отмены отличалась бы от протухшей ссылки видом ошибки
+// браузера вместо человеческого текста.
+func (h *PublicHandler) getCancelHTML(w http.ResponseWriter, r *http.Request) {
+	doc := h.currentIndex(r)
+	if doc == nil {
+		httpserver.WriteError(w, r, fmt.Errorf("renderer index unavailable for cancel page"))
+		return
+	}
+	var buf bytes.Buffer
+	buf.Write(doc.head)
+	buf.Write(doc.mid)
+	if err := headTmpl.Execute(&buf, headData{
+		Title:       "Отмена записи",
+		Description: defaultDescription,
+		SiteName:    defaultSiteName,
+		OGImage:     h.ogImageURL,
+	}); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("render cancel page: %w", err))
+		return
+	}
+	buf.Write(doc.tail)
+
+	// Не кэшируется: страница говорит о состоянии записи, а оно меняется той же
+	// кнопкой, что на ней стоит.
+	w.Header().Set("Cache-Control", "no-store")
+	httpserver.WriteHTML(w, r, http.StatusOK, buf.Bytes())
+}
+
 // titleOrFallback — заголовок для мест, где пустота невозможна (<title>, og:title,
 // экран «приём закрыт»). Пустой заголовок законен на самой странице (там <h1>
 // просто не рисуется), но вкладке и превью ссылки нужен текст.

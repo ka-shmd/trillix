@@ -13,11 +13,21 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/ka-shmd/trillix/internal/booking"
+	"github.com/ka-shmd/trillix/internal/entitlements"
+	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/pgtest"
+	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/submissions"
+	"github.com/ka-shmd/trillix/internal/visits"
+	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
 // Схема формы с вопросом о записи. Вопрос необязательный: обязательность к
@@ -96,6 +106,30 @@ func submitWithSlot(t *testing.T, srv *httptest.Server, slug, subID string, book
 	body := fmt.Sprintf(`{"submission_id":%q,"token":%q,"answers":{"s1":%q}}`,
 		subID, freshToken(), bookingID.String())
 	return postSubmission(t, srv, slug, body)
+}
+
+// deleteStack — сервис приёма со стоп-краном и id владельца формы: удаление ответа
+// идёт сервисом, а не HTTP, — проверяется правило, а не транспорт.
+func deleteStack(t *testing.T, slug string) (*submissions.Service, uuid.UUID) {
+	t.Helper()
+	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+		plans, pgtest.MailService(testPool), "http://localhost:5173")
+	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, plans).
+		WithSecret(testSecret)
+	visitsSvc := visits.NewService(testPool, formsSvc, plans, visits.Repo{}, nil, nil)
+	svc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc,
+		pgtest.MailService(testPool), plans, submissions.Repo{}, "http://app.test").
+		WithBookingGuard(booking.NewGuard(testPool, booking.Repo{}))
+
+	var userID uuid.UUID
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT wm.user_id FROM forms f
+		   JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+		  WHERE f.slug = $1`, slug).Scan(&userID); err != nil {
+		t.Fatalf("read owner: %v", err)
+	}
+	return svc, userID
 }
 
 // Приём ответа делает холд записью, а в ОТВЕТЕ оказывается ВРЕМЯ, а не id брони
@@ -289,5 +323,38 @@ func TestSubmit_RaceOnExpiredHolds(t *testing.T) {
 	}
 	if n := countSubmissions(t); n != 1 {
 		t.Fatalf("ответов %d, ожидался один", n)
+	}
+}
+
+// СТОП-КРАН УДАЛЕНИЯ ОТВЕТА (фаза 27, ADR §10): живая будущая запись держит, прошлая
+// не держит. Проверяется на настоящей базе — счёт делает SQL, а не фейк.
+func TestDeleteSubmission_StopCraneOnFutureBooking(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, scheduleID, formID := publishedBookingForm(t, 1)
+
+	subID := uuid.New()
+	future := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Minute)
+	bookingID := seedHold(t, scheduleID, formID, subID, future, 1, time.Now().Add(10*time.Minute))
+	if resp := submitWithSlot(t, srv, slug, subID.String(), bookingID); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("отправка: статус %d", resp.StatusCode)
+	}
+
+	svc, userID := deleteStack(t, slug)
+	err := svc.DeleteForForm(context.Background(), userID, formID, subID)
+	if err == nil {
+		t.Fatal("ответ удалён, хотя на него есть будущая запись")
+	}
+	if !strings.Contains(err.Error(), "будущая запись") {
+		t.Fatalf("текст отказа %q — автору нужно сказать, что делать", err.Error())
+	}
+
+	// Отменяем запись — и удаление проходит.
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE bookings SET status = 'canceled' WHERE id = $1`, bookingID); err != nil {
+		t.Fatalf("cancel booking: %v", err)
+	}
+	if err := svc.DeleteForForm(context.Background(), userID, formID, subID); err != nil {
+		t.Fatalf("удаление после отмены отвергнуто: %v", err)
 	}
 }

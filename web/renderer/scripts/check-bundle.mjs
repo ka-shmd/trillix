@@ -49,6 +49,16 @@ const PRINT_PREFIX = 'print/'
 const SLOTS_BUDGET_BYTES = 12 * 1024
 const SLOTS_PREFIX = 'slots/'
 
+// Страница отмены записи (dist/cancel/, фаза 27) — ПЯТЫЙ порог, и снова отдельный по
+// тому же доводу: её открывает только тот, кто пришёл отменять, по ссылке из письма.
+// Это вообще не форма — ни вопросов, ни отправки; складывать её вес с формой значило
+// бы мерить сумму, которую никто не скачивает за раз.
+//
+// Порог 8 КиБ: сегодня занято ~1.2, запас на разбор отказов и перенос записи, если он
+// однажды появится.
+const CANCEL_BUDGET_BYTES = 8 * 1024
+const CANCEL_PREFIX = 'cancel/'
+
 // Шрифты формы (фаза 22) — ТРЕТИЙ порог, снова отдельный, и снова потому, что
 // складывать разное значит не мерить ничего. Шрифт не в бандле: он не парсится и не
 // исполняется, приезжает параллельно и только тем респондентам, чьей форме он
@@ -100,11 +110,13 @@ const jsFiles =
     (f) =>
       !f.label.startsWith(EMBED_PREFIX) &&
       !f.label.startsWith(PRINT_PREFIX) &&
-      !f.label.startsWith(SLOTS_PREFIX),
+      !f.label.startsWith(SLOTS_PREFIX) &&
+      !f.label.startsWith(CANCEL_PREFIX),
   ) ?? null
 const embedFiles = allFiles?.filter((f) => f.label.startsWith(EMBED_PREFIX)) ?? []
 const printFiles = allFiles?.filter((f) => f.label.startsWith(PRINT_PREFIX)) ?? []
 const slotFiles = allFiles?.filter((f) => f.label.startsWith(SLOTS_PREFIX)) ?? []
+const cancelFiles = allFiles?.filter((f) => f.label.startsWith(CANCEL_PREFIX)) ?? []
 if (jsFiles === null) {
   console.error(`✗ нет собранной сборки в ${distDir} — сначала 'npm run build'`)
   process.exit(1)
@@ -195,6 +207,25 @@ if (slotFiles.length > 0) {
     process.exit(1)
   }
   console.log('✓ выбор времени в пределах бюджета')
+}
+
+if (cancelFiles.length > 0) {
+  let cancelTotal = 0
+  console.log('')
+  for (const f of cancelFiles) {
+    const size = gzipSync(readFileSync(f.path)).length
+    cancelTotal += size
+    console.log(`  ${f.label}  ${kib(size)} gzip`)
+  }
+  console.log(`Отмена записи: ${kib(cancelTotal)} gzip · бюджет ${kib(CANCEL_BUDGET_BYTES)}`)
+  if (cancelTotal > CANCEL_BUDGET_BYTES) {
+    console.error(
+      `✗ бюджет страницы отмены превышен на ${kib(cancelTotal - CANCEL_BUDGET_BYTES)}. ` +
+        `Это одна кнопка и две строки текста — режь код, а не порог.`,
+    )
+    process.exit(1)
+  }
+  console.log('✓ отмена записи в пределах бюджета')
 }
 
 // Загрузчик собирается вторым проходом (vite.embed.config.ts), печатная страница —

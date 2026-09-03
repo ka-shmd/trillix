@@ -189,6 +189,9 @@ type Service struct {
 	// nil = «модуля файлов в этой сборке нет» (юнит-тесты): удаление формы тогда
 	// работает как раньше.
 	files AnswerFiles
+	// bookingGuard — стоп-кран удаления формы с живыми будущими записями (фаза 27);
+	// nil = записи на контуре нет.
+	bookingGuard BookingGuard
 	// secret — секрет токена формы (FORM_TOKEN_SECRET). Из него выводятся ключ
 	// шифрования пароля формы и секрет подписи токенов разблокировки (0047).
 	// Подключается сеттером, как files: конструктор зовут из полусотни тестов, и
@@ -797,11 +800,36 @@ func (s *Service) UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUI
 	return updated, nil
 }
 
+// BookingGuard — сколько живых будущих записей держит форма (фаза 27). Реализация —
+// *booking.Guard; nil = записи на контуре нет, и стоп-кран не спрашивается.
+type BookingGuard interface {
+	FutureOfForm(ctx context.Context, formID uuid.UUID) (int64, error)
+}
+
+// WithBookingGuard подключает стоп-кран удаления.
+func (s *Service) WithBookingGuard(g BookingGuard) *Service {
+	s.bookingGuard = g
+	return s
+}
+
 // Delete удаляет форму (после проверки доступа).
 func (s *Service) Delete(ctx context.Context, userID, formID uuid.UUID) error {
 	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormDelete)
 	if err != nil {
 		return err
+	}
+	// СТОП-КРАН ЗАПИСИ (ADR §10): у формы есть живые будущие встречи. Молча снести
+	// чужие договорённости нельзя — сначала отмена, и это тот шаг, на котором
+	// записавшимся уходит письмо. Прошлые записи удалению не мешают.
+	if s.bookingGuard != nil {
+		n, err := s.bookingGuard.FutureOfForm(ctx, form.ID)
+		if err != nil {
+			return err
+		}
+		if n > 0 {
+			return fmt.Errorf("%w: у формы %s — сначала отмените их в расписании",
+				domain.ErrConflict, pluralBookings(n))
+		}
 	}
 	// Файлы ответов — ПЕРЕД строкой формы: каскад унесёт строки загрузок вместе с
 	// ключами объектов, и найти оставшееся в бакете будет уже нечем. Сбой
@@ -1356,4 +1384,19 @@ func clampLimit(limit int) int {
 	default:
 		return limit
 	}
+}
+
+// pluralBookings — «1 будущая запись», «2 будущие записи», «5 будущих записей».
+// Отказ читает живой человек, и число без согласования выглядит машинным сбоем.
+func pluralBookings(n int64) string {
+	word := "будущих записей"
+	if mod100 := n % 100; mod100 < 11 || mod100 > 14 {
+		switch n % 10 {
+		case 1:
+			word = "будущая запись"
+		case 2, 3, 4:
+			word = "будущие записи"
+		}
+	}
+	return fmt.Sprintf("%d %s", n, word)
 }

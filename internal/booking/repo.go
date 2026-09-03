@@ -16,6 +16,11 @@ import (
 )
 
 // Repo — доступ к данным расписаний поверх sqlc.
+//
+// ⚠ ВРЕМЕНА НАРУЖУ ОТДАЮТСЯ В UTC. pgx возвращает timestamptz в поясе сессии, и один и
+// тот же момент выглядел бы в разных ответах API по-разному («…07:00:00Z» против
+// «…10:00:00+03:00»). Читателей у этих полей несколько (кабинет, публичная выдача,
+// страница отмены), и разъехаться их разбору нельзя.
 type Repo struct{}
 
 // Schedule — строка schedules в том виде, в каком её знает кабинет: правило и
@@ -176,7 +181,7 @@ func (Repo) CreateBlock(ctx context.Context, db postgres.DBTX, b Block) (Block, 
 	return Block{
 		ID:         row.ID,
 		ScheduleID: row.ScheduleID,
-		StartsAt:   row.StartsAt.Time,
+		StartsAt:   row.StartsAt.Time.UTC(),
 		EndsAt:     row.EndsAt.Time,
 		Note:       row.Note,
 		CreatedAt:  row.CreatedAt.Time,
@@ -197,8 +202,8 @@ func (Repo) BlocksInRange(ctx context.Context, db postgres.DBTX, scheduleID uuid
 		out = append(out, Block{
 			ID:         r.ID,
 			ScheduleID: r.ScheduleID,
-			StartsAt:   r.StartsAt.Time,
-			EndsAt:     r.EndsAt.Time,
+			StartsAt:   r.StartsAt.Time.UTC(),
+			EndsAt:     r.EndsAt.Time.UTC(),
 			Note:       r.Note,
 			CreatedAt:  r.CreatedAt.Time,
 		})
@@ -232,7 +237,7 @@ func (Repo) UpcomingBookings(ctx context.Context, db postgres.DBTX, scheduleID u
 			ID:              r.ID,
 			FormID:          r.FormID,
 			FormTitle:       r.FormTitle,
-			StartsAt:        r.StartsAt.Time,
+			StartsAt:        r.StartsAt.Time.UTC(),
 			DurationMinutes: int(r.DurationMinutes),
 			Seats:           int(r.Seats),
 			Status:          r.Status,
@@ -380,7 +385,7 @@ func (Repo) BookingForConfirm(ctx context.Context, db postgres.DBTX, bookingID, 
 	out := BookingRow{
 		ID:         row.ID,
 		ScheduleID: row.ScheduleID,
-		StartsAt:   row.StartsAt.Time,
+		StartsAt:   row.StartsAt.Time.UTC(),
 		Seats:      int(row.Seats),
 		Status:     row.Status,
 	}
@@ -414,6 +419,78 @@ func (Repo) AttachBooking(ctx context.Context, db postgres.DBTX, bookingID, subm
 	})
 	if err != nil {
 		return 0, fmt.Errorf("confirm booking %s: %w", bookingID, err)
+	}
+	return n, nil
+}
+
+// BookingCard — что показывает страница отмены.
+type BookingCard struct {
+	ID              uuid.UUID
+	StartsAt        time.Time
+	DurationMinutes int
+	Seats           int
+	Status          string
+	FormTitle       string
+	Timezone        string
+}
+
+// BookingForCancel — карточка записи для страницы отмены.
+func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error) {
+	row, err := postgres.New(db).GetBookingForCancel(ctx, id)
+	if err != nil {
+		return BookingCard{}, err
+	}
+	return BookingCard{
+		ID:              row.ID,
+		StartsAt:        row.StartsAt.Time.UTC(),
+		DurationMinutes: int(row.DurationMinutes),
+		Seats:           int(row.Seats),
+		Status:          row.Status,
+		FormTitle:       row.FormTitle,
+		Timezone:        row.Timezone,
+	}, nil
+}
+
+// CancelByID отменяет запись по ссылке из письма. Право предъявил токен.
+func (Repo) CancelByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).CancelBookingByID(ctx, id)
+	if err != nil {
+		return 0, fmt.Errorf("cancel booking %s: %w", id, err)
+	}
+	return n, nil
+}
+
+// PurgeExpiredHolds убирает протухшие холды старше before. Место они не держат и так
+// (счёт занятого отсекает истёкшие) — это уборка мусора, а не освобождение времени.
+func (Repo) PurgeExpiredHolds(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error) {
+	n, err := postgres.New(db).DeleteExpiredHolds(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("purge expired holds: %w", err)
+	}
+	return n, nil
+}
+
+// CountFutureBookingsOfForm — живые будущие записи ФОРМЫ. Стоп-кран удаления ответа и
+// формы спрашивает именно это (design/booking.md §4.10).
+func (Repo) CountFutureBookingsOfForm(ctx context.Context, db postgres.DBTX, formID uuid.UUID, from time.Time) (int64, error) {
+	n, err := postgres.New(db).CountFutureBookingsOfForm(ctx, postgres.CountFutureBookingsOfFormParams{
+		FormID:   formID,
+		StartsAt: pgtype.Timestamptz{Time: from, Valid: true},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count future bookings of form %s: %w", formID, err)
+	}
+	return n, nil
+}
+
+// CountFutureBookingsOfSubmission — живые будущие записи ОДНОГО ответа.
+func (Repo) CountFutureBookingsOfSubmission(ctx context.Context, db postgres.DBTX, submissionID uuid.UUID, from time.Time) (int64, error) {
+	n, err := postgres.New(db).CountFutureBookingsOfSubmission(ctx, postgres.CountFutureBookingsOfSubmissionParams{
+		SubmissionID: pgtype.UUID{Bytes: submissionID, Valid: true},
+		StartsAt:     pgtype.Timestamptz{Time: from, Valid: true},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("count future bookings of submission %s: %w", submissionID, err)
 	}
 	return n, nil
 }

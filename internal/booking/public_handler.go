@@ -28,16 +28,33 @@ type publicService interface {
 	Hold(ctx context.Context, req HoldRequest) (uuid.UUID, time.Time, error)
 }
 
+// cancelService — отмена записи по ссылке из письма. Отдельным интерфейсом, а не
+// методами того же: у отмены нет ни формы, ни slug'а — право предъявляет токен.
+type cancelService interface {
+	Show(ctx context.Context, tok string) (Card, error)
+	Cancel(ctx context.Context, tok string) (Card, error)
+}
+
 // PublicHandler — публичный транспорт записи (без авторизации и CSRF).
 type PublicHandler struct {
 	svc          publicService
+	cancel       cancelService
 	listLimiter  RateLimiter
 	holdLimiter  RateLimiter
+	cancelLimit  RateLimiter
 	trustedProxy bool
 }
 
 func NewPublicHandler(svc publicService, list, hold RateLimiter, trustedProxy bool) *PublicHandler {
 	return &PublicHandler{svc: svc, listLimiter: list, holdLimiter: hold, trustedProxy: trustedProxy}
+}
+
+// WithCancel подключает отмену по ссылке. Сеттером, а не аргументом конструктора: у
+// отмены свой сервис и своё ведро, а связывать их с выдачей времени незачем.
+func (h *PublicHandler) WithCancel(svc cancelService, limiter RateLimiter) *PublicHandler {
+	h.cancel = svc
+	h.cancelLimit = limiter
+	return h
 }
 
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
@@ -48,6 +65,53 @@ func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	// ХОЛД — своё ведро и свой ключ (см. hold): общее с выдачей означало бы, что
 	// листание дат съедает право записаться.
 	mux.Handle("POST /public/v1/forms/{slug}/slots/hold", http.HandlerFunc(h.hold))
+
+	if h.cancel != nil {
+		// ОТМЕНА АДРЕСУЕТСЯ ТОКЕНОМ, А НЕ ФОРМОЙ: у респондента нет ни slug'а, ни
+		// сессии — ссылка из письма и есть его право. Ведро по IP: токен
+		// неперебираемый, но подбор его всё равно должен упираться в стену.
+		limited := httpserver.RateLimitByIP(h.cancelLimit, h.trustedProxy, "слишком много запросов")
+		mux.Handle("GET /public/v1/bookings/{token}", limited(http.HandlerFunc(h.showCancel)))
+		mux.Handle("POST /public/v1/bookings/{token}/cancel", limited(http.HandlerFunc(h.doCancel)))
+	}
+}
+
+func (h *PublicHandler) showCancel(w http.ResponseWriter, r *http.Request) {
+	card, err := h.cancel.Show(r.Context(), r.PathValue("token"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	writeCard(w, r, card)
+}
+
+func (h *PublicHandler) doCancel(w http.ResponseWriter, r *http.Request) {
+	card, err := h.cancel.Cancel(r.Context(), r.PathValue("token"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	writeCard(w, r, card)
+}
+
+// cardView — что видит страница отмены. Имени и контактов записавшегося здесь нет:
+// они живут в ответе формы и подчиняются его правилам (спека §13).
+type cardView struct {
+	StartsAt        time.Time `json:"startsAt"`
+	DurationMinutes int       `json:"durationMinutes"`
+	Seats           int       `json:"seats"`
+	FormTitle       string    `json:"formTitle"`
+	// Timezone — пояс РАСПИСАНИЯ: страница пишет время и в нём, и в поясе читателя,
+	// когда они разные.
+	Timezone string `json:"timezone"`
+	Canceled bool   `json:"canceled"`
+}
+
+// writeCard — карточка на провод. Приведением, а не переписыванием полей: наборы
+// совпадают, и расхождение обязано ломать сборку, а не молча терять поле.
+func writeCard(w http.ResponseWriter, r *http.Request, c Card) {
+	w.Header().Set("Cache-Control", "no-store")
+	httpserver.WriteJSON(w, r, http.StatusOK, cardView(c))
 }
 
 func (h *PublicHandler) slots(w http.ResponseWriter, r *http.Request) {

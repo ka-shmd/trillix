@@ -29,6 +29,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/blob"
 	"github.com/ka-shmd/trillix/internal/booking"
 	"github.com/ka-shmd/trillix/internal/config"
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/geo"
@@ -119,6 +120,12 @@ const (
 	// человек успевает, а занять весь день ботом — нет.
 	holdRatePerSec = 1.0 / 15.0
 	holdBurst      = 10
+
+	// Ведро страницы отмены — по IP. Токен неперебираем (подпись HMAC), но подбор
+	// всё равно должен упираться в стену, а сама страница дважды за минуту никому не
+	// нужна: открыть, прочитать, нажать.
+	cancelRatePerSec = 1.0 / 3.0
+	cancelBurst      = 10
 
 	// Жёсткий лимит на выдачу слота загрузки по IP (фаза 24, своё ведро). Ведро
 	// уже, чем у приёма ответа, и это осознанно: каждый слот — строка в базе и
@@ -501,6 +508,13 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// Подтверждение брони в приёме ответа: работает внутри транзакции submissions,
 	// поэтому ни пула, ни своих часов ему не даётся.
 	bookingConfirmer := booking.NewConfirmer(booking.Repo{})
+	// Стоп-кран удаления: живая будущая запись держит и ответ, и форму (ADR §10).
+	bookingGuard := booking.NewGuard(pool, booking.Repo{})
+	// Отмена по ссылке из письма. Секрет производный — с отдельной меткой назначения,
+	// как у разблокировки формы и токена печати; ротация FORM_TOKEN_SECRET гасит все
+	// выданные ссылки (раннбук ротации).
+	bookingCancelSvc := booking.NewCancelService(pool, booking.Repo{},
+		booking.DeriveCancelSecret(cfg.FormTokenSecret))
 	// Публичная половина записи: свободное время и холд. Своя транзакция ей нужна —
 	// лок слота, счёт занятого и вставка обязаны быть одной.
 	bookingPublicSvc := booking.NewPublicService(pool, postgres.TxRunner{Pool: pool}, booking.Repo{}, formsSvc)
@@ -509,7 +523,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		ratelimit.NewTokenBucket(slotsRatePerSec, slotsBurst),
 		ratelimit.NewTokenBucket(holdRatePerSec, holdBurst),
 		cfg.TrustedProxy,
-	)
+	).WithCancel(bookingCancelSvc, ratelimit.NewTokenBucket(cancelRatePerSec, cancelBurst))
 
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
 		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
@@ -560,6 +574,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// доступ, forms зовёт answerfiles при удалении формы. Обратный импорт замкнул
 	// бы цикл.
 	formsSvc.WithFiles(filesSvc)
+	formsSvc.WithBookingGuard(bookingGuard)
 	// Пространству файлы нужны по той же причине: его удаление уносит каскадом
 	// формы, а с ними — записи о загрузках вместе с ключами объектов.
 	workspacesSvc.WithFiles(filesSvc)
@@ -596,6 +611,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		// Подтверждение записи (фаза 27): холд становится бронью в той же
 		// транзакции, что принимает ответ, — время записи уезжает в сам ответ.
 		WithBookings(bookingConfirmer).
+		WithBookingGuard(bookingGuard).
 		// Адрес публичного рендерера нужен подвалу письма респонденту: в нём стоит
 		// ссылка на саму форму, а собрать её из origin кабинета нельзя.
 		WithRespondentMail(cfg.PublicRendererBaseURL, respondentMailLimiter)
@@ -708,6 +724,30 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("spent invitations purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	// Протухшие холды записи (фаза 27). ЭТО УБОРКА, А НЕ ОСВОБОЖДЕНИЕ ВРЕМЕНИ: место
+	// возвращается в оборот само — счёт занятого не считает истёкшие холды, — и
+	// заминка задачи ни на что не влияет. Здесь убираются строки брошенных вкладок,
+	// которые иначе копились бы вечно.
+	//
+	// Отсрочка вдвое больше срока холда: истёкший холд ещё может стать записью на
+	// отправке длинной анкеты (перезанятие, ADR §10), и сносить его в ту же секунду
+	// значило бы гарантированно отказать тому, кто как раз дописывает ответ.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "booking-hold-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
+			defer cancel()
+			n, err := bookingCancelSvc.PurgeHolds(ctx, 2*domain.HoldTTL)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired booking holds purged", slog.Int64("count", n))
 			}
 			return nil
 		},
