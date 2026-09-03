@@ -1,6 +1,9 @@
 package mail
 
 import (
+	"go/ast"
+	"go/parser"
+	"go/token"
 	"strings"
 	"testing"
 )
@@ -150,5 +153,120 @@ func TestRender_FooterOnlyForRespondent(t *testing.T) {
 	}
 	if body != "Свой текст." {
 		t.Fatalf("к письму владельцу приписан подвал: %q", body)
+	}
+}
+
+// TestEveryTemplateIsRegistered — РЕГРЕССИЯ. Константы шаблонов и карта templates
+// заводятся в двух разных местах одного файла, и фаза 27 показала цену этого: оба
+// письма о записи были объявлены константами с расписанным составом данных, но в
+// карту не попали. Ошибку выдаёт только Render, то есть уже диспетчер outbox — письмо
+// уходит в бесконечный бэкофф, а тесты вокруг него проверяют строку в очереди и потому
+// зелены.
+//
+// Список констант читается из ИСХОДНИКА (go/parser), а не переписывается сюда руками:
+// переписанный список забыли бы ровно так же.
+func TestEveryTemplateIsRegistered(t *testing.T) {
+	fset := token.NewFileSet()
+	file, err := parser.ParseFile(fset, "template.go", nil, 0)
+	if err != nil {
+		t.Fatalf("разбор template.go: %v", err)
+	}
+	var declared []string
+	ast.Inspect(file, func(n ast.Node) bool {
+		spec, ok := n.(*ast.ValueSpec)
+		if !ok {
+			return true
+		}
+		ident, ok := spec.Type.(*ast.Ident)
+		if !ok || ident.Name != "Template" {
+			return true
+		}
+		for _, name := range spec.Names {
+			declared = append(declared, name.Name)
+		}
+		return true
+	})
+	if len(declared) == 0 {
+		t.Fatal("в template.go не найдено ни одной константы Template — сломался разбор, а не код")
+	}
+	for _, name := range declared {
+		value := templateByName(t, name)
+		if _, ok := templates[value]; !ok {
+			t.Errorf("шаблон %s (%q) объявлен константой, но не заведён в карте templates: "+
+				"Render вернёт ошибку, и письмо не уйдёт никогда", name, value)
+		}
+	}
+}
+
+// templateByName — значение константы по её имени. Разбор исходника даёт имена;
+// значения берём у самого пакета, чтобы не парсить ещё и строковые литералы.
+func templateByName(t *testing.T, name string) Template {
+	t.Helper()
+	byName := map[string]Template{
+		"TemplatePasswordReset":      TemplatePasswordReset,
+		"TemplateEmailVerification":  TemplateEmailVerification,
+		"TemplateWorkspaceInvite":    TemplateWorkspaceInvite,
+		"TemplateSubmissionNew":      TemplateSubmissionNew,
+		"TemplateEmailChangeConfirm": TemplateEmailChangeConfirm,
+		"TemplateEmailChangeNotice":  TemplateEmailChangeNotice,
+		"TemplateRespondentReceipt":  TemplateRespondentReceipt,
+		"TemplateBookingConfirmed":   TemplateBookingConfirmed,
+		"TemplateBookingCanceled":    TemplateBookingCanceled,
+		"TemplatePasswordChanged":    TemplatePasswordChanged,
+	}
+	value, ok := byName[name]
+	if !ok {
+		t.Fatalf("константа %s объявлена в template.go, но не добавлена в этот тест: "+
+			"допиши её сюда — иначе новый шаблон не проверяется ничем", name)
+	}
+	return value
+}
+
+func TestRenderBookingConfirmed(t *testing.T) {
+	data := map[string]any{
+		"form_title":  "Стрижка",
+		"when":        "11 сентября 2026, 11:00 (Europe/Moscow)",
+		"cancel_link": "https://f.trillix.ru/cancel/abc",
+		"form_link":   "https://f.trillix.ru/r/anketa",
+	}
+	subject, body, err := Render(EmailMessage{Template: TemplateBookingConfirmed, Data: data})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if subject == "" {
+		t.Error("пустая тема письма")
+	}
+	// Ссылка отмены обязательна: без неё респондент не вернёт место в оборот, а
+	// подвал обязан объяснить, откуда письмо взялось (адрес ввели в форму).
+	for _, want := range []string{"Стрижка", "11:00 (Europe/Moscow)",
+		"https://f.trillix.ru/cancel/abc", "https://f.trillix.ru/r/anketa"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("тело письма не содержит %q:\n%s", want, body)
+		}
+	}
+}
+
+func TestRenderBookingCanceled(t *testing.T) {
+	data := map[string]any{
+		"form_title": "Стрижка",
+		"when":       "11 сентября 2026, 11:00 (Europe/Moscow)",
+		"form_link":  "https://f.trillix.ru/r/anketa",
+	}
+	subject, body, err := Render(EmailMessage{Template: TemplateBookingCanceled, Data: data})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if subject == "" {
+		t.Error("пустая тема письма")
+	}
+	// Ссылки отмены здесь НЕТ намеренно: отменять уже нечего, и живая ссылка в этом
+	// письме означала бы вторую отмену той же брони.
+	if strings.Contains(body, "/cancel/") {
+		t.Errorf("в письме об отмене осталась ссылка отмены:\n%s", body)
+	}
+	for _, want := range []string{"Стрижка", "11:00 (Europe/Moscow)", "https://f.trillix.ru/r/anketa"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("тело письма не содержит %q:\n%s", want, body)
+		}
 	}
 }

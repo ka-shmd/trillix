@@ -23,8 +23,10 @@ import (
 	"github.com/ka-shmd/trillix/internal/booking"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
+	"github.com/ka-shmd/trillix/internal/ratelimit"
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/visits"
 	"github.com/ka-shmd/trillix/internal/workspaces"
@@ -140,6 +142,9 @@ func deleteStack(t *testing.T, slug string) (*submissions.Service, uuid.UUID) {
 	svc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc,
 		pgtest.MailService(testPool), plans, submissions.Repo{}, "http://app.test").
 		WithBookingGuard(booking.NewGuard(testPool, booking.Repo{})).
+		// Адрес рендерера письму об отмене нужен так же, как письму о записи: его
+		// подвал называет форму ссылкой. Без него письма не будет вовсе.
+		WithRespondentMail("http://f.test", ratelimit.AllowAll{}).
 		WithBookingMail("Trillix <no-reply@trillix.test>")
 
 	var userID uuid.UUID
@@ -430,6 +435,35 @@ func TestSubmit_BookingMailWithInvite(t *testing.T) {
 	if !strings.Contains(ics, "METHOD:REQUEST") || !strings.Contains(ics, "UID:booking-"+bookingID.String()) {
 		t.Fatalf("приглашение не то:\n%s", ics)
 	}
+	assertRenders(t, payload, msg.Data["cancel_link"], "Trillix")
+}
+
+// assertRenders — РЕГРЕССИЯ И ГЛАВНАЯ ПРОВЕРКА обоих писем о записи: строка в очереди
+// ещё не письмо. Шаблоны заводятся отдельно от констант, и пропущенная запись в карте
+// templates даёт ошибку только у Render — то есть у диспетчера, на живом контуре, где
+// письмо молча уходит в бесконечный бэкофф. Тест, читающий payload и не зовущий Render,
+// такую сборку считает исправной.
+func assertRenders(t *testing.T, payload []byte, want ...string) {
+	t.Helper()
+	var msg mail.EmailMessage
+	if err := json.Unmarshal(payload, &msg); err != nil {
+		t.Fatalf("payload не разбирается в письмо: %v", err)
+	}
+	subject, body, err := mail.Render(msg)
+	if err != nil {
+		t.Fatalf("письмо %q не рендерится, то есть не уйдёт никогда: %v", msg.Template, err)
+	}
+	if subject == "" {
+		t.Error("пустая тема письма")
+	}
+	for _, w := range want {
+		if w == "" {
+			continue
+		}
+		if !strings.Contains(body, w) {
+			t.Errorf("тело письма не содержит %q:\n%s", w, body)
+		}
+	}
 }
 
 // ОТМЕНА ГАСИТ СОБЫТИЕ: письмо об отмене несёт тот же UID и БОЛЬШИЙ номер редакции —
@@ -474,4 +508,5 @@ func TestCancel_MailCancelsTheEvent(t *testing.T) {
 			t.Fatalf("в отмене нет %q:\n%s", want, ics)
 		}
 	}
+	assertRenders(t, payload, "Trillix")
 }

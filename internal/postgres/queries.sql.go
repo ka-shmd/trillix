@@ -2820,7 +2820,7 @@ func (q *Queries) GetSubmissionForPrint(ctx context.Context, arg GetSubmissionFo
 
 const getSubmissionOwner = `-- name: GetSubmissionOwner :one
 SELECT u.email, coalesce(f.name, f.title) AS title, f.title AS public_title,
-    f.workspace_id, f.notify_email, f.respondent_email
+    f.slug, f.workspace_id, f.notify_email, f.respondent_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id
@@ -2831,6 +2831,7 @@ type GetSubmissionOwnerRow struct {
 	Email           string
 	Title           string
 	PublicTitle     string
+	Slug            string
 	WorkspaceID     uuid.UUID
 	NotifyEmail     []byte
 	RespondentEmail []byte
@@ -2846,7 +2847,9 @@ type GetSubmissionOwnerRow struct {
 // отрабатывает на каждом открытии формы — лишний JSONB на самом горячем запросе
 // продукта не бесплатен. Заголовков два и они разные: `title` — внутреннее имя
 // (name ?? title), его видит владелец; `public_title` — то, как форма называется
-// для респондента, и в подвале его письма стоит именно оно.
+// для респондента, и в подвале его письма стоит именно оно. slug — адрес формы
+// для того же подвала: письма респонденту и о записи обязаны сказать, откуда
+// они взялись, а адрес известен только здесь.
 func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubmissionOwnerRow, error) {
 	row := q.db.QueryRow(ctx, getSubmissionOwner, id)
 	var i GetSubmissionOwnerRow
@@ -2854,6 +2857,7 @@ func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubm
 		&i.Email,
 		&i.Title,
 		&i.PublicTitle,
+		&i.Slug,
 		&i.WorkspaceID,
 		&i.NotifyEmail,
 		&i.RespondentEmail,

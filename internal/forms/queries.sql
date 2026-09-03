@@ -326,9 +326,11 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- отрабатывает на каждом открытии формы — лишний JSONB на самом горячем запросе
 -- продукта не бесплатен. Заголовков два и они разные: `title` — внутреннее имя
 -- (name ?? title), его видит владелец; `public_title` — то, как форма называется
--- для респондента, и в подвале его письма стоит именно оно.
+-- для респондента, и в подвале его письма стоит именно оно. slug — адрес формы
+-- для того же подвала: письма респонденту и о записи обязаны сказать, откуда
+-- они взялись, а адрес известен только здесь.
 SELECT u.email, coalesce(f.name, f.title) AS title, f.title AS public_title,
-    f.workspace_id, f.notify_email, f.respondent_email
+    f.slug, f.workspace_id, f.notify_email, f.respondent_email
 FROM forms f
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id

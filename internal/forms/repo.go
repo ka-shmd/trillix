@@ -636,6 +636,10 @@ type Owner struct {
 	WorkspaceID uuid.UUID
 	// NotifyEmail — свой текст письма (nil = дефолтный шаблон).
 	NotifyEmail *domain.NotifyEmail
+	// Slug — публичный адрес формы. Нужен ПОДВАЛУ писем респонденту: и квитанция,
+	// и письмо о записи уходят на адрес, введённый в форму, и обязаны сказать
+	// получателю, откуда взялись. Больше его на этом пути взять негде.
+	Slug string
 	// PublicTitle — как форма называется ДЛЯ РЕСПОНДЕНТА (колонка title). Отдельно
 	// от Title: тот несёт внутреннее имя из кабинета («Анкета (копия 2)»), и в
 	// подвале письма респонденту оно читалось бы как чужая кухня.
@@ -658,6 +662,7 @@ func (Repo) GetSubmissionOwner(ctx context.Context, db postgres.DBTX, formID uui
 		Email:           row.Email,
 		Title:           row.Title,
 		PublicTitle:     row.PublicTitle,
+		Slug:            row.Slug,
 		WorkspaceID:     row.WorkspaceID,
 		NotifyEmail:     notifyEmailFromJSON(row.NotifyEmail),
 		RespondentEmail: respondentEmailFromJSON(row.RespondentEmail),

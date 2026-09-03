@@ -81,6 +81,7 @@ func (s *Service) notifyBooking(
 			"form_title":  owner.PublicTitle,
 			"when":        when,
 			"cancel_link": link,
+			"form_link":   s.formBaseURL + "/r/" + slug,
 		},
 		Inline: []mail.File{s.invite(domain.ICSRequest, 0, b, owner.PublicTitle, to, link)},
 	}
@@ -165,7 +166,10 @@ func (s *Service) NotifyBookingCanceled(
 	timezone string,
 ) {
 	log := httpserver.LoggerFrom(ctx)
-	if s.bookingOrganizer == "" {
+	if s.bookingOrganizer == "" || s.formBaseURL == "" {
+		// Те же две настройки, что у письма о записи: без организатора приглашение
+		// не покажет половина клиентов, без адреса формы подвалу нечем объяснить
+		// получателю, откуда письмо взялось.
 		return
 	}
 	row, err := s.repo.GetForPrint(ctx, s.db, formID, submissionID)
@@ -209,6 +213,7 @@ func (s *Service) NotifyBookingCanceled(
 		Data: map[string]any{
 			"form_title": owner.PublicTitle,
 			"when":       bookingWhen(startsAt, timezone),
+			"form_link":  s.formBaseURL + "/r/" + owner.Slug,
 		},
 		// SEQUENCE 1 — БОЛЬШЕ, чем у приглашения (0): клиент вправе проигнорировать
 		// отмену с номером не выше выданного, приняв её за устаревшую.
