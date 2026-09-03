@@ -1998,10 +1998,17 @@ func TestPublish_SlotWithoutSchedule(t *testing.T) {
 	}
 }
 
-// То же расписание, но выбранное: публикация проходит.
+// То же расписание, но выбранное, и обязательный вопрос о почте на месте: публикация
+// проходит.
+//
+// ⚠ ПОЧТА В ЭТОЙ СХЕМЕ — НЕ УКРАШЕНИЕ. До 2026-09-04 тест публиковал форму записи без
+// неё и проходил: ровно то состояние, в котором письмо о записи молча не уходит.
 func TestPublish_SlotWithSchedule(t *testing.T) {
 	scheduleID := uuid.New()
-	schema := json.RawMessage(`{"blocks":[{"id":"s1","groupId":"g1","type":"slot","settings":{}}]}`)
+	schema := json.RawMessage(`{"blocks":[
+		{"id":"s1","groupId":"g1","type":"slot","settings":{}},
+		{"id":"e1","groupId":"g2","type":"email","required":true,"settings":{}}
+	]}`)
 	store := &fakeStore{form: Form{
 		ID: uuid.New(), WorkspaceID: uuid.New(), DraftSchema: schema, Status: "draft",
 		ScheduleID: &scheduleID,
@@ -2010,6 +2017,56 @@ func TestPublish_SlotWithSchedule(t *testing.T) {
 
 	if _, err := svc.Publish(context.Background(), uuid.New(), store.form.ID); err != nil {
 		t.Fatalf("публикация с выбранным расписанием отвергнута: %v", err)
+	}
+}
+
+// РЕГРЕССИЯ (отчёт владельца 2026-09-04): форма записи публиковалась без вопроса о
+// почте, и письмо о записи после этого молча не уходило — а с ним не уходила и ссылка
+// отмены, то есть место оставалось занятым до самого приёма.
+//
+// Необязательный вопрос о почте гейт тоже не проходит: респондент его пропускает, и
+// форма возвращается в то же состояние.
+func TestPublish_SlotWithoutRequiredEmail(t *testing.T) {
+	scheduleID := uuid.New()
+	cases := map[string]string{
+		"почты нет вовсе": `{"blocks":[{"id":"s1","groupId":"g1","type":"slot","settings":{}}]}`,
+		"почта необязательна": `{"blocks":[
+			{"id":"s1","groupId":"g1","type":"slot","settings":{}},
+			{"id":"e1","groupId":"g2","type":"email","settings":{}}
+		]}`,
+	}
+	for name, schema := range cases {
+		t.Run(name, func(t *testing.T) {
+			store := &fakeStore{form: Form{
+				ID: uuid.New(), WorkspaceID: uuid.New(), DraftSchema: json.RawMessage(schema),
+				Status: "draft", ScheduleID: &scheduleID,
+			}}
+			svc := newTestService(store)
+
+			_, err := svc.Publish(context.Background(), uuid.New(), store.form.ID)
+			if err == nil {
+				t.Fatal("форма записи без обязательной почты опубликована")
+			}
+			if !errors.Is(err, domain.ErrValidation) {
+				t.Fatalf("ошибка не ErrValidation: %v", err)
+			}
+			if !strings.Contains(err.Error(), "ссылку отмены") {
+				t.Fatalf("текст отказа %q — автору нужно сказать, ЗАЧЕМ почта", err.Error())
+			}
+		})
+	}
+}
+
+// Формы без записи новый гейт не касается: почта им не нужна.
+func TestPublish_NoSlotNeedsNoEmail(t *testing.T) {
+	schema := json.RawMessage(`{"blocks":[{"id":"q1","groupId":"g1","type":"short_text","settings":{}}]}`)
+	store := &fakeStore{form: Form{
+		ID: uuid.New(), WorkspaceID: uuid.New(), DraftSchema: schema, Status: "draft",
+	}}
+	svc := newTestService(store)
+
+	if _, err := svc.Publish(context.Background(), uuid.New(), store.form.ID); err != nil {
+		t.Fatalf("обычная форма не опубликовалась: %v", err)
 	}
 }
 

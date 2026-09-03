@@ -5,6 +5,9 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import { FormFactsProvider, type FormFacts } from './formFacts'
 import { SlotSettings } from './kinds/slotSettings'
+import { createBuilderStore } from './store'
+import { BuilderStoreContext } from './storeContext'
+import { type Block } from '@entities/formSchema'
 
 // Попап блока «Запись» спрашивает расписания ПРОСТРАНСТВА ФОРМЫ. Дважды за один день
 // он показывал пустой список при заведённом расписании (отчёт владельца 2026-09-03):
@@ -50,15 +53,26 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
-function renderWith(facts: FormFacts) {
+// Попапу нужен стор билдера: он смотрит в документ — есть ли обязательный вопрос о
+// почте. Блоками по умолчанию считается «есть», чтобы проверки про расписание не
+// спотыкались о второе предупреждение.
+function renderWith(facts: FormFacts, blocks: Block[] = [emailBlock(true)]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const store = createBuilderStore()
+  store.setState({ blocks })
   return render(
     <QueryClientProvider client={qc}>
-      <FormFactsProvider value={facts}>
-        <SlotSettings />
-      </FormFactsProvider>
+      <BuilderStoreContext.Provider value={store}>
+        <FormFactsProvider value={facts}>
+          <SlotSettings />
+        </FormFactsProvider>
+      </BuilderStoreContext.Provider>
     </QueryClientProvider>,
   )
+}
+
+function emailBlock(required: boolean): Block {
+  return { id: 'e1', groupId: 'g1', type: 'email', required } as Block
 }
 
 describe('расписание в попапе блока «Запись»', () => {
@@ -78,7 +92,7 @@ describe('расписание в попапе блока «Запись»', () 
     })
     // Зато сказано, что без выбора форму не опубликовать: это второй экран, на
     // котором автор узнаёт про гейт публикации, и первый — как раз этот.
-    expect(screen.getByText(/нельзя опубликовать/)).toBeTruthy()
+    expect(screen.getByText(/Пока расписание не выбрано/)).toBeTruthy()
   })
 
   it('пространство формы неизвестно — запроса нет вовсе', () => {
@@ -87,5 +101,33 @@ describe('расписание в попапе блока «Запись»', () 
     // и вернул бы 404 — молча, потому что попап показывает пустой список одинаково.
     renderWith({ id: 'form-1', workspaceId: '', workspaceSlug: '', scheduleId: null })
     expect(calls).toHaveLength(0)
+  })
+})
+
+// ВТОРАЯ ПОЛОВИНА ГЕЙТА (отчёт владельца 2026-09-04): форма записи без обязательного
+// вопроса о почте публиковалась, а письмо о записи потом молча не уходило — вместе с
+// ним не уходила ссылка отмены, и место стояло занятым до самого приёма.
+describe('почта в попапе блока «Запись»', () => {
+  const facts: FormFacts = {
+    id: 'form-1',
+    workspaceId: 'ws-1',
+    workspaceSlug: 'w-one',
+    scheduleId: 'sch-1',
+  }
+
+  it('обязательного вопроса о почте нет — предупреждаем', () => {
+    renderWith(facts, [])
+    expect(screen.getByText(/обязательный вопрос «Email»/)).toBeTruthy()
+  })
+
+  it('вопрос есть, но необязательный — предупреждаем всё равно', () => {
+    // Необязательный респондент пропускает, и форма возвращается в то же состояние.
+    renderWith(facts, [emailBlock(false)])
+    expect(screen.getByText(/обязательный вопрос «Email»/)).toBeTruthy()
+  })
+
+  it('обязательный вопрос есть — молчим', () => {
+    renderWith(facts, [emailBlock(true)])
+    expect(screen.queryByText(/обязательный вопрос «Email»/)).toBeNull()
   })
 })

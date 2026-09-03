@@ -5,6 +5,7 @@ import { formKeys } from '../../keys'
 import { setFormSchedule } from '../../api'
 import { schedulesQueryOptions } from '../../../../shared/schedules/queries'
 import { useFormFacts } from '../formFacts'
+import { useBuilderStore } from '../storeContext'
 import { SettingRow } from './settings'
 import {
   Select,
@@ -26,6 +27,12 @@ import {
 // патчит саму форму и инвалидирует её деталь.
 export function SlotSettings() {
   const facts = useFormFacts()
+  // Обязательный вопрос о почте — вторая половина условия публикации: без адреса
+  // письмо о записи молча не уходит, а с ним не уходит и ссылка отмены. Правило
+  // зеркалит domain.SlotNeedsEmail; разойтись им нельзя.
+  const hasRequiredEmail = useBuilderStore((s) =>
+    s.blocks.some((b) => b.type === 'email' && b.required === true),
+  )
   const qc = useQueryClient()
   const schedules = useQuery({
     ...schedulesQueryOptions(facts?.workspaceId ?? ''),
@@ -73,6 +80,15 @@ export function SlotSettings() {
       {!form.scheduleId && !empty && (
         <p className="px-2 pb-1 text-xs text-muted-foreground">
           Пока расписание не выбрано, форму нельзя опубликовать.
+        </p>
+      )}
+      {/* Предупреждение того же жанра, что и про невыбранное расписание, и по тому
+          же доводу: узнавать об отказе на кнопке «Опубликовать» — значит узнавать в
+          момент, когда автор уже считает форму готовой. */}
+      {!hasRequiredEmail && (
+        <p className="px-2 pb-1 text-xs text-muted-foreground">
+          Добавьте обязательный вопрос «Email»: на него уйдёт подтверждение записи со ссылкой
+          отмены. Без него форму нельзя опубликовать.
         </p>
       )}
       {/* ⚠ ССЫЛКА ВЕДЁТ В ПРОСТРАНСТВО ФОРМЫ, а не «в расписания вообще». Пока она

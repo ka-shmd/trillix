@@ -105,7 +105,8 @@ func bookingRow(t *testing.T, id uuid.UUID) (status string, submissionID *uuid.U
 
 func submitWithSlot(t *testing.T, srv *httptest.Server, slug, subID string, bookingID uuid.UUID) *http.Response {
 	t.Helper()
-	body := fmt.Sprintf(`{"submission_id":%q,"token":%q,"answers":{"s1":%q}}`,
+	// Почта в ответе обязательна: вопрос о ней есть в каждой форме записи.
+	body := fmt.Sprintf(`{"submission_id":%q,"token":%q,"answers":{"s1":%q,"e1":"client@example.com"}}`,
 		subID, freshToken(), bookingID.String())
 	return postSubmission(t, srv, slug, body)
 }
@@ -121,7 +122,7 @@ func publishedBookingFormWithEmail(t *testing.T) (slug string, scheduleID, formI
 		{"id":"t_s1","groupId":"g_s1","type":"title","text":[{"t":"Когда удобно"}]},
 		{"id":"s1","groupId":"g_s1","type":"slot","settings":{}},
 		{"id":"t_e1","groupId":"g_e1","type":"title","text":[{"t":"Почта"}]},
-		{"id":"e1","groupId":"g_e1","type":"email","settings":{}}]}`
+		{"id":"e1","groupId":"g_e1","type":"email","required":true,"settings":{}}]}`
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE form_versions SET schema = $1::jsonb WHERE form_id = $2`, schema, formID); err != nil {
 		t.Fatalf("update version schema: %v", err)

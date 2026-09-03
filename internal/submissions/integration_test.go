@@ -148,9 +148,14 @@ func publishedFormWithSchedule(t *testing.T, capacity int) (slug string, version
 	if err != nil {
 		t.Fatalf("create form: %v", err)
 	}
+	// ПОЧТА ЗДЕСЬ ОБЯЗАТЕЛЬНА, и это не украшение схемы: без неё гейт публикации
+	// отказывает (domain.SlotNeedsEmail), потому что письмо о записи — единственный
+	// носитель ссылки отмены.
 	schema := `{"blocks":[
 		{"id":"t_s1","groupId":"g_s1","type":"title","text":[{"t":"Когда удобно"}]},
-		{"id":"s1","groupId":"g_s1","type":"slot","settings":{}}]}`
+		{"id":"s1","groupId":"g_s1","type":"slot","settings":{}},
+		{"id":"t_e1","groupId":"g_e1","type":"title","text":[{"t":"Почта"}]},
+		{"id":"e1","groupId":"g_e1","type":"email","required":true,"settings":{}}]}`
 	updated, err := formsSvc.UpdateDraftSchema(ctx, user.ID, form.ID, json.RawMessage(schema), form.UpdatedAt)
 	if err != nil {
 		t.Fatalf("save schema: %v", err)
