@@ -214,10 +214,13 @@ export function ScheduleCanvas({
           >
             <ChevronRight className="size-4" />
           </Button>
-          <Button variant="ghost" size="sm" onClick={() => controller.today()}>
+          <span className="ml-2 text-base font-semibold">{rangeTitle(dates, view)}</span>
+          {/* «Сегодня» стоит ПОСЛЕ дат (решение владельца 2026-09-04): стрелки и
+              заголовок отрезка — про то, где мы сейчас, а возврат к текущему дню
+              читается следом, как выход из прогулки по календарю. */}
+          <Button variant="ghost" size="sm" className="ml-2" onClick={() => controller.today()}>
             Сегодня
           </Button>
-          <span className="ml-2 text-base font-semibold">{rangeTitle(dates, view)}</span>
         </div>
         <div className="flex items-center gap-3">
           <p className="hidden text-sm text-muted-foreground @3xl:block">

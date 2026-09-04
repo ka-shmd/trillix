@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { MoreHorizontal, Settings2, Trash2 } from 'lucide-react'
+import { Settings2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
@@ -18,18 +18,23 @@ import { PageCrumbs, PageActions } from '../../shared/page/headerPortals'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
-import {
   Sheet,
   SheetContent,
   SheetDescription,
   SheetHeader,
   SheetTitle,
 } from '@/components/ui/sheet'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from '@/components/ui/alert-dialog'
 
 // Страница одного расписания — РАБОЧИЙ СТОЛ, а не колонка разделов: слева узкая
 // полоса (мини-календарь и ближайшие записи), справа полотно во весь остаток
@@ -44,8 +49,8 @@ import {
 //    живёт внутри половин. Иначе полотно, у которого высота считается в пикселях,
 //    росло бы вниз, унося панель управления за край экрана.
 //
-// Параметры записи уехали в шторку: это настройка, к которой возвращаются редко, а
-// место на экране принадлежит распорядку.
+// Параметры записи и удаление расписания уехали в шторку: это настройки, к которым
+// возвращаются редко, а место в баре принадлежит тому, чем пользуются каждый день.
 //
 // Расписание адресуется ID, а не slug'ом: slug'ов у него нет — публичной сущностью
 // оно не является, наружу уезжает только свободное время формы. Пространство при этом
@@ -107,35 +112,6 @@ function SchedulePage() {
           <Settings2 className="size-4" />
           Параметры
         </Button>
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
-            <Button variant="ghost" size="icon" aria-label="Действия">
-              <MoreHorizontal className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end">
-            {/* Удаление отделено от прочего и покрашено ролью: оно необратимо, а
-                отказать может сервер — у расписания есть будущие записи или на него
-                ссылается форма. Текст отказа приходит оттуда же и показывается тостом:
-                места под коробку отказа на этой странице нет, вся высота у полотна. */}
-            <DropdownMenuItem
-              variant="destructive"
-              onSelect={() =>
-                remove.mutate(undefined, {
-                  onSuccess: () =>
-                    void navigate({
-                      to: '/workspaces/$workspaceSlug/schedules',
-                      params: { workspaceSlug },
-                    }),
-                  onError: (e) => toast.error(humanError(e)),
-                })
-              }
-            >
-              <Trash2 className="size-4" />
-              Удалить расписание
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
       </PageActions>
 
       <div className="flex h-full min-h-0">
@@ -162,13 +138,60 @@ function SchedulePage() {
               правятся на полотне.
             </SheetDescription>
           </SheetHeader>
-          <div className="px-4 pb-6">
+          <div className="flex flex-col gap-8 px-4 pb-6">
             <ScheduleEditor
               schedule={schedule}
               saving={update.isPending}
               error={update.isError ? humanError(update.error) : undefined}
               onSave={(input) => update.mutate(input)}
             />
+
+            {/* УДАЛЕНИЕ ЖИВЁТ ЗДЕСЬ (решение владельца 2026-09-04), а не меню в баре:
+                на рабочем столе бар занят тем, чем пользуются каждый день, а снос
+                расписания — редкое и необратимое действие, за которым идут в
+                настройки. Отделено чертой и покрашено ролью; спрашивается диалогом,
+                потому что отменить его нечем. */}
+            <div className="border-t pt-6">
+              <p className="text-sm font-semibold">Удалить расписание</p>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Формы, которые на него ссылаются, перестанут принимать записи. Пока у расписания
+                есть будущие записи, удалить его нельзя.
+              </p>
+              <AlertDialog>
+                <AlertDialogTrigger asChild>
+                  <Button variant="outline" size="sm" className="mt-3 text-destructive">
+                    <Trash2 className="size-4" />
+                    Удалить расписание
+                  </Button>
+                </AlertDialogTrigger>
+                <AlertDialogContent>
+                  <AlertDialogHeader>
+                    <AlertDialogTitle>Удалить расписание «{schedule.name}»?</AlertDialogTitle>
+                    <AlertDialogDescription>
+                      Действие необратимо. Отказать может сервер — у расписания есть будущие записи
+                      или на него ссылается форма; тогда он скажет, что именно мешает.
+                    </AlertDialogDescription>
+                  </AlertDialogHeader>
+                  <AlertDialogFooter>
+                    <AlertDialogCancel>Оставить</AlertDialogCancel>
+                    <AlertDialogAction
+                      onClick={() =>
+                        remove.mutate(undefined, {
+                          onSuccess: () =>
+                            void navigate({
+                              to: '/workspaces/$workspaceSlug/schedules',
+                              params: { workspaceSlug },
+                            }),
+                          onError: (e) => toast.error(humanError(e)),
+                        })
+                      }
+                    >
+                      Удалить
+                    </AlertDialogAction>
+                  </AlertDialogFooter>
+                </AlertDialogContent>
+              </AlertDialog>
+            </div>
           </div>
         </SheetContent>
       </Sheet>
