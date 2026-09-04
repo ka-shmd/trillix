@@ -103,6 +103,11 @@ export function ScheduleCanvas({
   // и гонять через состояние React перерисовку всего полотна на каждый кадр —
   // заведомо рвано.
   const canvasRef = useRef<HTMLDivElement>(null)
+  // Календарь целиком — ради одного `unselect()`, которого нет у контроллера
+  // (`useCalendarController` умеет листать и менять вид, но не снимать выделение).
+  // Снять его нужно РОВНО ТОГДА, когда закрылся попап: до этого выделение — предмет
+  // вопроса, и гасить его, пока спрашиваем, значит спрашивать про пустое место.
+  const calendarRef = useRef<{ unselect: () => void } | null>(null)
 
   const dates = useMemo(() => dateKeys(firstDate, visibleDays), [firstDate, visibleDays])
 
@@ -183,6 +188,14 @@ export function ScheduleCanvas({
     setAnchor({ kind: 'scope', x: at.x, y: at.y, dates, gesture, scope: 'weekly' })
   }
 
+  // closePopover — закрыть попап И снять выделение. Одной функцией, потому что это
+  // один момент: пока попап открыт, подсказка показывает, о чём его спрашивают.
+  function closePopover() {
+    calendarRef.current?.unselect()
+    clearBand()
+    setAnchor(null)
+  }
+
   // switchScope — пересчёт ОТ ИСХОДНОГО документа, а не отмена применённого: щёлкать
   // чип можно сколько угодно, состояние не накапливается. Это же и ПЕРВОЕ применение
   // свежей протяжки: до ответа на чип её в документе нет, и «переключить» с пустого
@@ -210,7 +223,7 @@ export function ScheduleCanvas({
         { onError: (e) => setError(humanError(e)) },
       )
     }
-    setAnchor(null)
+    closePopover()
   }
 
   return (
@@ -377,6 +390,10 @@ export function ScheduleCanvas({
             })
           }}
           selectable
+          // Клик по попапу выделение НЕ СНИМАЕТ: по умолчанию библиотека гасит его от
+          // любого нажатия за пределами сетки, а попап живёт в портале вне её — и
+          // подсказка исчезала бы от первого же ответа на вопрос.
+          unselectCancel='[data-slot="popover-content"]'
           // МИРАЖ ВЫДЕЛЕНИЯ ВЫКЛЮЧЕН. Он рисует ту самую непрерывную кляксу «остаток
           // первого дня, средние дни целиком, начало последнего» — и рисует её ПОВЕРХ
           // подсказки, которую мы выправили в прямоугольник. Двух предпросмотров у
@@ -411,8 +428,12 @@ export function ScheduleCanvas({
             // мираж — непрерывный отрезок «остаток понедельника, вторник целиком, среда
             // до 19:00», — и он остаётся висеть поверх созданных окон, показывая ровно
             // то, чего мы не делали.
-            info.view.calendar.unselect()
-            clearBand()
+            // ⚠ ВЫДЕЛЕНИЕ ОСТАЁТСЯ НА ПОЛОТНЕ, пока попап спрашивает: это предмет
+            // вопроса, и без него «что это за время?» задаётся про пустое место.
+            // Снимает его closePopover. Прямоугольником оно остаётся само —
+            // `data-sc-band` выставлен последним кадром протяжки и до закрытия не
+            // сбрасывается.
+            calendarRef.current = info.view.calendar
             const rect = selectionRect(info.startStr, info.endStr)
             if (!rect) return
             // ⚠ ЖЕСТ ЗАПОМИНАЕТСЯ, НО НЕ ПРИМЕНЯЕТСЯ. Полотно не знает, что за время
@@ -495,7 +516,7 @@ export function ScheduleCanvas({
       <CanvasPopover
         anchor={anchor}
         schedule={schedule}
-        onClose={() => setAnchor(null)}
+        onClose={closePopover}
         onDrawStep={(step: DrawStep) =>
           setAnchor((a) => (a && a.kind === 'draw' ? { ...a, step } : a))
         }
@@ -507,13 +528,13 @@ export function ScheduleCanvas({
           saveAvailability(
             withAvailability(schedule, applyGesture(schedule.availability, gesture, scope)),
           )
-          setAnchor(null)
+          closePopover()
         }}
         onOpenSubmission={onOpenSubmission}
         onCancelBooking={setCancelling}
         onRemoveBlock={(id) => {
           removeBlock.mutate(id, { onError: (e) => setError(humanError(e)) })
-          setAnchor(null)
+          closePopover()
         }}
       />
     </div>
