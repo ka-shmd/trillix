@@ -4,6 +4,7 @@ import type { Booking, Schedule, ScheduleBlock, TimeWindow } from '../../entitie
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { useCancelBooking } from '../../shared/schedules/queries'
+import { humanError } from '../../shared/api/errors'
 import { LOCALE } from '../../shared/format'
 import { everyLabel, onlyLabel, WEEKDAY_EVERY, weekdayOf } from './canvas'
 import type { Gesture, Scope } from './canvasEdit'
@@ -64,10 +65,17 @@ export function CanvasPopover({
             booking={anchor.booking}
             timezone={schedule.timezone}
             pending={cancel.isPending}
-            onCancel={() => {
-              cancel.mutate(anchor.booking.id)
-              onClose()
-            }}
+            error={cancel.isError ? humanError(cancel.error) : null}
+            // ⚠ КАРТОЧКА ЗАКРЫВАЕТСЯ ТОЛЬКО ПОСЛЕ УСПЕХА. До 2026-09-04 она
+            // закрывалась сразу, а отказ не показывался нигде: сервер отвечал 404 или
+            // запрос не уходил вовсе — и автор видел ровно то же, что при успехе, то
+            // есть «отмена не работает» (отчёт владельца). Тихий отказ здесь дороже
+            // обычного: место остаётся занятым, а человек считает, что освободил его.
+            onCancel={() =>
+              cancel.mutate(anchor.booking.id, {
+                onSuccess: () => onClose(),
+              })
+            }
           />
         )}
       </PopoverContent>
@@ -186,11 +194,13 @@ function BookingCard({
   booking,
   timezone,
   pending,
+  error,
   onCancel,
 }: {
   booking: Booking
   timezone: string
   pending: boolean
+  error: string | null
   onCancel: () => void
 }) {
   const end = new Date(new Date(booking.startsAt).getTime() + booking.durationMinutes * 60_000)
@@ -217,8 +227,13 @@ function BookingCard({
         <p className="text-sm text-muted-foreground">Ответ удалён — запись осталась</p>
       )}
       <Button size="sm" variant="outline" disabled={pending} onClick={onCancel}>
-        Отменить запись
+        {pending ? 'Отменяем…' : 'Отменить запись'}
       </Button>
+      {error && (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      )}
     </div>
   )
 }

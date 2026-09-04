@@ -42,11 +42,33 @@ export async function toApiError(res: Response): Promise<ApiError> {
 
 // humanError — текст отказа для показа человеку.
 //
-// НАШ ТОЛЬКО ТЕКСТ ApiError: его пишет бэк по-русски и специально для автора
-// («модель сейчас не отвечает, попробуйте ещё раз»). Сообщение любой другой
-// ошибки приходит от браузера или рантайма и по-английски — `Failed to fetch`,
-// `NetworkError when attempting to fetch resource`, — поэтому наружу оно не идёт
-// никогда, вместо него подставляется fallback.
-export function humanError(err: unknown, fallback = 'Что-то пошло не так. Попробуйте ещё раз.'): string {
-  return err instanceof ApiError ? err.message : fallback
+// ⚠ ТЕКСТ БЭКА ПРИГОДЕН НЕ ВСЕГДА. Человеческое сообщение он пишет только у
+// «обёрнутых» отказов (`wrappedSentinels` в respond.go: валидация, конфликт, тариф,
+// закрытая форма, недоступность). У остальных message РАВЕН КОДУ и приходит
+// латиницей — `unauthorized`, `not_found`, `forbidden`, `internal`. До экрана такое
+// доезжать не должно: в интерфейсе только русский текст, написанный нами (решение
+// владельца). Поймано на отмене записи, где отказ показался словом «unauthorized».
+//
+// Сообщение любой НЕ-ApiError приходит от браузера или рантайма и тоже по-английски
+// («Failed to fetch»), поэтому наружу не идёт никогда.
+//
+// Проверка на кириллицу, а не список кодов: коды заводятся на бэке, и второй их
+// список здесь разъехался бы с первым молча. Наши человеческие тексты по-русски по
+// правилу, машинные коды — латиницей, и это различие устойчивее перечисления.
+const BY_CODE: Record<string, string> = {
+  unauthorized: 'Сессия истекла — войдите заново.',
+  invalid_credentials: 'Неверная почта или пароль.',
+  forbidden: 'Недостаточно прав для этого действия.',
+  not_found: 'Не найдено — возможно, это уже удалили.',
+  rate_limited: 'Слишком часто. Подождите немного и попробуйте снова.',
+  payload_too_large: 'Слишком большой запрос.',
+}
+
+export function humanError(
+  err: unknown,
+  fallback = 'Что-то пошло не так. Попробуйте ещё раз.',
+): string {
+  if (!(err instanceof ApiError)) return fallback
+  if (/[а-яё]/i.test(err.message)) return err.message
+  return BY_CODE[err.code] ?? fallback
 }
