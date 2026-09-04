@@ -49,7 +49,7 @@ import {
 } from './canvas'
 import { applyGesture, docError, SNAP_MINUTES, type Gesture, type Scope } from './canvasEdit'
 import { clockToMinutes, minutesToClock } from './weekly'
-import { CanvasPopover, type Anchor } from './CanvasPopover'
+import { CanvasPopover, type Anchor, type DrawStep } from './CanvasPopover'
 import { zonedParts, zonedToUTC } from './zone'
 
 // Полотно недели: часы приёма, исключения, занятое время и записи одним экраном.
@@ -169,9 +169,13 @@ export function ScheduleCanvas({
     })
   }
 
-  // runGesture — применить жест областью по умолчанию и предложить вторую чипом.
-  // Умолчание — «каждый вторник»: правило описывает обычную неделю, и чаще правят
-  // именно его; исключение — это «в этот раз иначе», то есть более редкий случай.
+  // runGesture — жест ПЕРЕТАСКИВАНИЯ: применить областью по умолчанию и предложить
+  // вторую чипом. Умолчание — «каждый вторник»: правило описывает обычную неделю, и
+  // чаще правят именно его; исключение — это «в этот раз иначе», случай более редкий.
+  //
+  // ⚠ У ПРОТЯЖКИ ПО ПУСТОМУ МЕСТУ УМОЛЧАНИЯ НЕТ ВОВСЕ (см. select ниже). Разница не в
+  // осторожности, а в том, что там неизвестен сам слой: перетаскивая окно приёма,
+  // автор двигает уже названное время, и угадывать нечего.
   function runGesture(gesture: Gesture, at: { x: number; y: number }, dates: string[]) {
     beforeGesture.current = schedule
     const next = withAvailability(schedule, applyGesture(schedule.availability, gesture, 'weekly'))
@@ -180,33 +184,32 @@ export function ScheduleCanvas({
   }
 
   // switchScope — пересчёт ОТ ИСХОДНОГО документа, а не отмена применённого: щёлкать
-  // чип можно сколько угодно, состояние не накапливается.
+  // чип можно сколько угодно, состояние не накапливается. Это же и ПЕРВОЕ применение
+  // свежей протяжки: до ответа на чип её в документе нет, и «переключить» с пустого
+  // места — та же самая операция.
   function switchScope(gesture: Gesture, scope: Scope) {
     const before = beforeGesture.current ?? schedule
     saveAvailability(withAvailability(before, applyGesture(before.availability, gesture, scope)))
-    setAnchor((a) => (a && a.kind === 'scope' ? { ...a, scope } : a))
+    setAnchor((a) => (a && (a.kind === 'scope' || a.kind === 'draw') ? { ...a, scope } : a))
   }
 
-  // closeTime — третий ответ чипа: нарисованное было не приёмом, а занятостью.
-  // Правило возвращается к исходному, а время закрывается блокировкой.
-  function closeTime(gesture: Gesture) {
-    if (gesture.kind !== 'create') return
-    const before = beforeGesture.current ?? schedule
-    saveAvailability(before, () => {
-      // По блокировке на каждый задетый день: занятое время — точки на оси, и одной
-      // строкой «со вторника по четверг» они не выражаются (иначе закрытой оказалась
-      // бы и ночь между днями).
-      for (const date of gesture.dates) {
-        addBlock.mutate(
-          {
-            startsAt: zonedToUTC(date, gesture.window.from, schedule.timezone),
-            endsAt: zonedToUTC(date, endClock(gesture.window.to), schedule.timezone),
-            note: '',
-          },
-          { onError: (e) => setError(humanError(e)) },
-        )
-      }
-    })
+  // closeTime — второй ответ на «что это за время»: размечена не работа, а занятость.
+  // Правило не трогается вовсе — восстанавливать нечего, потому что до ответа жест не
+  // применялся.
+  function closeTime(gesture: Extract<Gesture, { kind: 'create' }>) {
+    // По блокировке на каждый задетый день: занятое время — точки на оси, и одной
+    // строкой «со вторника по четверг» они не выражаются (иначе закрытой оказалась бы
+    // и ночь между днями).
+    for (const date of gesture.dates) {
+      addBlock.mutate(
+        {
+          startsAt: zonedToUTC(date, gesture.window.from, schedule.timezone),
+          endsAt: zonedToUTC(date, endClock(gesture.window.to), schedule.timezone),
+          note: '',
+        },
+        { onError: (e) => setError(humanError(e)) },
+      )
+    }
     setAnchor(null)
   }
 
@@ -412,7 +415,19 @@ export function ScheduleCanvas({
             clearBand()
             const rect = selectionRect(info.startStr, info.endStr)
             if (!rect) return
-            runGesture({ kind: 'create', ...rect }, pointOf(info.jsEvent), rect.dates)
+            // ⚠ ЖЕСТ ЗАПОМИНАЕТСЯ, НО НЕ ПРИМЕНЯЕТСЯ. Полотно не знает, что за время
+            // размечено: приём и занятость рисуются одним движением мыши, и выбрать
+            // за автора приём значит время от времени молча открывать запись там, где
+            // человек занят. Сначала вопрос — что это за время, потом вопрос об
+            // объёме, и только потом правка.
+            beforeGesture.current = schedule
+            setAnchor({
+              kind: 'draw',
+              ...pointOf(info.jsEvent),
+              gesture: { kind: 'create', ...rect },
+              step: 'what',
+              scope: null,
+            })
           }}
           eventDrop={(info) => {
             const props = info.event.extendedProps as EventProps
@@ -481,6 +496,9 @@ export function ScheduleCanvas({
         anchor={anchor}
         schedule={schedule}
         onClose={() => setAnchor(null)}
+        onDrawStep={(step: DrawStep) =>
+          setAnchor((a) => (a && a.kind === 'draw' ? { ...a, step } : a))
+        }
         onScope={switchScope}
         onCloseTime={closeTime}
         onRemoveWindow={(date, w, scope) => {

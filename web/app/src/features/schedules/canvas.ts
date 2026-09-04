@@ -207,6 +207,14 @@ export function everyLabel(dates: string[]): string {
 }
 
 export function onlyLabel(dates: string[]): string {
+  const label = datesLabel(dates)
+  return label === '' ? '' : `Только ${label}`
+}
+
+// datesLabel — «16 сентября» или «16 — 18 сентября»: чем названо задетое жестом
+// место. Тем же словом, что и чип области действия, — вопрос и ответ на него не
+// должны называть одно и то же по-разному.
+export function datesLabel(dates: string[]): string {
   const first = dates[0]
   const last = dates[dates.length - 1]
   if (!first || !last) return ''
@@ -216,9 +224,9 @@ export function onlyLabel(dates: string[]): string {
       day: 'numeric',
       ...(withMonth ? { month: 'long' } : {}),
     })
-  if (first === last) return `Только ${day(first, true)}`
+  if (first === last) return day(first, true)
   const sameMonth = first.slice(0, 7) === last.slice(0, 7)
-  return `Только ${day(first, !sameMonth)} — ${day(last, true)}`
+  return `${day(first, !sameMonth)} — ${day(last, true)}`
 }
 
 // weekStart — понедельник недели, в которую попала дата. Неделя начинается с
