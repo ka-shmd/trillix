@@ -52,6 +52,16 @@ export const submissionsPageSchema = z.object({
 
 export type SubmissionsPage = z.infer<typeof submissionsPageSchema>
 
+// GET /forms/{id}/submissions/{sid} — ОДИН ответ с его файлами. Нужен окну ответа,
+// открытому не из списка: карточка записи на полотне расписания знает только id.
+// Форма та же, что у элемента страницы, — окно рисуется одним компонентом.
+export const submissionOneSchema = z.object({
+  submission: submissionSchema,
+  files: z.record(z.string(), answerFileSchema).default({}),
+})
+
+export type SubmissionOne = z.infer<typeof submissionOneSchema>
+
 // Черновик — то, что человек набрал и НЕ отправил (`partial_submissions`).
 // Зеркалит partialResponse из internal/submissions/handler.go.
 //

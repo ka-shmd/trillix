@@ -168,6 +168,7 @@ type Store interface {
 	DeleteOldPartials(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error)
 	InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error)
 	ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
+	SubmissionByID(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (Submission, error)
 	GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error)
 	GetForPrint(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (PrintRow, error)
 	ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error)
@@ -1238,6 +1239,30 @@ func (s *Service) DeletePartialForForm(ctx context.Context, userID, formID, visi
 // через forms.Get (чужая/нет формы → 404, приватное не раскрывается), затем чтение
 // страницы. after — курсор предыдущей страницы (nil для первой). Общий счётчик
 // считается всегда (кабинет показывает «N ответов»).
+// GetForForm — ОДИН ответ с его файлами. Нужен окну ответа, открытому не из списка:
+// карточка записи на полотне расписания знает только id ответа, а страница ответов
+// показывает окно из уже загруженной страницы списка и ничего не запрашивает.
+//
+// Права — те же и тем же способом, что у списка: доступ даёт членство в пространстве
+// ФОРМЫ, а id ответа из адреса правом не является (form_id стоит и в самом запросе).
+func (s *Service) GetForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) (Submission, map[string]domain.AnswerFile, error) {
+	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+		return Submission{}, nil, err
+	}
+	row, err := s.repo.SubmissionByID(ctx, s.db, submissionID, formID)
+	if err != nil {
+		return Submission{}, nil, err
+	}
+	if s.files == nil {
+		return row, nil, nil
+	}
+	files, err := s.files.InfoBySubmissions(ctx, []uuid.UUID{row.ID})
+	if err != nil {
+		return Submission{}, nil, err
+	}
+	return row, files, nil
+}
+
 func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error) {
 	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
 		return Page{}, err

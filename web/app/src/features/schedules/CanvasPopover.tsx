@@ -1,5 +1,3 @@
-import { Link } from '@tanstack/react-router'
-
 import type { Booking, Schedule, ScheduleBlock, TimeWindow } from '../../entities/schedule'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
@@ -27,6 +25,7 @@ export function CanvasPopover({
   onCloseTime,
   onRemoveWindow,
   onRemoveBlock,
+  onOpenSubmission,
 }: {
   anchor: Anchor | null
   schedule: Schedule
@@ -35,6 +34,10 @@ export function CanvasPopover({
   onCloseTime: (gesture: Gesture) => void
   onRemoveWindow: (date: string, window: TimeWindow, scope: Scope) => void
   onRemoveBlock: (id: string) => void
+  // Окно ответа рисует СТРАНИЦА, а не полотно: компонент окна живёт в фиче ответов,
+  // а импорт фичи из фичи запрещён (web/CLAUDE.md). Отсюда наверх уходит только
+  // «нажали на этот ответ».
+  onOpenSubmission: (booking: Booking) => void
 }) {
   const cancel = useCancelBooking(schedule.id)
 
@@ -66,6 +69,10 @@ export function CanvasPopover({
             timezone={schedule.timezone}
             pending={cancel.isPending}
             error={cancel.isError ? humanError(cancel.error) : null}
+            onOpen={() => {
+              onOpenSubmission(anchor.booking)
+              onClose()
+            }}
             // ⚠ КАРТОЧКА ЗАКРЫВАЕТСЯ ТОЛЬКО ПОСЛЕ УСПЕХА. До 2026-09-04 она
             // закрывалась сразу, а отказ не показывался нигде: сервер отвечал 404 или
             // запрос не уходил вовсе — и автор видел ровно то же, что при успехе, то
@@ -195,12 +202,14 @@ function BookingCard({
   timezone,
   pending,
   error,
+  onOpen,
   onCancel,
 }: {
   booking: Booking
   timezone: string
   pending: boolean
   error: string | null
+  onOpen: () => void
   onCancel: () => void
 }) {
   const end = new Date(new Date(booking.startsAt).getTime() + booking.durationMinutes * 60_000)
@@ -214,13 +223,12 @@ function BookingCard({
         </p>
       </div>
       {booking.submissionId ? (
-        <Link
-          to="/forms/$slug/submissions"
-          params={{ slug: booking.formSlug }}
-          className="text-sm underline underline-offset-4"
-        >
+        // ОТВЕТ ОТКРЫВАЕТСЯ ОКНОМ, А НЕ ПЕРЕХОДОМ НА СТРАНИЦУ ОТВЕТОВ (решение
+        // владельца 2026-09-04): автор пришёл посмотреть, кто записался, а не искать
+        // строку в таблице — и уводить его с расписания ради этого незачем.
+        <Button size="sm" variant="ghost" className="justify-start px-0" onClick={onOpen}>
           Открыть ответ
-        </Link>
+        </Button>
       ) : (
         // Бронь переживает ответ: удалённый ответ оставляет запись без ссылки, и
         // молчание здесь читалось бы как «ссылку забыли».

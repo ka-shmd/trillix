@@ -61,6 +61,20 @@ WHERE s.form_id = $1 AND NOT s.over_quota
 ORDER BY s.id DESC
 LIMIT $2;
 
+-- name: GetSubmissionForForm :one
+-- Один ответ целиком — окну ответа, открытому не из списка (карточка записи на
+-- полотне расписания). Ограничено form_id по тому же доводу, что и удаление: id
+-- ответа приезжает из адреса и правом доступа не является, доступ к самой форме
+-- сервис проверяет отдельно.
+--
+-- Сверхлимитные (over_quota) отдаются: список их прячет, потому что это витрина
+-- тарифа, а здесь спрашивают КОНКРЕТНЫЙ ответ по ссылке из записи — и «нет такого»
+-- на существующий ответ было бы враньём.
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.id = $1 AND s.form_id = $2;
+
 -- name: DeleteSubmission :execrows
 -- Удаление одного ответа (GDPR-гигиена). Ограничено form_id: ответ чужой формы по
 -- угаданному id не удалить (доступ к самой форме сервис проверяет отдельно). 0

@@ -55,6 +55,7 @@ export function ScheduleCanvas({
   schedule,
   goToDate,
   onRange,
+  onOpenSubmission,
 }: {
   schedule: Schedule
   // goToDate — дата, выбранная снаружи (мини-календарь слева, строка ближайшей
@@ -64,6 +65,9 @@ export function ScheduleCanvas({
   // onRange — какой отрезок сейчас показан. Нужен мини-календарю, чтобы подсветить
   // видимые дни: без этого две половины экрана живут каждая своей неделей.
   onRange?: (dates: string[]) => void
+  // Окно ответа рисует страница: компонент окна живёт в фиче ответов, а импорт фичи
+  // из фичи запрещён. Полотно только сообщает, что нажали.
+  onOpenSubmission: (booking: Booking) => void
 }) {
   const controller = useCalendarController()
   // Видимая неделя нужна ЭКРАНУ (от неё зависит запрос за занятым временем), но
@@ -456,6 +460,7 @@ export function ScheduleCanvas({
           )
           setAnchor(null)
         }}
+        onOpenSubmission={onOpenSubmission}
         onRemoveBlock={(id) => {
           removeBlock.mutate(id, { onError: (e) => setError(humanError(e)) })
           setAnchor(null)

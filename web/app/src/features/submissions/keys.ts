@@ -17,6 +17,12 @@ export const submissionKeys = {
   summary: (formId: string, period: Period) => ['submissions', 'summary', formId, period] as const,
   countAllPeriods: (formId: string) => ['submissions', 'count', formId] as const,
   count: (formId: string, period: Period) => ['submissions', 'count', formId, period] as const,
+  // Один ответ по id — окну, открытому не из списка (карточка записи на полотне
+  // расписания). Под своим ключом, а не под списком: список ключуется видом и
+  // курсором, и подмешивать в него одиночный ответ значило бы ронять его страницы
+  // при каждом открытии окна.
+  one: (formId: string, submissionId: string) =>
+    ['submissions', 'one', formId, submissionId] as const,
   // Черновики — свой ключ рядом со списком ответов, а не под ним: это другое
   // множество, и удаление ответа не имеет права трогать его кеш.
   partials: (formId: string) => ['submissions', 'partials', formId] as const,

@@ -13,10 +13,17 @@ import { ScheduleEditor } from '../../features/schedules/ScheduleEditor'
 import { SchedulePanel } from '../../features/schedules/SchedulePanel'
 import { LazyScheduleCanvas } from '../../features/schedules/lazyCanvas'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
+import { formDetailQueryOptions } from '../../features/forms/queries'
+import { submissionQueryOptions } from '../../features/submissions/queries'
+import { SubmissionPanel } from '../../features/submissions/SubmissionPanel'
+import { answerColumns } from '../../features/submissions/columns'
+import { listRow } from '../../features/submissions/rows'
+import { type Booking } from '../../entities/schedule'
 import { humanError } from '../../shared/api/errors'
 import { PageCrumbs, PageActions } from '../../shared/page/headerPortals'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
+import { Dialog, DialogContent } from '@/components/ui/dialog'
 import {
   Sheet,
   SheetContent,
@@ -74,6 +81,9 @@ function SchedulePage() {
   // уходит К нему по клику в мини-календаре.
   const [visible, setVisible] = useState<string[]>([])
   const [goToDate, setGoToDate] = useState<string | undefined>(undefined)
+  // Запись, чей ответ открыт окном. Целиком, а не одним id: у неё уже есть и форма
+  // (slug для схемы), и сам ответ — второй раз спрашивать их незачем.
+  const [openBooking, setOpenBooking] = useState<Booking | null>(null)
 
   const crumbs = [
     <Link key="ws" to="/workspaces/$workspaceSlug" params={{ workspaceSlug }}>
@@ -125,9 +135,20 @@ function SchedulePage() {
         <div className="min-w-0 flex-1">
           {/* onRange — СТАБИЛЬНАЯ функция (setState): полотно зовёт её эффектом, и
               стрелка, созданная тут же в разметке, устраивала бы цикл перерисовок. */}
-          <LazyScheduleCanvas schedule={schedule} goToDate={goToDate} onRange={setVisible} />
+          <LazyScheduleCanvas
+            schedule={schedule}
+            goToDate={goToDate}
+            onRange={setVisible}
+            onOpenSubmission={setOpenBooking}
+          />
         </div>
       </div>
+
+      {/* ОКНО ОТВЕТА — ТОТ ЖЕ КОМПОНЕНТ, ЧТО НА СТРАНИЦЕ ОТВЕТОВ (решение владельца
+          2026-09-04). Живёт на СТРАНИЦЕ, а не в полотне: компонент окна принадлежит
+          фиче ответов, а импорт фичи из фичи запрещён (web/CLAUDE.md) — маршрут же
+          складывает фичи по определению. */}
+      <BookingSubmissionDialog booking={openBooking} onClose={() => setOpenBooking(null)} />
 
       <Sheet open={settings} onOpenChange={setSettings}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
@@ -196,5 +217,55 @@ function SchedulePage() {
         </SheetContent>
       </Sheet>
     </>
+  )
+}
+
+// BookingSubmissionDialog — ответ, из которого пришла запись, целиком.
+//
+// Данных нужно двое: сам ответ (своей ручкой по id — на полотне нет страницы списка,
+// из которой окно рисуется в разделе «Ответы») и схема формы, из которой берутся
+// подписи вопросов. Обе спрашиваются только при открытом окне: пока автор смотрит на
+// сетку, ходить за ними незачем.
+function BookingSubmissionDialog({
+  booking,
+  onClose,
+}: {
+  booking: Booking | null
+  onClose: () => void
+}) {
+  const submissionId = booking?.submissionId ?? ''
+  const form = useQuery({
+    ...formDetailQueryOptions(booking?.formSlug ?? ''),
+    enabled: booking !== null,
+  })
+  const one = useQuery({
+    ...submissionQueryOptions(booking?.formId ?? '', submissionId),
+    enabled: booking !== null && submissionId !== '',
+  })
+
+  const ready = form.data && one.data
+  return (
+    <Dialog open={booking !== null} onOpenChange={(open) => !open && onClose()}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-4xl">
+        {(form.isPending || one.isPending) && <LoadingRows rows={4} />}
+        {(form.isError || one.isError) && (
+          <ErrorState
+            title="Не удалось открыть ответ."
+            description={humanError(form.error ?? one.error)}
+          />
+        )}
+        {ready && (
+          <SubmissionPanel
+            row={listRow(one.data.submission)}
+            columns={answerColumns(form.data.draftSchema.blocks)}
+            files={one.data.files}
+            formId={form.data.id}
+            // Удаление ответа с живой будущей записью сервер не даст (стоп-кран фазы
+            // 27), но если ответ всё же удалён — окну больше нечего показывать.
+            onDeleted={onClose}
+          />
+        )}
+      </DialogContent>
+    </Dialog>
   )
 }

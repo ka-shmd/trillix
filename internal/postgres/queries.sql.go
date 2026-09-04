@@ -2852,6 +2852,45 @@ func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissio
 	return i, err
 }
 
+const getSubmissionForForm = `-- name: GetSubmissionForForm :one
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.id = $1 AND s.form_id = $2
+`
+
+type GetSubmissionForFormParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+type GetSubmissionForFormRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Один ответ целиком — окну ответа, открытому не из списка (карточка записи на
+// полотне расписания). Ограничено form_id по тому же доводу, что и удаление: id
+// ответа приезжает из адреса и правом доступа не является, доступ к самой форме
+// сервис проверяет отдельно.
+//
+// Сверхлимитные (over_quota) отдаются: список их прячет, потому что это витрина
+// тарифа, а здесь спрашивают КОНКРЕТНЫЙ ответ по ссылке из записи — и «нет такого»
+// на существующий ответ было бы враньём.
+func (q *Queries) GetSubmissionForForm(ctx context.Context, arg GetSubmissionForFormParams) (GetSubmissionForFormRow, error) {
+	row := q.db.QueryRow(ctx, getSubmissionForForm, arg.ID, arg.FormID)
+	var i GetSubmissionForFormRow
+	err := row.Scan(
+		&i.ID,
+		&i.Answers,
+		&i.CreatedAt,
+		&i.FormVersion,
+	)
+	return i, err
+}
+
 const getSubmissionForPrint = `-- name: GetSubmissionForPrint :one
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version, fv.schema AS form_schema
 FROM submissions s
