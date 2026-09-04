@@ -30,6 +30,9 @@
   --fc-classic-border: var(--border);
   --fc-classic-strong-border: color-mix(in oklab, var(--border) 60%, var(--foreground));
   --fc-classic-highlight: color-mix(in oklab, var(--primary) 14%, transparent);
+  /* Подсветка сегодняшней КОЛОНКИ остаётся нейтральной и еле заметной: вторым
+     акцентом красится только само число (решение владельца 2026-09-04) — залитая
+     фиолетовым колонка спорила бы за внимание с полосами приёма. */
   --fc-classic-today: color-mix(in oklab, var(--primary) 6%, transparent);
   --fc-classic-now: var(--destructive);
   --fc-classic-ring-color: var(--ring);
@@ -180,9 +183,13 @@
   min-width: 1.75rem;
 }
 
+/* СЕГОДНЯ — ВТОРОЙ АКЦЕНТ, и один и тот же во всех трёх видах и в мини-календаре
+   слева (решение владельца 2026-09-04). Первый акцент занят действиями и записями:
+   покрасив им ещё и «сегодня», мы получили бы синее, которое в одном месте значит
+   «сюда можно нажать», а в другом — «этот день». Красится ЧИСЛО, а не колонка. */
 .sc-canvas .sc-day-today .sc-day-num {
-  background: var(--primary);
-  color: var(--primary-foreground);
+  background: var(--highlight);
+  color: var(--highlight-foreground);
 }
 
 /* День, в который приёма нет вовсе, приглушён в МЕСЯЦЕ: там полос приёма нет, и
@@ -211,9 +218,9 @@
 }
 
 .sc-month .sc-cell-today {
-  background: var(--primary);
+  background: var(--highlight);
   border-radius: 999px;
-  color: var(--primary-foreground);
+  color: var(--highlight-foreground);
   font-weight: 600;
 }
 
