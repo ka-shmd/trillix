@@ -14,25 +14,20 @@ import '@fullcalendar/react/skeleton.css'
 import '@fullcalendar/react/themes/classic/theme.css'
 import './canvas.css'
 
-import type { Booking, Schedule, ScheduleBlock, ScheduleInput } from '../../entities/schedule'
+import type {
+  Availability,
+  Booking,
+  Schedule,
+  ScheduleBlock,
+  ScheduleInput,
+} from '../../entities/schedule'
 import {
   calendarQueryOptions,
   useAddBlock,
-  useCancelBooking,
   useRemoveBlock,
   useUpdateSchedule,
 } from '../../shared/schedules/queries'
 import { Button } from '@/components/ui/button'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import { humanError } from '../../shared/api/errors'
 import { LOCALE } from '../../shared/format'
 import {
@@ -67,6 +62,7 @@ export function ScheduleCanvas({
   goToDate,
   onRange,
   onOpenSubmission,
+  onCancelBooking,
 }: {
   schedule: Schedule
   // goToDate — дата, выбранная снаружи (мини-календарь слева, строка ближайшей
@@ -79,6 +75,10 @@ export function ScheduleCanvas({
   // Окно ответа рисует страница: компонент окна живёт в фиче ответов, а импорт фичи
   // из фичи запрещён. Полотно только сообщает, что нажали.
   onOpenSubmission: (booking: Booking) => void
+  // Отмена тоже спрашивается СТРАНИЦЕЙ: тот же диалог открывается из списка
+  // ближайших записей слева, и два его экземпляра — это два разных обещания на одно
+  // действие.
+  onCancelBooking: (booking: Booking) => void
 }) {
   const controller = useCalendarController()
   // Видимая неделя нужна ЭКРАНУ (от неё зависит запрос за занятым временем), но
@@ -93,9 +93,6 @@ export function ScheduleCanvas({
     narrowScreen() ? 'timeGridDay' : 'timeGridWeek',
   )
   const [anchor, setAnchor] = useState<Anchor | null>(null)
-  // Запись, отмену которой подтверждают. Диалог рисует полотно, а не попап: попап
-  // закрывается от клика за своими пределами, унося с собой вложенный диалог.
-  const [cancelling, setCancelling] = useState<Booking | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Документ ДО жеста: чип переключает область действия пересчётом от него.
   const beforeGesture = useRef<Schedule | null>(null)
@@ -130,7 +127,6 @@ export function ScheduleCanvas({
   const busy = useQuery(calendarQueryOptions(schedule.id, window.from, window.to))
 
   const update = useUpdateSchedule(schedule.id, schedule.workspaceId)
-  const cancel = useCancelBooking(schedule.id)
   const addBlock = useAddBlock(schedule.id)
   const removeBlock = useRemoveBlock(schedule.id)
 
@@ -153,10 +149,10 @@ export function ScheduleCanvas({
     [schedule.availability, dates],
   )
 
-  // Границы оси часов: от самого раннего окна приёма до самого позднего, с запасом
-  // в час, но не уже рабочего дня и не шире суток. Считаются и по занятому времени
-  // тоже — встреча, назначенная до открытия приёма, обязана быть видна.
-  const hours = useMemo(() => axisHours(schedule, dates, busy.data), [schedule, dates, busy.data])
+  // Куда прокручена сетка на открытии. Считается ОДИН РАЗ, при монтировании: пересчёт
+  // на каждую правку правила дёргал бы полотно обратно к утру ровно в тот момент,
+  // когда автор смотрит на вечер.
+  const [scrollTo] = useState(() => scrollStart(schedule.availability))
 
   // saveAvailability — правка правила уходит на сервер СРАЗУ: полотно живёт по
   // законам календаря, а не формы с кнопкой «Сохранить». Параметры записи ниже по
@@ -341,12 +337,14 @@ export function ScheduleCanvas({
           // «11:00 – 12:00» рядом с названием переносит его на вторую строку и
           // обрезает на полуслове.
           displayEventEnd={false}
-          // Сутки показываются НЕ ЦЕЛИКОМ: двадцать четыре часа, из которых заняты
-          // восемь, — это полотно, где приём приходится искать прокруткой. Границы
-          // берутся из самого расписания и расширяются на час в каждую сторону,
-          // чтобы соседний час был виден и на него можно было протянуть окно.
-          slotMinTime={hours.min}
-          slotMaxTime={hours.max}
+          // СУТКИ ЦЕЛИКОМ (решение владельца 2026-09-04). Ось, обрезанная по часам
+          // приёма, отвечала не на тот вопрос: она показывала, что уже настроено, и
+          // ровно этим не давала настроить остальное — ночную смену, ранний час,
+          // встречу до открытия приёма. Открывается сетка всё равно на рабочих
+          // часах (scrollTime), но остаток суток от неё в одном движении колеса.
+          slotMinTime={AXIS.min}
+          slotMaxTime={AXIS.max}
+          scrollTime={scrollTo}
           dayMaxEvents={3}
           slotHeaderContent={(info) => <span className="sc-slot-label">{info.text}</span>}
           dayCellTopContent={(info) => (
@@ -497,22 +495,6 @@ export function ScheduleCanvas({
         />
       </div>
 
-      <CancelBookingDialog
-        booking={cancelling}
-        timezone={schedule.timezone}
-        pending={cancel.isPending}
-        error={cancel.isError ? humanError(cancel.error) : null}
-        onClose={() => {
-          cancel.reset()
-          setCancelling(null)
-        }}
-        onConfirm={(booking) =>
-          cancel.mutate(booking.id, {
-            onSuccess: () => setCancelling(null),
-          })
-        }
-      />
-
       <CanvasPopover
         anchor={anchor}
         schedule={schedule}
@@ -531,7 +513,7 @@ export function ScheduleCanvas({
           closePopover()
         }}
         onOpenSubmission={onOpenSubmission}
-        onCancelBooking={setCancelling}
+        onCancelBooking={onCancelBooking}
         onRemoveBlock={(id) => {
           removeBlock.mutate(id, { onError: (e) => setError(humanError(e)) })
           closePopover()
@@ -557,7 +539,7 @@ export function ScheduleCanvas({
       clearBand()
       return
     }
-    const box = bandBox(rect.window, hours, lane.clientHeight)
+    const box = bandBox(rect.window, AXIS, lane.clientHeight)
     if (!box) {
       clearBand()
       return
@@ -587,85 +569,6 @@ export function ScheduleCanvas({
       onError: (e) => setError(humanError(e)),
     })
   }
-}
-
-// CancelBookingDialog — подтверждение отмены записи.
-//
-// ОТМЕНА НЕОБРАТИМА И ЗАДЕВАЕТ ЧУЖОГО ЧЕЛОВЕКА, поэтому спрашивается диалогом
-// (отчёт владельца 2026-09-04: подтверждения не было вовсе). Диалог говорит обе
-// стороны последствия: место вернётся в оборот, а записавшемуся уйдёт письмо,
-// которое гасит встречу и в его календаре.
-//
-// ⚠ ПРО ПИСЬМО ГОВОРИТСЯ ЧЕСТНО. Адрес живёт в ОТВЕТЕ формы, и если ответ удалён,
-// слать письмо некуда — тогда диалог прямо просит сообщить человеку самому. Обещать
-// письмо там, где его не будет, — худший вид молчания: автор считает, что клиент
-// предупреждён.
-//
-// Диалог закрывается только по успеху: отказ сервера иначе остался бы за уже
-// закрытым окном, а место выглядело бы освобождённым.
-function CancelBookingDialog({
-  booking,
-  timezone,
-  pending,
-  error,
-  onClose,
-  onConfirm,
-}: {
-  booking: Booking | null
-  timezone: string
-  pending: boolean
-  error: string | null
-  onClose: () => void
-  onConfirm: (booking: Booking) => void
-}) {
-  return (
-    <AlertDialog open={booking !== null} onOpenChange={(open) => !open && onClose()}>
-      <AlertDialogContent>
-        {booking && (
-          <>
-            <AlertDialogHeader>
-              <AlertDialogTitle>Отменить запись?</AlertDialogTitle>
-              <AlertDialogDescription>
-                {bookingWhen(booking, timezone)} освободится и снова будет предлагаться в форме.{' '}
-                {booking.submissionId
-                  ? 'Записавшемуся уйдёт письмо об отмене — оно погасит встречу и в его календаре.'
-                  : 'Ответ формы удалён, поэтому письмо отправить некуда: сообщите человеку сами.'}
-              </AlertDialogDescription>
-            </AlertDialogHeader>
-            {error && (
-              <p role="alert" className="text-sm text-destructive">
-                {error}
-              </p>
-            )}
-            <AlertDialogFooter>
-              <AlertDialogCancel>Оставить</AlertDialogCancel>
-              <AlertDialogAction
-                disabled={pending}
-                onClick={(e) => {
-                  // Окно закрывается САМО по успеху, а не по клику.
-                  e.preventDefault()
-                  onConfirm(booking)
-                }}
-              >
-                {pending ? 'Отменяем…' : 'Отменить запись'}
-              </AlertDialogAction>
-            </AlertDialogFooter>
-          </>
-        )}
-      </AlertDialogContent>
-    </AlertDialog>
-  )
-}
-
-// bookingWhen — «4 сентября, 11:00» в поясе расписания.
-function bookingWhen(booking: Booking, timeZone: string): string {
-  return new Date(booking.startsAt).toLocaleString(LOCALE, {
-    timeZone,
-    day: 'numeric',
-    month: 'long',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 // EventProps — что полотно знает о своём событии. Слой обязателен: обработчики
@@ -821,42 +724,36 @@ const VIEWS = [
 
 type ViewName = (typeof VIEWS)[number]['name']
 
-// axisHours — границы оси часов. Сутки целиком показывать нельзя: приём занимает в
-// них треть, и его пришлось бы искать прокруткой. Час запаса с каждой стороны — не
-// красота: без него окно приёма прижато к краю, и протянуть новое рядом некуда.
-function axisHours(
-  schedule: Schedule,
-  dates: string[],
-  busy: { blocks: ScheduleBlock[]; bookings: Booking[] } | undefined,
-): { min: string; max: string } {
+// AXIS — границы оси: целые сутки. Ими же меряется прямоугольник подсказки
+// (bandBox), поэтому значение одно на весь файл: разъехавшись, они сдвинули бы
+// подсказку относительно сетки, по которой она рисуется.
+const AXIS = { min: '00:00', max: '24:00' }
+
+// scrollStart — на каком часе открыть сетку: за час до самого раннего окна приёма.
+// Сутки видны целиком, но начинать разглядывать их с полуночи незачем — приёма там
+// нет ни у кого. Час запаса не красота: без него окно приёма прижато к верхнему краю,
+// и протянуть новое перед ним некуда.
+//
+// Считается по САМОМУ ПРАВИЛУ, а не по занятому времени: занятость приезжает
+// отдельным запросом, и полотно прыгало бы после её загрузки.
+function scrollStart(a: Availability): string {
   const clocks: number[] = []
-  for (const date of dates) {
-    for (const w of effectiveWindows(schedule.availability, date).windows) {
+  for (const day of Object.values(a.weekly)) {
+    for (const w of day ?? []) {
       const from = clockToMinutes(w.from)
-      const to = clockToMinutes(w.to)
       if (from !== null) clocks.push(from)
-      if (to !== null) clocks.push(to)
     }
   }
-  const busyAt = (iso: string) => clockToMinutes(zonedParts(new Date(iso), schedule.timezone).clock)
-  for (const b of busy?.blocks ?? []) {
-    const from = busyAt(b.startsAt)
-    const to = busyAt(b.endsAt)
-    if (from !== null) clocks.push(from)
-    if (to !== null) clocks.push(to)
+  for (const ex of a.exceptions) {
+    for (const w of ex.windows) {
+      const from = clockToMinutes(w.from)
+      if (from !== null) clocks.push(from)
+    }
   }
-  for (const b of busy?.bookings ?? []) {
-    const from = busyAt(b.startsAt)
-    if (from !== null) clocks.push(from, from + b.durationMinutes)
-  }
-  // Пустое расписание показывает рабочий день, а не полночь-полночь: полотно, на
+  // Пустое расписание открывается на утре рабочего дня, а не в полночь: полотно, на
   // котором ещё ничего нет, должно открываться там, где приём заводят.
-  const min = clocks.length > 0 ? Math.min(...clocks, 9 * 60) : 8 * 60
-  const max = clocks.length > 0 ? Math.max(...clocks, 18 * 60) : 20 * 60
-  return {
-    min: minutesToClock(Math.max(0, Math.floor((min - 60) / 60) * 60)),
-    max: minutesToClock(Math.min(24 * 60, Math.ceil((max + 60) / 60) * 60)),
-  }
+  const min = clocks.length > 0 ? Math.min(...clocks) : 9 * 60
+  return minutesToClock(Math.max(0, Math.floor((min - 60) / 60) * 60))
 }
 
 // dateKeyOf — календарная дата момента В ПОЯСЕ РАСПИСАНИЯ: клетка месяца приходит

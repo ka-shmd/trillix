@@ -11,6 +11,7 @@ import {
 } from '../../shared/schedules/queries'
 import { ScheduleEditor } from '../../features/schedules/ScheduleEditor'
 import { SchedulePanel } from '../../features/schedules/SchedulePanel'
+import { CancelBookingDialog } from '../../features/schedules/CancelBookingDialog'
 import { LazyScheduleCanvas } from '../../features/schedules/lazyCanvas'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { formDetailQueryOptions } from '../../features/forms/queries'
@@ -84,6 +85,10 @@ function SchedulePage() {
   // Запись, чей ответ открыт окном. Целиком, а не одним id: у неё уже есть и форма
   // (slug для схемы), и сам ответ — второй раз спрашивать их незачем.
   const [openBooking, setOpenBooking] = useState<Booking | null>(null)
+  // Запись, отмену которой подтверждают. Диалог живёт ЗДЕСЬ, а не в полотне и не в
+  // списке: спрашивают его обе половины экрана, и два экземпляра одного вопроса —
+  // это два разных обещания на одно действие.
+  const [cancelling, setCancelling] = useState<Booking | null>(null)
 
   const crumbs = [
     <Link key="ws" to="/workspaces/$workspaceSlug" params={{ workspaceSlug }}>
@@ -129,7 +134,13 @@ function SchedulePage() {
             сеткой требуют ширины, которой там нет, а сетка на телефоне и так
             открывается видом дня. */}
         <aside className="hidden w-64 shrink-0 overflow-y-auto border-r p-3 xl:block">
-          <SchedulePanel schedule={schedule} visible={visible} onPick={setGoToDate} />
+          <SchedulePanel
+            schedule={schedule}
+            visible={visible}
+            onPick={setGoToDate}
+            onOpenSubmission={setOpenBooking}
+            onCancelBooking={setCancelling}
+          />
         </aside>
 
         <div className="min-w-0 flex-1">
@@ -140,6 +151,7 @@ function SchedulePage() {
             goToDate={goToDate}
             onRange={setVisible}
             onOpenSubmission={setOpenBooking}
+            onCancelBooking={setCancelling}
           />
         </div>
       </div>
@@ -149,6 +161,15 @@ function SchedulePage() {
           фиче ответов, а импорт фичи из фичи запрещён (web/CLAUDE.md) — маршрут же
           складывает фичи по определению. */}
       <BookingSubmissionDialog booking={openBooking} onClose={() => setOpenBooking(null)} />
+
+      {/* Диалог отмены — ОДИН НА ОБЕ ПОВЕРХНОСТИ: карточку записи на полотне и строку
+          списка слева. Вопрос, перечень последствий и сама мутация обязаны быть одни. */}
+      <CancelBookingDialog
+        scheduleId={scheduleId}
+        booking={cancelling}
+        timezone={schedule.timezone}
+        onClose={() => setCancelling(null)}
+      />
 
       <Sheet open={settings} onOpenChange={setSettings}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
