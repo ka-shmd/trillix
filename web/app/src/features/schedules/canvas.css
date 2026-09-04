@@ -1,0 +1,381 @@
+/* Вид полотна расписания. Отдельным файлом рядом с компонентом, а не в index.css:
+   он импортируется ЛЕНИВЫМ чанком и уезжает вместе с ним — на страницах без
+   расписания этих правил в бандле нет.
+
+   ОСНОВА — ШТАТНАЯ ТЕМА `classic` библиотеки, покрашенная нашими токенами. Сетка,
+   разделители, заголовки дней и «сегодня» у неё уже собраны и продуманы; писать их
+   заново означало бы держать свою вёрстку календаря без единой выгоды. Тема
+   полностью переменная (`--fc-classic-*`), поэтому её палитра здесь просто
+   переопределяется — файл `themes/classic/palette.css` мы не импортируем вовсе.
+
+   ЦЕПЛЯТЬСЯ ЗА КЛАССЫ БИБЛИОТЕКИ НЕЛЬЗЯ: седьмая ветка минифицирует собственные
+   имена (`.fc-a`, `.fc-cc`, …), и они меняются от сборки к сборке. Все селекторы
+   ниже идут от НАШИХ классов (опции `eventClass`, `dayCellClass`, …), а до чужой
+   обёртки достают через `:has(> …)` — по родству, а не по имени. */
+
+.sc-canvas {
+  /* Палитра темы = наши токены. Кнопок темы на полотне нет (панель своя), но
+     переменные заданы: тема рисует ими фокус и ховеры. */
+  --fc-classic-primary: var(--primary);
+  --fc-classic-primary-foreground: var(--primary-foreground);
+  --fc-classic-event: var(--primary);
+  --fc-classic-event-contrast: var(--primary-foreground);
+  --fc-classic-background: var(--card);
+  --fc-classic-foreground: var(--foreground);
+  --fc-classic-faint: color-mix(in oklab, var(--foreground) 3%, transparent);
+  --fc-classic-muted: color-mix(in oklab, var(--foreground) 6%, transparent);
+  --fc-classic-strong: color-mix(in oklab, var(--foreground) 12%, transparent);
+  --fc-classic-faint-foreground: var(--muted-foreground);
+  --fc-classic-muted-foreground: var(--muted-foreground);
+  --fc-classic-border: var(--border);
+  --fc-classic-strong-border: color-mix(in oklab, var(--border) 60%, var(--foreground));
+  --fc-classic-highlight: color-mix(in oklab, var(--primary) 14%, transparent);
+  /* Подсветка сегодняшней КОЛОНКИ остаётся нейтральной и еле заметной: вторым
+     акцентом красится только само число (решение владельца 2026-09-04) — залитая
+     фиолетовым колонка спорила бы за внимание с полосами приёма. */
+  --fc-classic-today: color-mix(in oklab, var(--primary) 6%, transparent);
+  --fc-classic-now: var(--destructive);
+  --fc-classic-ring-color: var(--ring);
+
+  /* Свои цвета слоёв. Приём — заливка, а не карточка: автор смотрит СКВОЗЬ неё на
+     записи, и плотная плашка мешала бы. */
+  --sc-av: color-mix(in oklab, var(--primary) 10%, transparent);
+  --sc-av-line: color-mix(in oklab, var(--primary) 55%, transparent);
+  --sc-av-ex: color-mix(in oklab, var(--highlight) 14%, transparent);
+  --sc-av-ex-line: color-mix(in oklab, var(--highlight) 65%, transparent);
+  --sc-block-stripe: color-mix(in oklab, var(--foreground) 8%, transparent);
+
+  font-size: 0.8125rem;
+  overflow: hidden;
+}
+
+/* СЛОЕНИЕ, А НЕ СОСЕДСТВО. Библиотека раскладывает пересекающиеся события бок о бок:
+   запись внутри часов приёма встала бы РЯДОМ с окном, вдвое сузив обоих, — и полотно
+   перестало бы читаться как «занято внутри приёмного времени».
+   Окно приёма растягивается во всю колонку и уходит под остальные слои.
+
+   ⚠ ТОЛЬКО В СЕТКЕ ВРЕМЕНИ (`.sc-grid`). В месяце событие лежит в строке недели, а
+   не в колонке дня, и `inset-inline` растягивает его на все семь дней — проверено
+   глазами: «Обед» занимал неделю целиком. */
+.sc-grid :has(> .sc-av) {
+  inset-inline: 0 !important;
+  z-index: 1;
+}
+
+.sc-grid :has(> .sc-block),
+.sc-grid :has(> .sc-booking) {
+  z-index: 3;
+}
+
+/* Записи не жмутся к правому краю колонки: раскладка библиотеки отводит окну приёма
+   собственный уровень, и без этой поправки встреча занимала бы правую половину дня.
+   Левый отступ оставлен намеренно — сквозь него видно, что запись лежит ВНУТРИ
+   приёмного часа, а не вместо него. */
+.sc-grid :has(> .sc-booking),
+.sc-grid :has(> .sc-block) {
+  inset-inline-start: 6px !important;
+  inset-inline-end: 2px !important;
+}
+
+.sc-canvas .sc-ev {
+  border-radius: 4px;
+  line-height: 1.25;
+  overflow: hidden;
+}
+
+.sc-canvas .sc-av {
+  background: var(--sc-av);
+  border: 0;
+  border-left: 2px solid var(--sc-av-line);
+  border-radius: 0 4px 4px 0;
+  cursor: pointer;
+}
+
+/* Исключение по дате отличается ЦВЕТОМ и штриховкой левой границы, а не подписью:
+   «так каждую неделю» и «так только в этот день» — первое, что автор пришёл увидеть. */
+.sc-canvas .sc-av-ex {
+  background: var(--sc-av-ex);
+  border-left: 2px dashed var(--sc-av-ex-line);
+}
+
+/* Полоса приёма пуста внутри: это фон дня, а не событие. */
+.sc-canvas .sc-av-fill {
+  display: block;
+  height: 100%;
+}
+
+/* Запись — ПЛОТНАЯ заливка акцентом. Светлая карточка с полосой слева (как в новом
+   Outlook) здесь проверена и отвергнута: полоса приёма под записью того же цвета, и
+   бледная встреча на бледном фоне переставала читаться вовсе. Плотная заливка —
+   единственное, что отделяет «занято человеком» от «в это время принимаю». */
+.sc-canvas .sc-booking {
+  background: var(--primary);
+  border: 1px solid color-mix(in oklab, var(--primary) 80%, var(--foreground));
+  color: var(--primary-foreground);
+  cursor: default;
+  padding: 2px 6px;
+}
+
+.sc-canvas .sc-block {
+  background:
+    repeating-linear-gradient(135deg, var(--sc-block-stripe) 0 5px, transparent 5px 10px),
+    var(--card);
+  border: 1px solid var(--border);
+  border-left: 3px solid color-mix(in oklab, var(--foreground) 35%, transparent);
+  color: color-mix(in oklab, var(--foreground) 80%, transparent);
+  cursor: grab;
+  padding: 2px 6px;
+}
+
+.sc-canvas .sc-ev-time {
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  opacity: 0.9;
+}
+
+.sc-canvas .sc-ev-title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Короткое событие — одна строка: время и название в строку, иначе название
+   выдавливается за пределы карточки и обрезается на полуслове. */
+.sc-canvas .sc-ev-short {
+  align-items: baseline;
+  display: flex;
+  gap: 4px;
+}
+
+/* Ось часов: числа мельче и приглушены, как в почтовом календаре, и прижаты к
+   линии часа, а не висят по центру строки. */
+.sc-canvas .sc-slot-label {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  font-variant-numeric: tabular-nums;
+  padding-inline-end: 8px;
+}
+
+/* Шапка дня: имя дня мелким и приглушённым, число крупным. Сегодняшнее число —
+   в залитом кружке: так «сегодня» видно боковым зрением, а не вычитывается. */
+.sc-canvas .sc-day-head {
+  align-items: center;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 0;
+}
+
+.sc-canvas .sc-day-name {
+  color: var(--muted-foreground);
+  font-size: 0.6875rem;
+  text-transform: lowercase;
+}
+
+.sc-canvas .sc-day-num {
+  align-items: center;
+  border-radius: 999px;
+  display: flex;
+  font-size: 0.9375rem;
+  font-weight: 600;
+  height: 1.75rem;
+  justify-content: center;
+  min-width: 1.75rem;
+}
+
+/* СЕГОДНЯ — ВТОРОЙ АКЦЕНТ, и один и тот же во всех трёх видах и в мини-календаре
+   слева (решение владельца 2026-09-04). Первый акцент занят действиями и записями:
+   покрасив им ещё и «сегодня», мы получили бы синее, которое в одном месте значит
+   «сюда можно нажать», а в другом — «этот день». Красится ЧИСЛО, а не колонка. */
+.sc-canvas .sc-day-today .sc-day-num {
+  background: var(--highlight);
+  color: var(--highlight-foreground);
+}
+
+/* День, в который приёма нет вовсе, приглушён в МЕСЯЦЕ: там полос приёма нет, и
+   «работаю — не работаю» иначе не видно ничем. */
+.sc-canvas .sc-day-off {
+  background: color-mix(in oklab, var(--foreground) 3%, transparent);
+}
+
+/* В месяце событие — компактная строка-чип, а не карточка: в клетку их влезает
+   несколько, и высота карточки съела бы день целиком. */
+.sc-month .sc-ev {
+  border-radius: 3px;
+  font-size: 0.6875rem;
+  margin: 0 2px 1px;
+  padding: 1px 5px;
+}
+
+/* Число дня в месяце: сегодняшнее — в залитом кружке, как в шапке недели. */
+.sc-month .sc-cell-num {
+  align-items: center;
+  display: inline-flex;
+  font-variant-numeric: tabular-nums;
+  height: 1.5rem;
+  justify-content: center;
+  min-width: 1.5rem;
+}
+
+.sc-month .sc-cell-today {
+  background: var(--highlight);
+  border-radius: 999px;
+  color: var(--highlight-foreground);
+  font-weight: 600;
+}
+
+/* ОКНО «ЕЩЁ N» В МЕСЯЦЕ. Тема подключена без своей палитры (её место заняли наши
+   токены), и всплывающему окну не досталось ни фона, ни тени: сквозь него просвечивала
+   клетка вместе со своими записями (отчёт владельца 2026-09-04). Вид задаётся здесь
+   по своим классам — `popoverClass`, а не по классам библиотеки: они минифицированы и
+   меняются с каждой её сборкой.
+
+   Окно выше слоёв полотна: у записи в сетке z-index 3, и без своего уровня окно
+   оказалось бы под ней.
+
+   ⚠ СЕЛЕКТОРЫ БЕЗ `.sc-canvas` ВПЕРЕДИ: окно рисуется в портале, за пределами
+   контейнера полотна. Само оно носит оба класса (`popoverClass`), поэтому правила
+   вида, писанные от `.sc-canvas`, внутри него работают. */
+.sc-pop {
+  background: var(--popover);
+  border: 1px solid var(--border);
+  border-radius: calc(var(--radius) + 2px);
+  box-shadow: 0 10px 30px color-mix(in oklab, var(--foreground) 15%, transparent);
+  color: var(--popover-foreground);
+  /* Записей на день может быть и двадцать: окно не растёт бесконечно, а прокручивается
+     внутри себя — иначе оно уезжает за нижний край месяца вместе с последними. */
+  max-height: 18rem;
+  min-width: 12rem;
+  overflow-y: auto;
+  padding: 6px;
+  z-index: 20;
+}
+
+.sc-pop-title {
+  font-size: 0.8125rem;
+  font-weight: 600;
+  padding-inline-start: 2px;
+}
+
+.sc-pop-close {
+  border-radius: 4px;
+  color: var(--muted-foreground);
+  padding: 2px;
+}
+
+.sc-pop-close:hover {
+  background: var(--accent);
+  color: var(--foreground);
+}
+
+/* Записи в окне — те же чипы, что в клетке, но во всю ширину окна: колонок здесь нет,
+   и половинная ширина оставляла бы пустоту справа от каждой строки. */
+.sc-pop .sc-ev {
+  margin: 2px 0 0;
+  padding: 3px 6px;
+}
+
+/* Легенда: что означает цвет. Живёт под панелью, а не подписями внутри полос —
+   надпись в каждой полосе повторяла бы одно и то же семь раз на экран. */
+.sc-key {
+  border-radius: 3px;
+  display: inline-block;
+  height: 0.75rem;
+  width: 0.75rem;
+}
+
+.sc-key-av {
+  background: color-mix(in oklab, var(--primary) 10%, var(--card));
+  border-left: 2px solid color-mix(in oklab, var(--primary) 55%, transparent);
+}
+
+.sc-key-ex {
+  background: color-mix(in oklab, var(--highlight) 14%, var(--card));
+  border-left: 2px dashed color-mix(in oklab, var(--highlight) 65%, transparent);
+}
+
+.sc-key-block {
+  background:
+    repeating-linear-gradient(
+      135deg,
+      color-mix(in oklab, var(--foreground) 8%, transparent) 0 4px,
+      transparent 4px 8px
+    ),
+    var(--card);
+  border: 1px solid var(--border);
+}
+
+.sc-key-booking {
+  background: var(--primary);
+}
+
+.sc-key-off {
+  background: color-mix(in oklab, var(--foreground) 3%, var(--card));
+  border: 1px solid var(--border);
+}
+
+/* ПОДСКАЗКА ПРОТЯЖКИ — ПРЯМОУГОЛЬНИК, а не непрерывный отрезок.
+   Библиотека рисует по слайсу на день и позиционирует их inline: первый день от
+   начала протяжки до низа, средние целиком, последний сверху до курсора. Для правила
+   приёма это враньё — оно описывает часы, а не одну длинную смену.
+   Переписываем обёртку слайса (до неё достаём через :has, по родству — имя класса у
+   неё минифицированное), переменные ставит paintBand на каждое движение мыши.
+   `!important` обязателен: позиция обёртки задана inline-стилем. */
+.sc-grid[data-sc-band] :has(> .sc-hl) {
+  top: var(--sc-band-top) !important;
+  height: var(--sc-band-h) !important;
+}
+
+/* Сама подсказка — контур будущего окна приёма, а не заливка: под ней уже лежат
+   слои, и плотный прямоугольник закрыл бы то, поверх чего рисуют. */
+.sc-canvas .sc-hl {
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+  border: 1px dashed color-mix(in oklab, var(--primary) 70%, transparent);
+  border-radius: 4px;
+  height: 100%;
+}
+
+/* Чужое событие без слоя — мираж перетаскивания самой библиотеки. Бледный контур, а
+   не заливка: он показывает, КУДА поедет окно, и закрывать собой полотно ему незачем. */
+.sc-canvas .sc-ghost {
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  border: 1px dashed color-mix(in oklab, var(--primary) 60%, transparent);
+  color: transparent;
+}
+
+/* ЛИНИЯ ТЕКУЩЕГО ВРЕМЕНИ ДОВЕДЕНА ДО НАЧАЛА СТРОКИ (решение владельца 2026-09-04).
+   Библиотека рисует её только в колонке сегодняшнего дня, и «сейчас» читалось лишь
+   там, где сегодня; на соседних днях уровень текущего часа приходилось прикидывать
+   глазом по оси слева.
+
+   Продолжение — псевдоэлемент той же линии: он уходит ВЛЕВО, через прошедшие дни и
+   через ось часов, и там приглушён. Яркой линия остаётся ровно на сегодняшнем дне —
+   она про «сейчас», а на прошедших датах это уже просто уровень времени.
+
+   Ширины в 100vw хватает на любую сетку, а лишнее срезает прокручиваемый контейнер
+   полотна; влево содержимое области прокрутки не растит (в LTR оно недостижимо). */
+.sc-grid .sc-now::before {
+  border-top: 1px solid color-mix(in oklab, var(--destructive) 35%, transparent);
+  content: '';
+  position: absolute;
+  right: 100%;
+  top: -1px;
+  width: 100vw;
+}
+
+/* Кружок в начале сегодняшней колонки (решение владельца 2026-09-04): линия времени
+   теперь тянется через всю сетку, и без якоря глазу негде опознать, ГДЕ она про
+   «сейчас», а где просто продолжение. Кружок ставится только у сегодняшнего дня —
+   библиотека рисует эту точку в его колонке и больше нигде.
+
+   Отрицательные поля в половину размера сажают кружок ровно на пересечение линии и
+   левого края колонки; `right: auto` снимает растяжку, которую задаёт тема. */
+.sc-grid .sc-now-dot {
+  background: var(--destructive);
+  border-radius: 999px;
+  height: 10px;
+  margin-left: -5px;
+  margin-top: -5px;
+  right: auto;
+  width: 10px;
+}

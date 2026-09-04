@@ -35,6 +35,7 @@ type listService interface {
 	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error)
 	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error)
 	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error)
+	GetForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) (Submission, map[string]domain.AnswerFile, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
 	AuthorizePrint(ctx context.Context, userID, formID, submissionID uuid.UUID) (PrintAccess, error)
 	ListPartialsForForm(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (PartialPage, error)
@@ -106,6 +107,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// (оба матчат .../submissions/summary/pdf). Тот же приём, что у черновиков,
 	// которые тоже вынесены из-под /submissions.
 	mux.Handle("GET /api/v1/forms/{id}/print/{sid}", h.requireAuth(http.HandlerFunc(h.pdf)))
+	mux.Handle("GET /api/v1/forms/{id}/submissions/{sid}",
+		h.requireAuth(http.HandlerFunc(h.get)))
 	mux.Handle("DELETE /api/v1/forms/{id}/submissions/{sid}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 	// Черновики — СВОЙ корень, а не подпуть /submissions: это другая таблица, другой
 	// курсор и другое право (гейт тарифа). Вкладка кабинета соседняя, данные — нет.
@@ -151,6 +154,51 @@ type listResponse struct {
 type fileResponse struct {
 	Name string `json:"name"`
 	Size int64  `json:"size"`
+}
+
+// get отдаёт ОДИН ответ с его файлами — окну ответа, открытому не из списка (карточка
+// записи на полотне расписания). Форма ответов та же, что у элемента списка: окно
+// рисуется одним и тем же компонентом, и второе представление того же ответа
+// разъехалось бы с первым.
+func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	subID, err := uuid.Parse(r.PathValue("sid"))
+	if err != nil {
+		// Неразбираемый id → 404 (несуществующий ответ), без раскрытия чего-либо.
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	row, files, err := h.svc.GetForForm(r.Context(), userID, formID, subID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	resp := submissionOneResponse{
+		Submission: submissionResponse{
+			Kind:        feedKindSubmission,
+			ID:          row.ID.String(),
+			FormVersion: row.FormVersion,
+			CreatedAt:   row.CreatedAt,
+			Answers:     row.Answers,
+		},
+		Files: map[string]fileResponse{},
+	}
+	for id, f := range files {
+		resp.Files[id] = fileResponse{Name: f.Name, Size: f.Size}
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+type submissionOneResponse struct {
+	Submission submissionResponse      `json:"submission"`
+	Files      map[string]fileResponse `json:"files"`
 }
 
 // list отдаёт страницу раздела «Ответы». ?kind=all — оба множества одним списком по

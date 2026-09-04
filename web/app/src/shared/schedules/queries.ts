@@ -9,6 +9,7 @@ import {
   cancelBooking,
   createSchedule,
   deleteSchedule,
+  getCalendar,
   getSchedule,
   listBlocks,
   listBookings,
@@ -43,6 +44,19 @@ export function bookingsQueryOptions(scheduleId: string) {
   return queryOptions({
     queryKey: scheduleKeys.bookings(scheduleId),
     queryFn: () => listBookings(scheduleId),
+  })
+}
+
+// calendarQueryOptions — окно полотна. Границы приезжают готовыми строками RFC 3339
+// от самого полотна: считать их здесь значило бы завести второе место, где решают,
+// какая неделя показана.
+export function calendarQueryOptions(scheduleId: string, from: string, to: string) {
+  return queryOptions({
+    queryKey: scheduleKeys.calendar(scheduleId, from, to),
+    queryFn: () => getCalendar(scheduleId, from, to),
+    // Показанная неделя остаётся на экране, пока грузится соседняя: иначе листание
+    // мигает пустым полотном на каждый шаг.
+    placeholderData: (prev) => prev,
   })
 }
 
@@ -86,7 +100,7 @@ export function useAddBlock(scheduleId: string) {
   return useMutation({
     mutationFn: (block: { startsAt: string; endsAt: string; note: string }) =>
       addBlock(scheduleId, block),
-    onSuccess: () => qc.invalidateQueries({ queryKey: scheduleKeys.blocks(scheduleId) }),
+    onSuccess: () => invalidateBusy(qc, scheduleId),
   })
 }
 
@@ -94,7 +108,7 @@ export function useRemoveBlock(scheduleId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (blockId: string) => removeBlock(scheduleId, blockId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: scheduleKeys.blocks(scheduleId) }),
+    onSuccess: () => invalidateBusy(qc, scheduleId),
   })
 }
 
@@ -103,6 +117,15 @@ export function useCancelBooking(scheduleId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (bookingId: string) => cancelBooking(scheduleId, bookingId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: scheduleKeys.bookings(scheduleId) }),
+    onSuccess: () => invalidateBusy(qc, scheduleId),
   })
+}
+
+// invalidateBusy — всё, что показывает ЗАНЯТОЕ: список ближайших, список блокировок
+// и полотно целиком (все его недели: какие именно затронуты, знать неоткуда).
+// Разъехаться этим трём нельзя — они об одном и том же.
+function invalidateBusy(qc: ReturnType<typeof useQueryClient>, scheduleId: string) {
+  void qc.invalidateQueries({ queryKey: scheduleKeys.blocks(scheduleId) })
+  void qc.invalidateQueries({ queryKey: scheduleKeys.bookings(scheduleId) })
+  void qc.invalidateQueries({ queryKey: scheduleKeys.calendarAll(scheduleId) })
 }

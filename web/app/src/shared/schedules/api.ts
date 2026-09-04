@@ -1,12 +1,14 @@
 import { apiRequest } from '../api/client'
 import {
   blocksResponseSchema,
+  scheduleCalendarSchema,
   bookingsResponseSchema,
   scheduleBlockSchema,
   scheduleSchema,
   schedulesResponseSchema,
   type Booking,
   type Schedule,
+  type ScheduleCalendar,
   type ScheduleBlock,
   type ScheduleInput,
 } from '../../entities/schedule'
@@ -76,4 +78,17 @@ export async function listBookings(scheduleId: string): Promise<Booking[]> {
 
 export function cancelBooking(scheduleId: string, bookingId: string): Promise<void> {
   return apiRequest(`/schedules/${scheduleId}/bookings/${bookingId}/cancel`, { method: 'POST' })
+}
+
+// getCalendar — два слоя полотна одним запросом. Границы обязательны обе, и сервер
+// откажет 422, если окно шире потолка: полотно листается неделями.
+export function getCalendar(
+  scheduleId: string,
+  from: string,
+  to: string,
+): Promise<ScheduleCalendar> {
+  const q = new URLSearchParams({ from, to })
+  return apiRequest(`/schedules/${scheduleId}/calendar?${q.toString()}`, {
+    schema: scheduleCalendarSchema,
+  })
 }

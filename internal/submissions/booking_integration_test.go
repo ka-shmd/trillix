@@ -10,6 +10,7 @@ package submissions_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -21,6 +22,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/booking"
+	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/mail"
@@ -105,7 +107,8 @@ func bookingRow(t *testing.T, id uuid.UUID) (status string, submissionID *uuid.U
 
 func submitWithSlot(t *testing.T, srv *httptest.Server, slug, subID string, bookingID uuid.UUID) *http.Response {
 	t.Helper()
-	body := fmt.Sprintf(`{"submission_id":%q,"token":%q,"answers":{"s1":%q}}`,
+	// Почта в ответе обязательна: вопрос о ней есть в каждой форме записи.
+	body := fmt.Sprintf(`{"submission_id":%q,"token":%q,"answers":{"s1":%q,"e1":"client@example.com"}}`,
 		subID, freshToken(), bookingID.String())
 	return postSubmission(t, srv, slug, body)
 }
@@ -121,7 +124,7 @@ func publishedBookingFormWithEmail(t *testing.T) (slug string, scheduleID, formI
 		{"id":"t_s1","groupId":"g_s1","type":"title","text":[{"t":"Когда удобно"}]},
 		{"id":"s1","groupId":"g_s1","type":"slot","settings":{}},
 		{"id":"t_e1","groupId":"g_e1","type":"title","text":[{"t":"Почта"}]},
-		{"id":"e1","groupId":"g_e1","type":"email","settings":{}}]}`
+		{"id":"e1","groupId":"g_e1","type":"email","required":true,"settings":{}}]}`
 	if _, err := testPool.Exec(context.Background(),
 		`UPDATE form_versions SET schema = $1::jsonb WHERE form_id = $2`, schema, formID); err != nil {
 		t.Fatalf("update version schema: %v", err)
@@ -509,4 +512,70 @@ func TestCancel_MailCancelsTheEvent(t *testing.T) {
 		}
 	}
 	assertRenders(t, payload, "Trillix")
+}
+
+// ОДИН ОТВЕТ ПО ID (2026-09-04, просьба владельца): карточка записи на полотне
+// расписания открывает окно ответа тем же компонентом, что и страница ответов, — но
+// у неё в руках только id, а страница рисует окно из уже загруженной страницы списка.
+//
+// Права проверяются так же, как у списка: доступ даёт членство в пространстве ФОРМЫ,
+// а id ответа из адреса правом не является — form_id стоит и в самом запросе.
+func TestGetSubmission_ByID(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, scheduleID, formID := publishedBookingFormWithEmail(t)
+
+	subID := uuid.New()
+	at := time.Now().Add(48 * time.Hour).UTC().Truncate(time.Minute)
+	bookingID := seedHold(t, scheduleID, formID, subID, at, 1, time.Now().Add(10*time.Minute))
+	body := fmt.Sprintf(`{"submission_id":%q,"token":%q,"answers":{"s1":%q,"e1":"client@example.com"}}`,
+		subID, freshToken(), bookingID.String())
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("отправка: статус %d", resp.StatusCode)
+	}
+
+	svc, userID := deleteStack(t, slug)
+	ctx := context.Background()
+
+	row, _, err := svc.GetForForm(ctx, userID, formID, subID)
+	if err != nil {
+		t.Fatalf("ответ не отдан: %v", err)
+	}
+	if row.ID != subID {
+		t.Fatalf("отдан ответ %s, спрашивали %s", row.ID, subID)
+	}
+	if !strings.Contains(string(row.Answers), "client@example.com") {
+		t.Fatalf("в ответе нет ответов респондента: %s", row.Answers)
+	}
+	if row.FormVersion == 0 {
+		t.Fatal("номер версии формы не заполнен — окно ответа его показывает")
+	}
+
+	// Несуществующий id — 404, а не пустой ответ.
+	if _, _, err := svc.GetForForm(ctx, userID, formID, uuid.New()); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("несуществующий ответ: ошибка %v, ожидался ErrNotFound", err)
+	}
+
+	// Ответ ЧУЖОЙ формы по верному id не отдаётся: form_id стоит в запросе.
+	otherSlug, _ := publishedForm(t, `{"blocks":[{"id":"q1","groupId":"g1","type":"short_text"}]}`)
+	var otherFormID uuid.UUID
+	if err := testPool.QueryRow(ctx, `SELECT id FROM forms WHERE slug = $1`, otherSlug).Scan(&otherFormID); err != nil {
+		t.Fatalf("read other form: %v", err)
+	}
+	if _, _, err := svc.GetForForm(ctx, userID, otherFormID, subID); err == nil {
+		t.Fatal("ответ отдан по чужой форме")
+	}
+
+	// Посторонний не получает ничего — и не отличает «нет доступа» от «нет такого»
+	// (инварианты 1 и 5). Владелец другой формы здесь и есть посторонний для этой.
+	var strangerID uuid.UUID
+	if err := testPool.QueryRow(ctx,
+		`SELECT wm.user_id FROM forms f
+		   JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+		  WHERE f.slug = $1`, otherSlug).Scan(&strangerID); err != nil {
+		t.Fatalf("read stranger: %v", err)
+	}
+	if _, _, err := svc.GetForForm(ctx, strangerID, formID, subID); err == nil {
+		t.Fatal("чужой ответ отдан постороннему")
+	}
 }

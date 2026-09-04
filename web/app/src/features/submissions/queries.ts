@@ -8,6 +8,7 @@ import { submissionKeys } from './keys'
 import {
   deletePartial,
   deleteSubmission,
+  getSubmission,
   getSubmissionsCount,
   getSummary,
   listBlockAnswers,
@@ -26,6 +27,15 @@ export function submissionsListQueryOptions(formId: string, kind: SubmissionsKin
     queryFn: ({ pageParam }) => listSubmissions(formId, kind, pageParam),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+  })
+}
+
+// Один ответ по id — окну ответа, открытому не из списка (карточка записи на полотне
+// расписания). `enabled` решает вызывающий: до открытия окна ходить незачем.
+export function submissionQueryOptions(formId: string, submissionId: string) {
+  return queryOptions({
+    queryKey: submissionKeys.one(formId, submissionId),
+    queryFn: () => getSubmission(formId, submissionId),
   })
 }
 

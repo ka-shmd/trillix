@@ -649,3 +649,149 @@ func closeBody(t *testing.T, r *http.Response) {
 		t.Errorf("close body: %v", err)
 	}
 }
+
+// Полотно недели: ранжированная выдача занятого времени и записей.
+//
+// Проверяется прежде всего ПРОШЛОЕ: ради него ручка и заведена — списки экрана
+// отдают только будущее, и полотно, листаемое назад, показывало бы пустые недели.
+func TestScheduleCalendar_Range(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	sch := createSchedule(t, owner, srv, wsID, scheduleBody)
+	formID := newForm(t, wsID, "f-canvas")
+
+	past := time.Now().Add(-72 * time.Hour).UTC().Truncate(time.Minute)
+	future := time.Now().Add(72 * time.Hour).UTC().Truncate(time.Minute)
+	pastBooking := seedBooking(t, sch.ID, formID, past, "confirmed")
+	seedBooking(t, sch.ID, formID, future, "confirmed")
+	seedBooking(t, sch.ID, formID, past.Add(time.Hour), "canceled")
+	seedBooking(t, sch.ID, formID, past.Add(2*time.Hour), "held")
+
+	// Блокировка прошлой недели: «во вторник меня не было».
+	blockBody := fmt.Sprintf(`{"startsAt":%q,"endsAt":%q,"note":"был в отпуске"}`,
+		past.Add(-time.Hour).Format(time.RFC3339), past.Format(time.RFC3339))
+	rb := postWithCSRF(t, owner, srv, "/api/v1/schedules/"+sch.ID+"/blocks", blockBody)
+	closeBody(t, rb)
+	if rb.StatusCode != http.StatusCreated {
+		t.Fatalf("блокировка в прошлом: статус %d, ожидалось 201", rb.StatusCode)
+	}
+
+	cal := getCalendar(t, owner, srv, sch.ID, past.Add(-24*time.Hour), past.Add(24*time.Hour))
+	if len(cal.Bookings) != 1 || cal.Bookings[0].ID != pastBooking {
+		t.Fatalf("записи прошлой недели = %+v, ожидалась одна подтверждённая", cal.Bookings)
+	}
+	if cal.Bookings[0].FormTitle == "" {
+		t.Fatalf("запись без названия формы: %+v", cal.Bookings[0])
+	}
+	if len(cal.Blocks) != 1 || cal.Blocks[0].Note != "был в отпуске" {
+		t.Fatalf("занятое время прошлой недели = %+v, ожидалась одна блокировка", cal.Blocks)
+	}
+
+	// Окно будущей недели про прошлое ничего не знает.
+	next := getCalendar(t, owner, srv, sch.ID, future.Add(-24*time.Hour), future.Add(24*time.Hour))
+	if len(next.Bookings) != 1 || next.Bookings[0].ID == pastBooking {
+		t.Fatalf("записи будущей недели = %+v, ожидалась одна будущая", next.Bookings)
+	}
+	if len(next.Blocks) != 0 {
+		t.Fatalf("занятое время будущей недели = %+v, ожидалось пусто", next.Blocks)
+	}
+}
+
+// Запись, НАЧАВШАЯСЯ до окна и заходящая в него, обязана попасть в выдачу: иначе
+// встреча, идущая через полночь понедельника, исчезла бы с полотна этой недели.
+func TestScheduleCalendar_OverlapCountsDuration(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	sch := createSchedule(t, owner, srv, wsID, scheduleBody)
+	formID := newForm(t, wsID, "f-overlap")
+
+	start := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Minute)
+	id := seedBooking(t, sch.ID, formID, start, "confirmed") // час длиной
+
+	// Окно открывается через полчаса после начала записи и её началом не задето.
+	cal := getCalendar(t, owner, srv, sch.ID, start.Add(30*time.Minute), start.Add(90*time.Minute))
+	if len(cal.Bookings) != 1 || cal.Bookings[0].ID != id {
+		t.Fatalf("записи = %+v, ожидалась зацепленная длительностью", cal.Bookings)
+	}
+
+	// Окно, начинающееся ровно в конце записи, её уже не видит: границы [from, to).
+	after := getCalendar(t, owner, srv, sch.ID, start.Add(time.Hour), start.Add(2*time.Hour))
+	if len(after.Bookings) != 0 {
+		t.Fatalf("записи после конца = %+v, ожидалось пусто", after.Bookings)
+	}
+}
+
+func TestScheduleCalendar_BadWindowRefuses(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	sch := createSchedule(t, owner, srv, wsID, scheduleBody)
+	now := time.Now().UTC()
+
+	cases := []struct {
+		name  string
+		query string
+	}{
+		{"без границ", ""},
+		{"только начало", "?from=" + url.QueryEscape(now.Format(time.RFC3339))},
+		{"мусор в границе", "?from=вчера&to=" + url.QueryEscape(now.Format(time.RFC3339))},
+		{"вывернутое окно", "?from=" + url.QueryEscape(now.Add(time.Hour).Format(time.RFC3339)) +
+			"&to=" + url.QueryEscape(now.Format(time.RFC3339))},
+		{"шире потолка", "?from=" + url.QueryEscape(now.Format(time.RFC3339)) +
+			"&to=" + url.QueryEscape(now.AddDate(0, 0, booking.CalendarWindowMaxDays+1).Format(time.RFC3339))},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			r := do(t, owner, http.MethodGet, srv.URL+"/api/v1/schedules/"+sch.ID+"/calendar"+c.query)
+			closeBody(t, r)
+			if r.StatusCode != http.StatusUnprocessableEntity {
+				t.Fatalf("статус %d, ожидалось 422", r.StatusCode)
+			}
+		})
+	}
+}
+
+// Чужое расписание неотличимо от несуществующего (инварианты 1 и 5) — полотно
+// расширяет тот же список адресов, что и остальные ручки расписания.
+func TestScheduleCalendar_ForeignWorkspace404(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	sch := createSchedule(t, owner, srv, wsID, scheduleBody)
+
+	stranger := registerUser(t, srv, "stranger@example.com")
+	now := time.Now().UTC()
+	r := do(t, stranger, http.MethodGet, srv.URL+"/api/v1/schedules/"+sch.ID+"/calendar"+
+		"?from="+url.QueryEscape(now.Format(time.RFC3339))+
+		"&to="+url.QueryEscape(now.AddDate(0, 0, 7).Format(time.RFC3339)))
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("чужое полотно: статус %d, ожидалось 404", r.StatusCode)
+	}
+}
+
+type calendarView struct {
+	Blocks []struct {
+		ID   string `json:"id"`
+		Note string `json:"note"`
+	} `json:"blocks"`
+	Bookings []struct {
+		ID        string `json:"id"`
+		FormTitle string `json:"formTitle"`
+	} `json:"bookings"`
+}
+
+func getCalendar(t *testing.T, c *http.Client, srv *httptest.Server, scheduleID string, from, to time.Time) calendarView {
+	t.Helper()
+	var out calendarView
+	decode(t, do(t, c, http.MethodGet, srv.URL+"/api/v1/schedules/"+scheduleID+"/calendar"+
+		"?from="+url.QueryEscape(from.Format(time.RFC3339))+
+		"&to="+url.QueryEscape(to.Format(time.RFC3339))), &out)
+	return out
+}

@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Link2, X } from 'lucide-react'
 import { toast } from 'sonner'
@@ -12,6 +12,8 @@ import { usePublishForm } from '../queries'
 import { type FormRef } from './useAutosave'
 import { dropPaid, hasCustomFields } from './designTheme'
 import { useBuilderStore } from './storeContext'
+import { useFormFacts } from './formFacts'
+import { publishBlockers } from './publishGate'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -24,6 +26,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // PublishControls — кнопка публикации в тонкой шапке редактора. «Опубликовать»
 // стоит здесь ВСЕГДА, в любом состоянии формы: публикация — действие редактора, и
@@ -42,11 +45,19 @@ import { Button } from '@/components/ui/button'
 // который показывается тут же. Погашенная заранее кнопка означала бы, что автор
 // узнаёт о стене, не увидев, что за ней.
 //
-// canPublish=false, пока есть несохранённые правки: публикация снимает снапшот
-// серверного черновика, поэтому сначала он должен догнать редактор (автосейв). Это
-// ЕДИНСТВЕННАЯ причина, по которой кнопка бывает неактивна: гейта публикации в
-// проекте нет (ADR §10, решение владельца 2026-07-31) — недособранная форма
-// публикуется, а безымянный вопрос получает сгенерированное имя.
+// КНОПКА БЫВАЕТ НЕАКТИВНА ПО ДВУМ ПРИЧИНАМ, и обе называются тултипом на ней самой
+// (решение владельца 2026-09-04 — подпись рядом с контролом отвергнута):
+//
+//  1. есть несохранённые правки: публикация снимает снапшот СЕРВЕРНОГО черновика,
+//     поэтому сначала он должен догнать редактор (автосейв);
+//  2. форма записи недособрана — не выбрано расписание либо нет обязательного
+//     вопроса о почте (publishGate.ts, зеркало гейта в forms.Publish).
+//
+// Общего гейта публикации в проекте по-прежнему нет (ADR §10, решение владельца
+// 2026-07-31): недособранная форма публикуется, безымянный вопрос получает
+// сгенерированное имя. Запись — исключение, и узкое: без расписания она ничего не
+// предложит, а без почты записавшийся не получит ссылку отмены и не сможет
+// отказаться — место будет стоять занятым до самого приёма.
 // ПЛАТНОЕ В ФОРМЕ ОБЪЯСНЯЕТСЯ ДИАЛОГОМ ПО НАЖАТИЮ (решение владельца 2026-08-10).
 // Шторка «Оформление» открыта всем и на любом тарифе: смотреть, менять и показывать в
 // превью можно всё — за гейтом стоят отдельные её функции, и упирается в них автор
@@ -73,6 +84,30 @@ function paidInUse(
   return out
 }
 
+// PublishButton — обёртка кнопки тултипом с причиной запрета.
+//
+// ⚠ ОБЁРТКА-SPAN ОБЯЗАТЕЛЬНА: у запрещённой кнопки нет pointer-событий, и тултип на
+// ней самой не открылся бы — то есть причина оказалась бы недоступна ровно тогда,
+// когда она нужна. Тот же приём, что у запрещённого тумблера «страница благодарности»
+// (kinds/pageBreakField.tsx).
+function PublishButton({ reasons, children }: { reasons: string[]; children: ReactNode }) {
+  if (reasons.length === 0) return children
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">{children}</span>
+      </TooltipTrigger>
+      <TooltipContent className="max-w-72">
+        <ul className="flex flex-col gap-1 text-left">
+          {reasons.map((text) => (
+            <li key={text}>{text}</li>
+          ))}
+        </ul>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 // ensureForm — адрес формы на сервере, добытый по надобности: у нового черновика
 // формы ещё нет (ленивое создание), а публикация пустой формы законна как и раньше
 // (гейта публикации в проекте нет, ADR §10) — значит, нажатие обязано её завести.
@@ -88,10 +123,19 @@ export function PublishControls({
   const publish = usePublishForm()
   const navigate = useNavigate()
   const design = useBuilderStore((s) => s.design)
+  const blocks = useBuilderStore((s) => s.blocks)
   const setDesign = useBuilderStore((s) => s.setDesign)
   const allowCustom = useFeatureAllowed('form_design_custom')
   const allowCSS = useFeatureAllowed('form_custom_css')
   const blocked = paidInUse(design, allowCustom, allowCSS)
+  // Расписание — ЖИВАЯ КОЛОНКА формы, и в карточке `Form` его нет: оно приезжает
+  // фактами полотна (formFacts), теми же, которыми пользуется попап блока.
+  const facts = useFormFacts()
+  const gate = publishBlockers(blocks, facts?.scheduleId ?? null)
+  // Причин может быть две (нет расписания И нет почты) — тогда в тултипе две строки,
+  // а не одна фраза через точку: автор читает список того, что доделать.
+  // Несохранённое стоит первым и вытесняет остальное: оно проходит само за секунду.
+  const reasons = !canPublish ? ['Дождитесь сохранения черновика'] : gate.map((b) => b.text)
   const planMessage = planRequiredMessage(publish.error)
   // Диалог «нужна подписка» — локальный UI-стейт: перезагрузку не переживает и никому
   // за пределами этой кнопки не нужен (web/CLAUDE.md).
@@ -125,33 +169,34 @@ export function PublishControls({
             Есть изменения
           </Badge>
         )}
-        <Button
-          size="sm"
-          disabled={!canPublish || publish.isPending}
-          title={!canPublish ? 'Дождитесь сохранения черновика' : undefined}
-          onClick={() => {
-            if (blocked.length > 0) {
-              setRefused(true)
-              return
-            }
-            // Уводим на /share только с первой публикации: там автор впервые берёт
-            // ссылку. Перепубликация — правка живой формы, и уносить из редактора её
-            // автора незачем.
-            void ensureForm()
-              .then(({ id, slug }) =>
-                publish.mutate(
-                  id,
-                  everPublished ? undefined : { onSuccess: () => void goShare(slug) },
-                ),
-              )
-              // Провалиться здесь может только создание формы (публикация свои ошибки
-              // показывает сама, ниже): нажали «Опубликовать» на нетронутом черновике,
-              // и завести его не вышло. Молчащая кнопка в этом месте — худший исход.
-              .catch(() => toast.error('Не удалось создать форму. Попробуйте ещё раз.'))
-          }}
-        >
-          {publish.isPending ? 'Публикуем…' : 'Опубликовать'}
-        </Button>
+        <PublishButton reasons={reasons}>
+          <Button
+            size="sm"
+            disabled={reasons.length > 0 || publish.isPending}
+            onClick={() => {
+              if (blocked.length > 0) {
+                setRefused(true)
+                return
+              }
+              // Уводим на /share только с первой публикации: там автор впервые берёт
+              // ссылку. Перепубликация — правка живой формы, и уносить из редактора её
+              // автора незачем.
+              void ensureForm()
+                .then(({ id, slug }) =>
+                  publish.mutate(
+                    id,
+                    everPublished ? undefined : { onSuccess: () => void goShare(slug) },
+                  ),
+                )
+                // Провалиться здесь может только создание формы (публикация свои ошибки
+                // показывает сама, ниже): нажали «Опубликовать» на нетронутом черновике,
+                // и завести его не вышло. Молчащая кнопка в этом месте — худший исход.
+                .catch(() => toast.error('Не удалось создать форму. Попробуйте ещё раз.'))
+            }}
+          >
+            {publish.isPending ? 'Публикуем…' : 'Опубликовать'}
+          </Button>
+        </PublishButton>
       </div>
 
       {/* Диалог, а не строка под кнопкой и не тост: строка разъезжала шапку (кнопка

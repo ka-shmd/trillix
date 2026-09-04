@@ -93,6 +93,9 @@ export const bookingSchema = z.object({
   id: z.string(),
   formId: z.string(),
   formTitle: z.string(),
+  // formSlug — адрес формы в кабинете: карточка записи на полотне ведёт к ответу,
+  // а ответы адресуются слагом формы, не её id.
+  formSlug: z.string(),
   startsAt: z.string(),
   durationMinutes: z.number().int(),
   seats: z.number().int(),
@@ -102,6 +105,14 @@ export const bookingSchema = z.object({
 export type Booking = z.infer<typeof bookingSchema>
 
 export const bookingsResponseSchema = z.object({ items: z.array(bookingSchema) })
+
+// Полотно недели: занятое время и записи одного отрезка. Одним ответом, потому что
+// две выдачи — это две картины занятости, снятые в разные моменты.
+export const scheduleCalendarSchema = z.object({
+  blocks: z.array(scheduleBlockSchema),
+  bookings: z.array(bookingSchema),
+})
+export type ScheduleCalendar = z.infer<typeof scheduleCalendarSchema>
 
 // Умолчания нового расписания (утверждены владельцем 2026-09-03, DEV-PLAN фаза 27):
 // расписание заводится готовым к работе, чтобы до первой записи ничего не

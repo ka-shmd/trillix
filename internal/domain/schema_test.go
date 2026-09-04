@@ -580,6 +580,45 @@ func TestValidateSchema_PageBreak(t *testing.T) {
 	}
 }
 
+// Форма с записью обязана иметь ОБЯЗАТЕЛЬНЫЙ вопрос о почте: без адреса письмо о
+// записи молча не уходит, а с ним не уходит и ссылка отмены (отчёт владельца
+// 2026-09-04). Проверка живёт отдельной функцией, потому что спрашивают её двое —
+// гейт публикации и предупреждение на полотне.
+func TestSlotNeedsEmail(t *testing.T) {
+	parse := func(t *testing.T, raw string) FormSchema {
+		t.Helper()
+		s, err := ValidateSchema(json.RawMessage(raw))
+		if err != nil {
+			t.Fatalf("схема не разобралась: %v", err)
+		}
+		return s
+	}
+
+	cases := []struct {
+		name   string
+		schema string
+		needs  bool
+	}{
+		{"без записи почта не нужна", `{"blocks":[{"id":"q1","groupId":"g1","type":"short_text","settings":{}}]}`, false},
+		{"запись без почты", `{"blocks":[{"id":"s1","groupId":"g1","type":"slot","settings":{}}]}`, true},
+		{"запись и необязательная почта", `{"blocks":[
+			{"id":"s1","groupId":"g1","type":"slot","settings":{}},
+			{"id":"e1","groupId":"g2","type":"email","settings":{}}
+		]}`, true},
+		{"запись и обязательная почта", `{"blocks":[
+			{"id":"s1","groupId":"g1","type":"slot","settings":{}},
+			{"id":"e1","groupId":"g2","type":"email","required":true,"settings":{}}
+		]}`, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := SlotNeedsEmail(parse(t, c.schema)); got != c.needs {
+				t.Fatalf("SlotNeedsEmail = %v, ожидалось %v", got, c.needs)
+			}
+		})
+	}
+}
+
 // Вопрос о записи в форме один: одна отправка — одна бронь (фаза 27,
 // design/booking.md §4.3).
 func TestValidateSchema_SlotOnlyOne(t *testing.T) {

@@ -1,6 +1,7 @@
 import { useDeletePartial, useDeleteSubmission } from './queries'
 import { ROW_WORDS, type AnswerRow } from './rows'
 import { formatDateTime } from '../../shared/format'
+import { humanError } from '../../shared/api/errors'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -54,9 +55,15 @@ export function DeleteAnswerDialog({
             Это действие необратимо. {words.deleteHint}
           </AlertDialogDescription>
         </AlertDialogHeader>
+        {/* ⚠ ПРИЧИНА ОТКАЗА — ОТ СЕРВЕРА, А НЕ ОБЩАЯ ФРАЗА. Отказы здесь бывают
+            осмысленные: живая будущая запись держит ответ (стоп-кран фазы 27), и
+            сервер говорит, что делать — «сначала отмените её в расписании». Общее
+            «попробуйте ещё раз» на этом месте не просто бесполезно, а ВРЁТ: повтор
+            не поможет никогда (отчёт владельца 2026-09-04, он увидел 409 в консоли,
+            а не на экране). */}
         {remove.isError && (
           <p role="alert" className="text-sm text-destructive">
-            Не удалось удалить. Попробуйте ещё раз.
+            {humanError(remove.error, 'Не удалось удалить. Попробуйте ещё раз.')}
           </p>
         )}
         <AlertDialogFooter>

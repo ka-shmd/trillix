@@ -3,10 +3,12 @@ package submissions
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ka-shmd/trillix/internal/domain"
@@ -88,6 +90,27 @@ func (Repo) ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.U
 		}
 	}
 	return out, nil
+}
+
+// SubmissionByID — один ответ формы. form_id в условии обязателен: id приезжает из
+// адреса и правом доступа не является (тот же довод, что у удаления).
+func (Repo) SubmissionByID(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (Submission, error) {
+	row, err := postgres.New(db).GetSubmissionForForm(ctx, postgres.GetSubmissionForFormParams{
+		ID:     id,
+		FormID: formID,
+	})
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Submission{}, domain.ErrNotFound
+		}
+		return Submission{}, fmt.Errorf("get submission %s: %w", id, err)
+	}
+	return Submission{
+		ID:          row.ID,
+		FormVersion: row.FormVersion,
+		Answers:     json.RawMessage(row.Answers),
+		CreatedAt:   row.CreatedAt.Time,
+	}, nil
 }
 
 // ListSubmissionsAfter — следующая страница одноколоночным курсором (id).

@@ -2,6 +2,7 @@ import { apiRequest } from '../../shared/api/client'
 import { toApiError } from '../../shared/api/errors'
 import {
   partialSubmissionsPageSchema,
+  submissionOneSchema,
   submissionsPageSchema,
   type PartialSubmissionsPage,
   type SubmissionsPage,
@@ -149,4 +150,13 @@ function fileNameFrom(disposition: string | null): string {
   }
   const ascii = disposition?.match(/filename="([^"]+)"/i)
   return ascii?.[1] ?? 'Ответ.pdf'
+}
+
+// getSubmission — один ответ по id: окно ответа, открытое из карточки записи на
+// полотне расписания. Страница ответов этой ручкой не пользуется — там окно рисуется
+// из уже загруженной страницы списка.
+export function getSubmission(formId: string, submissionId: string) {
+  return apiRequest(`/forms/${formId}/submissions/${submissionId}`, {
+    schema: submissionOneSchema,
+  })
 }

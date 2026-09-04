@@ -54,6 +54,81 @@ func (q *Queries) BlocksInRange(ctx context.Context, arg BlocksInRangeParams) ([
 	return items, nil
 }
 
+const bookingsInRange = `-- name: BookingsInRange :many
+SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
+       b.starts_at, b.duration_minutes, b.seats, b.status,
+       b.hold_expires_at, b.created_at,
+       coalesce(f.name, f.title) AS form_title, f.slug AS form_slug
+FROM bookings b
+JOIN forms f ON f.id = b.form_id
+WHERE b.schedule_id = $1
+  AND b.status = 'confirmed'
+  AND b.starts_at < $3
+  AND b.starts_at + make_interval(mins => b.duration_minutes) > $2
+ORDER BY b.starts_at, b.id
+`
+
+type BookingsInRangeParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	StartsAt_2 pgtype.Timestamptz
+}
+
+type BookingsInRangeRow struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	HoldExpiresAt   pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	FormTitle       string
+	FormSlug        string
+}
+
+// Записи, задевающие отрезок, — полотну недели. Условие пересечения считается по
+// ДЛИТЕЛЬНОСТИ САМОЙ БРОНИ, а не по нынешней длительности приёма: автор поменяет
+// час на полчаса, и уже назначенные встречи от этого не должны съехать (0050).
+//
+// Отменённые не показываются по той же причине, что и в списке ближайших: полотно
+// отвечает на вопрос «что занято», а не «что происходило». Холды тоже не показываются
+// — они живут пятнадцать минут, и мигающее на полотне занятое время автору врёт.
+func (q *Queries) BookingsInRange(ctx context.Context, arg BookingsInRangeParams) ([]BookingsInRangeRow, error) {
+	rows, err := q.db.Query(ctx, bookingsInRange, arg.ScheduleID, arg.StartsAt, arg.StartsAt_2)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []BookingsInRangeRow
+	for rows.Next() {
+		var i BookingsInRangeRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.ScheduleID,
+			&i.FormID,
+			&i.SubmissionID,
+			&i.StartsAt,
+			&i.DurationMinutes,
+			&i.Seats,
+			&i.Status,
+			&i.HoldExpiresAt,
+			&i.CreatedAt,
+			&i.FormTitle,
+			&i.FormSlug,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const bumpAIGenerations = `-- name: BumpAIGenerations :exec
 INSERT INTO workspace_usage (workspace_id, period, ai_generations)
 VALUES ($1, $2, 1)
@@ -2777,6 +2852,45 @@ func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissio
 	return i, err
 }
 
+const getSubmissionForForm = `-- name: GetSubmissionForForm :one
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+FROM submissions s
+JOIN form_versions fv ON fv.id = s.form_version_id
+WHERE s.id = $1 AND s.form_id = $2
+`
+
+type GetSubmissionForFormParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+type GetSubmissionForFormRow struct {
+	ID          uuid.UUID
+	Answers     []byte
+	CreatedAt   pgtype.Timestamptz
+	FormVersion int32
+}
+
+// Один ответ целиком — окну ответа, открытому не из списка (карточка записи на
+// полотне расписания). Ограничено form_id по тому же доводу, что и удаление: id
+// ответа приезжает из адреса и правом доступа не является, доступ к самой форме
+// сервис проверяет отдельно.
+//
+// Сверхлимитные (over_quota) отдаются: список их прячет, потому что это витрина
+// тарифа, а здесь спрашивают КОНКРЕТНЫЙ ответ по ссылке из записи — и «нет такого»
+// на существующий ответ было бы враньём.
+func (q *Queries) GetSubmissionForForm(ctx context.Context, arg GetSubmissionForFormParams) (GetSubmissionForFormRow, error) {
+	row := q.db.QueryRow(ctx, getSubmissionForForm, arg.ID, arg.FormID)
+	var i GetSubmissionForFormRow
+	err := row.Scan(
+		&i.ID,
+		&i.Answers,
+		&i.CreatedAt,
+		&i.FormVersion,
+	)
+	return i, err
+}
+
 const getSubmissionForPrint = `-- name: GetSubmissionForPrint :one
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version, fv.schema AS form_schema
 FROM submissions s
@@ -4473,7 +4587,7 @@ const listUpcomingBookings = `-- name: ListUpcomingBookings :many
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
        b.starts_at, b.duration_minutes, b.seats, b.status,
        b.hold_expires_at, b.created_at,
-       coalesce(f.name, f.title) AS form_title
+       coalesce(f.name, f.title) AS form_title, f.slug AS form_slug
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 WHERE b.schedule_id = $1 AND b.status = 'confirmed' AND b.starts_at >= $2
@@ -4499,6 +4613,7 @@ type ListUpcomingBookingsRow struct {
 	HoldExpiresAt   pgtype.Timestamptz
 	CreatedAt       pgtype.Timestamptz
 	FormTitle       string
+	FormSlug        string
 }
 
 // Ближайшие записи для экрана расписания. Отменённые не показываются: экран
@@ -4527,6 +4642,7 @@ func (q *Queries) ListUpcomingBookings(ctx context.Context, arg ListUpcomingBook
 			&i.HoldExpiresAt,
 			&i.CreatedAt,
 			&i.FormTitle,
+			&i.FormSlug,
 		); err != nil {
 			return nil, err
 		}

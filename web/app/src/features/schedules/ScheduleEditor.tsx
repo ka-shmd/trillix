@@ -3,15 +3,11 @@ import { useState } from 'react'
 import {
   MAX_SCHEDULE_NAME_LEN,
   timezoneOptions,
-  type Availability,
   type Schedule,
   type ScheduleInput,
 } from '../../entities/schedule'
-import { availabilityError, clampSeats } from './weekly'
-import { WeekEditor } from './WeekEditor'
-import { ExceptionsEditor } from './ExceptionsEditor'
+import { clampSeats } from './weekly'
 import { Section } from '../../shared/page/Section'
-import { PageFooter } from '../../shared/page/PageFooter'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -24,10 +20,14 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
-// Экран расписания: правило приёма, параметры нарезки, исключения. Сохраняется
-// ОДНОЙ кнопкой в подвале — это одно действие на страницу целиком, ради которого
-// подвал и существует. Блокировки и записи живут своими разделами и своими
-// ручками: они не часть настройки, а состояние.
+// Параметры записи: как режется сетка и сколько человек помещается в приём.
+// Живут в шторке страницы расписания и сохраняются ОДНОЙ кнопкой — это настройка, а
+// не жест.
+//
+// ЧАСОВ ПРИЁМА ЗДЕСЬ НЕТ, и это не упущение: правило и исключения правятся мышью на
+// полотне недели выше (ScheduleCanvas) и уходят на сервер сразу. Черновик этой формы
+// документ правила НЕ ВЕЗЁТ — иначе «Сохранить», нажатое после правки полотна,
+// вернуло бы правило к тому, каким оно было при открытии страницы.
 export function ScheduleEditor({
   schedule,
   onSave,
@@ -39,41 +39,34 @@ export function ScheduleEditor({
   saving: boolean
   error?: string
 }) {
-  const [draft, setDraft] = useState<ScheduleInput>(() => toInput(schedule))
+  const [draft, setDraft] = useState<Settings>(() => toSettings(schedule))
   // Сравнение с сохранённым — по содержимому: копия объекта в состоянии не равна
   // исходному по ссылке, и «изменено» горело бы всегда.
-  const dirty = JSON.stringify(draft) !== JSON.stringify(toInput(schedule))
-  const ruleError = availabilityError(draft.availability)
+  const dirty = JSON.stringify(draft) !== JSON.stringify(toSettings(schedule))
   const nameError = draft.name.trim() === '' ? 'Имя расписания обязательно' : null
   const seatsError =
     draft.maxSeatsPerBooking > draft.capacity
       ? 'Мест в одной записи не может быть больше вместимости'
       : null
-  const blocked = ruleError !== null || nameError !== null || seatsError !== null
+  const blocked = nameError !== null || seatsError !== null
 
-  function patch(next: Partial<ScheduleInput>) {
+  function patch(next: Partial<Settings>) {
     setDraft((prev) => ({ ...prev, ...next }))
   }
 
   return (
-    <div className="flex flex-col gap-12">
-      <Section
-        title="Приём"
-        description="Часы, в которые к вам можно записаться. Перерыв — это второе окно в дне."
-      >
-        <WeekEditor
-          value={draft.availability}
-          onChange={(availability: Availability) => patch({ availability })}
-        />
-      </Section>
-
+    <div className="flex flex-col gap-6">
       <Section
         title="Параметры записи"
         description="Как режется сетка времени и сколько человек помещается в один приём."
       >
         <div className="grid gap-5 @2xl:grid-cols-2">
-          <Field label="Название" hint="Называйте по тому, КТО принимает: «Мария — рисование».
-            Появится второй мастер — сразу видно, что ему нужно своё расписание." error={nameError}>
+          <Field
+            label="Название"
+            hint="Называйте по тому, КТО принимает: «Мария — рисование».
+            Появится второй мастер — сразу видно, что ему нужно своё расписание."
+            error={nameError}
+          >
             <Input
               value={draft.name}
               maxLength={MAX_SCHEDULE_NAME_LEN}
@@ -82,7 +75,10 @@ export function ScheduleEditor({
             />
           </Field>
 
-          <Field label="Часовой пояс" hint="Часы приёма заданы в этом поясе. Респондент увидит время в своём.">
+          <Field
+            label="Часовой пояс"
+            hint="Часы приёма заданы в этом поясе. Респондент увидит время в своём."
+          >
             <Select value={draft.timezone} onValueChange={(timezone) => patch({ timezone })}>
               <SelectTrigger className="w-full">
                 <SelectValue />
@@ -106,7 +102,10 @@ export function ScheduleEditor({
             />
           </Field>
 
-          <Field label="Перерыв между приёмами" hint="Минут после встречи. Входит в шаг сетки, но не в саму встречу.">
+          <Field
+            label="Перерыв между приёмами"
+            hint="Минут после встречи. Входит в шаг сетки, но не в саму встречу."
+          >
             <NumberInput
               value={draft.bufferMinutes}
               min={0}
@@ -115,7 +114,10 @@ export function ScheduleEditor({
             />
           </Field>
 
-          <Field label="Горизонт записи" hint="На сколько дней вперёд открыта запись, считая сегодняшний.">
+          <Field
+            label="Горизонт записи"
+            hint="На сколько дней вперёд открыта запись, считая сегодняшний."
+          >
             <NumberInput
               value={draft.horizonDays}
               min={1}
@@ -124,7 +126,10 @@ export function ScheduleEditor({
             />
           </Field>
 
-          <Field label="Не записывать позже чем за" hint="Минут до начала приёма. Два часа — это 120.">
+          <Field
+            label="Не записывать позже чем за"
+            hint="Минут до начала приёма. Два часа — это 120."
+          >
             <NumberInput
               value={draft.leadMinutes}
               min={0}
@@ -191,48 +196,44 @@ export function ScheduleEditor({
         </label>
       </Section>
 
-      <Section
-        title="Исключения по датам"
-        description="День из этого списка живёт по своим правилам, а не по недельным."
-      >
-        <ExceptionsEditor
-          value={draft.availability}
-          onChange={(availability) => patch({ availability })}
-        />
-      </Section>
-
-      <PageFooter>
+      {/* Кнопка стоит В ПОТОКЕ шторки, а не в подвале страницы: подвал приклеен к
+          нижнему краю ОБОЛОЧКИ и тянется во всю её ширину — под открытой шторкой он
+          читался бы как действие страницы, а не этих настроек. */}
+      <div className="sticky bottom-0 -mx-1 border-t bg-background px-1 py-3">
         <div className="flex flex-wrap items-center justify-end gap-3">
           {error && (
             <p role="alert" className="mr-auto text-sm text-destructive">
               {error}
             </p>
           )}
-          {!error && ruleError && (
-            <p role="alert" className="mr-auto text-sm text-destructive">
-              {ruleError.message}
-            </p>
-          )}
           {dirty && !blocked && !error && (
             <span className="mr-auto text-sm text-muted-foreground">Есть несохранённые правки</span>
           )}
-          <Button disabled={!dirty || blocked || saving} onClick={() => onSave(draft)}>
+          <Button
+            disabled={!dirty || blocked || saving}
+            // Правило берётся из ЖИВОГО расписания, а не из черновика: полотно правит
+            // его своими запросами, и черновик, снятый при открытии страницы, откатил
+            // бы всё, что автор нарисовал.
+            onClick={() => onSave({ ...draft, availability: schedule.availability })}
+          >
             {saving ? 'Сохраняем…' : 'Сохранить'}
           </Button>
         </div>
-      </PageFooter>
+      </div>
     </div>
   )
 }
 
-// toInput — что из расписания правит автор: всё, кроме назначенного сервером.
-// Перечислением, а не выбрасыванием служебных полей: новое поле обязано попасть
-// сюда осознанно, иначе оно молча не сохранялось бы.
-function toInput(s: Schedule): ScheduleInput {
+// Settings — то, что правит ЭТА форма: всё, кроме документа правила (он живёт на
+// полотне) и назначенного сервером.
+type Settings = Omit<ScheduleInput, 'availability'>
+
+// toSettings — перечислением, а не выбрасыванием служебных полей: новое поле обязано
+// попасть сюда осознанно, иначе оно молча не сохранялось бы.
+function toSettings(s: Schedule): Settings {
   return {
     name: s.name,
     timezone: s.timezone,
-    availability: s.availability,
     slotMinutes: s.slotMinutes,
     bufferMinutes: s.bufferMinutes,
     horizonDays: s.horizonDays,

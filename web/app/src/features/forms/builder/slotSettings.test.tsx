@@ -5,6 +5,9 @@ import { cleanup, render, screen, waitFor } from '@testing-library/react'
 
 import { FormFactsProvider, type FormFacts } from './formFacts'
 import { SlotSettings } from './kinds/slotSettings'
+import { createBuilderStore } from './store'
+import { BuilderStoreContext } from './storeContext'
+import { type Block } from '@entities/formSchema'
 
 // Попап блока «Запись» спрашивает расписания ПРОСТРАНСТВА ФОРМЫ. Дважды за один день
 // он показывал пустой список при заведённом расписании (отчёт владельца 2026-09-03):
@@ -50,15 +53,26 @@ beforeEach(() => {
 
 afterEach(cleanup)
 
-function renderWith(facts: FormFacts) {
+// Попапу нужен стор билдера: он смотрит в документ — есть ли обязательный вопрос о
+// почте. Блоками по умолчанию считается «есть», чтобы проверки про расписание не
+// спотыкались о второе предупреждение.
+function renderWith(facts: FormFacts, blocks: Block[] = [emailBlock(true)]) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
+  const store = createBuilderStore()
+  store.setState({ blocks })
   return render(
     <QueryClientProvider client={qc}>
-      <FormFactsProvider value={facts}>
-        <SlotSettings />
-      </FormFactsProvider>
+      <BuilderStoreContext.Provider value={store}>
+        <FormFactsProvider value={facts}>
+          <SlotSettings />
+        </FormFactsProvider>
+      </BuilderStoreContext.Provider>
     </QueryClientProvider>,
   )
+}
+
+function emailBlock(required: boolean): Block {
+  return { id: 'e1', groupId: 'g1', type: 'email', required } as Block
 }
 
 describe('расписание в попапе блока «Запись»', () => {
@@ -76,9 +90,9 @@ describe('расписание в попапе блока «Запись»', () 
     await waitFor(() => {
       expect(screen.queryByText(/ещё нет расписаний/)).toBeNull()
     })
-    // Зато сказано, что без выбора форму не опубликовать: это второй экран, на
-    // котором автор узнаёт про гейт публикации, и первый — как раз этот.
-    expect(screen.getByText(/нельзя опубликовать/)).toBeTruthy()
+    // Про «нельзя опубликовать» этот попап больше не говорит вовсе: условий два, и
+    // оба живут на кнопке «Опубликовать» (publishGate.test.ts).
+    expect(screen.queryByText(/нельзя опубликовать/)).toBeNull()
   })
 
   it('пространство формы неизвестно — запроса нет вовсе', () => {
