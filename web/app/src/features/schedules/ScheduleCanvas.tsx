@@ -345,19 +345,36 @@ export function ScheduleCanvas({
           slotMinTime={AXIS.min}
           slotMaxTime={AXIS.max}
           scrollTime={scrollTo}
+          // В клетку месяца влезает три записи, остальные прячутся за «ещё N» —
+          // окном, которое библиотека рисует сама. Своей палитры у него нет (тему мы
+          // подключаем без неё), поэтому вид ему задан классами ниже: без них окно
+          // выходило прозрачным, и сквозь него просвечивала сама клетка.
           dayMaxEvents={3}
+          // ⚠ ОКНО ЖИВЁТ В ПОРТАЛЕ, ЗА ПРЕДЕЛАМИ КОНТЕЙНЕРА ПОЛОТНА, поэтому носит
+          // `sc-canvas` вторым классом: все правила вида — цвета слоёв, шрифт,
+          // разметка события — писаны от него, и без этого записи в окне остались бы
+          // голым текстом с точкой.
+          popoverClass="sc-canvas sc-pop"
+          popoverCloseClass="sc-pop-close"
           slotHeaderContent={(info) => <span className="sc-slot-label">{info.text}</span>}
           dayCellTopContent={(info) => (
             <span className={`sc-cell-num${info.isToday ? ' sc-cell-today' : ''}`}>
               {info.text}
             </span>
           )}
-          dayHeaderContent={(info) => (
-            <span className={`sc-day-head${info.isToday ? ' sc-day-today' : ''}`}>
-              <span className="sc-day-name">{info.weekdayText}</span>
-              <span className="sc-day-num">{info.dayNumberText}</span>
-            </span>
-          )}
+          dayHeaderContent={(info) =>
+            // В ОКНЕ «ещё N» шапка — заголовок окна, а не колонка недели: нужна
+            // полная дата, а наша разметка колонки дала бы там одинокое число без
+            // месяца (имя дня в этом месте библиотека не считает).
+            info.inPopover ? (
+              <span className="sc-pop-title">{info.text}</span>
+            ) : (
+              <span className={`sc-day-head${info.isToday ? ' sc-day-today' : ''}`}>
+                <span className="sc-day-name">{info.weekdayText}</span>
+                <span className="sc-day-num">{info.dayNumberText}</span>
+              </span>
+            )
+          }
           // В МЕСЯЦЕ полос приёма нет — там их было бы тридцать штук, и клетка
           // превратилась бы в кашу. Вместо них приглушается день, в который приёма
           // нет вовсе: «работаю — не работаю» иначе не видно ничем.
