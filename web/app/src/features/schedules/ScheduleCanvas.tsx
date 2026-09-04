@@ -332,10 +332,27 @@ export function ScheduleCanvas({
             workingDays.has(dateKeyOf(info.date, schedule.timezone)) ? '' : 'sc-day-off'
           }
           eventContent={eventContent}
+          // ⚠ СОСТОЯНИЕ СТАВИТСЯ ОТЛОЖЕННО, И ЭТО НЕ ПЕРЕСТРАХОВКА. `datesSet`
+          // библиотека дёргает из обработчика смены своих пропсов, то есть ИЗ СВОЕЙ
+          // ФАЗЫ РЕНДЕРА; setState оттуда React считает побочным эффектом рендера и
+          // ругается в консоль («Can't perform a React state update on a component
+          // that hasn't mounted yet», отчёт владельца 2026-09-04 — вылезало при сдвиге
+          // линии текущего времени, когда библиотека перерисовывает себя сама).
+          // Микрозадача выносит обновление за пределы рендера, ничего не откладывая
+          // на глаз: она выполняется до следующей отрисовки.
+          //
+          // Значение сравнивается со старым: перерисовка библиотеки не меняет
+          // показанный отрезок, и без этой проверки каждый тик линии времени
+          // перерисовывал бы полотно целиком.
           datesSet={(info) => {
-            setFirstDate(dateOfNaive(info.startStr))
-            setVisibleDays(daysBetween(info.startStr, info.endStr))
-            setView(info.view.type as ViewName)
+            const nextFirst = dateOfNaive(info.startStr)
+            const nextDays = daysBetween(info.startStr, info.endStr)
+            const nextView = info.view.type as ViewName
+            queueMicrotask(() => {
+              setFirstDate((prev) => (prev === nextFirst ? prev : nextFirst))
+              setVisibleDays((prev) => (prev === nextDays ? prev : nextDays))
+              setView((prev) => (prev === nextView ? prev : nextView))
+            })
           }}
           selectable
           // МИРАЖ ВЫДЕЛЕНИЯ ВЫКЛЮЧЕН. Он рисует ту самую непрерывную кляксу «остаток
