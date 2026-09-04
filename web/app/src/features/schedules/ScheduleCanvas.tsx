@@ -291,6 +291,8 @@ export function ScheduleCanvas({
           headerToolbar={false}
           allDaySlot={false}
           nowIndicator
+          nowIndicatorLineClass="sc-now"
+          nowIndicatorDotClass="sc-now-dot"
           expandRows
           height="100%"
           slotDuration={{ minutes: 30 }}
