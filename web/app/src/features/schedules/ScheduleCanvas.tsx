@@ -28,6 +28,7 @@ import {
   clockOfNaive,
   dateKeys,
   dateOfNaive,
+  bandBox,
   effectiveWindows,
   selectionRect,
   shiftDate,
@@ -67,6 +68,10 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
   const [error, setError] = useState<string | null>(null)
   // Документ ДО жеста: чип переключает область действия пересчётом от него.
   const beforeGesture = useRef<Schedule | null>(null)
+  // Контейнер нужен ИМПЕРАТИВНО: подсказка перерисовывается на каждое движение мыши,
+  // и гонять через состояние React перерисовку всего полотна на каждый кадр —
+  // заведомо рвано.
+  const canvasRef = useRef<HTMLDivElement>(null)
 
   const dates = useMemo(() => dateKeys(firstDate, visibleDays), [firstDate, visibleDays])
   const window = useMemo(
@@ -231,7 +236,10 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
       {/* Класс вида на КОНТЕЙНЕРЕ, а не на самом виде: правила слоения должны
           действовать только в сетке времени, а `viewClass` вешает класс глубже, чем
           живут обёртки событий. */}
-      <div className={`sc-canvas rounded-lg border ${month ? 'sc-month' : 'sc-grid'}`}>
+      <div
+        ref={canvasRef}
+        className={`sc-canvas rounded-lg border ${month ? 'sc-month' : 'sc-grid'}`}
+      >
         <Calendar
           controller={controller}
           plugins={[timeGridPlugin, dayGridPlugin, interactionPlugin, classicTheme]}
@@ -290,7 +298,24 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
             setView(info.view.type as ViewName)
           }}
           selectable
-          selectMirror
+          // МИРАЖ ВЫДЕЛЕНИЯ ВЫКЛЮЧЕН. Он рисует ту самую непрерывную кляксу «остаток
+          // первого дня, средние дни целиком, начало последнего» — и рисует её ПОВЕРХ
+          // подсказки, которую мы выправили в прямоугольник. Двух предпросмотров у
+          // одного жеста быть не должно; остаётся подсказка (highlightClass).
+          selectMirror={false}
+          highlightClass="sc-hl"
+          dayLaneClass="sc-lane"
+          // ПОДСКАЗКА ВО ВРЕМЯ ПРОТЯЖКИ — тоже прямоугольник. Библиотека рисует
+          // непрерывный отрезок (остаток первого дня, средние дни целиком, начало
+          // последнего), и до правки автор видел одно, а получал другое. Хука на кадр
+          // перетаскивания у неё нет; selectAllow — единственное, что вызывается на
+          // каждое движение мыши, поэтому пересчёт живёт здесь. Значение всегда
+          // истинно: этот обработчик ничего не запрещает.
+          selectAllow={(span) => {
+            paintBand(span.startStr, span.endStr)
+            return true
+          }}
+          unselect={() => clearBand()}
           editable
           eventDurationEditable
           eventStartEditable
@@ -308,6 +333,7 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
             // до 19:00», — и он остаётся висеть поверх созданных окон, показывая ровно
             // то, чего мы не делали.
             info.view.calendar.unselect()
+            clearBand()
             const rect = selectionRect(info.startStr, info.endStr)
             if (!rect) return
             runGesture({ kind: 'create', ...rect }, pointOf(info.jsEvent), rect.dates)
@@ -381,6 +407,37 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
     </div>
   )
 
+  // paintBand — переписать позицию подсказки под прямоугольник. Обёртки подсказки
+  // позиционируются inline (`top`/`height` в пикселях), поэтому переопределяет их
+  // правило с `!important`, читающее эти две переменные (canvas.css).
+  //
+  // Пиксели, а не проценты: колонка — это ровно ось часов, и её высота меряется по
+  // месту. Считать проценты от времени пришлось бы, зная, что колонка нигде не
+  // обрезана; замер честнее.
+  function paintBand(startStr: string, endStr: string) {
+    const el = canvasRef.current
+    if (!el) return
+    const rect = selectionRect(startStr, endStr)
+    const lane = el.querySelector('.sc-lane')
+    // Один день библиотека и так рисует верно — переписывать нечего.
+    if (!rect || rect.dates.length < 2 || !lane) {
+      clearBand()
+      return
+    }
+    const box = bandBox(rect.window, hours, lane.clientHeight)
+    if (!box) {
+      clearBand()
+      return
+    }
+    el.style.setProperty('--sc-band-top', `${box.top}px`)
+    el.style.setProperty('--sc-band-h', `${box.height}px`)
+    el.dataset.scBand = ''
+  }
+
+  function clearBand() {
+    delete canvasRef.current?.dataset.scBand
+  }
+
   function moveBlock(block: ScheduleBlock, startStr: string, endStr: string) {
     // Блокировка переезжает удалением и заведением: своей правки у неё нет, а
     // заводить ручку PATCH ради перетаскивания дороже, чем два запроса.
@@ -451,7 +508,11 @@ function bookingEvent(booking: Booking) {
 // Строкой, а не списком: опция принимает одно имя класса (`ClassNameInput`), и массив
 // молча не доехал бы.
 function eventClass(info: { event: { extendedProps: Record<string, unknown> } }): string {
-  const props = info.event.extendedProps as EventProps
+  const props = info.event.extendedProps as EventProps | undefined
+  // ⚠ СОБЫТИЕ БЕЗ СЛОЯ — ЧУЖОЕ: мираж перетаскивания, который библиотека рисует сама.
+  // До правки оно проваливалось в ветку записи и вылезало на полотне синей кляксой
+  // (отчёт владельца 2026-09-04). Своего вида у чужого события быть не должно.
+  if (!props?.layer) return 'sc-ev sc-ghost'
   if (props.layer === 'availability') {
     return `sc-ev sc-av ${props.source === 'exception' ? 'sc-av-ex' : 'sc-av-weekly'}`
   }
@@ -599,7 +660,8 @@ function eventContent(info: {
   event: { extendedProps: Record<string, unknown>; title: string }
   timeText: string
 }) {
-  const props = info.event.extendedProps as EventProps
+  const props = info.event.extendedProps as EventProps | undefined
+  if (!props?.layer) return null
   if (props.layer === 'availability') {
     // Полоса приёма БЕЗ ТЕКСТА: это фон дня, а не событие. Что означает цвет,
     // говорит легенда под панелью — надпись в каждой полосе повторяла бы её

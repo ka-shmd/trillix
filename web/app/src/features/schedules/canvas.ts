@@ -175,6 +175,30 @@ export function selectionRect(
   return { dates, window: { from, to } }
 }
 
+// bandBox — где нарисовать подсказку протяжки, в пикселях колонки.
+//
+// Колонка дня — это РОВНО ось часов (замерено: высота колонки совпадает с полной
+// шкалой slotMinTime..slotMaxTime), поэтому пересчёт линейный. Высота приходит
+// замером, а не считается из вёрстки: полотно бывает разной высоты, и вторая копия
+// этого знания разъехалась бы с первой.
+//
+// null — окно вне видимой оси (правило шире показанных часов): рисовать нечего.
+export function bandBox(
+  window: TimeWindow,
+  axis: { min: string; max: string },
+  laneHeight: number,
+): { top: number; height: number } | null {
+  const axisFrom = clockToMinutes(axis.min)
+  const axisTo = clockToMinutes(axis.max)
+  const from = clockToMinutes(window.from)
+  const to = clockToMinutes(window.to)
+  if (axisFrom === null || axisTo === null || from === null || to === null) return null
+  const span = axisTo - axisFrom
+  if (span <= 0 || to <= from) return null
+  const px = laneHeight / span
+  return { top: (from - axisFrom) * px, height: (to - from) * px }
+}
+
 // everyLabel / onlyLabel — подписи областей действия для чипа. Прямоугольник задевает
 // несколько дней, и «Каждый вторник» перестаёт быть правдой.
 export function everyLabel(dates: string[]): string {

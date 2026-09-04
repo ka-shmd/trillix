@@ -4,6 +4,7 @@ import { DEFAULT_SCHEDULE, type Availability } from '../../entities/schedule'
 import {
   dateKeys,
   effectiveWindows,
+  bandBox,
   everyLabel,
   onlyLabel,
   selectionRect,
@@ -289,5 +290,38 @@ describe('выделение протяжкой', () => {
     expect(everyLabel(['2026-09-15', '2026-09-16', '2026-09-17'])).toBe('Каждые вт, ср, чт')
     expect(onlyLabel(['2026-09-15'])).toBe('Только 15 сентября')
     expect(onlyLabel(['2026-09-15', '2026-09-17'])).toBe('Только 15 — 17 сентября')
+  })
+})
+
+// Подсказка во время протяжки рисуется поверх чужой геометрии: библиотека
+// позиционирует свои слайсы в пикселях inline, и переопределяющее правило читает эти
+// два числа. Считаются они от ЗАМЕРЕННОЙ высоты колонки — колонка равна оси часов.
+describe('полоса подсказки', () => {
+  const axis = { min: '08:00', max: '20:00' } // 12 часов
+  const lane = 600 // пикселей на всю ось, то есть 50 на час
+
+  it('окно посреди оси', () => {
+    expect(bandBox({ from: '10:00', to: '14:00' }, axis, lane)).toEqual({ top: 100, height: 200 })
+  })
+
+  it('окно от самого начала оси', () => {
+    expect(bandBox({ from: '08:00', to: '09:00' }, axis, lane)).toEqual({ top: 0, height: 50 })
+  })
+
+  it('окно до полуночи считается по «24:00», а не по нулю', () => {
+    expect(bandBox({ from: '22:00', to: '24:00' }, { min: '20:00', max: '24:00' }, 200)).toEqual({
+      top: 100,
+      height: 100,
+    })
+  })
+
+  it('вывернутое или пустое окно не рисуется', () => {
+    expect(bandBox({ from: '14:00', to: '10:00' }, axis, lane)).toBeNull()
+    expect(bandBox({ from: '10:00', to: '10:00' }, axis, lane)).toBeNull()
+    expect(bandBox({ from: 'полдень', to: '14:00' }, axis, lane)).toBeNull()
+  })
+
+  it('пустая ось не делится на ноль', () => {
+    expect(bandBox({ from: '10:00', to: '11:00' }, { min: '10:00', max: '10:00' }, lane)).toBeNull()
   })
 })

@@ -250,3 +250,32 @@
 .sc-key-booking {
   background: var(--primary);
 }
+
+/* ПОДСКАЗКА ПРОТЯЖКИ — ПРЯМОУГОЛЬНИК, а не непрерывный отрезок.
+   Библиотека рисует по слайсу на день и позиционирует их inline: первый день от
+   начала протяжки до низа, средние целиком, последний сверху до курсора. Для правила
+   приёма это враньё — оно описывает часы, а не одну длинную смену.
+   Переписываем обёртку слайса (до неё достаём через :has, по родству — имя класса у
+   неё минифицированное), переменные ставит paintBand на каждое движение мыши.
+   `!important` обязателен: позиция обёртки задана inline-стилем. */
+.sc-grid[data-sc-band] :has(> .sc-hl) {
+  top: var(--sc-band-top) !important;
+  height: var(--sc-band-h) !important;
+}
+
+/* Сама подсказка — контур будущего окна приёма, а не заливка: под ней уже лежат
+   слои, и плотный прямоугольник закрыл бы то, поверх чего рисуют. */
+.sc-canvas .sc-hl {
+  background: color-mix(in oklab, var(--primary) 16%, transparent);
+  border: 1px dashed color-mix(in oklab, var(--primary) 70%, transparent);
+  border-radius: 4px;
+  height: 100%;
+}
+
+/* Чужое событие без слоя — мираж перетаскивания самой библиотеки. Бледный контур, а
+   не заливка: он показывает, КУДА поедет окно, и закрывать собой полотно ему незачем. */
+.sc-canvas .sc-ghost {
+  background: color-mix(in oklab, var(--primary) 12%, transparent);
+  border: 1px dashed color-mix(in oklab, var(--primary) 60%, transparent);
+  color: transparent;
+}
