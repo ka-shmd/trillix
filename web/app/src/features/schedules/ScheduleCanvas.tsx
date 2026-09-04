@@ -18,10 +18,21 @@ import type { Booking, Schedule, ScheduleBlock, ScheduleInput } from '../../enti
 import {
   calendarQueryOptions,
   useAddBlock,
+  useCancelBooking,
   useRemoveBlock,
   useUpdateSchedule,
 } from '../../shared/schedules/queries'
 import { Button } from '@/components/ui/button'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { humanError } from '../../shared/api/errors'
 import { LOCALE } from '../../shared/format'
 import {
@@ -82,6 +93,9 @@ export function ScheduleCanvas({
     narrowScreen() ? 'timeGridDay' : 'timeGridWeek',
   )
   const [anchor, setAnchor] = useState<Anchor | null>(null)
+  // Запись, отмену которой подтверждают. Диалог рисует полотно, а не попап: попап
+  // закрывается от клика за своими пределами, унося с собой вложенный диалог.
+  const [cancelling, setCancelling] = useState<Booking | null>(null)
   const [error, setError] = useState<string | null>(null)
   // Документ ДО жеста: чип переключает область действия пересчётом от него.
   const beforeGesture = useRef<Schedule | null>(null)
@@ -111,6 +125,7 @@ export function ScheduleCanvas({
   const busy = useQuery(calendarQueryOptions(schedule.id, window.from, window.to))
 
   const update = useUpdateSchedule(schedule.id, schedule.workspaceId)
+  const cancel = useCancelBooking(schedule.id)
   const addBlock = useAddBlock(schedule.id)
   const removeBlock = useRemoveBlock(schedule.id)
 
@@ -446,6 +461,22 @@ export function ScheduleCanvas({
         />
       </div>
 
+      <CancelBookingDialog
+        booking={cancelling}
+        timezone={schedule.timezone}
+        pending={cancel.isPending}
+        error={cancel.isError ? humanError(cancel.error) : null}
+        onClose={() => {
+          cancel.reset()
+          setCancelling(null)
+        }}
+        onConfirm={(booking) =>
+          cancel.mutate(booking.id, {
+            onSuccess: () => setCancelling(null),
+          })
+        }
+      />
+
       <CanvasPopover
         anchor={anchor}
         schedule={schedule}
@@ -461,6 +492,7 @@ export function ScheduleCanvas({
           setAnchor(null)
         }}
         onOpenSubmission={onOpenSubmission}
+        onCancelBooking={setCancelling}
         onRemoveBlock={(id) => {
           removeBlock.mutate(id, { onError: (e) => setError(humanError(e)) })
           setAnchor(null)
@@ -516,6 +548,85 @@ export function ScheduleCanvas({
       onError: (e) => setError(humanError(e)),
     })
   }
+}
+
+// CancelBookingDialog — подтверждение отмены записи.
+//
+// ОТМЕНА НЕОБРАТИМА И ЗАДЕВАЕТ ЧУЖОГО ЧЕЛОВЕКА, поэтому спрашивается диалогом
+// (отчёт владельца 2026-09-04: подтверждения не было вовсе). Диалог говорит обе
+// стороны последствия: место вернётся в оборот, а записавшемуся уйдёт письмо,
+// которое гасит встречу и в его календаре.
+//
+// ⚠ ПРО ПИСЬМО ГОВОРИТСЯ ЧЕСТНО. Адрес живёт в ОТВЕТЕ формы, и если ответ удалён,
+// слать письмо некуда — тогда диалог прямо просит сообщить человеку самому. Обещать
+// письмо там, где его не будет, — худший вид молчания: автор считает, что клиент
+// предупреждён.
+//
+// Диалог закрывается только по успеху: отказ сервера иначе остался бы за уже
+// закрытым окном, а место выглядело бы освобождённым.
+function CancelBookingDialog({
+  booking,
+  timezone,
+  pending,
+  error,
+  onClose,
+  onConfirm,
+}: {
+  booking: Booking | null
+  timezone: string
+  pending: boolean
+  error: string | null
+  onClose: () => void
+  onConfirm: (booking: Booking) => void
+}) {
+  return (
+    <AlertDialog open={booking !== null} onOpenChange={(open) => !open && onClose()}>
+      <AlertDialogContent>
+        {booking && (
+          <>
+            <AlertDialogHeader>
+              <AlertDialogTitle>Отменить запись?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {bookingWhen(booking, timezone)} освободится и снова будет предлагаться в форме.{' '}
+                {booking.submissionId
+                  ? 'Записавшемуся уйдёт письмо об отмене — оно погасит встречу и в его календаре.'
+                  : 'Ответ формы удалён, поэтому письмо отправить некуда: сообщите человеку сами.'}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            {error && (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            )}
+            <AlertDialogFooter>
+              <AlertDialogCancel>Оставить</AlertDialogCancel>
+              <AlertDialogAction
+                disabled={pending}
+                onClick={(e) => {
+                  // Окно закрывается САМО по успеху, а не по клику.
+                  e.preventDefault()
+                  onConfirm(booking)
+                }}
+              >
+                {pending ? 'Отменяем…' : 'Отменить запись'}
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </>
+        )}
+      </AlertDialogContent>
+    </AlertDialog>
+  )
+}
+
+// bookingWhen — «4 сентября, 11:00» в поясе расписания.
+function bookingWhen(booking: Booking, timeZone: string): string {
+  return new Date(booking.startsAt).toLocaleString(LOCALE, {
+    timeZone,
+    day: 'numeric',
+    month: 'long',
+    hour: '2-digit',
+    minute: '2-digit',
+  })
 }
 
 // EventProps — что полотно знает о своём событии. Слой обязателен: обработчики

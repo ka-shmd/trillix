@@ -1,8 +1,6 @@
 import type { Booking, Schedule, ScheduleBlock, TimeWindow } from '../../entities/schedule'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
-import { useCancelBooking } from '../../shared/schedules/queries'
-import { humanError } from '../../shared/api/errors'
 import { LOCALE } from '../../shared/format'
 import { everyLabel, onlyLabel, WEEKDAY_EVERY, weekdayOf } from './canvas'
 import type { Gesture, Scope } from './canvasEdit'
@@ -26,6 +24,7 @@ export function CanvasPopover({
   onRemoveWindow,
   onRemoveBlock,
   onOpenSubmission,
+  onCancelBooking,
 }: {
   anchor: Anchor | null
   schedule: Schedule
@@ -38,9 +37,11 @@ export function CanvasPopover({
   // а импорт фичи из фичи запрещён (web/CLAUDE.md). Отсюда наверх уходит только
   // «нажали на этот ответ».
   onOpenSubmission: (booking: Booking) => void
+  // Отмена спрашивается диалогом, и рисует его ПОЛОТНО, а не этот попап: диалог,
+  // вложенный в попап, живёт ровно до того момента, как попап закроется — а он
+  // закрывается от первого же клика за своими пределами, то есть по самому диалогу.
+  onCancelBooking: (booking: Booking) => void
 }) {
-  const cancel = useCancelBooking(schedule.id)
-
   return (
     <Popover open={anchor !== null} onOpenChange={(open) => !open && onClose()}>
       {/* Якорь — точка мыши, а не элемент события: события полотна перерисовываются
@@ -67,22 +68,14 @@ export function CanvasPopover({
           <BookingCard
             booking={anchor.booking}
             timezone={schedule.timezone}
-            pending={cancel.isPending}
-            error={cancel.isError ? humanError(cancel.error) : null}
             onOpen={() => {
               onOpenSubmission(anchor.booking)
               onClose()
             }}
-            // ⚠ КАРТОЧКА ЗАКРЫВАЕТСЯ ТОЛЬКО ПОСЛЕ УСПЕХА. До 2026-09-04 она
-            // закрывалась сразу, а отказ не показывался нигде: сервер отвечал 404 или
-            // запрос не уходил вовсе — и автор видел ровно то же, что при успехе, то
-            // есть «отмена не работает» (отчёт владельца). Тихий отказ здесь дороже
-            // обычного: место остаётся занятым, а человек считает, что освободил его.
-            onCancel={() =>
-              cancel.mutate(anchor.booking.id, {
-                onSuccess: () => onClose(),
-              })
-            }
+            onCancel={() => {
+              onCancelBooking(anchor.booking)
+              onClose()
+            }}
           />
         )}
       </PopoverContent>
@@ -200,15 +193,11 @@ function BlockCard({
 function BookingCard({
   booking,
   timezone,
-  pending,
-  error,
   onOpen,
   onCancel,
 }: {
   booking: Booking
   timezone: string
-  pending: boolean
-  error: string | null
   onOpen: () => void
   onCancel: () => void
 }) {
@@ -234,14 +223,9 @@ function BookingCard({
         // молчание здесь читалось бы как «ссылку забыли».
         <p className="text-sm text-muted-foreground">Ответ удалён — запись осталась</p>
       )}
-      <Button size="sm" variant="outline" disabled={pending} onClick={onCancel}>
-        {pending ? 'Отменяем…' : 'Отменить запись'}
+      <Button size="sm" variant="outline" onClick={onCancel}>
+        Отменить запись
       </Button>
-      {error && (
-        <p role="alert" className="text-sm text-destructive">
-          {error}
-        </p>
-      )}
     </div>
   )
 }
