@@ -5,14 +5,14 @@ import { Button } from '@/components/ui/button'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { useCancelBooking } from '../../shared/schedules/queries'
 import { LOCALE } from '../../shared/format'
-import { WEEKDAY_EVERY, weekdayOf } from './canvas'
+import { everyLabel, onlyLabel, WEEKDAY_EVERY, weekdayOf } from './canvas'
 import type { Gesture, Scope } from './canvasEdit'
 
 // Что полотно показывает у точки, где щёлкнули. Четыре вида, потому что вопросов к
 // полотну ровно четыре: «в каком объёме это правило», «убрать окно», «снять
 // блокировку», «что за запись».
 export type Anchor = { x: number; y: number } & (
-  | { kind: 'scope'; date: string; gesture: Gesture; scope: Scope }
+  | { kind: 'scope'; dates: string[]; gesture: Gesture; scope: Scope }
   | { kind: 'window'; date: string; window: TimeWindow }
   | { kind: 'block'; block: ScheduleBlock }
   | { kind: 'booking'; booking: Booking }
@@ -31,7 +31,7 @@ export function CanvasPopover({
   schedule: Schedule
   onClose: () => void
   onScope: (gesture: Gesture, scope: Scope) => void
-  onCloseTime: (gesture: Gesture, date: string) => void
+  onCloseTime: (gesture: Gesture) => void
   onRemoveWindow: (date: string, window: TimeWindow, scope: Scope) => void
   onRemoveBlock: (id: string) => void
 }) {
@@ -85,7 +85,7 @@ function ScopeChip({
 }: {
   anchor: Extract<Anchor, { kind: 'scope' }>
   onScope: (gesture: Gesture, scope: Scope) => void
-  onCloseTime: (gesture: Gesture, date: string) => void
+  onCloseTime: (gesture: Gesture) => void
 }) {
   return (
     <div className="flex flex-col gap-1">
@@ -96,14 +96,14 @@ function ScopeChip({
           variant={anchor.scope === 'weekly' ? 'default' : 'outline'}
           onClick={() => onScope(anchor.gesture, 'weekly')}
         >
-          {WEEKDAY_EVERY[weekdayOf(anchor.date)]}
+          {everyLabel(anchor.dates)}
         </Button>
         <Button
           size="sm"
           variant={anchor.scope === 'date' ? 'default' : 'outline'}
           onClick={() => onScope(anchor.gesture, 'date')}
         >
-          Только {dayTitle(anchor.date)}
+          {onlyLabel(anchor.dates)}
         </Button>
       </div>
       {/* Третий ответ есть только у протяжки по пустому месту: нарисованное было не
@@ -113,7 +113,7 @@ function ScopeChip({
           size="sm"
           variant="ghost"
           className="justify-start"
-          onClick={() => onCloseTime(anchor.gesture, anchor.date)}
+          onClick={() => onCloseTime(anchor.gesture)}
         >
           Это не приём — закрыть время
         </Button>

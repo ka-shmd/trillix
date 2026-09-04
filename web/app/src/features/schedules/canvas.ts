@@ -1,5 +1,6 @@
 import { WEEKDAYS, type Availability, type TimeWindow, type Weekday } from '../../entities/schedule'
-import { clockToMinutes, minutesToClock } from './weekly'
+import { clockToMinutes, minutesToClock, WEEKDAY_SHORT } from './weekly'
+import { LOCALE } from '../../shared/format'
 
 // Слой часов приёма на полотне недели: правило и исключения → окна с ДАТАМИ.
 //
@@ -133,6 +134,67 @@ export const WEEKDAY_EVERY: Record<Weekday, string> = {
   fri: 'Каждую пятницу',
   sat: 'Каждую субботу',
   sun: 'Каждое воскресенье',
+}
+
+// selectionRect — что автор выделил протяжкой: ПРЯМОУГОЛЬНИК, а не отрезок времени.
+//
+// Библиотека отдаёт непрерывный диапазон: протяжка со вторника на четверг это у неё
+// «вторник с 10:00 до полуночи, среда целиком, четверг до 14:00». Для правила приёма
+// это бессмыслица — правило описывает ЧАСЫ, а не одну длинную смену. Автор,
+// протянувший мышь на соседнюю колонку, ждёт те же часы на каждом задетом дне
+// (отчёт владельца 2026-09-04), и здесь отрезок пересчитывается в прямоугольник.
+//
+// null — выделение нулевой высоты (протяжка вбок ровно по горизонтали): создавать
+// нечего.
+export function selectionRect(
+  startStr: string,
+  endStr: string,
+): { dates: string[]; window: TimeWindow } | null {
+  const startDate = dateOfNaive(startStr)
+  let lastDate = dateOfNaive(endStr)
+  let endClock = clockOfNaive(endStr)
+  // Конец выделения — граница ИСКЛЮЧИТЕЛЬНАЯ: протяжка до самого низа вторника
+  // приезжает как «среда, 00:00». Без этой поправки она захватила бы лишнюю колонку,
+  // а окно «до полуночи» стало бы нулевым.
+  if (endClock === '00:00') {
+    lastDate = shiftDate(lastDate, -1)
+    endClock = '24:00'
+  }
+  const startClock = clockOfNaive(startStr)
+  if (lastDate === startDate) {
+    return startClock < endClock
+      ? { dates: [startDate], window: { from: startClock, to: endClock } }
+      : null
+  }
+  if (lastDate < startDate) return null
+  const from = startClock < endClock ? startClock : endClock
+  const to = startClock < endClock ? endClock : startClock
+  if (from === to) return null
+  const dates: string[] = []
+  for (let d = startDate; d <= lastDate && dates.length < 62; d = shiftDate(d, 1)) dates.push(d)
+  return { dates, window: { from, to } }
+}
+
+// everyLabel / onlyLabel — подписи областей действия для чипа. Прямоугольник задевает
+// несколько дней, и «Каждый вторник» перестаёт быть правдой.
+export function everyLabel(dates: string[]): string {
+  if (dates.length === 1 && dates[0]) return WEEKDAY_EVERY[weekdayOf(dates[0])]
+  return `Каждые ${dates.map((d) => WEEKDAY_SHORT[weekdayOf(d)]).join(', ')}`
+}
+
+export function onlyLabel(dates: string[]): string {
+  const first = dates[0]
+  const last = dates[dates.length - 1]
+  if (!first || !last) return ''
+  const day = (d: string, withMonth: boolean) =>
+    new Date(`${d}T00:00:00Z`).toLocaleDateString(LOCALE, {
+      timeZone: 'UTC',
+      day: 'numeric',
+      ...(withMonth ? { month: 'long' } : {}),
+    })
+  if (first === last) return `Только ${day(first, true)}`
+  const sameMonth = first.slice(0, 7) === last.slice(0, 7)
+  return `Только ${day(first, !sameMonth)} — ${day(last, true)}`
 }
 
 // weekStart — понедельник недели, в которую попала дата. Неделя начинается с

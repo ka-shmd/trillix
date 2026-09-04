@@ -29,6 +29,7 @@ import {
   dateKeys,
   dateOfNaive,
   effectiveWindows,
+  selectionRect,
   shiftDate,
   spansIn,
   weekStart,
@@ -124,11 +125,11 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
   // runGesture — применить жест областью по умолчанию и предложить вторую чипом.
   // Умолчание — «каждый вторник»: правило описывает обычную неделю, и чаще правят
   // именно его; исключение — это «в этот раз иначе», то есть более редкий случай.
-  function runGesture(gesture: Gesture, at: { x: number; y: number }, date: string) {
+  function runGesture(gesture: Gesture, at: { x: number; y: number }, dates: string[]) {
     beforeGesture.current = schedule
     const next = withAvailability(schedule, applyGesture(schedule.availability, gesture, 'weekly'))
     saveAvailability(next)
-    setAnchor({ kind: 'scope', x: at.x, y: at.y, date, gesture, scope: 'weekly' })
+    setAnchor({ kind: 'scope', x: at.x, y: at.y, dates, gesture, scope: 'weekly' })
   }
 
   // switchScope — пересчёт ОТ ИСХОДНОГО документа, а не отмена применённого: щёлкать
@@ -141,18 +142,23 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
 
   // closeTime — третий ответ чипа: нарисованное было не приёмом, а занятостью.
   // Правило возвращается к исходному, а время закрывается блокировкой.
-  function closeTime(gesture: Gesture, date: string) {
+  function closeTime(gesture: Gesture) {
     if (gesture.kind !== 'create') return
     const before = beforeGesture.current ?? schedule
     saveAvailability(before, () => {
-      addBlock.mutate(
-        {
-          startsAt: zonedToUTC(date, gesture.window.from, schedule.timezone),
-          endsAt: zonedToUTC(date, endClock(gesture.window.to), schedule.timezone),
-          note: '',
-        },
-        { onError: (e) => setError(humanError(e)) },
-      )
+      // По блокировке на каждый задетый день: занятое время — точки на оси, и одной
+      // строкой «со вторника по четверг» они не выражаются (иначе закрытой оказалась
+      // бы и ночь между днями).
+      for (const date of gesture.dates) {
+        addBlock.mutate(
+          {
+            startsAt: zonedToUTC(date, gesture.window.from, schedule.timezone),
+            endsAt: zonedToUTC(date, endClock(gesture.window.to), schedule.timezone),
+            note: '',
+          },
+          { onError: (e) => setError(humanError(e)) },
+        )
+      }
     })
     setAnchor(null)
   }
@@ -294,12 +300,17 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
           events={events}
           eventClass={eventClass}
           select={(info) => {
-            const date = dateOfNaive(info.startStr)
-            runGesture(
-              { kind: 'create', date, window: windowOf(info.startStr, info.endStr) },
-              pointOf(info.jsEvent),
-              date,
-            )
+            // Протяжка на соседнюю колонку — ПРЯМОУГОЛЬНИК: те же часы на каждом
+            // задетом дне, а не непрерывный отрезок «остаток вторника плюс начало
+            // среды» (canvas.ts, selectionRect).
+            // ⚠ ВЫДЕЛЕНИЕ СНИМАЕТСЯ СРАЗУ. Иначе библиотека оставляет на полотне свой
+            // мираж — непрерывный отрезок «остаток понедельника, вторник целиком, среда
+            // до 19:00», — и он остаётся висеть поверх созданных окон, показывая ровно
+            // то, чего мы не делали.
+            info.view.calendar.unselect()
+            const rect = selectionRect(info.startStr, info.endStr)
+            if (!rect) return
+            runGesture({ kind: 'create', ...rect }, pointOf(info.jsEvent), rect.dates)
           }}
           eventDrop={(info) => {
             const props = info.event.extendedProps as EventProps
@@ -314,7 +325,7 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
               date === props.date
                 ? { kind: 'update', date, orig: props.window, window: win }
                 : { kind: 'move', fromDate: props.date, orig: props.window, date, window: win }
-            runGesture(gesture, pointOf(info.jsEvent), date)
+            runGesture(gesture, pointOf(info.jsEvent), [date])
           }}
           eventResize={(info) => {
             const props = info.event.extendedProps as EventProps
@@ -331,7 +342,7 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
                 window: windowOf(info.event.startStr, info.event.endStr),
               },
               pointOf(info.jsEvent),
-              props.date,
+              [props.date],
             )
           }}
           eventClick={(info) => {

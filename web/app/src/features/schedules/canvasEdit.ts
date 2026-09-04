@@ -19,8 +19,11 @@ import { clockToMinutes, minutesToClock, windowsError } from './weekly'
 export type Scope = 'weekly' | 'date'
 
 export type Gesture =
-  // Протяжка по пустому месту.
-  | { kind: 'create'; date: string; window: TimeWindow }
+  // Протяжка по пустому месту. ДАТ МОЖЕТ БЫТЬ НЕСКОЛЬКО: протяжка мышью на соседнюю
+  // колонку выделяет ПРЯМОУГОЛЬНИК — тот же диапазон часов на каждом задетом дне
+  // (отчёт владельца 2026-09-04). Непрерывный отрезок «остаток вторника плюс начало
+  // среды» здесь бессмыслен: правило описывает часы приёма, а не одну длинную смену.
+  | { kind: 'create'; dates: string[]; window: TimeWindow }
   // Растягивание или перенос внутри дня: orig опознаёт окно на дате.
   | { kind: 'update'; date: string; orig: TimeWindow; window: TimeWindow }
   // Перенос на соседнюю колонку: у жеста две даты, и обе меняются.
@@ -39,34 +42,48 @@ export function applyGesture(a: Availability, g: Gesture, scope: Scope): Availab
   // область действия применяется к обеим одинаково.
   if (g.kind === 'move') {
     const without = applyGesture(a, { kind: 'remove', date: g.fromDate, orig: g.orig }, scope)
-    return applyGesture(without, { kind: 'create', date: g.date, window: g.window }, scope)
+    return applyGesture(without, { kind: 'create', dates: [g.date], window: g.window }, scope)
   }
-  const next = nextWindows(effectiveWindows(a, g.date).windows, g)
+  // Прямоугольник — это тот же жест, повторённый по колонкам: каждая дата получает
+  // одно и то же окно по общим правилам (слияние, область действия). Отдельной ветки
+  // «много дней» в документе нет, и заводить её значило бы держать второй способ
+  // править то же самое.
+  if (g.kind === 'create') {
+    return g.dates.reduce((doc, date) => applyOne(doc, { date, add: g.window }, scope), a)
+  }
+  if (g.kind === 'remove') {
+    return applyOne(a, { date: g.date, remove: g.orig }, scope)
+  }
+  return applyOne(a, { date: g.date, remove: g.orig, add: g.window }, scope)
+}
+
+// applyOne — правка ОДНОГО дня: убрать окно, добавить окно, или и то и другое
+// (растягивание — это замена). Слияние соприкоснувшихся обязательно, а не любезность:
+// пересекающиеся окна документ запрещает (сервер отвечает 422), а протянуть мышью
+// поверх соседнего окна — обычное дело. Автор при этом видит ровно то, что нарисовал:
+// два окна, ставшие одним.
+function applyOne(
+  a: Availability,
+  op: { date: string; add?: TimeWindow; remove?: TimeWindow },
+  scope: Scope,
+): Availability {
+  const current = effectiveWindows(a, op.date).windows
+  const kept = op.remove ? current.filter((w) => !sameWindow(w, op.remove as TimeWindow)) : current
+  const next = mergeWindows(op.add ? [...kept, op.add] : kept)
   if (scope === 'date') {
-    const others = a.exceptions.filter((e) => e.date !== g.date)
+    const others = a.exceptions.filter((e) => e.date !== op.date)
     return {
       ...a,
-      exceptions: [...others, { date: g.date, windows: next }].sort((x, y) =>
+      exceptions: [...others, { date: op.date, windows: next }].sort((x, y) =>
         x.date.localeCompare(y.date),
       ),
     }
   }
   return {
     ...a,
-    weekly: { ...a.weekly, [weekdayOf(g.date)]: next },
-    exceptions: a.exceptions.filter((e) => e.date !== g.date),
+    weekly: { ...a.weekly, [weekdayOf(op.date)]: next },
+    exceptions: a.exceptions.filter((e) => e.date !== op.date),
   }
-}
-
-// nextWindows — окна дня после жеста: сортировка и слияние соприкоснувшихся.
-//
-// Слияние обязательно, а не любезность: пересекающиеся окна документ запрещает
-// (сервер отвечает 422), а протянуть мышью поверх соседнего окна — обычное дело.
-// Автор при этом видит ровно то, что нарисовал: два окна, ставшие одним.
-function nextWindows(windows: TimeWindow[], g: Exclude<Gesture, { kind: 'move' }>): TimeWindow[] {
-  const kept = g.kind === 'create' ? windows : windows.filter((w) => !sameWindow(w, g.orig))
-  const added = g.kind === 'remove' ? [] : [g.window]
-  return mergeWindows([...kept, ...added])
 }
 
 function sameWindow(a: TimeWindow, b: TimeWindow): boolean {

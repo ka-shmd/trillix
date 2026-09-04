@@ -84,7 +84,7 @@ export function weekSummary(a: Availability): string {
     .join(' · ')
 }
 
-const WEEKDAY_SHORT: Record<Weekday, string> = {
+export const WEEKDAY_SHORT: Record<Weekday, string> = {
   mon: 'пн',
   tue: 'вт',
   wed: 'ср',
