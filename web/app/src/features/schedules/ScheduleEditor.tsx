@@ -8,7 +8,6 @@ import {
 } from '../../entities/schedule'
 import { clampSeats } from './weekly'
 import { Section } from '../../shared/page/Section'
-import { PageFooter } from '../../shared/page/PageFooter'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -22,7 +21,8 @@ import {
 } from '@/components/ui/select'
 
 // Параметры записи: как режется сетка и сколько человек помещается в приём.
-// Сохраняются ОДНОЙ кнопкой в подвале — это настройка, а не жест.
+// Живут в шторке страницы расписания и сохраняются ОДНОЙ кнопкой — это настройка, а
+// не жест.
 //
 // ЧАСОВ ПРИЁМА ЗДЕСЬ НЕТ, и это не упущение: правило и исключения правятся мышью на
 // полотне недели выше (ScheduleCanvas) и уходят на сервер сразу. Черновик этой формы
@@ -55,7 +55,7 @@ export function ScheduleEditor({
   }
 
   return (
-    <div className="flex flex-col gap-12">
+    <div className="flex flex-col gap-6">
       <Section
         title="Параметры записи"
         description="Как режется сетка времени и сколько человек помещается в один приём."
@@ -196,7 +196,10 @@ export function ScheduleEditor({
         </label>
       </Section>
 
-      <PageFooter>
+      {/* Кнопка стоит В ПОТОКЕ шторки, а не в подвале страницы: подвал приклеен к
+          нижнему краю ОБОЛОЧКИ и тянется во всю её ширину — под открытой шторкой он
+          читался бы как действие страницы, а не этих настроек. */}
+      <div className="sticky bottom-0 -mx-1 border-t bg-background px-1 py-3">
         <div className="flex flex-wrap items-center justify-end gap-3">
           {error && (
             <p role="alert" className="mr-auto text-sm text-destructive">
@@ -216,7 +219,7 @@ export function ScheduleEditor({
             {saving ? 'Сохраняем…' : 'Сохранить'}
           </Button>
         </div>
-      </PageFooter>
+      </div>
     </div>
   )
 }

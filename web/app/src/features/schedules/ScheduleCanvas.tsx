@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import Calendar, { useCalendarController } from '@fullcalendar/react'
 import timeGridPlugin from '@fullcalendar/react/timegrid'
@@ -51,7 +51,20 @@ import { zonedParts, zonedToUTC } from './zone'
 // ВСЁ ПОКАЗЫВАЕТСЯ В ПОЯСЕ РАСПИСАНИЯ (`timeZone`), а не в поясе устройства: правило
 // задано в нём, и поездка автора не должна сдвигать ему показ собственного распорядка
 // (ADR §10). Именно ради именованных поясов взята седьмая ветка библиотеки.
-export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
+export function ScheduleCanvas({
+  schedule,
+  goToDate,
+  onRange,
+}: {
+  schedule: Schedule
+  // goToDate — дата, выбранная снаружи (мини-календарь слева, строка ближайшей
+  // записи). Полотно листает себя к ней и НЕ спорит с ней о виде: месяц остаётся
+  // месяцем, неделя неделей — человек выбрал день, а не способ на него смотреть.
+  goToDate?: string
+  // onRange — какой отрезок сейчас показан. Нужен мини-календарю, чтобы подсветить
+  // видимые дни: без этого две половины экрана живут каждая своей неделей.
+  onRange?: (dates: string[]) => void
+}) {
   const controller = useCalendarController()
   // Видимая неделя нужна ЭКРАНУ (от неё зависит запрос за занятым временем), но
   // ведёт её КАЛЕНДАРЬ: кнопки только просят его перелистнуть, а состояние приезжает
@@ -74,6 +87,16 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
   const canvasRef = useRef<HTMLDivElement>(null)
 
   const dates = useMemo(() => dateKeys(firstDate, visibleDays), [firstDate, visibleDays])
+
+  // Внешний выбор даты — императивная команда календарю, а не второе состояние:
+  // источник правды о показанном отрезке один, и это сам календарь (datesSet).
+  useEffect(() => {
+    if (goToDate) controller.gotoDate(goToDate)
+  }, [goToDate, controller])
+
+  useEffect(() => {
+    onRange?.(dates)
+  }, [dates, onRange])
   const window = useMemo(
     () => ({
       from: zonedToUTC(firstDate, '00:00', schedule.timezone),
@@ -169,8 +192,11 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
   }
 
   return (
-    <div className="flex flex-col gap-3">
-      <div className="flex flex-wrap items-center justify-between gap-2">
+    // Полотно занимает ВСЮ высоту отведённой панели: панель управления и легенда
+    // сверху не растягиваются, а сетка забирает остаток (min-h-0 обязателен — без
+    // него flex-элемент не сжимается ниже содержимого, и сетка вылезает за экран).
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-1">
           <Button
             variant="ghost"
@@ -220,15 +246,24 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
         </div>
       </div>
 
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
-        <Legend className="sc-key-av" title="Приём" />
-        <Legend className="sc-key-ex" title="Только в этот день" />
+      {/* Легенда РАЗНАЯ у видов, и это не украшение: в месяце полос приёма нет вовсе
+          (там приглушён день без приёма), и строка «Приём» объясняла бы цвет, которого
+          на экране нет. */}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-b px-3 py-1.5 text-xs text-muted-foreground">
+        {month ? (
+          <Legend className="sc-key-off" title="День без приёма" />
+        ) : (
+          <>
+            <Legend className="sc-key-av" title="Приём" />
+            <Legend className="sc-key-ex" title="Только в этот день" />
+          </>
+        )}
         <Legend className="sc-key-block" title="Занято" />
         <Legend className="sc-key-booking" title="Запись" />
       </div>
 
       {error && (
-        <p role="alert" className="text-sm text-destructive">
+        <p role="alert" className="px-3 py-1.5 text-sm text-destructive">
           {error}
         </p>
       )}
@@ -238,7 +273,7 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
           живут обёртки событий. */}
       <div
         ref={canvasRef}
-        className={`sc-canvas rounded-lg border ${month ? 'sc-month' : 'sc-grid'}`}
+        className={`sc-canvas min-h-0 flex-1 overflow-auto ${month ? 'sc-month' : 'sc-grid'}`}
       >
         <Calendar
           controller={controller}
@@ -254,7 +289,7 @@ export function ScheduleCanvas({ schedule }: { schedule: Schedule }) {
           allDaySlot={false}
           nowIndicator
           expandRows
-          height="auto"
+          height="100%"
           slotDuration={{ minutes: 30 }}
           snapDuration={{ minutes: SNAP_MINUTES }}
           slotHeaderInterval={{ hours: 1 }}
