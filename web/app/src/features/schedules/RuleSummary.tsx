@@ -1,6 +1,6 @@
 import type { Schedule } from '../../entities/schedule'
 import { groupDays, NO_RULE, ruleGroups } from './weekly'
-import { SETTING_NAME } from './settingNames'
+import { SETTING_NAME, SETTINGS_TITLE } from './settingNames'
 
 // Левая полоса поверхности «Приём»: правило словами и параметры нарезки.
 //
@@ -44,7 +44,7 @@ export function RuleSummary({
       </div>
 
       <div>
-        <p className="font-semibold">Нарезка</p>
+        <p className="font-semibold">{SETTINGS_TITLE}</p>
         <dl className="mt-2 flex flex-col gap-1">
           <Row title={SETTING_NAME.slotMinutes} value={minutes(schedule.slotMinutes)} />
           {schedule.bufferMinutes > 0 && (

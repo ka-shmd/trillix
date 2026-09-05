@@ -15,6 +15,7 @@ import { CancelBookingDialog } from '../../features/schedules/CancelBookingDialo
 import { LazyRuleCanvas, LazyScheduleCanvas } from '../../features/schedules/lazyCanvas'
 import { RuleSummary } from '../../features/schedules/RuleSummary'
 import type { Surface } from '../../features/schedules/SurfaceTabs'
+import { SETTINGS_TITLE } from '../../features/schedules/settingNames'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { submissionQueryOptions } from '../../features/submissions/queries'
@@ -191,7 +192,7 @@ function SchedulePage() {
       <Sheet open={settings} onOpenChange={setSettings}>
         <SheetContent className="w-full overflow-y-auto sm:max-w-xl">
           <SheetHeader>
-            <SheetTitle>Параметры записи</SheetTitle>
+            <SheetTitle>{SETTINGS_TITLE}</SheetTitle>
             <SheetDescription>
               Как режется сетка времени и сколько человек помещается в один приём. Часы приёма
               правятся на полотне.

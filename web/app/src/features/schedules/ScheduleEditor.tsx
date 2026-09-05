@@ -7,7 +7,7 @@ import {
   type ScheduleInput,
 } from '../../entities/schedule'
 import { clampSeats } from './weekly'
-import { SETTING_NAME } from './settingNames'
+import { SETTING_NAME, SETTINGS_TITLE } from './settingNames'
 import { Section } from '../../shared/page/Section'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -58,7 +58,7 @@ export function ScheduleEditor({
   return (
     <div className="flex flex-col gap-6">
       <Section
-        title="Параметры записи"
+        title={SETTINGS_TITLE}
         description="Как режется сетка времени и сколько человек помещается в один приём."
       >
         <div className="grid gap-5 @2xl:grid-cols-2">
