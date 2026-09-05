@@ -118,7 +118,6 @@
   background: var(--card);
   border: 1px solid var(--border);
   border-left: 4px solid var(--border);
-  color: var(--foreground);
   /* Запись ДВИГАЕТСЯ мышью (перенос встречи), и курсор обязан это показывать. */
   cursor: grab;
   padding: 2px 6px;
@@ -130,7 +129,6 @@
     var(--card);
   border: 1px solid var(--border);
   border-left: 3px solid color-mix(in oklab, var(--foreground) 35%, transparent);
-  color: color-mix(in oklab, var(--foreground) 80%, transparent);
   cursor: grab;
   padding: 2px 6px;
 }
@@ -153,6 +151,22 @@
   align-items: baseline;
   display: flex;
   gap: 4px;
+}
+
+/* ⚠ ЦВЕТ ТЕКСТА ЗАДАЁТСЯ НА САМОМ ТЕКСТЕ, А НЕ НА КАРТОЧКЕ. Тема красит ВНУТРЕННЮЮ
+   обёртку события (`blockEventInnerClass`) своим контрастным цветом, а он выведен из
+   `--fc-classic-event-contrast` — у нас это `--primary-foreground`, то есть почти
+   белый. Элемент ближе к тексту побеждает наследование от карточки, поэтому `color`
+   на `.sc-booking` до строки не доходит: на светлой подложке тона выходил белый
+   текст по белому (отчёт владельца 2026-09-05).
+   Специфичности тут не хватило бы тоже — цвет темы приезжает переменной, заданной
+   инлайном на самом событии. */
+.sc-canvas .sc-booking .sc-ev-short {
+  color: var(--foreground);
+}
+
+.sc-canvas .sc-block .sc-ev-short {
+  color: color-mix(in oklab, var(--foreground) 80%, transparent);
 }
 
 /* Ось часов: числа мельче и приглушены, как в почтовом календаре, и прижаты к
