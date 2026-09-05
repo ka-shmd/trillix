@@ -240,3 +240,66 @@ export function shiftDate(date: string, days: number): string {
   const at = Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1) + days * 86_400_000
   return new Date(at).toISOString().slice(0, 10)
 }
+
+// ═══ ПОВЕРХНОСТЬ «ПРИЁМ»: НЕДЕЛЯ БЕЗ ДАТ ═══════════════════════════════════════
+//
+// Правило недельное, и правится оно на неделе, у которой дат нет: семь колонок
+// «Пн … Вс» (ADR §10). Библиотека же умеет показывать только настоящие даты,
+// поэтому неделя берётся ОПОРНАЯ — фиксированная и никогда не показываемая
+// числами.
+//
+// ⚠ МИНА: опорная неделя обязана лежать ВНЕ горизонта записи. Жест области
+// `weekly` снимает исключение со своей даты (canvasEdit, applyOne) — окажись
+// опорной настоящая неделя, правка правила молча стирала бы исключения тех дат,
+// которых автор в этот момент даже не видит. 2001 год недостижим: горизонт не
+// длиннее года вперёд, а исключения живут только внутри него.
+export const RULE_WEEK = '2001-01-01' // понедельник
+export const RULE_WEEK_DATES = dateKeys(RULE_WEEK, 7)
+
+// ruleSpans — окна недельного правила на опорной неделе. Исключения отброшены
+// нацело: поверхность «Приём» отвечает за обычную неделю, а «в этот день иначе»
+// живёт на датах и правится там же.
+export function ruleSpans(a: Availability): AvailabilitySpan[] {
+  return spansIn({ weekly: a.weekly, exceptions: [] }, RULE_WEEK_DATES)
+}
+
+// AXIS — границы оси обеих поверхностей: целые сутки (решение владельца
+// 2026-09-04). Ими же меряется прямоугольник подсказки (bandBox), поэтому
+// значение одно на все полотна: разъехавшись, они сдвинули бы подсказку
+// относительно сетки, по которой она рисуется.
+export const AXIS = { min: '00:00', max: '24:00' }
+
+// scrollStart — на каком часе открыть сетку: за час до самого раннего окна приёма.
+// Сутки видны целиком, но начинать разглядывать их с полуночи незачем — приёма там
+// нет ни у кого. Час запаса не красота: без него окно приёма прижато к верхнему краю,
+// и протянуть новое перед ним некуда.
+//
+// Считается по САМОМУ ПРАВИЛУ, а не по занятому времени: занятость приезжает
+// отдельным запросом, и полотно прыгало бы после её загрузки.
+export function scrollStart(a: Availability): string {
+  const clocks: number[] = []
+  for (const day of Object.values(a.weekly)) {
+    for (const w of day ?? []) {
+      const from = clockToMinutes(w.from)
+      if (from !== null) clocks.push(from)
+    }
+  }
+  for (const ex of a.exceptions) {
+    for (const w of ex.windows) {
+      const from = clockToMinutes(w.from)
+      if (from !== null) clocks.push(from)
+    }
+  }
+  // Пустое расписание открывается на утре рабочего дня, а не в полночь: полотно, на
+  // котором ещё ничего нет, должно открываться там, где приём заводят.
+  const min = clocks.length > 0 ? Math.min(...clocks) : 9 * 60
+  return minutesToClock(Math.max(0, Math.floor((min - 60) / 60) * 60))
+}
+
+// windowOf — пара отметок календаря в окно правила. Полночь СЛЕДУЮЩИХ суток — это
+// «24:00» конца окна, а не ноль: иначе окно до полуночи схлопывалось бы в нулевое.
+export function windowOf(startStr: string, endStr: string): TimeWindow {
+  const from = clockOfNaive(startStr)
+  const to = dateOfNaive(endStr) === dateOfNaive(startStr) ? clockOfNaive(endStr) : '24:00'
+  return { from, to }
+}

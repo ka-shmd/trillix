@@ -12,7 +12,9 @@ import {
 import { ScheduleEditor } from '../../features/schedules/ScheduleEditor'
 import { SchedulePanel } from '../../features/schedules/SchedulePanel'
 import { CancelBookingDialog } from '../../features/schedules/CancelBookingDialog'
-import { LazyScheduleCanvas } from '../../features/schedules/lazyCanvas'
+import { LazyRuleCanvas, LazyScheduleCanvas } from '../../features/schedules/lazyCanvas'
+import { RuleSummary } from '../../features/schedules/RuleSummary'
+import type { Surface } from '../../features/schedules/SurfaceTabs'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { submissionQueryOptions } from '../../features/submissions/queries'
@@ -77,6 +79,11 @@ function SchedulePage() {
   const update = useUpdateSchedule(scheduleId, workspaceId)
   const remove = useDeleteSchedule(scheduleId, workspaceId)
   const [settings, setSettings] = useState(false)
+  // ПОВЕРХНОСТЬ ЖИВЁТ НА СТРАНИЦЕ, а не в полотне: от неё зависят обе половины
+  // экрана — справа меняется само полотно, слева мини-календарь сменяется сводкой
+  // правила. Открывается страница на «Календаре»: часы приёма задают раз, а
+  // смотрят, кто придёт, каждый день.
+  const [surface, setSurface] = useState<Surface>('calendar')
   // Даты, которые сейчас показывает полотно, и дата, к которой его просят перейти.
   // Две разные вещи: первая приезжает ОТ полотна (оно решает, что показать), вторая
   // уходит К нему по клику в мини-календаре.
@@ -134,25 +141,35 @@ function SchedulePage() {
             сеткой требуют ширины, которой там нет, а сетка на телефоне и так
             открывается видом дня. */}
         <aside className="hidden w-64 shrink-0 overflow-y-auto border-r p-3 xl:block">
-          <SchedulePanel
-            schedule={schedule}
-            visible={visible}
-            onPick={setGoToDate}
-            onOpenSubmission={setOpenBooking}
-            onCancelBooking={setCancelling}
-          />
+          {surface === 'rule' ? (
+            <RuleSummary schedule={schedule} />
+          ) : (
+            <SchedulePanel
+              schedule={schedule}
+              visible={visible}
+              onPick={setGoToDate}
+              onOpenSubmission={setOpenBooking}
+              onCancelBooking={setCancelling}
+            />
+          )}
         </aside>
 
         <div className="min-w-0 flex-1">
           {/* onRange — СТАБИЛЬНАЯ функция (setState): полотно зовёт её эффектом, и
               стрелка, созданная тут же в разметке, устраивала бы цикл перерисовок. */}
-          <LazyScheduleCanvas
-            schedule={schedule}
-            goToDate={goToDate}
-            onRange={setVisible}
-            onOpenSubmission={setOpenBooking}
-            onCancelBooking={setCancelling}
-          />
+          {surface === 'rule' ? (
+            <LazyRuleCanvas schedule={schedule} surface={surface} onSurface={setSurface} />
+          ) : (
+            <LazyScheduleCanvas
+              schedule={schedule}
+              surface={surface}
+              onSurface={setSurface}
+              goToDate={goToDate}
+              onRange={setVisible}
+              onOpenSubmission={setOpenBooking}
+              onCancelBooking={setCancelling}
+            />
+          )}
         </div>
       </div>
 

@@ -14,13 +14,7 @@ import '@fullcalendar/react/skeleton.css'
 import '@fullcalendar/react/themes/classic/theme.css'
 import './canvas.css'
 
-import type {
-  Availability,
-  Booking,
-  Schedule,
-  ScheduleBlock,
-  ScheduleInput,
-} from '../../entities/schedule'
+import type { Booking, Schedule, ScheduleBlock, ScheduleInput } from '../../entities/schedule'
 import {
   calendarQueryOptions,
   useAddBlock,
@@ -30,21 +24,24 @@ import {
 import { Button } from '@/components/ui/button'
 import { humanError } from '../../shared/api/errors'
 import { LOCALE } from '../../shared/format'
+import { clearBand as clearBandEl, paintBand as paintBandEl } from './band'
 import {
+  AXIS,
   clockOfNaive,
   dateKeys,
   dateOfNaive,
-  bandBox,
   effectiveWindows,
+  scrollStart,
   selectionRect,
   shiftDate,
   spansIn,
   weekStart,
+  windowOf,
   type AvailabilitySpan,
 } from './canvas'
 import { applyGesture, docError, SNAP_MINUTES, type Gesture, type Scope } from './canvasEdit'
-import { clockToMinutes, minutesToClock } from './weekly'
 import { CanvasPopover, type Anchor, type DrawStep } from './CanvasPopover'
+import { SurfaceTabs, type Surface } from './SurfaceTabs'
 import { zonedParts, zonedToUTC } from './zone'
 
 // Полотно недели: часы приёма, исключения, занятое время и записи одним экраном.
@@ -59,12 +56,19 @@ import { zonedParts, zonedToUTC } from './zone'
 // (ADR §10). Именно ради именованных поясов взята седьмая ветка библиотеки.
 export function ScheduleCanvas({
   schedule,
+  surface,
+  onSurface,
   goToDate,
   onRange,
   onOpenSubmission,
   onCancelBooking,
 }: {
   schedule: Schedule
+  // Поверхность и её переключатель приезжают СО СТРАНИЦЫ: от выбора зависит не
+  // только полотно, но и левая полоса — там мини-календарь сменяется сводкой
+  // правила, — а значит решать это полотну не по чину.
+  surface: Surface
+  onSurface: (s: Surface) => void
   // goToDate — дата, выбранная снаружи (мини-календарь слева, строка ближайшей
   // записи). Полотно листает себя к ней и НЕ спорит с ней о виде: месяц остаётся
   // месяцем, неделя неделей — человек выбрал день, а не способ на него смотреть.
@@ -229,6 +233,11 @@ export function ScheduleCanvas({
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex flex-wrap items-center justify-between gap-2 border-b px-3 py-2">
         <div className="flex items-center gap-1">
+          {/* Переключатель поверхностей стоит ПЕРВЫМ и на обеих вкладках на одном
+              месте: орган управления, прыгающий под курсором от собственного
+              нажатия, — это второй орган управления. */}
+          <SurfaceTabs surface={surface} onSurface={onSurface} />
+          <span className="mx-2 h-5 w-px bg-border" aria-hidden />
           <Button
             variant="ghost"
             size="icon"
@@ -539,35 +548,13 @@ export function ScheduleCanvas({
     </div>
   )
 
-  // paintBand — переписать позицию подсказки под прямоугольник. Обёртки подсказки
-  // позиционируются inline (`top`/`height` в пикселях), поэтому переопределяет их
-  // правило с `!important`, читающее эти две переменные (canvas.css).
-  //
-  // Пиксели, а не проценты: колонка — это ровно ось часов, и её высота меряется по
-  // месту. Считать проценты от времени пришлось бы, зная, что колонка нигде не
-  // обрезана; замер честнее.
+  // Подсказка протяжки живёт в band.ts — её рисуют обе поверхности полотна.
   function paintBand(startStr: string, endStr: string) {
-    const el = canvasRef.current
-    if (!el) return
-    const rect = selectionRect(startStr, endStr)
-    const lane = el.querySelector('.sc-lane')
-    // Один день библиотека и так рисует верно — переписывать нечего.
-    if (!rect || rect.dates.length < 2 || !lane) {
-      clearBand()
-      return
-    }
-    const box = bandBox(rect.window, AXIS, lane.clientHeight)
-    if (!box) {
-      clearBand()
-      return
-    }
-    el.style.setProperty('--sc-band-top', `${box.top}px`)
-    el.style.setProperty('--sc-band-h', `${box.height}px`)
-    el.dataset.scBand = ''
+    paintBandEl(canvasRef.current, startStr, endStr)
   }
 
   function clearBand() {
-    delete canvasRef.current?.dataset.scBand
+    clearBandEl(canvasRef.current)
   }
 
   function moveBlock(block: ScheduleBlock, startStr: string, endStr: string) {
@@ -652,14 +639,6 @@ function eventClass(info: { event: { extendedProps: Record<string, unknown> } })
   return 'sc-ev sc-booking'
 }
 
-// windowOf — пара отметок календаря в окно правила. Полночь СЛЕДУЮЩИХ суток — это
-// «24:00» конца окна, а не ноль: иначе окно до полуночи схлопывалось бы в нулевое.
-function windowOf(startStr: string, endStr: string): { from: string; to: string } {
-  const from = clockOfNaive(startStr)
-  const to = dateOfNaive(endStr) === dateOfNaive(startStr) ? clockOfNaive(endStr) : '24:00'
-  return { from, to }
-}
-
 // endClock — «24:00» в отметку, которую понимает перевод в UTC.
 function endClock(to: string): string {
   return to === '24:00' ? '23:59' : to
@@ -740,38 +719,6 @@ const VIEWS = [
 ] as const
 
 type ViewName = (typeof VIEWS)[number]['name']
-
-// AXIS — границы оси: целые сутки. Ими же меряется прямоугольник подсказки
-// (bandBox), поэтому значение одно на весь файл: разъехавшись, они сдвинули бы
-// подсказку относительно сетки, по которой она рисуется.
-const AXIS = { min: '00:00', max: '24:00' }
-
-// scrollStart — на каком часе открыть сетку: за час до самого раннего окна приёма.
-// Сутки видны целиком, но начинать разглядывать их с полуночи незачем — приёма там
-// нет ни у кого. Час запаса не красота: без него окно приёма прижато к верхнему краю,
-// и протянуть новое перед ним некуда.
-//
-// Считается по САМОМУ ПРАВИЛУ, а не по занятому времени: занятость приезжает
-// отдельным запросом, и полотно прыгало бы после её загрузки.
-function scrollStart(a: Availability): string {
-  const clocks: number[] = []
-  for (const day of Object.values(a.weekly)) {
-    for (const w of day ?? []) {
-      const from = clockToMinutes(w.from)
-      if (from !== null) clocks.push(from)
-    }
-  }
-  for (const ex of a.exceptions) {
-    for (const w of ex.windows) {
-      const from = clockToMinutes(w.from)
-      if (from !== null) clocks.push(from)
-    }
-  }
-  // Пустое расписание открывается на утре рабочего дня, а не в полночь: полотно, на
-  // котором ещё ничего нет, должно открываться там, где приём заводят.
-  const min = clocks.length > 0 ? Math.min(...clocks) : 9 * 60
-  return minutesToClock(Math.max(0, Math.floor((min - 60) / 60) * 60))
-}
 
 // dateKeyOf — календарная дата момента В ПОЯСЕ РАСПИСАНИЯ: клетка месяца приходит
 // от библиотеки моментом, а «работаю ли я в этот день» спрашивается у правила,
