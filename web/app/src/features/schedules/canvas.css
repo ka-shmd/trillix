@@ -104,15 +104,23 @@
   height: 100%;
 }
 
-/* Запись — ПЛОТНАЯ заливка акцентом. Светлая карточка с полосой слева (как в новом
-   Outlook) здесь проверена и отвергнута: полоса приёма под записью того же цвета, и
-   бледная встреча на бледном фоне переставала читаться вовсе. Плотная заливка —
-   единственное, что отделяет «занято человеком» от «в это время принимаю». */
+/* Запись — ПОДЛОЖКА ТОНОМ ФОРМЫ И ПОЛОСА СЛЕВА, ровно как строка в списке ближайших
+   (решение владельца 2026-09-05). Плотная заливка акцентом, стоявшая здесь раньше,
+   отвечала на вопрос «занято человеком или идёт приём», но не на «чья это запись» —
+   а одно расписание обслуживает несколько форм, и на полотне они шли вперемешку
+   одним цветом.
+   Тон в заливку взять можно потому, что она НЕПРОЗРАЧНАЯ: смешивается с `--card`, а
+   не с тем, что под ней. Полоса приёма сквозь запись больше не просвечивает, и довод
+   против светлой карточки («бледная встреча на бледном фоне») снят вместе с
+   прозрачностью. Текст — обычный `--foreground`: светлота категориального набора
+   гуляет от 0.42 до 0.82, и белым по нему читалось бы не везде. */
 .sc-canvas .sc-booking {
-  background: var(--primary);
-  border: 1px solid color-mix(in oklab, var(--primary) 80%, var(--foreground));
-  color: var(--primary-foreground);
-  cursor: default;
+  background: var(--card);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--border);
+  color: var(--foreground);
+  /* Запись ДВИГАЕТСЯ мышью (перенос встречи), и курсор обязан это показывать. */
+  cursor: grab;
   padding: 2px 6px;
 }
 
@@ -390,37 +398,50 @@
   text-transform: none;
 }
 
-/* ЧЬЯ ЭТО ФОРМА — ПОЛОСКОЙ СЛЕВА, тем же тоном, что у строки в списке ближайших
-   (formColor.ts). В заливку тон не идёт намеренно: плотный акцент отделяет «занято
-   человеком» от «в это время принимаю» (решение владельца 2026-09-04), а светлота
-   категориального набора гуляет от 0.42 до 0.82 — текст читался бы не на всех
-   восьми. */
-.sc-canvas .sc-booking {
-  border-left-width: 4px;
-}
+/* ЧЬЯ ЭТО ФОРМА — ТОТ ЖЕ ТОН, ЧТО У СТРОКИ В СПИСКЕ БЛИЖАЙШИХ (`formColor.ts`):
+   подложка и полоса слева. Номер тона считает общая функция по id формы, поэтому
+   список и полотно не разъедутся; здесь остаётся только «номер → токен», и статикой
+   он быть обязан — цвет живёт классом, а не значением в данных.
 
+   Подложка мешается с `--card`, а не с прозрачностью: под записью лежит полоса
+   приёма, и полупрозрачный тон принял бы её цвет. */
 .sc-canvas .sc-tone-1 {
+  background: color-mix(in oklab, var(--chart-1) 14%, var(--card));
   border-left-color: var(--chart-1);
 }
+
 .sc-canvas .sc-tone-2 {
+  background: color-mix(in oklab, var(--chart-2) 14%, var(--card));
   border-left-color: var(--chart-2);
 }
+
 .sc-canvas .sc-tone-3 {
+  background: color-mix(in oklab, var(--chart-3) 14%, var(--card));
   border-left-color: var(--chart-3);
 }
+
 .sc-canvas .sc-tone-4 {
+  background: color-mix(in oklab, var(--chart-4) 14%, var(--card));
   border-left-color: var(--chart-4);
 }
+
 .sc-canvas .sc-tone-5 {
+  background: color-mix(in oklab, var(--chart-5) 14%, var(--card));
   border-left-color: var(--chart-5);
 }
+
 .sc-canvas .sc-tone-6 {
+  background: color-mix(in oklab, var(--chart-6) 14%, var(--card));
   border-left-color: var(--chart-6);
 }
+
 .sc-canvas .sc-tone-7 {
+  background: color-mix(in oklab, var(--chart-7) 14%, var(--card));
   border-left-color: var(--chart-7);
 }
+
 .sc-canvas .sc-tone-8 {
+  background: color-mix(in oklab, var(--chart-8) 14%, var(--card));
   border-left-color: var(--chart-8);
 }
 
