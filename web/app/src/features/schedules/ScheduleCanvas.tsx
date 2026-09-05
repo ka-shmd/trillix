@@ -61,7 +61,7 @@ import { clockToMinutes, minutesToClock } from './weekly'
 import { MoveBookingDialog } from './MoveBookingDialog'
 import { CanvasPopover, type Anchor } from './CanvasPopover'
 import { DayHeader } from './DayHeader'
-import { formTone } from './formColor'
+import { eventClass, type EventProps } from './eventClass'
 import { WindowPopover, type WindowAnchor } from './WindowPopover'
 import { SurfaceTabs, type Surface } from './SurfaceTabs'
 import { zonedParts, zonedToUTC } from './zone'
@@ -653,28 +653,6 @@ export function ScheduleCanvas({
   }
 }
 
-// EventProps — что полотно знает о своём событии. Слой обязателен: обработчики
-// приходят одни на все четыре, и различать их по виду события нечем.
-type EventProps =
-  | {
-      layer: 'availability'
-      date: string
-      window: TimeWindow
-      source: string
-      // editing — окно принадлежит дню, часы которого правят прямо сейчас. Лежит в
-      // самом событии, потому что вид красит `eventClass`, а до состояния экрана он
-      // не дотягивается.
-      editing: boolean
-    }
-  | { layer: 'block'; block: ScheduleBlock }
-  | { layer: 'booking'; booking: Booking }
-
-// ЧАСЫ ПРИЁМА — ФОНОВОЕ СОБЫТИЕ, а не обычное (ADR §10). Фоновое библиотека не даёт
-// ни двигать, ни тянуть, ни нажимать — ровно то, чем подложка и должна быть на этой
-// поверхности: правило правится на соседней вкладке.
-//
-// Исключение одно — день, часы которого правят прямо сейчас: на время режима его
-// окна возвращаются в обычные события и обретают ручки.
 function availabilityEvent(span: AvailabilitySpan, editing: boolean) {
   return {
     id: `av:${span.date}:${span.window.from}-${span.window.to}`,
@@ -715,30 +693,6 @@ function bookingEvent(booking: Booking) {
     durationEditable: false,
     extendedProps: { layer: 'booking', booking } satisfies EventProps,
   }
-}
-
-// eventClass — слой красится классом, а не цветом в данных: цвета живут в токенах
-// дизайн-системы, и второй набор в этом файле разъехался бы с ними.
-//
-// Строкой, а не списком: опция принимает одно имя класса (`ClassNameInput`), и массив
-// молча не доехал бы.
-function eventClass(info: { event: { extendedProps: Record<string, unknown> } }): string {
-  const props = info.event.extendedProps as EventProps | undefined
-  // ⚠ СОБЫТИЕ БЕЗ СЛОЯ — ЧУЖОЕ: мираж перетаскивания, который библиотека рисует сама.
-  // До правки оно проваливалось в ветку записи и вылезало на полотне синей кляксой
-  // (отчёт владельца 2026-09-04). Своего вида у чужого события быть не должно.
-  if (!props?.layer) return 'sc-ev sc-ghost'
-  if (props.layer === 'availability') {
-    const source = props.source === 'exception' ? 'sc-av-ex' : 'sc-av-weekly'
-    // Правимый день выделен и на самой полосе: режим, который виден только по
-    // открытому меню, автор забудет закрыть.
-    return `sc-ev sc-av ${source}${props.editing ? ' sc-av-edit' : ''}`
-  }
-  if (props.layer === 'block') return 'sc-ev sc-block'
-  // ЦВЕТ ЗАПИСИ — ЧЬЯ ЭТО ФОРМА, тем же набором и тем же способом, что в списке
-  // ближайших (formColor.ts): одно расписание обслуживает несколько форм, и на
-  // полотне они шли вперемешку одним цветом.
-  return `sc-ev sc-booking ${formTone(props.booking.formId)}`
 }
 
 // endClock — «24:00» в отметку, которую понимает перевод в UTC.
