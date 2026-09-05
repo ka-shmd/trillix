@@ -7,6 +7,7 @@ import {
   type ScheduleInput,
 } from '../../entities/schedule'
 import { clampSeats } from './weekly'
+import { SETTING_NAME } from './settingNames'
 import { Section } from '../../shared/page/Section'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -62,7 +63,7 @@ export function ScheduleEditor({
       >
         <div className="grid gap-5 @2xl:grid-cols-2">
           <Field
-            label="Название"
+            label={SETTING_NAME.name}
             hint="Называйте по тому, КТО принимает: «Мария — рисование».
             Появится второй мастер — сразу видно, что ему нужно своё расписание."
             error={nameError}
@@ -76,7 +77,7 @@ export function ScheduleEditor({
           </Field>
 
           <Field
-            label="Часовой пояс"
+            label={SETTING_NAME.timezone}
             hint="Часы приёма заданы в этом поясе. Респондент увидит время в своём."
           >
             <Select value={draft.timezone} onValueChange={(timezone) => patch({ timezone })}>
@@ -93,7 +94,7 @@ export function ScheduleEditor({
             </Select>
           </Field>
 
-          <Field label="Длительность приёма" hint="Минут на одну встречу.">
+          <Field label={SETTING_NAME.slotMinutes} hint="Минут на одну встречу.">
             <NumberInput
               value={draft.slotMinutes}
               min={1}
@@ -103,7 +104,7 @@ export function ScheduleEditor({
           </Field>
 
           <Field
-            label="Перерыв между приёмами"
+            label={SETTING_NAME.bufferMinutes}
             hint="Минут после встречи. Входит в шаг сетки, но не в саму встречу."
           >
             <NumberInput
@@ -115,7 +116,7 @@ export function ScheduleEditor({
           </Field>
 
           <Field
-            label="Горизонт записи"
+            label={SETTING_NAME.horizonDays}
             hint="На сколько дней вперёд открыта запись, считая сегодняшний."
           >
             <NumberInput
@@ -127,7 +128,7 @@ export function ScheduleEditor({
           </Field>
 
           <Field
-            label="Не записывать позже чем за"
+            label={SETTING_NAME.leadMinutes}
             hint="Минут до начала приёма. Два часа — это 120."
           >
             <NumberInput
@@ -138,7 +139,7 @@ export function ScheduleEditor({
           </Field>
 
           <Field
-            label="Мест в одном приёме"
+            label={SETTING_NAME.capacity}
             hint="Сколько человек помещается в одно время. Больше одного — это групповое занятие."
           >
             <NumberInput
@@ -163,7 +164,7 @@ export function ScheduleEditor({
               вовсе. */}
           {draft.capacity > 1 && (
             <Field
-              label="Мест в одной записи"
+              label={SETTING_NAME.maxSeatsPerBooking}
               hint="Сколько мест один человек может занять сразу — «приду с двумя детьми»."
               error={seatsError}
             >

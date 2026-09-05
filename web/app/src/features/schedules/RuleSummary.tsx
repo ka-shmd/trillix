@@ -1,5 +1,6 @@
 import type { Schedule } from '../../entities/schedule'
 import { groupDays, NO_RULE, ruleGroups } from './weekly'
+import { SETTING_NAME } from './settingNames'
 
 // Левая полоса поверхности «Приём»: правило словами и параметры нарезки.
 //
@@ -7,7 +8,20 @@ import { groupDays, NO_RULE, ruleGroups } from './weekly'
 // правила дат не бывает. Место освободилось, и занимает его то, чего на полотне не
 // прочесть глазом: сколько длится приём, на сколько вперёд открыта запись и за какой
 // срок до встречи записаться уже нельзя.
-export function RuleSummary({ schedule }: { schedule: Schedule }) {
+//
+// Подписи нарезки берутся из `settingNames.ts` — оттуда же, откуда их берёт шторка
+// «Параметры», которая этими значениями и управляет. Своих строк здесь быть не
+// должно: почему — сказано у самой константы.
+export function RuleSummary({
+  schedule,
+  onOpenSettings,
+}: {
+  schedule: Schedule
+  // Блок мёртвый — он только показывает. На вкладке, где всё остальное меняется
+  // мышью, это обязано быть сказано вслух, иначе сводка читается как ещё одно место
+  // для правки.
+  onOpenSettings: () => void
+}) {
   const groups = ruleGroups(schedule.availability)
   const exceptions = schedule.availability.exceptions.length
 
@@ -32,16 +46,25 @@ export function RuleSummary({ schedule }: { schedule: Schedule }) {
       <div>
         <p className="font-semibold">Нарезка</p>
         <dl className="mt-2 flex flex-col gap-1">
-          <Row title="Приём" value={minutes(schedule.slotMinutes)} />
+          <Row title={SETTING_NAME.slotMinutes} value={minutes(schedule.slotMinutes)} />
           {schedule.bufferMinutes > 0 && (
-            <Row title="Перерыв" value={minutes(schedule.bufferMinutes)} />
+            <Row title={SETTING_NAME.bufferMinutes} value={minutes(schedule.bufferMinutes)} />
           )}
-          <Row title="Горизонт" value={days(schedule.horizonDays)} />
+          <Row title={SETTING_NAME.horizonDays} value={days(schedule.horizonDays)} />
           {schedule.leadMinutes > 0 && (
-            <Row title="Не позже чем за" value={minutes(schedule.leadMinutes)} />
+            <Row title={SETTING_NAME.leadMinutes} value={minutes(schedule.leadMinutes)} />
           )}
-          {schedule.capacity > 1 && <Row title="Мест в приёме" value={String(schedule.capacity)} />}
+          {schedule.capacity > 1 && (
+            <Row title={SETTING_NAME.capacity} value={String(schedule.capacity)} />
+          )}
         </dl>
+        <button
+          type="button"
+          className="mt-2 text-sm text-primary underline-offset-4 hover:underline"
+          onClick={onOpenSettings}
+        >
+          Изменить в параметрах
+        </button>
       </div>
 
       {/* МОСТ МЕЖДУ ПОВЕРХНОСТЯМИ. Исключения правятся на датах, и автор, стоящий на
@@ -57,11 +80,15 @@ export function RuleSummary({ schedule }: { schedule: Schedule }) {
   )
 }
 
+// Row — подпись слева, значение справа. Подписи здесь длинные (они из шторки, и
+// сокращать их нельзя), а полоса узкая: подпись обязана переноситься, значение —
+// нет. `items-baseline` держит значение на первой строке подписи, а не по центру
+// двухстрочной.
 function Row({ title, value }: { title: string; value: string }) {
   return (
-    <div className="flex justify-between gap-2">
-      <dt className="text-muted-foreground">{title}</dt>
-      <dd className="text-right tabular-nums">{value}</dd>
+    <div className="flex items-baseline justify-between gap-2">
+      <dt className="min-w-0 text-muted-foreground">{title}</dt>
+      <dd className="shrink-0 tabular-nums">{value}</dd>
     </div>
   )
 }

@@ -142,7 +142,7 @@ function SchedulePage() {
             открывается видом дня. */}
         <aside className="hidden w-64 shrink-0 overflow-y-auto border-r p-3 xl:block">
           {surface === 'rule' ? (
-            <RuleSummary schedule={schedule} />
+            <RuleSummary schedule={schedule} onOpenSettings={() => setSettings(true)} />
           ) : (
             <SchedulePanel
               schedule={schedule}
