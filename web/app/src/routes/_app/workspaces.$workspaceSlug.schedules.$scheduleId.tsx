@@ -22,6 +22,7 @@ import { formDetailQueryOptions } from '../../features/forms/queries'
 import { submissionQueryOptions } from '../../features/submissions/queries'
 import { SubmissionPanel } from '../../features/submissions/SubmissionPanel'
 import { answerColumns } from '../../features/submissions/columns'
+import { formatAnswer } from '../../features/submissions/answerFormat'
 import { listRow } from '../../features/submissions/rows'
 import { type Booking } from '../../entities/schedule'
 import { humanError } from '../../shared/api/errors'
@@ -188,10 +189,6 @@ function SchedulePage() {
         booking={card}
         timezone={schedule.timezone}
         onClose={() => setCard(null)}
-        onOpenSubmission={(b) => {
-          setCard(null)
-          setOpenBooking(b)
-        }}
         onCancel={(b) => {
           setCard(null)
           setCancelling(b)
@@ -296,13 +293,11 @@ function BookingCardDialog({
   booking,
   timezone,
   onClose,
-  onOpenSubmission,
   onCancel,
 }: {
   booking: Booking | null
   timezone: string
   onClose: () => void
-  onOpenSubmission: (booking: Booking) => void
   onCancel: (booking: Booking) => void
 }) {
   const submissionId = booking?.submissionId ?? ''
@@ -315,21 +310,33 @@ function BookingCardDialog({
     enabled: booking !== null && submissionId !== '',
   })
 
-  const answers = one.data?.submission.answers ?? {}
-  const people = answerColumns(form.data?.draftSchema.blocks ?? [])
+  const values = one.data?.submission.answers ?? {}
+  const files = one.data?.files ?? {}
+  const columns = answerColumns(form.data?.draftSchema.blocks ?? [])
+
+  const people = columns
     .filter((c) => c.block.type === 'email')
-    .map((c) => ({ label: c.label, value: answers[c.block.id] }))
+    .map((c) => ({ label: c.label, value: values[c.block.id] }))
     .filter(
       (p): p is { label: string; value: string } => typeof p.value === 'string' && p.value !== '',
     )
+
+  // Остальные ответы — В ПОРЯДКЕ ВОПРОСОВ ФОРМЫ и теми же подписями и значениями,
+  // что в таблице ответов (`answerColumns`, `formatAnswer`): id опций, согласие и
+  // время записи иначе показались бы сырыми. Почта исключена — она уже стоит выше
+  // участниками, и один и тот же адрес дважды в маленьком окне читается как сбой.
+  const answers = columns
+    .filter((c) => c.block.type !== 'email')
+    .map((c) => ({ label: c.label, value: formatAnswer(c.block, values[c.block.id], files) }))
+    .filter((a) => a.value !== '')
 
   return (
     <BookingDetails
       booking={booking}
       timezone={timezone}
       people={people}
+      answers={answers}
       loading={form.isPending || one.isPending}
-      onOpenSubmission={onOpenSubmission}
       onCancel={onCancel}
       onClose={onClose}
     />

@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { Mail } from 'lucide-react'
 
 import type { Booking } from '../../entities/schedule'
@@ -28,8 +29,8 @@ export function BookingDetails({
   booking,
   timezone,
   people,
+  answers,
   loading,
-  onOpenSubmission,
   onCancel,
   onClose,
 }: {
@@ -38,11 +39,17 @@ export function BookingDetails({
   // people — что человек указал о себе: подпись вопроса и ответ. Обычно один адрес;
   // форма, спрашивающая почту дважды, честно покажет оба.
   people: { label: string; value: string }[]
+  // answers — ОСТАЛЬНЫЕ ответы этой анкеты, в порядке вопросов формы. Вопросы про
+  // почту сюда не попадают: они уже стоят выше участниками, и один и тот же адрес
+  // дважды в маленьком окне читается как сбой.
+  answers: { label: string; value: string }[]
   loading: boolean
-  onOpenSubmission: (booking: Booking) => void
   onCancel: (booking: Booking) => void
   onClose: () => void
 }) {
+  // Сколько ответов раскрыто. Состояние живёт здесь, а не снаружи: оно про этот
+  // экран и переживать закрытие окна не должно.
+  const [expanded, setExpanded] = useState(false)
   return (
     <Dialog open={booking !== null} onOpenChange={(open) => !open && onClose()}>
       <DialogContent className="sm:max-w-lg">
@@ -92,14 +99,42 @@ export function BookingDetails({
               )}
             </div>
 
-            <DialogFooter className="sm:justify-between">
-              {booking.submissionId ? (
-                <Button variant="ghost" onClick={() => onOpenSubmission(booking)}>
-                  Открыть ответ
-                </Button>
-              ) : (
-                <span />
-              )}
+            {/* ОТВЕТЫ АНКЕТЫ ПРЯМО ЗДЕСЬ, в рамке: карточка отвечает «кто придёт», а
+                это и есть то, что человек о себе написал. Сначала несколько первых —
+                окно не должно расти на форму в двадцать вопросов; остальные
+                раскрываются на месте, не уводя автора с карточки. */}
+            {booking.submissionId !== null && (loading || answers.length > 0) && (
+              <div className="rounded-md border p-3">
+                {loading ? (
+                  <Skeleton className="h-16 w-full" />
+                ) : (
+                  <>
+                    <dl className="flex flex-col gap-2">
+                      {(expanded ? answers : answers.slice(0, PREVIEW)).map((a) => (
+                        <div key={a.label} className="flex flex-col gap-0.5">
+                          <dt className="text-xs text-muted-foreground">{a.label}</dt>
+                          <dd className="text-sm break-words whitespace-pre-wrap">
+                            {a.value || '—'}
+                          </dd>
+                        </div>
+                      ))}
+                    </dl>
+                    {answers.length > PREVIEW && (
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        className="mt-2 px-0"
+                        onClick={() => setExpanded((v) => !v)}
+                      >
+                        {expanded ? 'Свернуть' : `Показать ещё ${answers.length - PREVIEW}`}
+                      </Button>
+                    )}
+                  </>
+                )}
+              </div>
+            )}
+
+            <DialogFooter>
               {/* Отмена спрашивается СВОИМ диалогом, общим со списком ближайших: вопрос,
                   перечень последствий и мутация обязаны быть одни. Это окно перед ним
                   закрывается — два окна подряд на одно действие читаются как два
@@ -114,6 +149,10 @@ export function BookingDetails({
     </Dialog>
   )
 }
+
+// PREVIEW — сколько ответов видно до раскрытия. Три: окно должно оставаться
+// карточкой встречи, а не превращаться в анкету целиком.
+const PREVIEW = 3
 
 // when — «16 сентября, 11:00 — 12:00» в поясе РАСПИСАНИЯ: прочитай его поясом
 // браузера, и автор в поездке увидел бы чужие числа на собственной встрече.
