@@ -14,7 +14,14 @@ import '@fullcalendar/react/skeleton.css'
 import '@fullcalendar/react/themes/classic/theme.css'
 import './canvas.css'
 
-import type { Booking, Schedule, ScheduleBlock, ScheduleInput } from '../../entities/schedule'
+import type {
+  Availability,
+  Booking,
+  Schedule,
+  ScheduleBlock,
+  ScheduleInput,
+  TimeWindow,
+} from '../../entities/schedule'
 import {
   calendarQueryOptions,
   useAddBlock,
@@ -28,6 +35,7 @@ import { clearBand as clearBandEl, paintBand as paintBandEl } from './band'
 import {
   AXIS,
   clockOfNaive,
+  dateByNumber,
   dateKeys,
   dateOfNaive,
   effectiveWindows,
@@ -39,8 +47,19 @@ import {
   windowOf,
   type AvailabilitySpan,
 } from './canvas'
-import { applyGesture, docError, SNAP_MINUTES, type Gesture, type Scope } from './canvasEdit'
-import { CanvasPopover, type Anchor, type DrawStep } from './CanvasPopover'
+import {
+  applyGesture,
+  closeDay,
+  dayState,
+  docError,
+  resetDay,
+  SNAP_MINUTES,
+  type Gesture,
+} from './canvasEdit'
+import { CanvasPopover, type Anchor } from './CanvasPopover'
+import { DayHeader } from './DayHeader'
+import { formTone } from './formColor'
+import { WindowPopover, type WindowAnchor } from './WindowPopover'
 import { SurfaceTabs, type Surface } from './SurfaceTabs'
 import { zonedParts, zonedToUTC } from './zone'
 
@@ -97,9 +116,15 @@ export function ScheduleCanvas({
     narrowScreen() ? 'timeGridDay' : 'timeGridWeek',
   )
   const [anchor, setAnchor] = useState<Anchor | null>(null)
+  // Окно приёма спрашивается ОТДЕЛЬНЫМ попапом: тот же вопрос задаёт поверхность
+  // «Приём», и два его экземпляра были бы двумя обещаниями на одно действие.
+  const [windowAnchor, setWindowAnchor] = useState<WindowAnchor | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Документ ДО жеста: чип переключает область действия пересчётом от него.
-  const beforeGesture = useRef<Schedule | null>(null)
+  // ДЕНЬ, У КОТОРОГО ПРАВЯТ ЧАСЫ. Пока он назван, его подложка перестаёт быть
+  // подложкой: окна этого дня становятся обычными событиями, их можно тянуть и
+  // убирать, а протяжка по его колонке заводит приём, а не занятость. Остальные дни
+  // в это время живут как обычно.
+  const [editingDay, setEditingDay] = useState<string | null>(null)
   // Контейнер нужен ИМПЕРАТИВНО: подсказка перерисовывается на каждое движение мыши,
   // и гонять через состояние React перерисовку всего полотна на каждый кадр —
   // заведомо рвано.
@@ -139,11 +164,15 @@ export function ScheduleCanvas({
     () => [
       // В месяце полос приёма нет: тридцать полос превратили бы клетки в кашу, а
       // «работаю — не работаю» там показывает приглушённый день (dayCellClass).
-      ...(month ? [] : spansIn(schedule.availability, dates).map(availabilityEvent)),
+      ...(month
+        ? []
+        : spansIn(schedule.availability, dates).map((span) =>
+            availabilityEvent(span, span.date === editingDay),
+          )),
       ...(busy.data?.blocks ?? []).map(blockEvent),
       ...(busy.data?.bookings ?? []).map(bookingEvent),
     ],
-    [schedule.availability, dates, busy.data, month],
+    [schedule.availability, dates, busy.data, month, editingDay],
   )
 
   // Дни видимого отрезка, в которые приём вообще ведётся, — месяцу.
@@ -161,69 +190,47 @@ export function ScheduleCanvas({
   // saveAvailability — правка правила уходит на сервер СРАЗУ: полотно живёт по
   // законам календаря, а не формы с кнопкой «Сохранить». Параметры записи ниже по
   // странице сохраняются по-прежнему своей кнопкой — они не жест, а настройка.
-  function saveAvailability(next: Schedule, onDone?: () => void) {
-    const bad = docError(next.availability)
+  function saveAvailability(next: Availability) {
+    const bad = docError(next)
     if (bad) {
       setError(bad)
       return
     }
     setError(null)
-    update.mutate(toInput(next), {
-      onError: (e) => setError(humanError(e)),
-      onSuccess: () => onDone?.(),
-    })
+    update.mutate(toInput(schedule, next), { onError: (e) => setError(humanError(e)) })
   }
 
-  // runGesture — жест ПЕРЕТАСКИВАНИЯ: применить областью по умолчанию и предложить
-  // вторую чипом. Умолчание — «каждый вторник»: правило описывает обычную неделю, и
-  // чаще правят именно его; исключение — это «в этот раз иначе», случай более редкий.
-  //
-  // ⚠ У ПРОТЯЖКИ ПО ПУСТОМУ МЕСТУ УМОЛЧАНИЯ НЕТ ВОВСЕ (см. select ниже). Разница не в
-  // осторожности, а в том, что там неизвестен сам слой: перетаскивая окно приёма,
-  // автор двигает уже названное время, и угадывать нечего.
-  function runGesture(gesture: Gesture, at: { x: number; y: number }, dates: string[]) {
-    beforeGesture.current = schedule
-    const next = withAvailability(schedule, applyGesture(schedule.availability, gesture, 'weekly'))
-    saveAvailability(next)
-    setAnchor({ kind: 'scope', x: at.x, y: at.y, dates, gesture, scope: 'weekly' })
+  // applyDay — жест в режиме правки часов одного дня. Область всегда `date`: на
+  // этой поверхности правят КОНКРЕТНОЕ число, а «пусть так будет всегда» живёт на
+  // соседней вкладке и правится там же.
+  function applyDay(gesture: Gesture) {
+    saveAvailability(applyGesture(schedule.availability, gesture, 'date'))
   }
 
-  // closePopover — закрыть попап И снять выделение. Одной функцией, потому что это
-  // один момент: пока попап открыт, подсказка показывает, о чём его спрашивают.
+  // closePopover — закрыть попап И снять выделение.
   function closePopover() {
     calendarRef.current?.unselect()
     clearBand()
     setAnchor(null)
   }
 
-  // switchScope — пересчёт ОТ ИСХОДНОГО документа, а не отмена применённого: щёлкать
-  // чип можно сколько угодно, состояние не накапливается. Это же и ПЕРВОЕ применение
-  // свежей протяжки: до ответа на чип её в документе нет, и «переключить» с пустого
-  // места — та же самая операция.
-  function switchScope(gesture: Gesture, scope: Scope) {
-    const before = beforeGesture.current ?? schedule
-    saveAvailability(withAvailability(before, applyGesture(before.availability, gesture, scope)))
-    setAnchor((a) => (a && (a.kind === 'scope' || a.kind === 'draw') ? { ...a, scope } : a))
-  }
-
-  // closeTime — второй ответ на «что это за время»: размечена не работа, а занятость.
-  // Правило не трогается вовсе — восстанавливать нечего, потому что до ответа жест не
-  // применялся.
-  function closeTime(gesture: Extract<Gesture, { kind: 'create' }>) {
+  // closeTime — ЕДИНСТВЕННЫЙ смысл протяжки по датированной неделе: это время
+  // занято. Слой здесь известен по построению — часы приёма стали подложкой, и
+  // нарисовать их этим жестом нельзя (ADR §10).
+  function closeTime(rect: { dates: string[]; window: TimeWindow }) {
     // По блокировке на каждый задетый день: занятое время — точки на оси, и одной
     // строкой «со вторника по четверг» они не выражаются (иначе закрытой оказалась бы
     // и ночь между днями).
-    for (const date of gesture.dates) {
+    for (const date of rect.dates) {
       addBlock.mutate(
         {
-          startsAt: zonedToUTC(date, gesture.window.from, schedule.timezone),
-          endsAt: zonedToUTC(date, endClock(gesture.window.to), schedule.timezone),
+          startsAt: zonedToUTC(date, rect.window.from, schedule.timezone),
+          endsAt: zonedToUTC(date, endClock(rect.window.to), schedule.timezone),
           note: '',
         },
         { onError: (e) => setError(humanError(e)) },
       )
     }
-    closePopover()
   }
 
   return (
@@ -371,19 +378,45 @@ export function ScheduleCanvas({
               {info.text}
             </span>
           )}
-          dayHeaderContent={(info) =>
+          dayHeaderContent={(info) => {
             // В ОКНЕ «ещё N» шапка — заголовок окна, а не колонка недели: нужна
             // полная дата, а наша разметка колонки дала бы там одинокое число без
             // месяца (имя дня в этом месте библиотека не считает).
-            info.inPopover ? (
-              <span className="sc-pop-title">{info.text}</span>
-            ) : (
-              <span className={`sc-day-head${info.isToday ? ' sc-day-today' : ''}`}>
-                <span className="sc-day-name">{info.weekdayText}</span>
-                <span className="sc-day-num">{info.dayNumberText}</span>
-              </span>
+            if (info.inPopover) return <span className="sc-pop-title">{info.text}</span>
+            // В МЕСЯЦЕ шапка называет день недели, а не дату: колонок семь, а клеток
+            // тридцать, и меню исключений вешать не на что.
+            if (month) {
+              return (
+                <span className="sc-day-head">
+                  <span className="sc-day-name">{info.weekdayText}</span>
+                </span>
+              )
+            }
+            // ⚠ ДАТА КОЛОНКИ — ПО ЧИСЛУ В ЕЁ ШАПКЕ, а не по `info.date`. У Date
+            // библиотеки в именованном поясе двойное прочтение: это может быть и
+            // настоящий момент начала суток, и «маркер», у которого UTC-поля хранят
+            // местное время. Два прочтения расходятся на сутки при ОТРИЦАТЕЛЬНОМ
+            // смещении пояса, и «не принимаю в этот день» закрыло бы соседний.
+            // Число же однозначно: в видимом отрезке (семь дней или один) оно
+            // встречается ровно раз.
+            const date = dateByNumber(dates, info.dayNumberText)
+            if (!date) return null
+            return (
+              <DayHeader
+                name={info.weekdayText}
+                number={info.dayNumberText}
+                today={info.isToday}
+                state={dayState(schedule.availability, date)}
+                editing={editingDay === date}
+                onCloseDay={() => saveAvailability(closeDay(schedule.availability, date))}
+                onEditHours={() => setEditingDay((d) => (d === date ? null : date))}
+                onResetDay={() => {
+                  saveAvailability(resetDay(schedule.availability, date))
+                  setEditingDay((d) => (d === date ? null : d))
+                }}
+              />
             )
-          }
+          }}
           // В МЕСЯЦЕ полос приёма нет — там их было бы тридцать штук, и клетка
           // превратилась бы в кашу. Вместо них приглушается день, в который приёма
           // нет вовсе: «работаю — не работаю» иначе не видно ничем.
@@ -445,34 +478,31 @@ export function ScheduleCanvas({
           events={events}
           eventClass={eventClass}
           select={(info) => {
+            calendarRef.current = info.view.calendar
             // Протяжка на соседнюю колонку — ПРЯМОУГОЛЬНИК: те же часы на каждом
             // задетом дне, а не непрерывный отрезок «остаток вторника плюс начало
             // среды» (canvas.ts, selectionRect).
-            // ⚠ ВЫДЕЛЕНИЕ СНИМАЕТСЯ СРАЗУ. Иначе библиотека оставляет на полотне свой
-            // мираж — непрерывный отрезок «остаток понедельника, вторник целиком, среда
-            // до 19:00», — и он остаётся висеть поверх созданных окон, показывая ровно
-            // то, чего мы не делали.
-            // ⚠ ВЫДЕЛЕНИЕ ОСТАЁТСЯ НА ПОЛОТНЕ, пока попап спрашивает: это предмет
-            // вопроса, и без него «что это за время?» задаётся про пустое место.
-            // Снимает его closePopover. Прямоугольником оно остаётся само —
-            // `data-sc-band` выставлен последним кадром протяжки и до закрытия не
-            // сбрасывается.
-            calendarRef.current = info.view.calendar
             const rect = selectionRect(info.startStr, info.endStr)
+            info.view.calendar.unselect()
+            clearBand()
             if (!rect) return
-            // ⚠ ЖЕСТ ЗАПОМИНАЕТСЯ, НО НЕ ПРИМЕНЯЕТСЯ. Полотно не знает, что за время
-            // размечено: приём и занятость рисуются одним движением мыши, и выбрать
-            // за автора приём значит время от времени молча открывать запись там, где
-            // человек занят. Сначала вопрос — что это за время, потом вопрос об
-            // объёме, и только потом правка.
-            beforeGesture.current = schedule
-            setAnchor({
-              kind: 'draw',
-              ...pointOf(info.jsEvent),
-              gesture: { kind: 'create', ...rect },
-              step: 'what',
-              scope: null,
-            })
+            // ЖЕСТ ПРИМЕНЯЕТСЯ СРАЗУ И БЕЗ ВОПРОСОВ: что за время размечено, здесь
+            // известно по построению. Обычно это занятость — часы приёма на этой
+            // поверхности подложка, и нарисовать их нельзя; исключение одно —
+            // колонка дня, часы которого правят прямо сейчас.
+            if (editingDay && rect.dates.length === 1 && rect.dates[0] === editingDay) {
+              applyDay({ kind: 'create', dates: rect.dates, window: rect.window })
+              return
+            }
+            closeTime(rect)
+          }}
+          // eventAllow — окно приёма не уходит из своей колонки. Перетащить его на
+          // соседний день значило бы «в среду принимаю как во вторник», а это правка
+          // ПРАВИЛА, и живёт она на поверхности «Приём».
+          eventAllow={(drop, event) => {
+            const props = event?.extendedProps as EventProps | undefined
+            if (props?.layer !== 'availability') return true
+            return dateOfNaive(drop.startStr) === props.date
           }}
           eventDrop={(info) => {
             const props = info.event.extendedProps as EventProps
@@ -480,14 +510,15 @@ export function ScheduleCanvas({
               moveBlock(props.block, info.event.startStr, info.event.endStr)
               return
             }
+            // Окна приёма двигаются только в режиме правки дня: в остальное время
+            // они подложка, и библиотека сюда не доводит.
             if (props.layer !== 'availability' || !info.event.startStr) return
-            const date = dateOfNaive(info.event.startStr)
-            const win = windowOf(info.event.startStr, info.event.endStr)
-            const gesture: Gesture =
-              date === props.date
-                ? { kind: 'update', date, orig: props.window, window: win }
-                : { kind: 'move', fromDate: props.date, orig: props.window, date, window: win }
-            runGesture(gesture, pointOf(info.jsEvent), [date])
+            applyDay({
+              kind: 'update',
+              date: props.date,
+              orig: props.window,
+              window: windowOf(info.event.startStr, info.event.endStr),
+            })
           }}
           eventResize={(info) => {
             const props = info.event.extendedProps as EventProps
@@ -496,22 +527,18 @@ export function ScheduleCanvas({
               return
             }
             if (props.layer !== 'availability') return
-            runGesture(
-              {
-                kind: 'update',
-                date: props.date,
-                orig: props.window,
-                window: windowOf(info.event.startStr, info.event.endStr),
-              },
-              pointOf(info.jsEvent),
-              [props.date],
-            )
+            applyDay({
+              kind: 'update',
+              date: props.date,
+              orig: props.window,
+              window: windowOf(info.event.startStr, info.event.endStr),
+            })
           }}
           eventClick={(info) => {
             const props = info.event.extendedProps as EventProps
             const at = pointOf(info.jsEvent)
             if (props.layer === 'availability') {
-              setAnchor({ ...at, kind: 'window', date: props.date, window: props.window })
+              setWindowAnchor({ ...at, date: props.date, window: props.window })
             } else if (props.layer === 'block') {
               setAnchor({ ...at, kind: 'block', block: props.block })
             } else {
@@ -521,23 +548,20 @@ export function ScheduleCanvas({
         />
       </div>
 
+      <WindowPopover
+        anchor={windowAnchor}
+        title="Убрать приём в этот день"
+        onClose={() => setWindowAnchor(null)}
+        onRemove={(date, w) => {
+          applyDay({ kind: 'remove', date, orig: w })
+          setWindowAnchor(null)
+        }}
+      />
+
       <CanvasPopover
         anchor={anchor}
         schedule={schedule}
         onClose={closePopover}
-        onDrawStep={(step: DrawStep) =>
-          setAnchor((a) => (a && a.kind === 'draw' ? { ...a, step } : a))
-        }
-        onScope={switchScope}
-        onCloseTime={closeTime}
-        onRemoveWindow={(date, w, scope) => {
-          beforeGesture.current = schedule
-          const gesture: Gesture = { kind: 'remove', date, orig: w }
-          saveAvailability(
-            withAvailability(schedule, applyGesture(schedule.availability, gesture, scope)),
-          )
-          closePopover()
-        }}
         onOpenSubmission={onOpenSubmission}
         onCancelBooking={onCancelBooking}
         onRemoveBlock={(id) => {
@@ -578,21 +602,37 @@ export function ScheduleCanvas({
 // EventProps — что полотно знает о своём событии. Слой обязателен: обработчики
 // приходят одни на все четыре, и различать их по виду события нечем.
 type EventProps =
-  | { layer: 'availability'; date: string; window: { from: string; to: string }; source: string }
+  | {
+      layer: 'availability'
+      date: string
+      window: TimeWindow
+      source: string
+      // editing — окно принадлежит дню, часы которого правят прямо сейчас. Лежит в
+      // самом событии, потому что вид красит `eventClass`, а до состояния экрана он
+      // не дотягивается.
+      editing: boolean
+    }
   | { layer: 'block'; block: ScheduleBlock }
   | { layer: 'booking'; booking: Booking }
 
-function availabilityEvent(span: AvailabilitySpan) {
+// ЧАСЫ ПРИЁМА — ФОНОВОЕ СОБЫТИЕ, а не обычное (ADR §10). Фоновое библиотека не даёт
+// ни двигать, ни тянуть, ни нажимать — ровно то, чем подложка и должна быть на этой
+// поверхности: правило правится на соседней вкладке.
+//
+// Исключение одно — день, часы которого правят прямо сейчас: на время режима его
+// окна возвращаются в обычные события и обретают ручки.
+function availabilityEvent(span: AvailabilitySpan, editing: boolean) {
   return {
     id: `av:${span.date}:${span.window.from}-${span.window.to}`,
     start: span.start,
     end: span.end,
-    display: 'auto',
+    display: editing ? 'auto' : 'background',
     extendedProps: {
       layer: 'availability',
       date: span.date,
       window: span.window,
       source: span.source,
+      editing,
     } satisfies EventProps,
   }
 }
@@ -633,10 +673,16 @@ function eventClass(info: { event: { extendedProps: Record<string, unknown> } })
   // (отчёт владельца 2026-09-04). Своего вида у чужого события быть не должно.
   if (!props?.layer) return 'sc-ev sc-ghost'
   if (props.layer === 'availability') {
-    return `sc-ev sc-av ${props.source === 'exception' ? 'sc-av-ex' : 'sc-av-weekly'}`
+    const source = props.source === 'exception' ? 'sc-av-ex' : 'sc-av-weekly'
+    // Правимый день выделен и на самой полосе: режим, который виден только по
+    // открытому меню, автор забудет закрыть.
+    return `sc-ev sc-av ${source}${props.editing ? ' sc-av-edit' : ''}`
   }
   if (props.layer === 'block') return 'sc-ev sc-block'
-  return 'sc-ev sc-booking'
+  // ЦВЕТ ЗАПИСИ — ЧЬЯ ЭТО ФОРМА, тем же набором и тем же способом, что в списке
+  // ближайших (formColor.ts): одно расписание обслуживает несколько форм, и на
+  // полотне они шли вперемешку одним цветом.
+  return `sc-ev sc-booking ${formTone(props.booking.formId)}`
 }
 
 // endClock — «24:00» в отметку, которую понимает перевод в UTC.
@@ -648,18 +694,14 @@ function pointOf(e: MouseEvent | null): { x: number; y: number } {
   return { x: e?.clientX ?? 0, y: e?.clientY ?? 0 }
 }
 
-function withAvailability(s: Schedule, availability: Schedule['availability']): Schedule {
-  return { ...s, availability }
-}
-
 // toInput — расписание в тело PATCH. Перечислением, а не выбрасыванием служебных
 // полей: новое поле обязано попасть сюда осознанно, иначе правка полотна молча
 // сбрасывала бы его к прежнему значению.
-function toInput(s: Schedule): ScheduleInput {
+function toInput(s: Schedule, availability: Availability): ScheduleInput {
   return {
     name: s.name,
     timezone: s.timezone,
-    availability: s.availability,
+    availability,
     slotMinutes: s.slotMinutes,
     bufferMinutes: s.bufferMinutes,
     horizonDays: s.horizonDays,

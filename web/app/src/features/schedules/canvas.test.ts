@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { DEFAULT_SCHEDULE, type Availability } from '../../entities/schedule'
 import {
+  dateByNumber,
   dateKeys,
   effectiveWindows,
   bandBox,
@@ -16,7 +17,7 @@ import {
   weekStart,
   weekdayOf,
 } from './canvas'
-import { applyGesture, docError, type Gesture } from './canvasEdit'
+import { applyGesture, closeDay, dayState, docError, resetDay, type Gesture } from './canvasEdit'
 
 const base: Availability = {
   weekly: {
@@ -370,5 +371,68 @@ describe('поверхность «Приём» — неделя без дат',
     )
     expect(next.weekly.tue).toEqual([{ from: '09:00', to: '18:00' }])
     expect(next.exceptions).toEqual(doc.exceptions)
+  })
+})
+
+describe('исключения по датам — действия на дне', () => {
+  const doc: Availability = {
+    weekly: { tue: [{ from: '10:00', to: '18:00' }] },
+    exceptions: [],
+  }
+
+  it('«не принимаю в этот день» — исключение с пустыми окнами, а не снятое правило', () => {
+    const next = closeDay(doc, '2026-09-15')
+    expect(next.exceptions).toEqual([{ date: '2026-09-15', windows: [] }])
+    // Правило дня недели не тронуто: закрыт ОДИН вторник, а не все.
+    expect(next.weekly.tue).toEqual(doc.weekly.tue)
+    expect(effectiveWindows(next, '2026-09-15').windows).toEqual([])
+    expect(effectiveWindows(next, '2026-09-22').windows).toEqual(doc.weekly.tue)
+  })
+
+  it('«принимаю как обычно» возвращает день под недельное правило', () => {
+    const closed = closeDay(doc, '2026-09-15')
+    expect(resetDay(closed, '2026-09-15').exceptions).toEqual([])
+    expect(effectiveWindows(resetDay(closed, '2026-09-15'), '2026-09-15').windows).toEqual(
+      doc.weekly.tue,
+    )
+  })
+
+  it.each([
+    ['обычный день', doc, 'weekly'],
+    ['закрытый день', closeDay(doc, '2026-09-15'), 'closed'],
+    [
+      'день со своими часами',
+      { ...doc, exceptions: [{ date: '2026-09-15', windows: [{ from: '11:00', to: '12:00' }] }] },
+      'exception',
+    ],
+  ])('%s опознаётся меню', (_name, a, state) => {
+    expect(dayState(a as Availability, '2026-09-15')).toBe(state)
+  })
+
+  it('закрытый день не теряет закрытия от повторного нажатия', () => {
+    const twice = closeDay(closeDay(doc, '2026-09-15'), '2026-09-15')
+    expect(twice.exceptions).toEqual([{ date: '2026-09-15', windows: [] }])
+  })
+})
+
+describe('дата колонки по числу в шапке', () => {
+  // Сторож двойного прочтения библиотечного Date: у отрицательного смещения пояса
+  // «маркер» и настоящий момент расходятся на сутки, и меню дня закрыло бы соседний.
+  const week = dateKeys('2026-09-14', 7)
+
+  it('находит дату по числу месяца', () => {
+    expect(dateByNumber(week, '16')).toBe('2026-09-16')
+    expect(dateByNumber(week, '20')).toBe('2026-09-20')
+  })
+
+  it('через границу месяца число остаётся однозначным', () => {
+    const across = dateKeys('2026-09-28', 7)
+    expect(dateByNumber(across, '30')).toBe('2026-09-30')
+    expect(dateByNumber(across, '1')).toBe('2026-10-01')
+  })
+
+  it('чужое число — не дата', () => {
+    expect(dateByNumber(week, '31')).toBeUndefined()
+    expect(dateByNumber(week, 'вт')).toBeUndefined()
   })
 })

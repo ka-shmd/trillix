@@ -389,3 +389,100 @@
   font-weight: 600;
   text-transform: none;
 }
+
+/* ЧЬЯ ЭТО ФОРМА — ПОЛОСКОЙ СЛЕВА, тем же тоном, что у строки в списке ближайших
+   (formColor.ts). В заливку тон не идёт намеренно: плотный акцент отделяет «занято
+   человеком» от «в это время принимаю» (решение владельца 2026-09-04), а светлота
+   категориального набора гуляет от 0.42 до 0.82 — текст читался бы не на всех
+   восьми. */
+.sc-canvas .sc-booking {
+  border-left-width: 4px;
+}
+
+.sc-canvas .sc-tone-1 {
+  border-left-color: var(--chart-1);
+}
+.sc-canvas .sc-tone-2 {
+  border-left-color: var(--chart-2);
+}
+.sc-canvas .sc-tone-3 {
+  border-left-color: var(--chart-3);
+}
+.sc-canvas .sc-tone-4 {
+  border-left-color: var(--chart-4);
+}
+.sc-canvas .sc-tone-5 {
+  border-left-color: var(--chart-5);
+}
+.sc-canvas .sc-tone-6 {
+  border-left-color: var(--chart-6);
+}
+.sc-canvas .sc-tone-7 {
+  border-left-color: var(--chart-7);
+}
+.sc-canvas .sc-tone-8 {
+  border-left-color: var(--chart-8);
+}
+
+/* ЧАСЫ ПРИЁМА — ПОДЛОЖКА, и курсор обязан говорить об этом честно: нажать на неё
+   нельзя. Указатель возвращается только тому дню, часы которого правят. */
+.sc-canvas .sc-av {
+  cursor: default;
+}
+
+.sc-canvas .sc-av-edit {
+  cursor: pointer;
+  outline: 2px solid var(--sc-av-line);
+  outline-offset: -2px;
+}
+
+/* Шапка дня — кнопка меню исключений. Выглядит она по-прежнему шапкой: рамка и фон
+   появляются под курсором, потому что орган управления, который видно всегда,
+   спорил бы за внимание с самой сеткой. */
+.sc-canvas .sc-day-menu {
+  background: transparent;
+  border: 0;
+  border-radius: 6px;
+  cursor: pointer;
+  width: 100%;
+}
+
+.sc-canvas .sc-day-menu:hover,
+.sc-canvas .sc-day-menu[data-state='open'] {
+  background: var(--fc-classic-faint);
+}
+
+.sc-canvas .sc-day-name {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+  justify-content: center;
+}
+
+.sc-canvas .sc-day-chevron {
+  height: 0.75rem;
+  opacity: 0;
+  width: 0.75rem;
+}
+
+.sc-canvas .sc-day-menu:hover .sc-day-chevron,
+.sc-canvas .sc-day-menu[data-state='open'] .sc-day-chevron {
+  opacity: 1;
+}
+
+/* День, выпавший из обычного правила, помечен точкой под числом. Полоса приёма об
+   этом говорит не всегда: у закрытого дня полосы нет вовсе, и «не принимаю 14-го»
+   иначе не отличить от «по воскресеньям не работаю». */
+.sc-canvas .sc-day-special .sc-day-num::after {
+  background: var(--sc-av-ex-line);
+  border-radius: 999px;
+  bottom: 2px;
+  content: '';
+  height: 3px;
+  position: absolute;
+  width: 3px;
+}
+
+.sc-canvas .sc-day-special .sc-day-num {
+  position: relative;
+}

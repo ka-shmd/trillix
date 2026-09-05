@@ -134,3 +134,31 @@ export function docError(a: Availability): string | null {
 // snapMinutes — шаг прилипания жеста, в минутах. Полотно рисует сетку тем же шагом:
 // нарисованное мышью окно обязано совпасть с линией, к которой оно прилипло.
 export const SNAP_MINUTES = 15
+
+// closeDay — «не принимаю в этот день»: исключение с ПУСТЫМ списком окон.
+//
+// Исключение перебивает день целиком (domain, ScheduleException), поэтому пустой
+// список и означает закрытый день, а не «правило не тронуто». Девять из десяти
+// исключений — именно этот случай: отпуск, праздник, уехал.
+export function closeDay(a: Availability, date: string): Availability {
+  const others = a.exceptions.filter((e) => e.date !== date)
+  return {
+    ...a,
+    exceptions: [...others, { date, windows: [] }].sort((x, y) => x.date.localeCompare(y.date)),
+  }
+}
+
+// resetDay — «принимаю как обычно»: исключение снимается, и день возвращается под
+// недельное правило. Обратная сторона closeDay и правки часов одного дня.
+export function resetDay(a: Availability, date: string): Availability {
+  return { ...a, exceptions: a.exceptions.filter((e) => e.date !== date) }
+}
+
+// dayState — что сейчас с этим днём: обычная неделя, свои часы или «не принимаю».
+// Меню на шапке колонки предлагает по нему разные пункты — снимать исключение,
+// которого нет, незачем.
+export function dayState(a: Availability, date: string): 'weekly' | 'exception' | 'closed' {
+  const ex = a.exceptions.find((e) => e.date === date)
+  if (!ex) return 'weekly'
+  return ex.windows.length === 0 ? 'closed' : 'exception'
+}

@@ -303,3 +303,16 @@ export function windowOf(startStr: string, endStr: string): TimeWindow {
   const to = dateOfNaive(endStr) === dateOfNaive(startStr) ? clockOfNaive(endStr) : '24:00'
   return { from, to }
 }
+
+// dateByNumber — какая из показанных дат стоит в колонке с этим числом.
+//
+// ⚠ Обходит ДВОЙНОЕ ПРОЧТЕНИЕ библиотечного Date. В именованном поясе он бывает и
+// настоящим моментом начала суток, и «маркером», у которого UTC-поля хранят местное
+// время; прочтения расходятся на сутки при отрицательном смещении пояса, и меню дня
+// закрыло бы приём в соседнем. Число месяца двойного прочтения не имеет и в отрезке
+// не длиннее недели встречается ровно раз.
+export function dateByNumber(dates: string[], dayNumberText: string): string | undefined {
+  const n = Number(dayNumberText)
+  if (!Number.isInteger(n)) return undefined
+  return dates.find((d) => Number(d.slice(8, 10)) === n)
+}
