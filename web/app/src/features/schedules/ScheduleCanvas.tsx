@@ -82,8 +82,7 @@ export function ScheduleCanvas({
   onSurface,
   goToDate,
   onRange,
-  onOpenSubmission,
-  onCancelBooking,
+  onOpenBooking,
 }: {
   schedule: Schedule
   // Поверхность и её переключатель приезжают СО СТРАНИЦЫ: от выбора зависит не
@@ -98,13 +97,10 @@ export function ScheduleCanvas({
   // onRange — какой отрезок сейчас показан. Нужен мини-календарю, чтобы подсветить
   // видимые дни: без этого две половины экрана живут каждая своей неделей.
   onRange?: (dates: string[]) => void
-  // Окно ответа рисует страница: компонент окна живёт в фиче ответов, а импорт фичи
-  // из фичи запрещён. Полотно только сообщает, что нажали.
-  onOpenSubmission: (booking: Booking) => void
-  // Отмена тоже спрашивается СТРАНИЦЕЙ: тот же диалог открывается из списка
-  // ближайших записей слева, и два его экземпляра — это два разных обещания на одно
-  // действие.
-  onCancelBooking: (booking: Booking) => void
+  // Карточку записи рисует СТРАНИЦА: ей нужны почта из ответа и схема формы, а это
+  // чужие фичи — импорт фичи из фичи запрещён (web/CLAUDE.md). Полотно только
+  // сообщает наверх, на какую запись нажали.
+  onOpenBooking: (booking: Booking) => void
 }) {
   const controller = useCalendarController()
   // Видимая неделя нужна ЭКРАНУ (от неё зависит запрос за занятым временем), но
@@ -561,7 +557,7 @@ export function ScheduleCanvas({
             } else if (props.layer === 'block') {
               setAnchor({ ...at, kind: 'block', block: props.block })
             } else {
-              setAnchor({ ...at, kind: 'booking', booking: props.booking })
+              onOpenBooking(props.booking)
             }
           }}
         />
@@ -589,8 +585,6 @@ export function ScheduleCanvas({
         anchor={anchor}
         schedule={schedule}
         onClose={closePopover}
-        onOpenSubmission={onOpenSubmission}
-        onCancelBooking={onCancelBooking}
         onRemoveBlock={(id) => {
           removeBlock.mutate(id, { onError: (e) => setError(humanError(e)) })
           closePopover()

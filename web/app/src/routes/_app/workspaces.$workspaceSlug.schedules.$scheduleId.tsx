@@ -14,6 +14,7 @@ import { SchedulePanel } from '../../features/schedules/SchedulePanel'
 import { CancelBookingDialog } from '../../features/schedules/CancelBookingDialog'
 import { LazyRuleCanvas, LazyScheduleCanvas } from '../../features/schedules/lazyCanvas'
 import { RuleSummary } from '../../features/schedules/RuleSummary'
+import { BookingDetails } from '../../features/schedules/BookingDetails'
 import type { Surface } from '../../features/schedules/SurfaceTabs'
 import { SETTINGS_TITLE } from '../../features/schedules/settingNames'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
@@ -90,8 +91,11 @@ function SchedulePage() {
   // уходит К нему по клику в мини-календаре.
   const [visible, setVisible] = useState<string[]>([])
   const [goToDate, setGoToDate] = useState<string | undefined>(undefined)
-  // Запись, чей ответ открыт окном. Целиком, а не одним id: у неё уже есть и форма
-  // (slug для схемы), и сам ответ — второй раз спрашивать их незачем.
+  // Запись, чья КАРТОЧКА открыта: имя формы, время и участники. Открывается кликом
+  // по событию на полотне и строкой списка ближайших.
+  const [card, setCard] = useState<Booking | null>(null)
+  // Запись, чей ОТВЕТ открыт окном целиком. Второе окно, а не то же самое: карточка
+  // отвечает «кто придёт», ответ — «что человек написал», и это разные вопросы.
   const [openBooking, setOpenBooking] = useState<Booking | null>(null)
   // Запись, отмену которой подтверждают. Диалог живёт ЗДЕСЬ, а не в полотне и не в
   // списке: спрашивают его обе половины экрана, и два экземпляра одного вопроса —
@@ -167,8 +171,7 @@ function SchedulePage() {
               onSurface={setSurface}
               goToDate={goToDate}
               onRange={setVisible}
-              onOpenSubmission={setOpenBooking}
-              onCancelBooking={setCancelling}
+              onOpenBooking={setCard}
             />
           )}
         </div>
@@ -178,6 +181,23 @@ function SchedulePage() {
           2026-09-04). Живёт на СТРАНИЦЕ, а не в полотне: компонент окна принадлежит
           фиче ответов, а импорт фичи из фичи запрещён (web/CLAUDE.md) — маршрут же
           складывает фичи по определению. */}
+      {/* КАРТОЧКА ЗАПИСИ. Почта участника лежит в ОТВЕТЕ формы, а схема — в форме;
+          обе фичи чужие полотну, поэтому данные собираются здесь, а рисует их
+          компонент расписаний. */}
+      <BookingCardDialog
+        booking={card}
+        timezone={schedule.timezone}
+        onClose={() => setCard(null)}
+        onOpenSubmission={(b) => {
+          setCard(null)
+          setOpenBooking(b)
+        }}
+        onCancel={(b) => {
+          setCard(null)
+          setCancelling(b)
+        }}
+      />
+
       <BookingSubmissionDialog booking={openBooking} onClose={() => setOpenBooking(null)} />
 
       {/* Диалог отмены — ОДИН НА ОБЕ ПОВЕРХНОСТИ: карточку записи на полотне и строку
@@ -256,6 +276,63 @@ function SchedulePage() {
         </SheetContent>
       </Sheet>
     </>
+  )
+}
+
+// BookingCardDialog — карточка записи вместе с контактами участника.
+//
+// ПОЧТА ЖИВЁТ В ОТВЕТЕ ФОРМЫ, а не в строке брони (0050), поэтому её приходится
+// поднимать двумя запросами: сам ответ и схему формы, из которой берутся подписи
+// вопросов. Оба — только при открытом окне: пока автор смотрит на сетку, ходить за
+// ними незачем.
+//
+// Показываются ответы на ВОПРОСЫ ТИПА «почта», а не «тот адрес, куда мы пишем».
+// Выбор адреса для письма — правило сервера (`domain.BookingAddress`: сначала
+// назначенный источник, потом первый годный email-вопрос), и повторять его здесь
+// значило бы завести третье зеркало, которое ошибётся молча и покажет чужой адрес.
+// Форма с одним вопросом про почту — а это подавляющее большинство — и так даёт
+// ровно одну строку.
+function BookingCardDialog({
+  booking,
+  timezone,
+  onClose,
+  onOpenSubmission,
+  onCancel,
+}: {
+  booking: Booking | null
+  timezone: string
+  onClose: () => void
+  onOpenSubmission: (booking: Booking) => void
+  onCancel: (booking: Booking) => void
+}) {
+  const submissionId = booking?.submissionId ?? ''
+  const form = useQuery({
+    ...formDetailQueryOptions(booking?.formSlug ?? ''),
+    enabled: booking !== null && submissionId !== '',
+  })
+  const one = useQuery({
+    ...submissionQueryOptions(booking?.formId ?? '', submissionId),
+    enabled: booking !== null && submissionId !== '',
+  })
+
+  const answers = one.data?.submission.answers ?? {}
+  const people = answerColumns(form.data?.draftSchema.blocks ?? [])
+    .filter((c) => c.block.type === 'email')
+    .map((c) => ({ label: c.label, value: answers[c.block.id] }))
+    .filter(
+      (p): p is { label: string; value: string } => typeof p.value === 'string' && p.value !== '',
+    )
+
+  return (
+    <BookingDetails
+      booking={booking}
+      timezone={timezone}
+      people={people}
+      loading={form.isPending || one.isPending}
+      onOpenSubmission={onOpenSubmission}
+      onCancel={onCancel}
+      onClose={onClose}
+    />
   )
 }
 
