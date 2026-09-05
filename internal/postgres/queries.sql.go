@@ -54,6 +54,50 @@ func (q *Queries) BlocksInRange(ctx context.Context, arg BlocksInRangeParams) ([
 	return items, nil
 }
 
+const bookingForMove = `-- name: BookingForMove :one
+SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
+       b.starts_at, b.duration_minutes, b.seats, b.status, b.revision
+FROM bookings b
+WHERE b.id = $1 AND b.schedule_id = $2 AND b.status = 'confirmed'
+`
+
+type BookingForMoveParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+}
+
+type BookingForMoveRow struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+	Revision        int32
+}
+
+// Бронь перед переносом: что двигаем и сколько мест это займёт на новом месте.
+// Расписание спрашивается вместе с ней — id из адреса правом не является, и строка
+// чужого расписания обязана быть неотличима от несуществующей.
+func (q *Queries) BookingForMove(ctx context.Context, arg BookingForMoveParams) (BookingForMoveRow, error) {
+	row := q.db.QueryRow(ctx, bookingForMove, arg.ID, arg.ScheduleID)
+	var i BookingForMoveRow
+	err := row.Scan(
+		&i.ID,
+		&i.ScheduleID,
+		&i.FormID,
+		&i.SubmissionID,
+		&i.StartsAt,
+		&i.DurationMinutes,
+		&i.Seats,
+		&i.Status,
+		&i.Revision,
+	)
+	return i, err
+}
+
 const bookingsInRange = `-- name: BookingsInRange :many
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
        b.starts_at, b.duration_minutes, b.seats, b.status,
@@ -1676,7 +1720,7 @@ func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) 
 
 const getBookingForCancel = `-- name: GetBookingForCancel :one
 SELECT b.id, b.form_id, b.submission_id, b.starts_at, b.duration_minutes, b.seats, b.status,
-       coalesce(f.name, f.title) AS form_title, s.timezone
+       b.revision, coalesce(f.name, f.title) AS form_title, s.timezone
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 JOIN schedules s ON s.id = b.schedule_id
@@ -1691,6 +1735,7 @@ type GetBookingForCancelRow struct {
 	DurationMinutes int32
 	Seats           int32
 	Status          string
+	Revision        int32
 	FormTitle       string
 	Timezone        string
 }
@@ -1709,6 +1754,7 @@ func (q *Queries) GetBookingForCancel(ctx context.Context, id uuid.UUID) (GetBoo
 		&i.DurationMinutes,
 		&i.Seats,
 		&i.Status,
+		&i.Revision,
 		&i.FormTitle,
 		&i.Timezone,
 	)
@@ -5021,6 +5067,31 @@ func (q *Queries) MarkVisitSubmitted(ctx context.Context, arg MarkVisitSubmitted
 	return result.RowsAffected(), nil
 }
 
+const moveBooking = `-- name: MoveBooking :execrows
+UPDATE bookings SET starts_at = $3, revision = revision + 1
+WHERE id = $1 AND schedule_id = $2 AND status = 'confirmed'
+`
+
+type MoveBookingParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+}
+
+// Перенос брони на новое время. НОМЕР РЕДАКЦИИ РАСТЁТ ТЕМ ЖЕ УТВЕРЖДЕНИЕМ: разъедься
+// они, приглашение уехало бы с номером, который чужой календарь уже видел, и правка
+// была бы отброшена как устаревшая.
+//
+// Длительность НЕ пересчитывается по нынешней нарезке: она снимок момента записи
+// (0050), и перенос встречи её менять не должен.
+func (q *Queries) MoveBooking(ctx context.Context, arg MoveBookingParams) (int64, error) {
+	result, err := q.db.Exec(ctx, moveBooking, arg.ID, arg.ScheduleID, arg.StartsAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const nextFormVersion = `-- name: NextFormVersion :one
 SELECT (coalesce(max(version), 0) + 1)::int AS next_version
 FROM form_versions
@@ -5357,6 +5428,31 @@ type TakenSeatsAtParams struct {
 // То же для ОДНОЙ точки — счёт под advisory-lock перед взятием холда.
 func (q *Queries) TakenSeatsAt(ctx context.Context, arg TakenSeatsAtParams) (int64, error) {
 	row := q.db.QueryRow(ctx, takenSeatsAt, arg.ScheduleID, arg.StartsAt, arg.ClientID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const takenSeatsAtExcept = `-- name: TakenSeatsAtExcept :one
+SELECT coalesce(sum(seats), 0)::bigint
+FROM bookings
+WHERE schedule_id = $1 AND starts_at = $2 AND id <> $3
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+`
+
+type TakenSeatsAtExceptParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	ID         uuid.UUID
+}
+
+// Сколько мест занято в точке, НЕ СЧИТАЯ саму переносимую бронь.
+//
+// Исключение по id, а не по client_id (как у публичного холда): переносу нужно не
+// «мой холд не мешает мне», а «эта самая строка не считает себя дважды» — она уже
+// лежит в таблице, и без исключения перенос внутри одного слота отказал бы сам себе.
+func (q *Queries) TakenSeatsAtExcept(ctx context.Context, arg TakenSeatsAtExceptParams) (int64, error) {
+	row := q.db.QueryRow(ctx, takenSeatsAtExcept, arg.ScheduleID, arg.StartsAt, arg.ID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err

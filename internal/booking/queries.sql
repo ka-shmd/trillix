@@ -231,7 +231,7 @@ SELECT capacity FROM schedules WHERE id = $1;
 -- Имени и контактов записавшегося здесь нет — их знает только ответ формы, и страница
 -- отмены к нему не ходит (спека §13).
 SELECT b.id, b.form_id, b.submission_id, b.starts_at, b.duration_minutes, b.seats, b.status,
-       coalesce(f.name, f.title) AS form_title, s.timezone
+       b.revision, coalesce(f.name, f.title) AS form_title, s.timezone
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 JOIN schedules s ON s.id = b.schedule_id
@@ -274,3 +274,33 @@ SELECT s.timezone
 FROM forms f
 JOIN schedules s ON s.id = f.schedule_id
 WHERE f.id = $1;
+
+-- name: BookingForMove :one
+-- Бронь перед переносом: что двигаем и сколько мест это займёт на новом месте.
+-- Расписание спрашивается вместе с ней — id из адреса правом не является, и строка
+-- чужого расписания обязана быть неотличима от несуществующей.
+SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
+       b.starts_at, b.duration_minutes, b.seats, b.status, b.revision
+FROM bookings b
+WHERE b.id = $1 AND b.schedule_id = $2 AND b.status = 'confirmed';
+
+-- name: TakenSeatsAtExcept :one
+-- Сколько мест занято в точке, НЕ СЧИТАЯ саму переносимую бронь.
+--
+-- Исключение по id, а не по client_id (как у публичного холда): переносу нужно не
+-- «мой холд не мешает мне», а «эта самая строка не считает себя дважды» — она уже
+-- лежит в таблице, и без исключения перенос внутри одного слота отказал бы сам себе.
+SELECT coalesce(sum(seats), 0)::bigint
+FROM bookings
+WHERE schedule_id = $1 AND starts_at = $2 AND id <> $3
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()));
+
+-- name: MoveBooking :execrows
+-- Перенос брони на новое время. НОМЕР РЕДАКЦИИ РАСТЁТ ТЕМ ЖЕ УТВЕРЖДЕНИЕМ: разъедься
+-- они, приглашение уехало бы с номером, который чужой календарь уже видел, и правка
+-- была бы отброшена как устаревшая.
+--
+-- Длительность НЕ пересчитывается по нынешней нарезке: она снимок момента записи
+-- (0050), и перенос встречи её менять не должен.
+UPDATE bookings SET starts_at = $3, revision = revision + 1
+WHERE id = $1 AND schedule_id = $2 AND status = 'confirmed';

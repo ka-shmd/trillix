@@ -423,3 +423,49 @@ func coveredByBlock(start, end time.Time, blocks []Busy) bool {
 	}
 	return false
 }
+
+// MoveAligned — годится ли эта точка старта для переноса брони автором.
+//
+// ЕДИНСТВЕННОЕ, ЧТО ЗДЕСЬ ЗАЩИЩАЕТСЯ, — счёт занятости. Он считается по РАВЕНСТВУ
+// точки старта (queries.sql, TakenSeatsAt*), поэтому бронь, съехавшая на 11:07, не
+// встретится в счёте ни с чем: в 11:00 при вместимости 1 сели бы двое, и каждый
+// честно под своим локом. Прилипание к шагу сетки — не оформление, а то, чем
+// перенос остаётся внутри модели (ADR §10).
+//
+// Часы приёма, упреждение и горизонт здесь НЕ проверяются намеренно: автор — не
+// респондент, и, договорившись по телефону, он вправе поставить человека и до
+// открытия приёма, и внутрь упреждения (решение владельца 2026-09-05).
+//
+// Точка годится, если верно хотя бы одно:
+//
+//   - она совпадает с началом слота, который расписание нарезало бы в этот день, —
+//     то есть отстоит от начала одного из окон приёма на целое число шагов;
+//   - её минута от полуночи кратна шагу. Это ответ для времени ВНЕ окон приёма,
+//     где своей сетки нет вовсе, но общий шаг сохраняется.
+func MoveAligned(s Schedule, at time.Time) bool {
+	loc, err := LoadScheduleLocation(s.Timezone)
+	if err != nil {
+		return false
+	}
+	step := s.SlotMinutes + s.BufferMinutes
+	if step <= 0 {
+		return false
+	}
+	local := at.In(loc)
+	if local.Second() != 0 || local.Nanosecond() != 0 {
+		return false
+	}
+	minutes := local.Hour()*60 + local.Minute()
+
+	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	for _, w := range windowsForDate(s.Availability, date) {
+		from, err := parseClock(w.From)
+		if err != nil {
+			continue
+		}
+		if minutes >= from && (minutes-from)%step == 0 {
+			return true
+		}
+	}
+	return minutes%step == 0
+}

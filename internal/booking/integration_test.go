@@ -67,7 +67,7 @@ func newStack(t *testing.T) *httptest.Server {
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
 		pgtest.MailService(testPool), appOrigin)
 
-	svc := booking.NewService(testPool, booking.Repo{}, wsSvc, plans)
+	svc := booking.NewService(testPool, postgres.TxRunner{Pool: testPool}, booking.Repo{}, wsSvc, plans)
 	h := booking.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()
@@ -794,4 +794,140 @@ func getCalendar(t *testing.T, c *http.Client, srv *httptest.Server, scheduleID 
 		"?from="+url.QueryEscape(from.Format(time.RFC3339))+
 		"&to="+url.QueryEscape(to.Format(time.RFC3339))), &out)
 	return out
+}
+
+// Перенос записи автором. Ограничений ровно два (ADR §10), и оба проверяются здесь
+// на живой базе: вместимость слота — под тем же advisory-lock, что у публичного
+// холда, и шаг сетки — без которого занятость слота перестала бы считаться вовсе.
+func TestBookings_Move(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	sch := createSchedule(t, owner, srv, wsID, scheduleBody)
+	formID := newForm(t, wsID, "f-move")
+
+	// Шаг сетки этого расписания — 70 минут (приём 60 плюс перерыв 10), поэтому
+	// годные точки кратны 70 минутам от полуночи в поясе расписания.
+	msk, err := time.LoadLocation("Europe/Moscow")
+	if err != nil {
+		t.Fatalf("пояс: %v", err)
+	}
+	base := time.Now().In(msk).AddDate(0, 0, 7)
+	midnight := time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, msk)
+	at := func(minutes int) time.Time { return midnight.Add(time.Duration(minutes) * time.Minute) }
+
+	id := seedBooking(t, sch.ID, formID, at(700), "confirmed")
+	move := func(bookingID string, to time.Time) *http.Response {
+		body := fmt.Sprintf(`{"startsAt":%q}`, to.UTC().Format(time.RFC3339))
+		return postWithCSRF(t, owner, srv, "/api/v1/schedules/"+sch.ID+"/bookings/"+bookingID+"/move", body)
+	}
+
+	r := move(id, at(840))
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("перенос: статус %d, ожидалось 204", r.StatusCode)
+	}
+	if got, rev := bookingState(t, id); !got.Equal(at(840)) || rev != 1 {
+		t.Fatalf("после переноса starts_at=%s revision=%d, ожидалось %s и 1", got, rev, at(840))
+	}
+
+	// НОМЕР РЕДАКЦИИ РАСТЁТ КАЖДЫЙ РАЗ. Без этого второе приглашение уехало бы с
+	// номером, который чужой календарь уже видел, и было бы отброшено.
+	r = move(id, at(910))
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("второй перенос: статус %d, ожидалось 204", r.StatusCode)
+	}
+	if _, rev := bookingState(t, id); rev != 2 {
+		t.Fatalf("после второго переноса revision=%d, ожидалось 2", rev)
+	}
+
+	// ЗАНЯТЫЙ СЛОТ. Вместимость 1, и вторая запись в ту же точку не помещается —
+	// иначе перенос обходил бы защиту от двойной записи с той стороны, с которой её
+	// никто не сторожит.
+	other := seedBooking(t, sch.ID, formID, at(700), "confirmed")
+	r = move(id, at(700))
+	closeBody(t, r)
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("перенос в занятый слот: статус %d, ожидалось 409", r.StatusCode)
+	}
+	if got, _ := bookingState(t, id); !got.Equal(at(910)) {
+		t.Fatalf("отказ сдвинул запись на %s — в базе не должно было измениться ничего", got)
+	}
+	if n := seatsAt(t, sch.ID, at(700)); n != 1 {
+		t.Fatalf("в слоте %d мест при вместимости 1", n)
+	}
+
+	// МИМО СЕТКИ. Семь минут в сторону — и запись перестала бы встречаться в счёте
+	// занятости с чем бы то ни было.
+	r = move(id, at(707))
+	closeBody(t, r)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("перенос мимо шага сетки: статус %d, ожидалось 422", r.StatusCode)
+	}
+	if got, rev := bookingState(t, id); !got.Equal(at(910)) || rev != 2 {
+		t.Fatalf("отказ тронул строку: starts_at=%s revision=%d", got, rev)
+	}
+
+	// Вне часов приёма перенос ПРОХОДИТ: автор не респондент, и договорённость по
+	// телефону сильнее его же расписания (решение владельца 2026-09-05).
+	r = move(id, at(420))
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("перенос на 07:00 вне приёма: статус %d, ожидалось 204", r.StatusCode)
+	}
+
+	// Отменённая запись переносу не подлежит, и отличить её от чужой снаружи нельзя.
+	cancelled := postWithCSRF(t, owner, srv, "/api/v1/schedules/"+sch.ID+"/bookings/"+other+"/cancel", "")
+	closeBody(t, cancelled)
+	r = move(other, at(1050))
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("перенос отменённой: статус %d, ожидалось 404", r.StatusCode)
+	}
+}
+
+// Чужое расписание переносом не правится: id брони из адреса правом не является.
+func TestBookings_MoveForeignSchedule404(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner@example.com")
+	stranger := registerUser(t, srv, "stranger@example.com")
+	wsID := personalWorkspace(t)
+	sch := createSchedule(t, owner, srv, wsID, scheduleBody)
+	formID := newForm(t, wsID, "f-move-foreign")
+	id := seedBooking(t, sch.ID, formID, time.Now().Add(48*time.Hour), "confirmed")
+
+	body := fmt.Sprintf(`{"startsAt":%q}`, time.Now().Add(72*time.Hour).UTC().Format(time.RFC3339))
+	r := postWithCSRF(t, stranger, srv, "/api/v1/schedules/"+sch.ID+"/bookings/"+id+"/move", body)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("чужой перенос: статус %d, ожидалось 404", r.StatusCode)
+	}
+}
+
+func bookingState(t *testing.T, id string) (time.Time, int) {
+	t.Helper()
+	var startsAt time.Time
+	var revision int
+	err := testPool.QueryRow(context.Background(),
+		`SELECT starts_at, revision FROM bookings WHERE id = $1`, id).Scan(&startsAt, &revision)
+	if err != nil {
+		t.Fatalf("select booking: %v", err)
+	}
+	return startsAt, revision
+}
+
+func seatsAt(t *testing.T, scheduleID string, startsAt time.Time) int {
+	t.Helper()
+	var seats int
+	err := testPool.QueryRow(context.Background(),
+		`SELECT coalesce(sum(seats), 0)::int FROM bookings
+		 WHERE schedule_id = $1 AND starts_at = $2 AND status = 'confirmed'`,
+		scheduleID, startsAt).Scan(&seats)
+	if err != nil {
+		t.Fatalf("select seats: %v", err)
+	}
+	return seats
 }

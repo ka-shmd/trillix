@@ -80,6 +80,19 @@ export function cancelBooking(scheduleId: string, bookingId: string): Promise<vo
   return apiRequest(`/schedules/${scheduleId}/bookings/${bookingId}/cancel`, { method: 'POST' })
 }
 
+// moveBooking — перенос записи на другое время. Едет только новое начало:
+// длительность и число мест переезжают как есть, а прежнее время сервер знает сам.
+export function moveBooking(
+  scheduleId: string,
+  bookingId: string,
+  startsAt: string,
+): Promise<void> {
+  return apiRequest(`/schedules/${scheduleId}/bookings/${bookingId}/move`, {
+    method: 'POST',
+    body: { startsAt },
+  })
+}
+
 // getCalendar — два слоя полотна одним запросом. Границы обязательны обе, и сервер
 // откажет 422, если окно шире потолка: полотно листается неделями.
 export function getCalendar(

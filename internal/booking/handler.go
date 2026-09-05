@@ -35,6 +35,7 @@ type bookingService interface {
 	Upcoming(ctx context.Context, userID, scheduleID uuid.UUID) ([]Booking, error)
 	Calendar(ctx context.Context, userID, scheduleID uuid.UUID, from, to time.Time) (Calendar, error)
 	CancelBooking(ctx context.Context, userID, scheduleID, bookingID uuid.UUID) error
+	MoveBooking(ctx context.Context, userID, scheduleID, bookingID uuid.UUID, startsAt time.Time) error
 }
 
 // Handler — приватный транспорт расписаний.
@@ -81,6 +82,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(http.HandlerFunc(h.upcoming)))
 	mux.Handle("POST /api/v1/schedules/{id}/bookings/{bookingId}/cancel",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.cancelBooking))))
+	mux.Handle("POST /api/v1/schedules/{id}/bookings/{bookingId}/move",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.moveBooking))))
 }
 
 // scheduleView — расписание на проводе. Отдельный тип, а не доменный: у транспорта
@@ -192,6 +195,13 @@ type blockRequest struct {
 	StartsAt time.Time `json:"startsAt"`
 	EndsAt   time.Time `json:"endsAt"`
 	Note     string    `json:"note"`
+}
+
+// moveRequest — куда переносят запись. Только новое начало: длительность и число
+// мест переезжают как есть, а прежнее время сервер знает сам — присылать его значило
+// бы дать клиенту назвать не то.
+type moveRequest struct {
+	StartsAt time.Time `json:"startsAt"`
 }
 
 func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
@@ -379,6 +389,29 @@ func (h *Handler) cancelBooking(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.CancelBooking(r.Context(), user.ID, scheduleID, bookingID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// moveBooking — перенос записи автором. Отказывает он двумя способами: 422, если
+// время не легло на шаг сетки, и 409, если в слоте не осталось мест.
+func (h *Handler) moveBooking(w http.ResponseWriter, r *http.Request) {
+	user, scheduleID, ok := h.userAndID(w, r, "id")
+	if !ok {
+		return
+	}
+	bookingID, err := uuid.Parse(r.PathValue("bookingId"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	req, ok := decodeBody[moveRequest](w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.MoveBooking(r.Context(), user.ID, scheduleID, bookingID, req.StartsAt); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}

@@ -485,11 +485,66 @@ type BookingCard struct {
 	DurationMinutes int
 	Seats           int
 	Status          string
-	FormTitle       string
-	Timezone        string
+	// Revision — номер редакции события календаря. Отмена уезжает со СЛЕДУЮЩИМ:
+	// документ с номером не выше принятого клиент вправе отбросить как устаревший.
+	Revision  int
+	FormTitle string
+	Timezone  string
 }
 
 // BookingForCancel — карточка записи для страницы отмены.
+// BookingMove — бронь перед переносом: что двигаем и сколько мест это займёт.
+type BookingMove struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    *uuid.UUID
+	StartsAt        time.Time
+	DurationMinutes int
+	Seats           int
+	Revision        int
+}
+
+func (Repo) BookingForMove(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (BookingMove, error) {
+	row, err := postgres.New(db).BookingForMove(ctx, postgres.BookingForMoveParams{ID: id, ScheduleID: scheduleID})
+	if err != nil {
+		return BookingMove{}, err
+	}
+	move := BookingMove{
+		ID:              row.ID,
+		FormID:          row.FormID,
+		StartsAt:        row.StartsAt.Time.UTC(),
+		DurationMinutes: int(row.DurationMinutes),
+		Seats:           int(row.Seats),
+		Revision:        int(row.Revision),
+	}
+	if row.SubmissionID.Valid {
+		id := uuid.UUID(row.SubmissionID.Bytes)
+		move.SubmissionID = &id
+	}
+	return move, nil
+}
+
+// TakenAtExcept — занятость точки без учёта самой переносимой брони.
+func (Repo) TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, bookingID uuid.UUID) (int, error) {
+	n, err := postgres.New(db).TakenSeatsAtExcept(ctx, postgres.TakenSeatsAtExceptParams{
+		ScheduleID: scheduleID,
+		StartsAt:   pgtype.Timestamptz{Time: startsAt, Valid: true},
+		ID:         bookingID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+func (Repo) MoveBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID, startsAt time.Time) (int64, error) {
+	return postgres.New(db).MoveBooking(ctx, postgres.MoveBookingParams{
+		ID:         id,
+		ScheduleID: scheduleID,
+		StartsAt:   pgtype.Timestamptz{Time: startsAt, Valid: true},
+	})
+}
+
 func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error) {
 	row, err := postgres.New(db).GetBookingForCancel(ctx, id)
 	if err != nil {
@@ -502,6 +557,7 @@ func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID
 		DurationMinutes: int(row.DurationMinutes),
 		Seats:           int(row.Seats),
 		Status:          row.Status,
+		Revision:        int(row.Revision),
 		FormTitle:       row.FormTitle,
 		Timezone:        row.Timezone,
 	}

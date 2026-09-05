@@ -53,9 +53,12 @@ import {
   dayState,
   docError,
   resetDay,
+  snapToGrid,
   SNAP_MINUTES,
   type Gesture,
 } from './canvasEdit'
+import { clockToMinutes, minutesToClock } from './weekly'
+import { MoveBookingDialog } from './MoveBookingDialog'
 import { CanvasPopover, type Anchor } from './CanvasPopover'
 import { DayHeader } from './DayHeader'
 import { formTone } from './formColor'
@@ -125,6 +128,11 @@ export function ScheduleCanvas({
   // убирать, а протяжка по его колонке заводит приём, а не занятость. Остальные дни
   // в это время живут как обычно.
   const [editingDay, setEditingDay] = useState<string | null>(null)
+  // ПЕРЕНОС ЗАПИСИ ждёт подтверждения: карточка в полотне уже переехала, а в базе
+  // нет. `revert` — обещание библиотеки вернуть её на место; без него отказ и
+  // «оставить как было» оставляли бы на экране встречу, которой не случилось.
+  const [moving, setMoving] = useState<{ booking: Booking; startsAt: string } | null>(null)
+  const revertMove = useRef<(() => void) | null>(null)
   // Контейнер нужен ИМПЕРАТИВНО: подсказка перерисовывается на каждое движение мыши,
   // и гонять через состояние React перерисовку всего полотна на каждый кадр —
   // заведомо рвано.
@@ -510,6 +518,10 @@ export function ScheduleCanvas({
               moveBlock(props.block, info.event.startStr, info.event.endStr)
               return
             }
+            if (props.layer === 'booking') {
+              askMove(props.booking, info.event.startStr, info.revert)
+              return
+            }
             // Окна приёма двигаются только в режиме правки дня: в остальное время
             // они подложка, и библиотека сюда не доводит.
             if (props.layer !== 'availability' || !info.event.startStr) return
@@ -558,6 +570,14 @@ export function ScheduleCanvas({
         }}
       />
 
+      <MoveBookingDialog
+        scheduleId={schedule.id}
+        move={moving}
+        timezone={schedule.timezone}
+        outsideHours={moving !== null && !insideHours(schedule, moving.startsAt)}
+        onClose={finishMove}
+      />
+
       <CanvasPopover
         anchor={anchor}
         schedule={schedule}
@@ -579,6 +599,33 @@ export function ScheduleCanvas({
 
   function clearBand() {
     clearBandEl(canvasRef.current)
+  }
+
+  // askMove — карточку бросили, спрашиваем подтверждение.
+  //
+  // ⚠ ВРЕМЯ ПРИЛИПАЕТ К СЕТКЕ ЗДЕСЬ, а не на сервере: занятость слота считается по
+  // равенству точки старта, и промах в семь минут сервер отвергнет 422-й. Липкость
+  // (canvasEdit, snapToGrid) — зеркало доменного правила, поэтому диалог называет
+  // ровно то время, которое уедет.
+  function askMove(booking: Booking, startStr: string, revert: () => void) {
+    const date = dateOfNaive(startStr)
+    const dropped = clockToMinutes(clockOfNaive(startStr))
+    if (dropped === null) {
+      revert()
+      return
+    }
+    const step = schedule.slotMinutes + schedule.bufferMinutes
+    const at = snapToGrid(schedule.availability, date, dropped, step)
+    revertMove.current = revert
+    setMoving({ booking, startsAt: zonedToUTC(date, minutesToClock(at), schedule.timezone) })
+  }
+
+  // finishMove — исход диалога. Отказавшись, карточку ОБЯЗАТЕЛЬНО возвращаем: полотно
+  // её уже передвинуло, а данные не менялись, и сама она назад не поедет.
+  function finishMove(moved: boolean) {
+    if (!moved) revertMove.current?.()
+    revertMove.current = null
+    setMoving(null)
   }
 
   function moveBlock(block: ScheduleBlock, startStr: string, endStr: string) {
@@ -654,8 +701,10 @@ function bookingEvent(booking: Booking) {
     start: booking.startsAt,
     end: new Date(start.getTime() + booking.durationMinutes * 60_000).toISOString(),
     title: booking.formTitle,
-    // Записи не двигаются и не тянутся: время встречи — договорённость с человеком.
-    startEditable: false,
+    // ЗАПИСЬ ДВИГАЕТСЯ, НО НЕ ТЯНЕТСЯ. Перенести встречу автор вправе — это его
+    // рабочий стол; изменить её длительность нельзя: она снимок нарезки на момент
+    // записи (0050), и растягивать чужую встречу мышью значило бы менять
+    // договорённость молча.
     durationEditable: false,
     extendedProps: { layer: 'booking', booking } satisfies EventProps,
   }
@@ -761,6 +810,21 @@ const VIEWS = [
 ] as const
 
 type ViewName = (typeof VIEWS)[number]['name']
+
+// insideHours — лежит ли эта точка внутри часов приёма. Отказом это не является
+// (автор вправе поставить человека и вне приёма), но диалог обязан сказать об этом
+// вслух: время вне приёма формой не предлагается, и вернуть его в оборот отменой уже
+// не выйдет.
+function insideHours(schedule: Schedule, iso: string): boolean {
+  const { date, clock } = zonedParts(new Date(iso), schedule.timezone)
+  const minutes = clockToMinutes(clock)
+  if (minutes === null) return false
+  return effectiveWindows(schedule.availability, date).windows.some((w) => {
+    const from = clockToMinutes(w.from)
+    const to = clockToMinutes(w.to)
+    return from !== null && to !== null && minutes >= from && minutes < to
+  })
+}
 
 // dateKeyOf — календарная дата момента В ПОЯСЕ РАСПИСАНИЯ: клетка месяца приходит
 // от библиотеки моментом, а «работаю ли я в этот день» спрашивается у правила,

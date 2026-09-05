@@ -437,3 +437,79 @@ func slotsLocal(t *testing.T, slots []Slot, tz string) []string {
 	}
 	return out
 }
+
+// MoveAligned — единственное, что удерживает перенос внутри модели: занятость слота
+// считается по РАВЕНСТВУ точки старта, и бронь, съехавшая на семь минут, не
+// встретилась бы в счёте ни с чем.
+func TestMoveAligned(t *testing.T) {
+	msk := time.FixedZone("MSK", 3*60*60)
+	at := func(day, hour, minute int) time.Time {
+		return time.Date(2026, 9, day, hour, minute, 0, 0, msk)
+	}
+
+	t.Run("шаг без буфера", func(t *testing.T) {
+		s := sampleSchedule()
+		tests := []struct {
+			name string
+			at   time.Time
+			want bool
+		}{
+			{"начало окна приёма", at(15, 10, 0), true},
+			{"через шаг от начала окна", at(15, 11, 0), true},
+			{"вне окон приёма, но по шагу от полуночи", at(15, 7, 0), true},
+			{"ночь по шагу", at(15, 2, 0), true},
+			{"семь минут мимо", at(15, 11, 7), false},
+			{"полчаса мимо при часовом шаге", at(15, 11, 30), false},
+			{
+				"выходной по шагу — годится: часы приёма здесь не спрашиваются",
+				at(19, 12, 0), true,
+			},
+		}
+		for _, tt := range tests {
+			t.Run(tt.name, func(t *testing.T) {
+				if got := MoveAligned(s, tt.at); got != tt.want {
+					t.Fatalf("MoveAligned(%s) = %v, ожидалось %v", tt.at.Format(time.RFC3339), got, tt.want)
+				}
+			})
+		}
+	})
+
+	// Окно, начинающееся не на круглом часе, — ровно тот случай, ради которого
+	// правило двухступенчатое: своей сетке от полуночи не кратно ничего.
+	t.Run("окно с получаса", func(t *testing.T) {
+		s := sampleSchedule()
+		s.Availability.Weekly["tue"] = []Window{{From: "10:30", To: "18:00"}}
+		if !MoveAligned(s, at(15, 10, 30)) {
+			t.Fatal("начало окна 10:30 обязано годиться")
+		}
+		if !MoveAligned(s, at(15, 11, 30)) {
+			t.Fatal("11:30 — второй слот того же окна")
+		}
+		if MoveAligned(s, at(15, 11, 15)) {
+			t.Fatal("11:15 не лежит ни на сетке окна, ни на шаге от полуночи")
+		}
+	})
+
+	t.Run("буфер входит в шаг", func(t *testing.T) {
+		s := sampleSchedule()
+		s.SlotMinutes = 50
+		s.BufferMinutes = 10
+		if !MoveAligned(s, at(15, 11, 0)) {
+			t.Fatal("шаг 60: 11:00 — второй слот")
+		}
+		if MoveAligned(s, at(15, 10, 50)) {
+			t.Fatal("10:50 — конец первого приёма, а не начало второго")
+		}
+	})
+
+	t.Run("секунды и неизвестный пояс не годятся", func(t *testing.T) {
+		s := sampleSchedule()
+		if MoveAligned(s, time.Date(2026, 9, 15, 11, 0, 30, 0, msk)) {
+			t.Fatal("точка старта с секундами в сетке не лежит")
+		}
+		s.Timezone = "Europe/Атлантида"
+		if MoveAligned(s, at(15, 11, 0)) {
+			t.Fatal("пояс не загрузился — годной точку называть нельзя")
+		}
+	})
+}

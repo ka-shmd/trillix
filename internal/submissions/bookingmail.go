@@ -11,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/mail"
 )
@@ -83,6 +84,9 @@ func (s *Service) notifyBooking(
 			"cancel_link": link,
 			"form_link":   s.formBaseURL + "/r/" + slug,
 		},
+		// SEQUENCE 0 — нулевой номер редакции события: письмо о самой записи уходит
+		// в момент её создания, когда `bookings.revision` ещё нулевой. Дальше номер
+		// ведёт сама строка, и присылает его тот, кто её правил.
 		Inline: []mail.File{s.invite(domain.ICSRequest, 0, b, owner.PublicTitle, to, link)},
 	}
 	if err := s.mail.EnqueueEmail(ctx, s.db, msg); err != nil {
@@ -163,6 +167,7 @@ func (s *Service) NotifyBookingCanceled(
 	formID, submissionID, bookingID uuid.UUID,
 	startsAt time.Time,
 	durationMinutes int,
+	sequence int,
 	timezone string,
 ) {
 	log := httpserver.LoggerFrom(ctx)
@@ -172,32 +177,8 @@ func (s *Service) NotifyBookingCanceled(
 		// получателю, откуда письмо взялось.
 		return
 	}
-	row, err := s.repo.GetForPrint(ctx, s.db, formID, submissionID)
-	if err != nil {
-		log.Warn("submission not read for booking cancel mail",
-			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
-		return
-	}
-	schema, err := domain.ValidateSchema(row.Schema)
-	if err != nil {
-		log.Warn("schema not parsed for booking cancel mail",
-			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
-		return
-	}
-	var answers map[string]json.RawMessage
-	if err := json.Unmarshal(row.Answers, &answers); err != nil {
-		log.Warn("answers not parsed for booking cancel mail",
-			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
-		return
-	}
-	owner, err := s.forms.SubmissionOwner(ctx, formID)
-	if err != nil {
-		log.Warn("submission owner not resolved for booking cancel mail",
-			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
-		return
-	}
-	to := domain.BookingAddress(owner.RespondentEmail, schema, answers)
-	if to == "" {
+	owner, to, ok := s.bookingRecipient(ctx, formID, submissionID, "cancel")
+	if !ok {
 		return
 	}
 
@@ -215,12 +196,119 @@ func (s *Service) NotifyBookingCanceled(
 			"when":       bookingWhen(startsAt, timezone),
 			"form_link":  s.formBaseURL + "/r/" + owner.Slug,
 		},
-		// SEQUENCE 1 — БОЛЬШЕ, чем у приглашения (0): клиент вправе проигнорировать
-		// отмену с номером не выше выданного, приняв её за устаревшую.
-		Inline: []mail.File{s.invite(domain.ICSCancel, 1, b, owner.PublicTitle, to, "")},
+		// НОМЕР ПРИСЫЛАЕТ МОДУЛЬ ЗАПИСИ, и он всегда больше выданного: клиент вправе
+		// проигнорировать отмену с номером не выше принятого, приняв её за
+		// устаревшую. Константы здесь стояла единица — она врала с первого же
+		// переноса, потому что перенос тоже уезжает REQUEST'ом и поднимает номер.
+		Inline: []mail.File{s.invite(domain.ICSCancel, sequence, b, owner.PublicTitle, to, "")},
 	}
 	if err := s.mail.EnqueueEmail(ctx, s.db, msg); err != nil {
 		log.Warn("booking cancel mail not enqueued",
+			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
+	}
+}
+
+// bookingRecipient — кому и от чьего имени слать письмо о чужой встрече.
+//
+// АДРЕС ЖИВЁТ В ОТВЕТЕ ФОРМЫ, а не в строке брони (0050): чтобы его получить, надо
+// поднять ответ, разобрать схему опубликованной версии и найти в ней вопрос про
+// почту. Одно и то же нужно и отмене, и переносу — порознь эти сорок строк разъехались
+// бы молча, и одно из писем стало бы уходить не туда.
+//
+// ok = false означает «письма не будет», и это не всегда ошибка: у формы может не быть
+// вопроса про почту вовсе, а у брони — ответа (его удалили).
+func (s *Service) bookingRecipient(
+	ctx context.Context, formID, submissionID uuid.UUID, purpose string,
+) (forms.Owner, string, bool) {
+	log := httpserver.LoggerFrom(ctx)
+	row, err := s.repo.GetForPrint(ctx, s.db, formID, submissionID)
+	if err != nil {
+		log.Warn("submission not read for booking mail",
+			slog.String("purpose", purpose),
+			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
+		return forms.Owner{}, "", false
+	}
+	schema, err := domain.ValidateSchema(row.Schema)
+	if err != nil {
+		log.Warn("schema not parsed for booking mail",
+			slog.String("purpose", purpose),
+			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
+		return forms.Owner{}, "", false
+	}
+	var answers map[string]json.RawMessage
+	if err := json.Unmarshal(row.Answers, &answers); err != nil {
+		log.Warn("answers not parsed for booking mail",
+			slog.String("purpose", purpose),
+			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
+		return forms.Owner{}, "", false
+	}
+	owner, err := s.forms.SubmissionOwner(ctx, formID)
+	if err != nil {
+		log.Warn("submission owner not resolved for booking mail",
+			slog.String("purpose", purpose),
+			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+		return forms.Owner{}, "", false
+	}
+	to := domain.BookingAddress(owner.RespondentEmail, schema, answers)
+	if to == "" {
+		return forms.Owner{}, "", false
+	}
+	return owner, to, true
+}
+
+// NotifyBookingRescheduled ставит письмо о переносе записи.
+//
+// МЕТОД REQUEST, А НЕ CANCEL, и UID тот же: календарь получателя ДВИГАЕТ встречу, а
+// не заводит вторую рядом с погашенной. Номер редакции присылает модуль записи — он
+// растёт в той же транзакции, что переносит бронь (0052), и приглашение с номером не
+// больше принятого клиент вправе отбросить.
+//
+// Зовёт его только кабинет: у респондента переноса нет, в письме у него одна кнопка —
+// отменить (ADR §10). Best-effort: письмо не имеет права отменить состоявшийся перенос.
+func (s *Service) NotifyBookingRescheduled(
+	ctx context.Context,
+	formID, submissionID, bookingID uuid.UUID,
+	wasAt, startsAt time.Time,
+	durationMinutes int,
+	sequence int,
+	timezone string,
+) {
+	log := httpserver.LoggerFrom(ctx)
+	if s.bookingOrganizer == "" || s.formBaseURL == "" {
+		return
+	}
+	owner, to, ok := s.bookingRecipient(ctx, formID, submissionID, "reschedule")
+	if !ok {
+		return
+	}
+
+	b := slotBooking{
+		BookingID:       bookingID,
+		StartsAt:        startsAt,
+		DurationMinutes: durationMinutes,
+		Timezone:        timezone,
+	}
+	// Ссылка отмены остаётся ЖИВОЙ и едет снова: перенос её не гасит (подпись
+	// покрывает id брони, а он не менялся), а письмо о переносе — последнее, что у
+	// человека на руках, и отменять он будет из него.
+	link := ""
+	if s.bookings != nil {
+		link = s.bookings.CancelLink(bookingID)
+	}
+	msg := mail.EmailMessage{
+		To:       to,
+		Template: mail.TemplateBookingRescheduled,
+		Data: map[string]any{
+			"form_title":  owner.PublicTitle,
+			"was":         bookingWhen(wasAt, timezone),
+			"when":        bookingWhen(startsAt, timezone),
+			"cancel_link": link,
+			"form_link":   s.formBaseURL + "/r/" + owner.Slug,
+		},
+		Inline: []mail.File{s.invite(domain.ICSRequest, sequence, b, owner.PublicTitle, to, link)},
+	}
+	if err := s.mail.EnqueueEmail(ctx, s.db, msg); err != nil {
+		log.Warn("booking reschedule mail not enqueued",
 			slog.String("submission_id", submissionID.String()), slog.String("error", err.Error()))
 	}
 }

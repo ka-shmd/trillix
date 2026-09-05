@@ -17,7 +17,15 @@ import {
   weekStart,
   weekdayOf,
 } from './canvas'
-import { applyGesture, closeDay, dayState, docError, resetDay, type Gesture } from './canvasEdit'
+import {
+  applyGesture,
+  closeDay,
+  dayState,
+  docError,
+  resetDay,
+  snapToGrid,
+  type Gesture,
+} from './canvasEdit'
 
 const base: Availability = {
   weekly: {
@@ -434,5 +442,48 @@ describe('дата колонки по числу в шапке', () => {
   it('чужое число — не дата', () => {
     expect(dateByNumber(week, '31')).toBeUndefined()
     expect(dateByNumber(week, 'вт')).toBeUndefined()
+  })
+})
+
+// snapToGrid — зеркало domain.MoveAligned. Решает сервер, но промах в семь минут не
+// должен превращаться в 422: карточка обязана прилипнуть к годной точке сама.
+describe('прилипание переносимой записи к сетке', () => {
+  const doc: Availability = {
+    weekly: { tue: [{ from: '10:00', to: '18:00' }] },
+    exceptions: [],
+  }
+  // 15 сентября 2026 — вторник.
+  const tue = '2026-09-15'
+
+  it('промах в семь минут возвращается на слот', () => {
+    expect(snapToGrid(doc, tue, 11 * 60 + 7, 60)).toBe(11 * 60)
+  })
+
+  it('окно с получаса даёт свою сетку, а не кратность полуночи', () => {
+    const odd: Availability = { weekly: { tue: [{ from: '10:30', to: '18:00' }] }, exceptions: [] }
+    expect(snapToGrid(odd, tue, 11 * 60 + 20, 60)).toBe(11 * 60 + 30)
+  })
+
+  it('вне часов приёма прилипает к шагу от полуночи', () => {
+    // Ночь: окон приёма нет вовсе, но перенос туда законен.
+    expect(snapToGrid(doc, tue, 2 * 60 + 25, 60)).toBe(2 * 60)
+  })
+
+  it('буфер входит в шаг', () => {
+    // Шаг 70: слоты окна идут 10:00, 11:10, 12:20.
+    expect(snapToGrid(doc, tue, 11 * 60 + 20, 70)).toBe(11 * 60 + 10)
+  })
+
+  it('за край суток не выносит', () => {
+    const late: Availability = { weekly: { tue: [{ from: '23:00', to: '24:00' }] }, exceptions: [] }
+    expect(snapToGrid(late, tue, 23 * 60 + 50, 60)).toBeLessThan(24 * 60)
+  })
+
+  it('исключение по дате перебивает правило и здесь', () => {
+    const withEx: Availability = {
+      ...doc,
+      exceptions: [{ date: tue, windows: [{ from: '10:30', to: '12:00' }] }],
+    }
+    expect(snapToGrid(withEx, tue, 11 * 60 + 20, 60)).toBe(11 * 60 + 30)
   })
 })

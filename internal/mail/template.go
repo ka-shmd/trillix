@@ -56,6 +56,11 @@ const (
 	// приглашением, но методом CANCEL: клиент гасит событие в календаре.
 	// Data: {"form_title", "when", "form_link"}.
 	TemplateBookingCanceled Template = "booking_canceled"
+	// TemplateBookingRescheduled — письмо о переносе записи автором. Приглашение —
+	// REQUEST с тем же UID и бо́льшим номером редакции: календарь ДВИГАЕТ встречу, а
+	// не заводит вторую. Data: {"form_title", "was", "when", "cancel_link",
+	// "form_link"}.
+	TemplateBookingRescheduled Template = "booking_rescheduled"
 	// TemplatePasswordChanged — уведомление о смене пароля (фаза 23, слайс C).
 	// Data: {"link": "<url восстановления>"}. Ссылки-токена в нём нет: письмо не
 	// даёт никаких прав, а только сообщает о случившемся.
@@ -181,6 +186,25 @@ var templates = map[Template]mailTemplate{
 				"{{.cancel_link}}",
 		)),
 		footer: template.Must(template.New("booking_confirmed_footer").Parse(
+			"--\n" +
+				"Вы получили это письмо, потому что записались через форму " +
+				"«{{.form_title}}» в Trillix:\n{{.form_link}}",
+		)),
+	},
+	TemplateBookingRescheduled: {
+		subject: "Запись перенесена",
+		body: template.Must(template.New("booking_rescheduled").Parse(
+			"Здравствуйте!\n\n" +
+				"Запись через форму «{{.form_title}}» перенесена.\n\n" +
+				"Было: {{.was}}\n" +
+				"Стало: {{.when}}\n\n" +
+				"Приложенное приглашение двигает встречу в календаре — второй она " +
+				"не станет.\n\n" +
+				"Если новое время не подходит, отмените запись по ссылке и " +
+				"выберите другое:\n\n" +
+				"{{.cancel_link}}",
+		)),
+		footer: template.Must(template.New("booking_rescheduled_footer").Parse(
 			"--\n" +
 				"Вы получили это письмо, потому что записались через форму " +
 				"«{{.form_title}}» в Trillix:\n{{.form_link}}",

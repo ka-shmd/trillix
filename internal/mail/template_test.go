@@ -212,6 +212,7 @@ func templateByName(t *testing.T, name string) Template {
 		"TemplateRespondentReceipt":  TemplateRespondentReceipt,
 		"TemplateBookingConfirmed":   TemplateBookingConfirmed,
 		"TemplateBookingCanceled":    TemplateBookingCanceled,
+		"TemplateBookingRescheduled": TemplateBookingRescheduled,
 		"TemplatePasswordChanged":    TemplatePasswordChanged,
 	}
 	value, ok := byName[name]

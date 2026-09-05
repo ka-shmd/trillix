@@ -14,6 +14,7 @@ import {
   listBlocks,
   listBookings,
   listSchedules,
+  moveBooking,
   removeBlock,
   updateSchedule,
 } from './api'
@@ -117,6 +118,17 @@ export function useCancelBooking(scheduleId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (bookingId: string) => cancelBooking(scheduleId, bookingId),
+    onSuccess: () => invalidateBusy(qc, scheduleId),
+  })
+}
+
+// Перенос меняет ЗАНЯТОЕ так же, как отмена: место уходит с одной точки оси и
+// появляется на другой.
+export function useMoveBooking(scheduleId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (v: { bookingId: string; startsAt: string }) =>
+      moveBooking(scheduleId, v.bookingId, v.startsAt),
     onSuccess: () => invalidateBusy(qc, scheduleId),
   })
 }

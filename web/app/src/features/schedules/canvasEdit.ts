@@ -162,3 +162,36 @@ export function dayState(a: Availability, date: string): 'weekly' | 'exception' 
   if (!ex) return 'weekly'
   return ex.windows.length === 0 ? 'closed' : 'exception'
 }
+
+// snapToGrid — куда на самом деле встанет карточка записи, брошенная в эту минуту.
+//
+// ЗЕРКАЛО СЕРВЕРА, А НЕ ЗАМЕНА ЕМУ: то же правило написано в Go (domain.MoveAligned)
+// и решает именно там (инвариант 3). Здесь оно нужно затем, чтобы автор не получал
+// 422 за промах в семь минут — карточка липнет к ближайшей годной точке, а диалог
+// подтверждения называет ту, что вышла.
+//
+// Правило двухступенчатое, и обе ступени обязательны:
+//
+//   • начало слота, который расписание нарезало бы в этот день, — то есть отстоящее
+//     от начала окна приёма на целое число шагов. Без этой ступени расписание с
+//     приёмом от 10:30 не позволило бы попасть ни в один собственный слот;
+//   • кратность шагу от полуночи — ответ для времени ВНЕ окон приёма, где своей
+//     сетки нет вовсе. Автор вправе поставить человека и туда (ADR §10).
+//
+// Ближайшая из ступеней и выигрывает; при равном расстоянии — более ранняя.
+export function snapToGrid(a: Availability, date: string, minutes: number, step: number): number {
+  if (step <= 0) return minutes
+  const candidates: number[] = [Math.round(minutes / step) * step]
+  for (const w of effectiveWindows(a, date).windows) {
+    const from = clockToMinutes(w.from)
+    if (from === null) continue
+    candidates.push(from + Math.round((minutes - from) / step) * step)
+  }
+  const inDay = candidates.filter((c) => c >= 0 && c < 24 * 60)
+  if (inDay.length === 0) return minutes
+  return inDay.reduce((best, c) => {
+    const closer = Math.abs(c - minutes) < Math.abs(best - minutes)
+    const tie = Math.abs(c - minutes) === Math.abs(best - minutes) && c < best
+    return closer || tie ? c : best
+  })
+}

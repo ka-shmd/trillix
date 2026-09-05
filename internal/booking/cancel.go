@@ -36,8 +36,20 @@ var _ CancelStore = Repo{}
 // Зовётся best-effort: письмо не имеет права отменить отмену. Человек нажал кнопку,
 // место освободилось — сбой почты этого уже не отменяет.
 type CancelNotifier interface {
+	// sequence — номер редакции документа календаря. Едет ПАРАМЕТРОМ, а не считается
+	// на месте: он живёт в строке брони (bookings.revision, 0052) и растёт с каждым
+	// переносом, а модуль писем о ней знает только id.
 	NotifyBookingCanceled(ctx context.Context, formID, submissionID, bookingID uuid.UUID,
-		startsAt time.Time, durationMinutes int, timezone string)
+		startsAt time.Time, durationMinutes int, sequence int, timezone string)
+}
+
+// BookingNotifier — письма о чужой встрече, которые шлёт КАБИНЕТ. Отмена у него общая
+// с отменой по ссылке, а перенос бывает только отсюда: респонденту переноса не дано
+// (ADR §10), у него в письме одна кнопка — отменить.
+type BookingNotifier interface {
+	CancelNotifier
+	NotifyBookingRescheduled(ctx context.Context, formID, submissionID, bookingID uuid.UUID,
+		wasAt, startsAt time.Time, durationMinutes int, sequence int, timezone string)
 }
 
 // CancelService — страница отмены и сама отмена.
@@ -78,10 +90,12 @@ type Card struct {
 	// Canceled — запись уже отменена. Не ошибка: по ссылке переходят дважды, и второй
 	// раз человек обязан увидеть «уже отменено», а не отказ.
 	Canceled bool
-	// Ниже — служебное: письму об отмене нужно знать, у какого ответа брать адрес.
-	// Наружу не отдаётся (см. cardView в public_handler.go).
+	// Ниже — служебное: письму об отмене нужно знать, у какого ответа брать адрес и
+	// с каким номером редакции гасить событие календаря. Наружу не отдаётся
+	// (см. cardView в public_handler.go).
 	formID       uuid.UUID
 	submissionID *uuid.UUID
+	revision     int
 }
 
 // Show — карточка записи по ссылке отмены.
@@ -110,6 +124,7 @@ func (s *CancelService) Show(ctx context.Context, tok string) (Card, error) {
 		Canceled:        b.Status == domain.BookingCanceled,
 		formID:          b.FormID,
 		submissionID:    b.SubmissionID,
+		revision:        b.Revision,
 	}, nil
 }
 
@@ -135,7 +150,9 @@ func (s *CancelService) Cancel(ctx context.Context, tok string) (Card, error) {
 	// гасит событие тем же UID, а сбой почты уже освобождённое место не занимает.
 	if s.notifier != nil && card.formID != uuid.Nil && card.submissionID != nil {
 		s.notifier.NotifyBookingCanceled(ctx, card.formID, *card.submissionID, id,
-			card.StartsAt, card.DurationMinutes, card.Timezone)
+			// СЛЕДУЮЩИЙ номер, а не единица: после переносов приглашение уже уехало
+			// с бо́льшим, и отмена с прежним была бы отброшена как устаревшая.
+			card.StartsAt, card.DurationMinutes, card.revision+1, card.Timezone)
 	}
 	return card, nil
 }
