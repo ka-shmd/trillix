@@ -131,13 +131,17 @@ WHERE b.schedule_id = $1
   AND b.starts_at + make_interval(mins => b.duration_minutes) > $2
 ORDER BY b.starts_at, b.id;
 
--- name: CancelBookingByAuthor :execrows
+-- name: CancelBookingByAuthor :one
 -- Отмена записи автором из кабинета. Место освобождается тем же утверждением:
 -- строка перестаёт считаться занятой в тот же момент, когда меняется статус.
 --
--- Повторная отмена даёт 0 строк — для вызывающего это «уже отменена», а не ошибка.
+-- Повторная отмена не даёт строк — для вызывающего это «уже отменена», а не ошибка.
+--
+-- Номер редакции возвращается отсюда же: отмена уезжает со СЛЕДУЮЩИМ, и прочитанный
+-- заранее разошёлся бы с переносом, случившимся между чтением и этим UPDATE.
 UPDATE bookings SET status = 'canceled', canceled_at = now()
-WHERE id = $1 AND schedule_id = $2 AND status <> 'canceled';
+WHERE id = $1 AND schedule_id = $2 AND status <> 'canceled'
+RETURNING revision;
 
 -- name: TakenSeatsInRange :many
 -- Сколько мест занято в каждой точке отрезка. Публичная выдача свободного времени
@@ -231,18 +235,21 @@ SELECT capacity FROM schedules WHERE id = $1;
 -- Имени и контактов записавшегося здесь нет — их знает только ответ формы, и страница
 -- отмены к нему не ходит (спека §13).
 SELECT b.id, b.form_id, b.submission_id, b.starts_at, b.duration_minutes, b.seats, b.status,
-       b.revision, coalesce(f.name, f.title) AS form_title, s.timezone
+       coalesce(f.name, f.title) AS form_title, s.timezone
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 JOIN schedules s ON s.id = b.schedule_id
 WHERE b.id = $1;
 
--- name: CancelBookingByID :execrows
+-- name: CancelBookingByID :one
 -- Отмена по ссылке из письма. Право предъявляет сам токен (подпись покрывает id и
 -- срок), поэтому в условии только id и «ещё не отменена»: повторный переход по той же
--- ссылке даёт 0 строк, и для человека это «уже отменено», а не ошибка.
+-- ссылке не даёт строк, и для человека это «уже отменено», а не ошибка.
+--
+-- Номер редакции — отсюда же, по тому же доводу, что у отмены из кабинета.
 UPDATE bookings SET status = 'canceled', canceled_at = now()
-WHERE id = $1 AND status <> 'canceled';
+WHERE id = $1 AND status <> 'canceled'
+RETURNING revision;
 
 -- name: DeleteExpiredHolds :execrows
 -- Чистка протухших холдов (internal/periodic).
@@ -279,8 +286,10 @@ WHERE f.id = $1;
 -- Бронь перед переносом: что двигаем и сколько мест это займёт на новом месте.
 -- Расписание спрашивается вместе с ней — id из адреса правом не является, и строка
 -- чужого расписания обязана быть неотличима от несуществующей.
+-- Номера редакции здесь НЕТ: его отдаёт сам перенос (RETURNING), потому что
+-- прочитанный заранее одинаков у двух одновременных переносов.
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
-       b.starts_at, b.duration_minutes, b.seats, b.status, b.revision
+       b.starts_at, b.duration_minutes, b.seats, b.status
 FROM bookings b
 WHERE b.id = $1 AND b.schedule_id = $2 AND b.status = 'confirmed';
 
@@ -295,12 +304,19 @@ FROM bookings
 WHERE schedule_id = $1 AND starts_at = $2 AND id <> $3
   AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()));
 
--- name: MoveBooking :execrows
+-- name: MoveBooking :one
 -- Перенос брони на новое время. НОМЕР РЕДАКЦИИ РАСТЁТ ТЕМ ЖЕ УТВЕРЖДЕНИЕМ: разъедься
 -- они, приглашение уехало бы с номером, который чужой календарь уже видел, и правка
 -- была бы отброшена как устаревшая.
 --
 -- Длительность НЕ пересчитывается по нынешней нарезке: она снимок момента записи
 -- (0050), и перенос встречи её менять не должен.
+--
+-- НОМЕР ВОЗВРАЩАЕТСЯ ЭТИМ ЖЕ УТВЕРЖДЕНИЕМ, а не читается заранее: два переноса одной
+-- брони в РАЗНЫЕ слоты берут разные advisory-lock'и и друг друга не ждут, поэтому
+-- прочитанный до транзакции номер у обоих одинаков — и оба письма уехали бы с общим
+-- SEQUENCE. Здесь их разводит блокировка строки: UPDATE'ы одной строки Postgres
+-- сериализует сам, и RETURNING отдаёт каждому свой номер.
 UPDATE bookings SET starts_at = $3, revision = revision + 1
-WHERE id = $1 AND schedule_id = $2 AND status = 'confirmed';
+WHERE id = $1 AND schedule_id = $2 AND status = 'confirmed'
+RETURNING revision;

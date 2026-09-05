@@ -458,14 +458,36 @@ func MoveAligned(s Schedule, at time.Time) bool {
 	minutes := local.Hour()*60 + local.Minute()
 
 	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	inWindow := false
 	for _, w := range windowsForDate(s.Availability, date) {
 		from, err := parseClock(w.From)
 		if err != nil {
 			continue
 		}
-		if minutes >= from && (minutes-from)%step == 0 {
+		to, err := parseClock(w.To)
+		if err != nil {
+			continue
+		}
+		if minutes < from || minutes >= to {
+			// Точка вне этого окна. Продолжение сетки окна ЗА его конец не годится:
+			// 13:30 при окне 10:00–13:00 и шаге 70 отстоит от начала на целое число
+			// шагов, но приёма там уже нет, а встреча накрыла бы слот 14:00.
+			continue
+		}
+		inWindow = true
+		if (minutes-from)%step == 0 {
 			return true
 		}
+	}
+	// ⚠ ВТОРАЯ СТУПЕНЬ ДЕЙСТВУЕТ ТОЛЬКО ВНЕ ОКОН ПРИЁМА. Внутри окна у времени есть
+	// СВОЯ сетка, и кратность шагу от полуночи с ней не совпадает: при окне с 10:00
+	// и шаге 70 расписание нарезает 10:00 и 11:10, а 11:40 кратно 70 от полуночи —
+	// то есть попадает в час приёма мимо всех его слотов. Такая бронь не встретится
+	// в счёте занятости ни с чем (он считается по равенству точки старта), и в 11:10
+	// при вместимости 1 сядет второй человек: две встречи внахлёст, и ни одна не
+	// видит другую.
+	if inWindow {
+		return false
 	}
 	return minutes%step == 0
 }

@@ -300,15 +300,21 @@ func (Repo) BookingsInRange(ctx context.Context, db postgres.DBTX, scheduleID uu
 	return out, nil
 }
 
-func (Repo) CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int64, error) {
-	n, err := postgres.New(db).CancelBookingByAuthor(ctx, postgres.CancelBookingByAuthorParams{
+// CancelBooking отменяет запись из кабинета и возвращает НОМЕР РЕДАКЦИИ отменённой
+// строки. pgx.ErrNoRows означает «нет такой записи или уже отменена» — вызывающий
+// различает это сам.
+func (Repo) CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int, error) {
+	rev, err := postgres.New(db).CancelBookingByAuthor(ctx, postgres.CancelBookingByAuthorParams{
 		ID:         id,
 		ScheduleID: scheduleID,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, err
+		}
 		return 0, fmt.Errorf("cancel booking %s: %w", id, err)
 	}
-	return n, nil
+	return int(rev), nil
 }
 
 // scheduleFrom — строка БД в доменное расписание. Документ правила разбирается
@@ -485,11 +491,8 @@ type BookingCard struct {
 	DurationMinutes int
 	Seats           int
 	Status          string
-	// Revision — номер редакции события календаря. Отмена уезжает со СЛЕДУЮЩИМ:
-	// документ с номером не выше принятого клиент вправе отбросить как устаревший.
-	Revision  int
-	FormTitle string
-	Timezone  string
+	FormTitle       string
+	Timezone        string
 }
 
 // BookingForCancel — карточка записи для страницы отмены.
@@ -501,7 +504,6 @@ type BookingMove struct {
 	StartsAt        time.Time
 	DurationMinutes int
 	Seats           int
-	Revision        int
 }
 
 func (Repo) BookingForMove(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (BookingMove, error) {
@@ -515,7 +517,6 @@ func (Repo) BookingForMove(ctx context.Context, db postgres.DBTX, id, scheduleID
 		StartsAt:        row.StartsAt.Time.UTC(),
 		DurationMinutes: int(row.DurationMinutes),
 		Seats:           int(row.Seats),
-		Revision:        int(row.Revision),
 	}
 	if row.SubmissionID.Valid {
 		id := uuid.UUID(row.SubmissionID.Bytes)
@@ -537,12 +538,15 @@ func (Repo) TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid
 	return int(n), nil
 }
 
-func (Repo) MoveBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID, startsAt time.Time) (int64, error) {
-	return postgres.New(db).MoveBooking(ctx, postgres.MoveBookingParams{
+// MoveBooking двигает бронь и возвращает НОВЫЙ номер редакции — тот, с которым уедет
+// приглашение. pgx.ErrNoRows — строку между чтением и правкой отменили.
+func (Repo) MoveBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID, startsAt time.Time) (int, error) {
+	rev, err := postgres.New(db).MoveBooking(ctx, postgres.MoveBookingParams{
 		ID:         id,
 		ScheduleID: scheduleID,
 		StartsAt:   pgtype.Timestamptz{Time: startsAt, Valid: true},
 	})
+	return int(rev), err
 }
 
 func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error) {
@@ -557,7 +561,6 @@ func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID
 		DurationMinutes: int(row.DurationMinutes),
 		Seats:           int(row.Seats),
 		Status:          row.Status,
-		Revision:        int(row.Revision),
 		FormTitle:       row.FormTitle,
 		Timezone:        row.Timezone,
 	}
@@ -569,12 +572,15 @@ func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID
 }
 
 // CancelByID отменяет запись по ссылке из письма. Право предъявил токен.
-func (Repo) CancelByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int64, error) {
-	n, err := postgres.New(db).CancelBookingByID(ctx, id)
+func (Repo) CancelByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int, error) {
+	rev, err := postgres.New(db).CancelBookingByID(ctx, id)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, err
+		}
 		return 0, fmt.Errorf("cancel booking %s: %w", id, err)
 	}
-	return n, nil
+	return int(rev), nil
 }
 
 // PurgeExpiredHolds убирает протухшие холды старше before. Место они не держат и так

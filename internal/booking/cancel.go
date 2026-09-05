@@ -23,7 +23,9 @@ import (
 // CancelStore — доступ к данным отмены.
 type CancelStore interface {
 	BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error)
-	CancelByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int64, error)
+	// CancelByID возвращает номер редакции отменённой строки; pgx.ErrNoRows — запись
+	// исчезла или отменена между показом карточки и нажатием.
+	CancelByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int, error)
 	PurgeExpiredHolds(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error)
 }
 
@@ -90,12 +92,12 @@ type Card struct {
 	// Canceled — запись уже отменена. Не ошибка: по ссылке переходят дважды, и второй
 	// раз человек обязан увидеть «уже отменено», а не отказ.
 	Canceled bool
-	// Ниже — служебное: письму об отмене нужно знать, у какого ответа брать адрес и
-	// с каким номером редакции гасить событие календаря. Наружу не отдаётся
-	// (см. cardView в public_handler.go).
+	// Ниже — служебное: письму об отмене нужно знать, у какого ответа брать адрес.
+	// Наружу не отдаётся (см. cardView в public_handler.go). Номера редакции здесь
+	// НЕТ намеренно: его отдаёт сама отмена, потому что между показом карточки и
+	// нажатием запись могли перенести.
 	formID       uuid.UUID
 	submissionID *uuid.UUID
-	revision     int
 }
 
 // Show — карточка записи по ссылке отмены.
@@ -124,7 +126,6 @@ func (s *CancelService) Show(ctx context.Context, tok string) (Card, error) {
 		Canceled:        b.Status == domain.BookingCanceled,
 		formID:          b.FormID,
 		submissionID:    b.SubmissionID,
-		revision:        b.Revision,
 	}, nil
 }
 
@@ -142,7 +143,18 @@ func (s *CancelService) Cancel(ctx context.Context, tok string) (Card, error) {
 		return card, nil
 	}
 	id, _ := ParseCancelToken(s.secret, tok, s.now())
-	if _, err := s.repo.CancelByID(ctx, s.db, id); err != nil {
+	// НОМЕР РЕДАКЦИИ БЕРЁТСЯ У САМОЙ ОТМЕНЫ, а не из карточки, показанной раньше:
+	// между показом и нажатием запись могли перенести, и номер из карточки оказался
+	// бы не больше уже выданного — такую отмену клиент вправе отбросить как
+	// устаревшую, и встреча осталась бы в календаре навсегда.
+	revision, err := s.repo.CancelByID(ctx, s.db, id)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Отменили в соседней вкладке, пока человек читал карточку: для него это
+			// тот же успех, что и повторный переход по ссылке.
+			card.Canceled = true
+			return card, nil
+		}
 		return Card{}, err
 	}
 	card.Canceled = true
@@ -152,7 +164,7 @@ func (s *CancelService) Cancel(ctx context.Context, tok string) (Card, error) {
 		s.notifier.NotifyBookingCanceled(ctx, card.formID, *card.submissionID, id,
 			// СЛЕДУЮЩИЙ номер, а не единица: после переносов приглашение уже уехало
 			// с бо́льшим, и отмена с прежним была бы отброшена как устаревшая.
-			card.StartsAt, card.DurationMinutes, card.revision+1, card.Timezone)
+			card.StartsAt, card.DurationMinutes, revision+1, card.Timezone)
 	}
 	return card, nil
 }

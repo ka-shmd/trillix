@@ -56,7 +56,7 @@ func (q *Queries) BlocksInRange(ctx context.Context, arg BlocksInRangeParams) ([
 
 const bookingForMove = `-- name: BookingForMove :one
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
-       b.starts_at, b.duration_minutes, b.seats, b.status, b.revision
+       b.starts_at, b.duration_minutes, b.seats, b.status
 FROM bookings b
 WHERE b.id = $1 AND b.schedule_id = $2 AND b.status = 'confirmed'
 `
@@ -75,12 +75,13 @@ type BookingForMoveRow struct {
 	DurationMinutes int32
 	Seats           int32
 	Status          string
-	Revision        int32
 }
 
 // Бронь перед переносом: что двигаем и сколько мест это займёт на новом месте.
 // Расписание спрашивается вместе с ней — id из адреса правом не является, и строка
 // чужого расписания обязана быть неотличима от несуществующей.
+// Номера редакции здесь НЕТ: его отдаёт сам перенос (RETURNING), потому что
+// прочитанный заранее одинаков у двух одновременных переносов.
 func (q *Queries) BookingForMove(ctx context.Context, arg BookingForMoveParams) (BookingForMoveRow, error) {
 	row := q.db.QueryRow(ctx, bookingForMove, arg.ID, arg.ScheduleID)
 	var i BookingForMoveRow
@@ -93,7 +94,6 @@ func (q *Queries) BookingForMove(ctx context.Context, arg BookingForMoveParams) 
 		&i.DurationMinutes,
 		&i.Seats,
 		&i.Status,
-		&i.Revision,
 	)
 	return i, err
 }
@@ -197,9 +197,10 @@ func (q *Queries) BumpAIGenerations(ctx context.Context, arg BumpAIGenerationsPa
 	return err
 }
 
-const cancelBookingByAuthor = `-- name: CancelBookingByAuthor :execrows
+const cancelBookingByAuthor = `-- name: CancelBookingByAuthor :one
 UPDATE bookings SET status = 'canceled', canceled_at = now()
 WHERE id = $1 AND schedule_id = $2 AND status <> 'canceled'
+RETURNING revision
 `
 
 type CancelBookingByAuthorParams struct {
@@ -210,29 +211,33 @@ type CancelBookingByAuthorParams struct {
 // Отмена записи автором из кабинета. Место освобождается тем же утверждением:
 // строка перестаёт считаться занятой в тот же момент, когда меняется статус.
 //
-// Повторная отмена даёт 0 строк — для вызывающего это «уже отменена», а не ошибка.
-func (q *Queries) CancelBookingByAuthor(ctx context.Context, arg CancelBookingByAuthorParams) (int64, error) {
-	result, err := q.db.Exec(ctx, cancelBookingByAuthor, arg.ID, arg.ScheduleID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// Повторная отмена не даёт строк — для вызывающего это «уже отменена», а не ошибка.
+//
+// Номер редакции возвращается отсюда же: отмена уезжает со СЛЕДУЮЩИМ, и прочитанный
+// заранее разошёлся бы с переносом, случившимся между чтением и этим UPDATE.
+func (q *Queries) CancelBookingByAuthor(ctx context.Context, arg CancelBookingByAuthorParams) (int32, error) {
+	row := q.db.QueryRow(ctx, cancelBookingByAuthor, arg.ID, arg.ScheduleID)
+	var revision int32
+	err := row.Scan(&revision)
+	return revision, err
 }
 
-const cancelBookingByID = `-- name: CancelBookingByID :execrows
+const cancelBookingByID = `-- name: CancelBookingByID :one
 UPDATE bookings SET status = 'canceled', canceled_at = now()
 WHERE id = $1 AND status <> 'canceled'
+RETURNING revision
 `
 
 // Отмена по ссылке из письма. Право предъявляет сам токен (подпись покрывает id и
 // срок), поэтому в условии только id и «ещё не отменена»: повторный переход по той же
-// ссылке даёт 0 строк, и для человека это «уже отменено», а не ошибка.
-func (q *Queries) CancelBookingByID(ctx context.Context, id uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, cancelBookingByID, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// ссылке не даёт строк, и для человека это «уже отменено», а не ошибка.
+//
+// Номер редакции — отсюда же, по тому же доводу, что у отмены из кабинета.
+func (q *Queries) CancelBookingByID(ctx context.Context, id uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, cancelBookingByID, id)
+	var revision int32
+	err := row.Scan(&revision)
+	return revision, err
 }
 
 const claimSubmissionFile = `-- name: ClaimSubmissionFile :execrows
@@ -1720,7 +1725,7 @@ func (q *Queries) GetAccountEntitlements(ctx context.Context, userID uuid.UUID) 
 
 const getBookingForCancel = `-- name: GetBookingForCancel :one
 SELECT b.id, b.form_id, b.submission_id, b.starts_at, b.duration_minutes, b.seats, b.status,
-       b.revision, coalesce(f.name, f.title) AS form_title, s.timezone
+       coalesce(f.name, f.title) AS form_title, s.timezone
 FROM bookings b
 JOIN forms f ON f.id = b.form_id
 JOIN schedules s ON s.id = b.schedule_id
@@ -1735,7 +1740,6 @@ type GetBookingForCancelRow struct {
 	DurationMinutes int32
 	Seats           int32
 	Status          string
-	Revision        int32
 	FormTitle       string
 	Timezone        string
 }
@@ -1754,7 +1758,6 @@ func (q *Queries) GetBookingForCancel(ctx context.Context, id uuid.UUID) (GetBoo
 		&i.DurationMinutes,
 		&i.Seats,
 		&i.Status,
-		&i.Revision,
 		&i.FormTitle,
 		&i.Timezone,
 	)
@@ -5067,9 +5070,10 @@ func (q *Queries) MarkVisitSubmitted(ctx context.Context, arg MarkVisitSubmitted
 	return result.RowsAffected(), nil
 }
 
-const moveBooking = `-- name: MoveBooking :execrows
+const moveBooking = `-- name: MoveBooking :one
 UPDATE bookings SET starts_at = $3, revision = revision + 1
 WHERE id = $1 AND schedule_id = $2 AND status = 'confirmed'
+RETURNING revision
 `
 
 type MoveBookingParams struct {
@@ -5084,12 +5088,17 @@ type MoveBookingParams struct {
 //
 // Длительность НЕ пересчитывается по нынешней нарезке: она снимок момента записи
 // (0050), и перенос встречи её менять не должен.
-func (q *Queries) MoveBooking(ctx context.Context, arg MoveBookingParams) (int64, error) {
-	result, err := q.db.Exec(ctx, moveBooking, arg.ID, arg.ScheduleID, arg.StartsAt)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+//
+// НОМЕР ВОЗВРАЩАЕТСЯ ЭТИМ ЖЕ УТВЕРЖДЕНИЕМ, а не читается заранее: два переноса одной
+// брони в РАЗНЫЕ слоты берут разные advisory-lock'и и друг друга не ждут, поэтому
+// прочитанный до транзакции номер у обоих одинаков — и оба письма уехали бы с общим
+// SEQUENCE. Здесь их разводит блокировка строки: UPDATE'ы одной строки Postgres
+// сериализует сам, и RETURNING отдаёт каждому свой номер.
+func (q *Queries) MoveBooking(ctx context.Context, arg MoveBookingParams) (int32, error) {
+	row := q.db.QueryRow(ctx, moveBooking, arg.ID, arg.ScheduleID, arg.StartsAt)
+	var revision int32
+	err := row.Scan(&revision)
+	return revision, err
 }
 
 const nextFormVersion = `-- name: NextFormVersion :one

@@ -181,13 +181,30 @@ export function dayState(a: Availability, date: string): 'weekly' | 'exception' 
 // Ближайшая из ступеней и выигрывает; при равном расстоянии — более ранняя.
 export function snapToGrid(a: Availability, date: string, minutes: number, step: number): number {
   if (step <= 0) return minutes
-  const candidates: number[] = [Math.round(minutes / step) * step]
-  for (const w of effectiveWindows(a, date).windows) {
-    const from = clockToMinutes(w.from)
-    if (from === null) continue
-    candidates.push(from + Math.round((minutes - from) / step) * step)
+  const windows = effectiveWindows(a, date)
+    .windows.map((w) => ({ from: clockToMinutes(w.from), to: clockToMinutes(w.to) }))
+    .filter((w): w is { from: number; to: number } => w.from !== null && w.to !== null)
+
+  const candidates: number[] = []
+  for (const w of windows) {
+    // Шагов от начала окна — не меньше нуля и не дальше его конца. Округление к
+    // ближайшему иначе уводит точку ПЕРЕД окном или ЗА него, а сервер такие не
+    // принимает: у него ступень окна действует ровно внутри `from…to`.
+    for (let at = w.from; at < w.to; at += step) {
+      if (Math.abs(at - minutes) <= step) candidates.push(at)
+    }
   }
+  // Кратность шагу от полуночи — ответ для времени ВНЕ окон приёма, где своей сетки
+  // нет вовсе. Внутри окна такая точка не годится: у окна сетка своя, и бронь мимо
+  // неё не встретится в счёте занятости ни с чем (domain.MoveAligned).
+  for (const c of [Math.floor(minutes / step) * step, Math.ceil(minutes / step) * step]) {
+    if (!windows.some((w) => c >= w.from && c < w.to)) candidates.push(c)
+  }
+
   const inDay = candidates.filter((c) => c >= 0 && c < 24 * 60)
+  // Годной точки в этих сутках нет вовсе (шаг длиннее суток, окно у самой полуночи):
+  // двигать некуда, и сырую минуту сервер отверг бы так же — оставляем как есть,
+  // отказ придёт от него с внятным текстом.
   if (inDay.length === 0) return minutes
   return inDay.reduce((best, c) => {
     const closer = Math.abs(c - minutes) < Math.abs(best - minutes)

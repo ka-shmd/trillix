@@ -17,6 +17,7 @@ import {
   weekStart,
   weekdayOf,
 } from './canvas'
+import { clockToMinutes } from './weekly'
 import {
   applyGesture,
   closeDay,
@@ -485,5 +486,55 @@ describe('прилипание переносимой записи к сетке
       exceptions: [{ date: tue, windows: [{ from: '10:30', to: '12:00' }] }],
     }
     expect(snapToGrid(withEx, tue, 11 * 60 + 20, 60)).toBe(11 * 60 + 30)
+  })
+})
+
+// КОНТРАКТ ЗЕРКАЛА: всё, что предлагает клиент, сервер обязан принять. Предикат
+// ниже — это `domain.MoveAligned` словами теста: точка годится, если кратна шагу от
+// полуночи ЛИБО отстоит от начала окна приёма на целое неотрицательное число шагов.
+// Клиент, предложивший точку вне этого множества, получает 422 на время, которое сам
+// же и выбрал, — и карточка отскакивает без объяснения.
+function serverAccepts(a: Availability, date: string, minutes: number, step: number): boolean {
+  let inWindow = false
+  for (const w of effectiveWindows(a, date).windows) {
+    const from = clockToMinutes(w.from)
+    const to = clockToMinutes(w.to)
+    if (from === null || to === null) continue
+    if (minutes < from || minutes >= to) continue
+    inWindow = true
+    if ((minutes - from) % step === 0) return true
+  }
+  // Внутри окна кратность шагу от полуночи не спасает: у окна сетка своя.
+  return inWindow ? false : minutes % step === 0
+}
+
+describe('прилипание не предлагает того, что сервер отвергнет', () => {
+  const tue = '2026-09-15'
+  const cases: { name: string; windows: { from: string; to: string }[]; step: number }[] = [
+    { name: 'окно на круглом часе', windows: [{ from: '10:00', to: '18:00' }], step: 60 },
+    // Ровно этот случай и ломался: начало окна не кратно шагу, и округление к
+    // ближайшему уводило точку ПЕРЕД окном.
+    { name: 'окно с получаса', windows: [{ from: '10:30', to: '18:00' }], step: 60 },
+    { name: 'шаг с буфером', windows: [{ from: '10:30', to: '18:00' }], step: 70 },
+    {
+      name: 'два окна с перерывом',
+      windows: [
+        { from: '09:45', to: '13:00' },
+        { from: '14:20', to: '18:00' },
+      ],
+      step: 45,
+    },
+    { name: 'день без приёма', windows: [], step: 60 },
+  ]
+
+  it.each(cases)('$name', ({ windows, step }) => {
+    const a: Availability = { weekly: { tue: windows }, exceptions: [] }
+    for (let m = 0; m < 24 * 60; m += 5) {
+      const snapped = snapToGrid(a, tue, m, step)
+      expect(
+        serverAccepts(a, tue, snapped, step),
+        `бросок на ${m} мин прилип к ${snapped}, а сервер такую точку не принимает`,
+      ).toBe(true)
+    }
   })
 })
