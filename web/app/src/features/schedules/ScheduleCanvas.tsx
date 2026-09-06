@@ -327,7 +327,7 @@ export function ScheduleCanvas({
           живут обёртки событий. */}
       <div
         ref={canvasRef}
-        className={`sc-canvas min-h-0 flex-1 overflow-auto ${month ? 'sc-month' : 'sc-grid'}`}
+        className={`sc-canvas sc-cal min-h-0 flex-1 overflow-auto ${month ? 'sc-month' : 'sc-grid'}`}
       >
         <Calendar
           controller={controller}
