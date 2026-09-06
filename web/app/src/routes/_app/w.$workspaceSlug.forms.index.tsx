@@ -1,7 +1,7 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useCallback } from 'react'
-import { Plus } from 'lucide-react'
+import { LayoutTemplate, Plus } from 'lucide-react'
 import { z } from 'zod'
 import { NEW_FORM_SLUG } from '../../features/forms/draft'
 import { formsListQueryOptions } from '../../features/forms/queries'
@@ -11,6 +11,9 @@ import { FormCard } from '../../features/forms/FormCard'
 import { FormsToolbar } from '../../features/forms/FormsToolbar'
 import { DEFAULT_FORMS_SORT, formsSortSchema, type FormsSort } from '../../entities/form'
 import { PageCrumbs } from '../../shared/page/headerPortals'
+import { PageContainer } from '../../shared/page/PageContainer'
+import { PageHeader } from '../../shared/page/PageHeader'
+import { ErrorState } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -100,18 +103,41 @@ function FormsDashboard() {
   const isSearching = q.trim() !== ''
 
   return (
-    <section className="mx-auto max-w-5xl p-6">
-      {/* Путь — само пространство: дашборд и есть его список форм. */}
-      <PageCrumbs items={[workspace?.name ?? 'Формы']} />
-      <div className="mb-6 flex items-center justify-between">
-        <h1 className="text-2xl font-semibold tracking-tight">Мои формы</h1>
-        <Button onClick={handleCreate} className="gap-2">
-          <Plus className="size-4" />
-          Новая форма
-        </Button>
-      </div>
+    <PageContainer width="wide">
+      {/* Путь кончается на самом пространстве: этот экран и есть его корень. */}
+      <PageCrumbs items={[workspace?.name ?? '…']} />
+      {/* Заголовок — ИМЯ ПРОСТРАНСТВА, а не «Мои формы»: тот же экран показывает
+          формы команды, и «мои» там было прямой неправдой. Крошка и заголовок
+          называют одно место одним словом. */}
+      <PageHeader
+        title={workspace?.name ?? '…'}
+        actions={
+          <>
+            {/* Шаблон — способ начать форму, а не место в навигации: пункт сайдбара
+                вёл в галерею, не зная пространства, и форма из неё всегда ложилась в
+                личное. Здесь пространство названо адресом экрана. */}
+            <Button asChild variant="outline">
+              <Link to="/w/$workspaceSlug/templates" params={{ workspaceSlug }}>
+                <LayoutTemplate className="size-4" />
+                Начать с шаблона
+              </Link>
+            </Button>
+            <Button onClick={handleCreate}>
+              <Plus className="size-4" />
+              Новая форма
+            </Button>
+          </>
+        }
+      />
 
-      <FormsToolbar q={q} sort={sort} onSearchChange={onSearchChange} onSortChange={onSortChange} />
+      <div className="mt-8">
+        <FormsToolbar
+          q={q}
+          sort={sort}
+          onSearchChange={onSearchChange}
+          onSortChange={onSortChange}
+        />
+      </div>
 
       {workspaces.data && !workspace ? (
         <div className="mx-auto mt-12 max-w-md text-center">
@@ -123,12 +149,11 @@ function FormsDashboard() {
       ) : query.isPending ? (
         <FormsSkeleton />
       ) : query.isError ? (
-        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-          <p className="mb-3 text-sm">Не удалось загрузить формы.</p>
-          <Button variant="outline" size="sm" onClick={() => query.refetch()}>
-            Повторить
-          </Button>
-        </div>
+        <ErrorState
+          title="Не удалось загрузить формы."
+          onRetry={() => void query.refetch()}
+          retryLabel="Повторить"
+        />
       ) : forms.length === 0 ? (
         // Два разных пустых состояния: «форм нет» и «под запрос ничего не нашлось»
         // — это разные новости, и предлагать создание формы в ответ на неудачный
@@ -175,7 +200,7 @@ function FormsDashboard() {
           )}
         </>
       )}
-    </section>
+    </PageContainer>
   )
 }
 
