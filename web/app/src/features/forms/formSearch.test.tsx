@@ -71,6 +71,14 @@ async function renderSearch() {
   })
 }
 
+// Окно открывается строкой панели — единственным входом: горячего сочетания у
+// поиска нет намеренно (см. FormSearch).
+async function openSearch() {
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: /Поиск/ }))
+  })
+}
+
 async function type(text: string) {
   const input = screen.getByPlaceholderText('Название формы…')
   await act(async () => {
@@ -79,24 +87,30 @@ async function type(text: string) {
 }
 
 describe('поиск форм по всем пространствам', () => {
-  // Сочетание — единственный способ открыть поиск, не целясь в панель, а панель
-  // бывает свёрнута в полосу и закрыта шторкой на мобильном.
-  it('⌘K открывает окно откуда угодно', async () => {
+  it('строка панели открывает окно поиска', async () => {
     await renderSearch()
     expect(screen.queryByPlaceholderText('Название формы…')).toBeNull()
+    await openSearch()
+    expect(screen.getByPlaceholderText('Название формы…')).toBeTruthy()
+  })
+
+  // Сторож: горячего сочетания у поиска нет намеренно — Ctrl+K занят в браузере его
+  // собственным поиском, и перехватывать привычную клавишу ради окна, которое
+  // открывается строкой панели, продукт не должен.
+  it('Ctrl+K у браузера не отбирается', async () => {
+    await renderSearch()
     await act(async () => {
+      fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
       fireEvent.keyDown(document, { key: 'k', metaKey: true })
     })
-    expect(screen.getByPlaceholderText('Название формы…')).toBeTruthy()
+    expect(screen.queryByPlaceholderText('Название формы…')).toBeNull()
   })
 
   // НЕСУЩЕЕ У ВЫДАЧИ — МЕСТО: две одинаково названные формы в разных пространствах
   // различает только оно, а «в каком из них форма» человек как раз и не помнил.
   it('строка результата называет пространство', async () => {
     await renderSearch()
-    await act(async () => {
-      fireEvent.keyDown(document, { key: 'k', ctrlKey: true })
-    })
+    await openSearch()
     await type('анкета')
 
     expect(screen.getByText('Анкета читателя')).toBeTruthy()
@@ -110,9 +124,7 @@ describe('поиск форм по всем пространствам', () => {
   // строке), розданная форма — на ответы.
   it('черновик ведёт в редактор своего пространства, розданная форма — на ответы', async () => {
     await renderSearch()
-    await act(async () => {
-      fireEvent.keyDown(document, { key: 'k', metaKey: true })
-    })
+    await openSearch()
     await type('анкета')
 
     const draft = screen.getByText('Анкета читателя').closest('a')
@@ -125,9 +137,7 @@ describe('поиск форм по всем пространствам', () => {
   // спрашивать нечего.
   it('до первой буквы результатов нет', async () => {
     await renderSearch()
-    await act(async () => {
-      fireEvent.keyDown(document, { key: 'k', metaKey: true })
-    })
+    await openSearch()
     expect(screen.queryByText('Анкета читателя')).toBeNull()
     expect(screen.getByText(/Начните набирать название/)).toBeTruthy()
   })

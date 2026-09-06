@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { FileText, Search } from 'lucide-react'
@@ -22,7 +22,13 @@ import { SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar'
 // ОКНО, А НЕ СТРОКА В ВЕРХНЕМ БАРЕ. Бар занят: слева путь, справа действия экрана
 // (у формы там кластер участников, «Копировать ссылку» и «Редактировать»), и поле
 // посередине отбирало бы у них ширину на каждом экране ради того, чем пользуются
-// изредка. Строка в панели с подписью ⌘K стоит одну строку и находится глазами.
+// изредка. Строка в панели стоит одну строку и находится глазами.
+//
+// ГОРЯЧЕГО СОЧЕТАНИЯ У ПОИСКА НЕТ (решение владельца 2026-09-06), и это не
+// недоделка. Ctrl+K занят в браузере его собственным поиском, а перехватывать
+// привычную клавишу ради окна, которое открывается строкой панели, — плохой размен.
+// Подписать его тоже нечем: ⌘ есть только на маке, и на прочих машинах такая
+// подпись просто неверна.
 //
 // Фильтрация ОТКЛЮЧЕНА у cmdk (`shouldFilter={false}`): совпадение ищет сервер по
 // всем пространствам, а второе просеивание тех же строк на клиенте выбрасывало бы
@@ -31,19 +37,6 @@ export function FormSearch() {
   const [open, setOpen] = useState(false)
   const [query, setQuery] = useState('')
   const found = useQuery(formsSearchQueryOptions(query))
-
-  // ⌘K / Ctrl+K — открыть откуда угодно. Слушатель на документе, а не на строке
-  // панели: панель бывает свёрнута в полосу значков и закрыта шторкой на мобильном,
-  // а сочетание обязано работать одинаково везде.
-  useEffect(() => {
-    function onKey(e: KeyboardEvent) {
-      if (e.key.toLowerCase() !== 'k' || !(e.metaKey || e.ctrlKey)) return
-      e.preventDefault()
-      setOpen((prev) => !prev)
-    }
-    document.addEventListener('keydown', onKey)
-    return () => document.removeEventListener('keydown', onKey)
-  }, [])
 
   const hits = found.data?.forms ?? []
   const asked = query.trim() !== ''
@@ -54,11 +47,6 @@ export function FormSearch() {
         <SidebarMenuButton onClick={() => setOpen(true)} tooltip="Поиск форм">
           <Search className="size-4" />
           <span>Поиск</span>
-          {/* Подпись сочетания — единственный способ о нём узнать. Прячется вместе
-              с текстом в свёрнутой полосе. */}
-          <kbd className="ml-auto text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-            ⌘K
-          </kbd>
         </SidebarMenuButton>
       </SidebarMenuItem>
 
