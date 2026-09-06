@@ -128,6 +128,21 @@ describe('навигация пространства в сайдбаре', () =
     expect(active.className).not.toContain('data-[active=true]:bg-sidebar-accent')
   })
 
+  // СТОРОЖ ВЕНДОРЕННОЙ ПРАВКИ. У `Separator` ширина задана под атрибутным селектором
+  // (`data-[orientation=horizontal]:w-full`), и плоский `w-auto` из `SidebarSeparator`
+  // её не перебивал: у разных модификаторов разные ключи, `cn` оставлял оба класса, а
+  // побеждал более специфичный. Вместе с `mx-2` это давало 100% + 16px и
+  // горизонтальную прокрутку панели (отчёт владельца 2026-09-06).
+  it('разделители не шире панели', async () => {
+    await renderNav('/w/team/forms', ['billing.view'])
+    const rules = document.querySelectorAll('[data-slot="sidebar-separator"]')
+    expect(rules.length).toBeGreaterThan(0)
+    for (const rule of rules) {
+      expect(rule.className).not.toContain('data-[orientation=horizontal]:w-full')
+      expect(rule.className).toContain('data-[orientation=horizontal]:w-auto')
+    }
+  })
+
   // Переключатель обязан читаться местом, а не пятым пунктом списка: буква
   // пространства и подпись, чем оно является.
   it('переключатель называет пространство буквой и видом', async () => {

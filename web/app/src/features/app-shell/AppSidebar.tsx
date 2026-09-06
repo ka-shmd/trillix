@@ -84,7 +84,7 @@ export function AppSidebar({
       {/* Личный ярус отделён линией, а не отступом: без неё «Настройки» читались
           пятым разделом пространства, а скачок роста у строки аккаунта (48px против
           32px в списке выше) — сбоем вёрстки. */}
-      <SidebarSeparator className="mx-2" />
+      <SidebarSeparator />
 
       <SidebarFooter>
         <SidebarGroup className="p-0">
