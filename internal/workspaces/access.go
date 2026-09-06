@@ -147,9 +147,7 @@ func (s *Service) checkFrozen(ctx context.Context, acc AccessContext) error {
 		if err != nil {
 			return err
 		}
-		// Лимит считает ВСЕ пространства владельца, включая личное, поэтому на
-		// остальные приходится Limit-1 мест.
-		if d.Limit != nil && acc.TeamRank > *d.Limit-1 {
+		if overWorkspaceLimit(acc.IsPersonal, acc.TeamRank, d.Limit) {
 			return domain.ErrWorkspaceFrozen
 		}
 	}
@@ -169,10 +167,29 @@ func (s *Service) checkFrozen(ctx context.Context, acc AccessContext) error {
 	if err != nil {
 		return err
 	}
-	if d.Limit != nil && acc.MemberRank > *d.Limit {
+	if overMemberLimit(acc.MemberRank, d.Limit) {
 		return domain.ErrWorkspaceFrozen
 	}
 	return nil
+}
+
+// ⚠ АРИФМЕТИКА ЗАМОРОЗКИ ЖИВЁТ ЗДЕСЬ, И ТОЛЬКО ЗДЕСЬ. Спрашивающих о ней двое:
+// checkFrozen (запрет на операцию) и frozenForList (пометка в списке кабинета), и
+// расходиться им нельзя — интерфейс, который показывает пространство рабочим, а на
+// первом же действии отвечает 402, хуже отсутствия пометки. Порядок веток и
+// ленивость запросов у них свои: у одного горячий путь прав, у другого список на
+// каждый экран, — а сравнения общие.
+//
+// Лимит пространств считает ВСЕ пространства владельца, ВКЛЮЧАЯ личное, поэтому на
+// дополнительные приходится Limit-1 мест. `nil` у лимита — безлимит.
+func overWorkspaceLimit(isPersonal bool, teamRank int64, limit *int64) bool {
+	return !isPersonal && limit != nil && teamRank > *limit-1
+}
+
+// Владелец (ранг 1) не мёрзнет никогда: отрезать плательщика от собственных форм
+// нельзя ни при каком тарифе.
+func overMemberLimit(memberRank int64, limit *int64) bool {
+	return memberRank > 1 && limit != nil && memberRank > *limit
 }
 
 // IsMember — состоит ли человек в пространстве. Голое членство, БЕЗ вопроса о

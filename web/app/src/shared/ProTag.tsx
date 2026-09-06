@@ -1,5 +1,6 @@
 import { Link } from '@tanstack/react-router'
 
+import { usePlanLink } from './planLink'
 import { Badge } from '@/components/ui/badge'
 
 // Метка платной возможности. Ссылка, а не подпись: автор, увидевший её, должен
@@ -42,9 +43,10 @@ import { Badge } from '@/components/ui/badge'
 // `highlight`: вариант отвечает за цвет, и вешать на него начертание значило бы
 // раздать его каждому будущему бейджу второго акцента.
 export function ProTag() {
+  const plan = usePlanLink()
   return (
     <Badge asChild variant="highlight" className="text-[10px] font-semibold tracking-wide">
-      <Link to="/settings/plan">ПРО</Link>
+      <Link {...plan}>ПРО</Link>
     </Badge>
   )
 }

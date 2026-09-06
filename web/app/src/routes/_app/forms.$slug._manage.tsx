@@ -1,6 +1,5 @@
 import { createFileRoute, Link, Outlet, useMatchRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
 import { Copy, Pencil } from 'lucide-react'
 
 import { type Form, displayFormTitle } from '../../entities/form'
@@ -8,10 +7,10 @@ import { FormActionsMenu } from '../../features/forms/FormActionsMenu'
 import { copyFormLink } from '../../features/forms/copyLink'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { MemberCluster } from '../../features/workspaces/MemberCluster'
-import { MembersDialog } from '../../features/workspaces/MembersDialog'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
-import { periodSchema, withoutPeriod } from '../../shared/period'
+import { useDeclareWorkspace } from '../../shared/workspaceContext'
+import { periodSchema } from '../../shared/period'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
 import { PageActions, PageCrumbs } from '../../shared/page/headerPortals'
@@ -70,12 +69,16 @@ function ManageLayout() {
   const contentWidth = matchRoute({ to: '/forms/$slug/submissions', fuzzy: true })
     ? 'full'
     : 'default'
+  // Экраны формы пространства в адресе не несут — его знает сама форма. Отсюда
+  // оболочка кабинета (крошка, подсветка сайдбара, гейты тарифа) и узнаёт, где стоит
+  // человек: прямая ссылка на форму из письма или закладки читается верно, а не как
+  // личное пространство (`shared/workspaceContext.tsx`).
+  useDeclareWorkspace(form.data?.workspaceSlug)
   const workspaceCrumb = useWorkspaceCrumb()
   // Пространство берётся из адреса — то же, что показывает крошка. Нет его (список
   // ещё едет либо slug чужой) — кластер не рисуем: пустое место честнее, чем кружки
   // не тех людей.
   const workspace = useCurrentWorkspace()
-  const [membersOpen, setMembersOpen] = useState(false)
 
   // Форма не найдена — общий экран на всю группу: рисовать табы над «формы нет»
   // бессмысленно. Свои error-стейты данных у экранов внутри остаются.
@@ -88,9 +91,7 @@ function ManageLayout() {
           description="Возможно, её удалили или ссылка устарела."
         />
         <Button asChild variant="outline" size="sm" className="mt-3">
-          <Link to="/forms" search={withoutPeriod}>
-            Вернуться к списку
-          </Link>
+          <Link to="/forms">Вернуться к списку</Link>
         </Button>
       </PageContainer>
     )
@@ -121,7 +122,6 @@ function ManageLayout() {
           {workspace && (
             <MemberCluster
               workspace={workspace}
-              onOpen={() => setMembersOpen(true)}
               className="px-0 hover:bg-transparent dark:hover:bg-transparent"
             />
           )}
@@ -153,18 +153,19 @@ function ManageLayout() {
             её текст, у залитой — край заливки, поэтому её собственные 8px поля уже
             и есть тот зазор, который видит глаз: 16 слева от кнопки против 16 от
             аватара до значка копирования. */}
-          <Button asChild size="sm" className="h-8 gap-1.5 px-2 has-[>svg]:px-2">
-            <Link to="/forms/$slug/edit" search={withoutPeriod} params={{ slug }}>
-              <Pencil className="size-3.5" /> Редактировать
-            </Link>
-          </Button>
+          {/* Кнопка появляется вместе с формой: адрес редактора называет
+            пространство, а знает его сама форма. */}
+          {form.data && (
+            <Button asChild size="sm" className="h-8 gap-1.5 px-2 has-[>svg]:px-2">
+              <Link
+                to="/w/$workspaceSlug/forms/$slug/edit"
+                params={{ workspaceSlug: form.data.workspaceSlug, slug }}
+              >
+                <Pencil className="size-3.5" /> Редактировать
+              </Link>
+            </Button>
+          )}
         </PageActions>
-
-        {/* Окно состава живёт на странице, а не в портале бара: портал несёт только
-          то, что видно в самом баре. */}
-        {workspace && (
-          <MembersDialog workspace={workspace} open={membersOpen} onOpenChange={setMembersOpen} />
-        )}
 
         <PageHeader
           title={title}
@@ -215,7 +216,6 @@ function FormTabs({ slug }: { slug: string }) {
     <nav className="mt-6 mb-8 flex gap-4 border-b" aria-label="Разделы формы">
       <Link
         to="/forms/$slug/share"
-        search={withoutPeriod}
         params={{ slug }}
         className={base}
         activeProps={active}
@@ -244,7 +244,6 @@ function FormTabs({ slug }: { slug: string }) {
       </Link>
       <Link
         to="/forms/$slug/submissions"
-        search={withoutPeriod}
         params={{ slug }}
         className={base}
         activeProps={active}
@@ -254,7 +253,6 @@ function FormTabs({ slug }: { slug: string }) {
       </Link>
       <Link
         to="/forms/$slug/integrations"
-        search={withoutPeriod}
         params={{ slug }}
         className={base}
         activeProps={active}
@@ -268,7 +266,6 @@ function FormTabs({ slug }: { slug: string }) {
           послать ссылкой со вкладки «Частичные». */}
       <Link
         to="/forms/$slug/settings"
-        search={withoutPeriod}
         params={{ slug }}
         className={base}
         activeProps={active}

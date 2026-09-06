@@ -58,6 +58,12 @@ export function membersQueryOptions(workspaceId: string) {
   return queryOptions({
     queryKey: workspaceKeys.members(workspaceId),
     queryFn: () => listMembers(workspaceId),
+    // Состав меняется редко и только явными действиями, которые сами
+    // инвалидируют этот ключ (приглашение, снятие доступа). Длинный staleTime
+    // нужен потому, что состав спрашивает НАВИГАЦИЯ: панель читает по нему права
+    // текущего пространства на каждом экране кабинета, и без него переключение
+    // пространств стоило бы запроса на каждый переход.
+    staleTime: 5 * 60 * 1000,
   })
 }
 

@@ -78,6 +78,7 @@ type Store interface {
 	GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, error)
 	GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (Form, error)
 	ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error)
+	SearchForms(ctx context.Context, db postgres.DBTX, userID uuid.UUID, search string, limit int32) ([]SearchHit, error)
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
 	UpdateFormNotifyOnSubmission(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, enabled bool) (Form, error)
@@ -367,6 +368,32 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, opts ListOptions) 
 		page.NextCursor = &Cursor{SortKey: last.SortKey, ID: last.ID, Sort: sort}
 	}
 	return page, nil
+}
+
+// MaxSearchResults — потолок выдачи поиска по всем пространствам. Не постранично:
+// поиск отвечает на «где эта форма», и человек, пролиставший двадцать несовпадений,
+// уточнит запрос, а не нажмёт «ещё». Потолок здесь же и защищает от «а» одной
+// буквой на аккаунте с сотней форм.
+const MaxSearchResults = 20
+
+// Search — формы по всем пространствам, где человек состоит.
+//
+// Отдельная операция, а не режим List: список живёт внутри ОДНОГО пространства и
+// потому спрашивает право на него (`Can`), а поиск пространства не называет — их
+// много. Право здесь держит сам запрос: соединение по членству физически не пускает
+// в выдачу чужую форму (инвариант 1).
+//
+// Пустой запрос — ПУСТОЙ ОТВЕТ, а не отказ: строка поиска пуста ровно до первой
+// набранной буквы, и 422 на этом состоянии был бы ошибкой на ровном месте.
+func (s *Service) Search(ctx context.Context, userID uuid.UUID, query string) ([]SearchHit, error) {
+	q := strings.TrimSpace(query)
+	if q == "" {
+		return nil, nil
+	}
+	if utf8.RuneCountInString(q) > MaxSearchLen {
+		return nil, fmt.Errorf("%w: строка поиска длиннее %d символов", domain.ErrValidation, MaxSearchLen)
+	}
+	return s.repo.SearchForms(ctx, s.db, userID, escapeLike(q), int32(MaxSearchResults))
 }
 
 // escapeLike обезвреживает спецсимволы шаблона LIKE в пользовательской строке

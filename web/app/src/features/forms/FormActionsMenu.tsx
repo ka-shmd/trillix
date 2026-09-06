@@ -55,7 +55,14 @@ import { Label } from '@/components/ui/label'
 export function FormActionsMenu({
   form,
 }: {
-  form: { id: string; slug: string; name: string | null; title: string; status: Form['status'] }
+  form: {
+    id: string
+    slug: string
+    name: string | null
+    title: string
+    status: Form['status']
+    workspaceSlug: string
+  }
 }) {
   const navigate = useNavigate()
   const rename = useUpdateFormName()
@@ -91,7 +98,10 @@ export function FormActionsMenu({
     remove.mutate(form.id, {
       onSuccess: () => {
         toast.success(`Форма «${label}» удалена`)
-        void navigate({ to: '/forms', search: (prev) => prev })
+        void navigate({
+          to: '/w/$workspaceSlug/forms',
+          params: { workspaceSlug: form.workspaceSlug },
+        })
       },
       onError: () => toast.error('Не удалось удалить форму'),
     })
@@ -112,7 +122,10 @@ export function FormActionsMenu({
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" className="w-56">
           <DropdownMenuItem asChild>
-            <Link to="/forms/$slug/edit" params={{ slug: form.slug }} search={(prev) => prev}>
+            <Link
+              to="/w/$workspaceSlug/forms/$slug/edit"
+              params={{ workspaceSlug: form.workspaceSlug, slug: form.slug }}
+            >
               <Pencil className="size-4" />
               Редактировать
             </Link>

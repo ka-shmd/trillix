@@ -1,17 +1,17 @@
 import { createFileRoute, redirect, useNavigate, Outlet } from '@tanstack/react-router'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { meQueryOptions, useLogout } from '../features/auth/queries'
 import { displayName } from '../entities/user'
-import type { Workspace } from '../entities/workspace'
-import { NEW_FORM_SLUG } from '../features/forms/draft'
-import { formKeys } from '../features/forms/keys'
-import { WorkspacesNav } from '../features/workspaces/WorkspacesNav'
+import { WorkspaceNav } from '../features/workspaces/WorkspaceNav'
+import { FormSearch } from '../features/forms/FormSearch'
+import { workspacesQueryOptions } from '../features/workspaces/queries'
 import { useMemo, useState } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { HeaderSidebarTrigger } from '../features/app-shell/HeaderSidebarTrigger'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
 import { AppChromeContext } from '../shared/appChrome'
+import { WorkspaceAddressProvider } from '../shared/workspaceContext'
 
 // Layout-группа приложения за сессией. Гард префетчит /auth/me; нет живой
 // сессии → редирект на /login (защищённый маршрут не показывает контент).
@@ -29,8 +29,15 @@ export const Route = createFileRoute('/_app')({
 function AppLayout() {
   const navigate = useNavigate()
   const { data: user } = useQuery(meQueryOptions)
+  // Личное пространство отдаётся оболочке ЗДЕСЬ, а не читается провайдером: список
+  // пространств — хозяйство фичи, а `shared/` в фичи не ходит. Провайдеру нужно
+  // одно — куда отступить, когда пространство не названо ни адресом, ни формой, ни
+  // памятью браузера (первый вход, настройки аккаунта).
+  const personal = useQuery({
+    ...workspacesQueryOptions,
+    select: (list) => list.find((w) => w.isPersonal)?.slug ?? null,
+  })
   const logout = useLogout()
-  const qc = useQueryClient()
   // DOM-узлы хрома: две половины верхнего бара (слева путь, справа действия) и
   // подвал у нижнего края. Страницы порталят в них через PageCrumbs/PageActions
   // (shared/page/headerPortals.tsx) и PageFooter (shared/page/PageFooter.tsx).
@@ -47,37 +54,21 @@ function AppLayout() {
   // Гард гарантирует наличие user; на всякий случай не рендерим оболочку без него.
   if (!user) return null
 
-  // «+» у пространства в сайдбаре НИЧЕГО не создаёт: открывается редактор
-  // несуществующего черновика, а форма заводится первой правкой
-  // (features/forms/draft.ts). Пространство здесь НАЗВАНО и уезжает в адрес
-  // редактора (пусто = личное) — оттуда его прочтёт и создание.
-  function handleCreateIn(workspace: Workspace) {
-    void navigate({
-      to: '/forms/$slug/edit',
-      params: { slug: NEW_FORM_SLUG },
-      search: workspace.isPersonal ? {} : { w: workspace.slug },
-    })
-  }
-
   return (
-    <SidebarProvider>
-      <AppSidebar
-        userEmail={user.email}
-        person={user}
-        userName={displayName(user)}
-        onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}
-        loggingOut={logout.isPending}
-        workspacesNav={
-          <WorkspacesNav
-            onCreateForm={handleCreateIn}
-            // Формы снесённого пространства ушли вместе с ним; их страницы
-            // остались бы в кэше и всплыли бы по прямой ссылке ?w=<id>. Ключи
-            // форм — чужая фича, поэтому чистка живёт здесь, а не в мутации.
-            onWorkspaceDeleted={() => qc.invalidateQueries({ queryKey: formKeys.list() })}
-          />
-        }
-      />
-      {/* ОБОЛОЧКА СЪЕЗЖАЕТ ВМЕСТЕ С ВЫЕЗЖАЮЩЕЙ ШТОРКОЙ. Ширину открытой шторки
+    <WorkspaceAddressProvider personalSlug={personal.data ?? null}>
+      <SidebarProvider>
+        <AppSidebar
+          person={user}
+          userName={displayName(user)}
+          onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}
+          loggingOut={logout.isPending}
+          workspaceNav={
+            <WorkspaceNav>
+              <FormSearch />
+            </WorkspaceNav>
+          }
+        />
+        {/* ОБОЛОЧКА СЪЕЗЖАЕТ ВМЕСТЕ С ВЫЕЗЖАЮЩЕЙ ШТОРКОЙ. Ширину открытой шторки
           кладёт в --app-drawer тот, кто её открыл (DesignDrawer); закрытая — 0px.
           Отступ здесь, а не на <main>: шапка sticky и лежит ВНУТРИ этой коробки,
           поэтому съезжает вместе с содержимым — иначе шторка накрывала бы её край,
@@ -86,27 +77,27 @@ function AppLayout() {
           Переменная на корне, а не проп через три слоя: шторку открывают глубоко в
           фиче, а съезжает оболочка маршрута — тот же приём, которым рендерер
           надевает тему на документ. */}
-      <SidebarInset className="pr-(--app-drawer) transition-[padding-right] duration-300 ease-in-out">
-        {/* Шапка зафиксирована (sticky): вся страница скроллится, а верхний бар
+        <SidebarInset className="pr-(--app-drawer) transition-[padding-right] duration-300 ease-in-out">
+          {/* Шапка зафиксирована (sticky): вся страница скроллится, а верхний бар
             остаётся на месте. z-20 — над контентом редактора, bg — чтобы контент
             не просвечивал под ней. */}
-        <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background pr-2 pl-3">
-          {/* Кнопка панели появляется здесь, только когда в самой панели её нажать
+          <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background pr-2 pl-3">
+            {/* Кнопка панели появляется здесь, только когда в самой панели её нажать
               негде: свёрнутая уезжает за экран, мобильная шторка закрыта. */}
-          <HeaderSidebarTrigger />
-          {/* Слева путь страницы, справа её действия. */}
-          <div ref={setHeaderLeft} className="flex min-w-0 flex-1 items-center" />
-          <div ref={setHeaderRight} className="flex shrink-0 items-center gap-2" />
-        </header>
-        {/* Отступы задаёт каждая страница сама: редактору нужен bleed, дашборду/
+            <HeaderSidebarTrigger />
+            {/* Слева путь страницы, справа её действия. */}
+            <div ref={setHeaderLeft} className="flex min-w-0 flex-1 items-center" />
+            <div ref={setHeaderRight} className="flex shrink-0 items-center gap-2" />
+          </header>
+          {/* Отступы задаёт каждая страница сама: редактору нужен bleed, дашборду/
             ответам — обычные поля. */}
-        <main className="flex-1 overflow-auto">
-          {!user.emailVerified && <VerifyEmailBanner />}
-          <AppChromeContext.Provider value={chromeSlots}>
-            <Outlet />
-          </AppChromeContext.Provider>
-        </main>
-        {/* Подвал страницы: полоса у нижнего края под одно действие — «Сохранить»
+          <main className="flex-1 overflow-auto">
+            {!user.emailVerified && <VerifyEmailBanner />}
+            <AppChromeContext.Provider value={chromeSlots}>
+              <Outlet />
+            </AppChromeContext.Provider>
+          </main>
+          {/* Подвал страницы: полоса у нижнего края под одно действие — «Сохранить»
             настроек формы. Приклеен `sticky bottom-0`, а не `fixed`: скроллится
             вся страница (см. комментарий о шапке), а сама полоса живёт ВНУТРИ
             оболочки — поэтому она съезжает вместе с ней при открытой шторке и не
@@ -115,11 +106,12 @@ function AppLayout() {
             Пустая полоса скрыта: страниц с подвалом одна, и лишняя линия у
             нижнего края на всех остальных — не «почти незаметно», а второй
             горизонт в интерфейсе. */}
-        <footer
-          ref={setFooterSlot}
-          className="sticky bottom-0 z-20 border-t bg-background empty:hidden"
-        />
-      </SidebarInset>
-    </SidebarProvider>
+          <footer
+            ref={setFooterSlot}
+            className="sticky bottom-0 z-20 border-t bg-background empty:hidden"
+          />
+        </SidebarInset>
+      </SidebarProvider>
+    </WorkspaceAddressProvider>
   )
 }

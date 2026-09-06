@@ -17,7 +17,7 @@ import (
 
 // fakeStore — герметичная подмена репозитория (без БД, инвариант тестов).
 type fakeStore struct {
-	workspaces []Workspace
+	workspaces []WorkspaceAccess
 	err        error
 	gotUserID  uuid.UUID
 
@@ -39,7 +39,7 @@ type fakeStore struct {
 	ownedTeams      []string
 }
 
-func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]Workspace, error) {
+func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]WorkspaceAccess, error) {
 	f.gotUserID = userID
 	return f.workspaces, f.err
 }
@@ -178,7 +178,10 @@ func newTestService(store *fakeStore, plans *fakePlans) (*Service, *fakeTx) {
 // ListForUser пробрасывает userID в репозиторий и возвращает его результат.
 func TestListForUser_DelegatesAndReturns(t *testing.T) {
 	uid := uuid.New()
-	store := &fakeStore{workspaces: []Workspace{{ID: uuid.New(), Name: "Личное пространство", IsPersonal: true}}}
+	store := &fakeStore{workspaces: []WorkspaceAccess{{
+		Workspace:  Workspace{ID: uuid.New(), Name: "Личное пространство", IsPersonal: true},
+		MemberRank: 1,
+	}}}
 	svc, _ := newTestService(store, &fakePlans{allowed: true})
 
 	got, err := svc.ListForUser(context.Background(), uid)

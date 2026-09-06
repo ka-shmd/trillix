@@ -291,8 +291,8 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 type workspaceResponse struct {
 	ID string `json:"id"`
 	// slug — короткий публичный ключ: им кабинет адресует пространство в своих
-	// URL (/workspaces/{slug}, ?w={slug}), как формой — forms.slug. В запросы
-	// API по-прежнему едет id: перевод делает кабинет по этому же списку.
+	// URL (/w/{slug}/…), как формой — forms.slug. В запросы API по-прежнему едет
+	// id: перевод делает кабинет по этому же списку.
 	Slug string `json:"slug"`
 	Name string `json:"name"`
 	// isPersonal — личное пространство спрашивающего: кабинет помечает его в
@@ -302,6 +302,16 @@ type workspaceResponse struct {
 	// обзоре). Точен на СПИСКЕ; у ответов мутаций всегда 0 — они отвечают самой
 	// вывеской, а число кабинет перечитает списком.
 	FormCount int64 `json:"formCount"`
+	// frozen — пространство закрыто для спрашивающего: тариф владельца больше не
+	// покрывает столько пространств или участников (ADR §10). Заполняется только
+	// СПИСКОМ, у ответов мутаций всегда false — только что созданное пространство
+	// замороженным не бывает, а остальные кабинет перечитает списком.
+	//
+	// Кабинету он нужен, чтобы объяснить состояние: без пометки замороженное
+	// пространство выглядит обычным, а каждый его экран отвечает 402 — то есть
+	// единственное состояние продукта, из которого человек не может выйти сам,
+	// неотличимо от сетевого сбоя.
+	Frozen bool `json:"frozen"`
 }
 
 type listResponse struct {
@@ -395,6 +405,6 @@ func (h *Handler) remove(w http.ResponseWriter, r *http.Request) {
 func toResponse(ws Workspace) workspaceResponse {
 	return workspaceResponse{
 		ID: ws.ID.String(), Slug: ws.Slug, Name: ws.Name,
-		IsPersonal: ws.IsPersonal, FormCount: ws.FormCount,
+		IsPersonal: ws.IsPersonal, FormCount: ws.FormCount, Frozen: ws.Frozen,
 	}
 }

@@ -78,7 +78,7 @@ export function SlotSettings() {
         <p className="px-2 pb-1 text-xs text-muted-foreground">
           В этом пространстве ещё нет расписаний.{' '}
           <Link
-            to="/workspaces/$workspaceSlug/schedules"
+            to="/w/$workspaceSlug/schedules"
             params={{ workspaceSlug: form.workspaceSlug }}
             className="underline"
           >

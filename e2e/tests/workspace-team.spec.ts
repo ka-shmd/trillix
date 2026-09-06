@@ -75,20 +75,19 @@ test('приглашение в пространство: коллега при�
   await createDialog.getByPlaceholder('Например, «Отдел маркетинга»').fill(spaceName)
   await createDialog.getByRole('button', { name: 'Создать' }).click()
 
-  // Пространство на обзоре — секция с заголовком, а не строка списка. Отдельного
-  // экрана участников больше нет: состав живёт в диалоге, который открывают
-  // кластер кружков у правого края строки и пункт «Участники» в меню «…».
-  await expect(page.getByRole('heading', { name: spaceName })).toBeVisible()
-  await page.getByRole('button', { name: `Участники пространства «${spaceName}»` }).click()
+  // Пространство на обзоре — строка со ссылкой в него. Состав — СТРАНИЦА раздела
+  // (`/w/{slug}/members`), а не диалог: кластер кружков у правого края строки ведёт
+  // туда же, что и пункт сайдбара.
+  await expect(page.getByRole('link', { name: spaceName })).toBeVisible()
+  await page.getByRole('link', { name: `Участники пространства «${spaceName}»` }).click()
 
-  const members = page.getByRole('dialog', { name: `Участники: ${spaceName}` })
-  await expect(members).toBeVisible()
-  await members.getByPlaceholder('coworker@example.com').fill(mateEmail)
-  await members.getByRole('button', { name: 'Пригласить' }).click()
-  await expect(members.getByText('Приглашение отправлено')).toBeVisible()
-  // Позванный виден в том же окне ещё до принятия — это состояние пространства,
-  // а не невидимая очередь.
-  await expect(members.getByText(mateEmail)).toBeVisible()
+  await expect(page).toHaveURL(/\/w\/[^/]+\/members$/)
+  await page.getByPlaceholder('coworker@example.com').fill(mateEmail)
+  await page.getByRole('button', { name: 'Пригласить' }).click()
+  await expect(page.getByText('Приглашение отправлено')).toBeVisible()
+  // Позванный виден на той же странице ещё до принятия — это состояние
+  // пространства, а не невидимая очередь.
+  await expect(page.getByText(mateEmail)).toBeVisible()
 
   const link = await inviteLinkFor(page.request, mateEmail)
 
@@ -106,51 +105,49 @@ test('приглашение в пространство: коллега при�
   await matePage.goto(link)
   await matePage.getByRole('button', { name: 'Принять приглашение' }).click()
 
-  // После принятия он оказывается в списке форм ЭТОГО пространства.
-  await expect(matePage).toHaveURL(/\/forms\?w=/)
-  // Пространство в адресе называется своим slug'ом — тем же, которым кабинет
-  // адресует его везде. Дальше он нужен, чтобы прийти на чужой тариф напрямую.
-  const spaceSlug = new URL(matePage.url()).searchParams.get('w') ?? ''
+  // После принятия он оказывается в списке форм ЭТОГО пространства. Пространство
+  // стоит В ПУТИ: параметра `?w=` в кабинете больше нет вовсе — потерянный
+  // параметр читался как «личное» молча (docs/design/cabinet-navigation.md).
+  await expect(matePage).toHaveURL(/\/w\/[^/]+\/forms$/)
+  const spaceSlug = new URL(matePage.url()).pathname.split('/')[2] ?? ''
   expect(spaceSlug).not.toBe('')
 
   // Формы правит: заводит свою прямо в общем пространстве. Кнопка только открывает
   // полотно — форму создаёт первая правка (ленивое создание, EDITOR.md §18), поэтому
   // доказательство права писать здесь — смена сентинела в адресе на настоящий slug.
-  // Кнопка берётся с самой страницы форм: в сайдбаре создания больше нет, там
-  // остался только «плюс» у пространства. На дашборде «Новая форма» бывает в двух
-  // экземплярах (шапка списка и пустое состояние) — годится любая, обе несут `?w=`
-  // из адреса; exact отсекает «Новая форма в пространстве «…»» — подпись «плюса».
+  // Кнопка берётся с самой страницы форм: в сайдбаре создания нет. На экране
+  // «Новая форма» бывает в двух экземплярах (шапка списка и пустое состояние) —
+  // годится любая, обе ведут в редактор ЭТОГО пространства.
   await matePage.getByRole('button', { name: 'Новая форма', exact: true }).first().click()
-  await expect(matePage).toHaveURL(/\/forms\/new\/edit\?.*w=/)
+  await expect(matePage).toHaveURL(new RegExp(`/w/${spaceSlug}/forms/new/edit$`))
   await matePage.getByLabel('Название формы').fill('Форма коллеги')
   await expect(matePage).not.toHaveURL(/\/forms\/new\/edit/)
 
   // --- Права: управление составом и тариф редактору закрыты ---
-  await matePage.goto('/workspaces')
-  await matePage.getByRole('button', { name: `Участники пространства «${spaceName}»` }).click()
-  const mateMembers = matePage.getByRole('dialog', { name: `Участники: ${spaceName}` })
-  // Ждём приехавший состав ПЕРЕД проверками отсутствия: диалог спрашивает права
-  // только у открытого окна (`enabled: open`), и на ещё не пришедшем ответе
+  await matePage.goto(`/w/${spaceSlug}/members`)
+  // Ждём приехавший состав ПЕРЕД проверками отсутствия: на ещё не пришедшем ответе
   // «кнопок нет» выполнилось бы даже у владельца.
-  await expect(mateMembers.getByText(ownerEmail)).toBeVisible()
+  await expect(matePage.getByText(ownerEmail)).toBeVisible()
   // Кнопок управления участниками у редактора нет — кабинет прячет их по
   // permissions с сервера, а не по роли, вычисленной на фронте.
-  await expect(mateMembers.getByRole('button', { name: 'Пригласить' })).toHaveCount(0)
-  await expect(mateMembers.getByRole('button', { name: 'Снять доступ' })).toHaveCount(0)
+  await expect(matePage.getByRole('button', { name: 'Пригласить' })).toHaveCount(0)
+  await expect(matePage.getByRole('button', { name: 'Снять доступ' })).toHaveCount(0)
+  // Пункта «Тариф» в панели у редактора тоже нет: право `billing.view` только у
+  // владельца, и пункт, который заведомо откажет, стоять не должен.
+  await expect(matePage.getByRole('link', { name: 'Тариф' })).toHaveCount(0)
 
-  // Тариф чужого пространства не отдаёт сам сервер (billing.view — только
-  // владельцу), и прячется он не кнопкой: приходим по прямому адресу.
-  await matePage.goto(`/settings/plan?w=${spaceSlug}`)
+  // Тариф чужого пространства не отдаёт сам сервер, и прячется он не кнопкой:
+  // приходим по прямому адресу.
+  await matePage.goto(`/w/${spaceSlug}/plan`)
   await expect(matePage.getByText('Не удалось загрузить тариф.')).toBeVisible()
 
   // --- Владелец отзывает доступ ---
   // Перезагрузка нужна за данными: коллега принял приглашение в другом контексте,
   // и до перечитывания состава он у владельца всё ещё «приглашён, но не вошёл».
-  // Диалог её не переживает (состояние экрана, а не адреса) — открываем заново.
+  // Страница состава её переживает — адрес у раздела свой.
   await page.reload()
-  await page.getByRole('button', { name: `Участники пространства «${spaceName}»` }).click()
-  await members.getByRole('button', { name: `Снять доступ: ${mateEmail}` }).click()
-  await expect(members.getByText(mateEmail)).toHaveCount(0)
+  await page.getByRole('button', { name: `Снять доступ: ${mateEmail}` }).click()
+  await expect(page.getByText(mateEmail)).toHaveCount(0)
 
   // --- У коллеги пространство исчезло ---
   await matePage.goto('/workspaces')

@@ -12,7 +12,6 @@ import { formDetailQueryOptions } from '../forms/queries'
 import { useFeatureAllowed } from '../plan/useFeature'
 import { ApiError } from '../../shared/api/errors'
 import { ProTag } from '../../shared/ProTag'
-import { withoutPeriod } from '../../shared/period'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent } from '@/components/ui/dialog'
@@ -165,7 +164,7 @@ function PartialsPromo({ slug }: { slug: string }) {
         незавершённые не уезжают, писем о них не приходит.
       </p>
       <Button asChild className="mt-2">
-        <Link to="/forms/$slug/settings" params={{ slug }} search={withoutPeriod} hash="partial">
+        <Link to="/forms/$slug/settings" params={{ slug }} hash="partial">
           Включить сбор
         </Link>
       </Button>

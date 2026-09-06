@@ -63,7 +63,8 @@ function InvitePage() {
               accept.mutate(token, {
                 // В адрес едет slug, а не id: так пространство названо во всех
                 // URL кабинета (shared/currentWorkspace).
-                onSuccess: (ws) => navigate({ to: '/forms', search: { w: ws.slug } }),
+                onSuccess: (ws) =>
+                  navigate({ to: '/w/$workspaceSlug/forms', params: { workspaceSlug: ws.slug } }),
               })
             }
           >

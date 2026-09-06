@@ -332,3 +332,28 @@ export const FORMS_SORT_LABELS: Record<FormsSort, string> = {
   created: 'По дате создания',
   responses: 'По числу ответов',
 }
+
+// Строка выдачи поиска по всем пространствам. Своя схема, а не formSchema: у
+// найденной формы нет ни счётчиков, ни версии — сервер их не считает, потому что
+// строке результата они не нужны, а нули в этих полях врали бы.
+//
+// НЕСУЩЕЕ ЗДЕСЬ — МЕСТО. Без имени пространства список результатов из разных
+// пространств неотличим от списка одного, а «в каком из них форма» человек как раз
+// и не помнил; slug нужен ссылке в редактор — он адресуется через пространство.
+export const formSearchHitSchema = z.object({
+  id: z.string(),
+  slug: z.string(),
+  name: z.string().nullable(),
+  title: z.string(),
+  status: formStatusSchema,
+  workspaceSlug: z.string(),
+  workspaceName: z.string(),
+})
+
+export type FormSearchHit = z.infer<typeof formSearchHitSchema>
+
+export const formSearchResponseSchema = z.object({
+  forms: z.array(formSearchHitSchema),
+})
+
+export type FormSearchResponse = z.infer<typeof formSearchResponseSchema>

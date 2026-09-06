@@ -55,7 +55,6 @@ export function SubmissionsTabs({ slug, children }: { slug: string; children?: R
         <Link
           to="/forms/$slug/submissions/all"
           params={{ slug }}
-          search={(prev) => prev}
           className={base}
           activeProps={active}
           inactiveProps={inactive}
@@ -66,7 +65,6 @@ export function SubmissionsTabs({ slug, children }: { slug: string; children?: R
         <Link
           to="/forms/$slug/submissions/completed"
           params={{ slug }}
-          search={(prev) => prev}
           className={base}
           activeProps={active}
           inactiveProps={inactive}
@@ -77,7 +75,6 @@ export function SubmissionsTabs({ slug, children }: { slug: string; children?: R
         <Link
           to="/forms/$slug/submissions/partial"
           params={{ slug }}
-          search={(prev) => prev}
           className={base}
           activeProps={active}
           inactiveProps={inactive}

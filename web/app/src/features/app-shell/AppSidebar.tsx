@@ -1,5 +1,6 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { CreditCard, FileText, LayoutTemplate, LogOut, Settings } from 'lucide-react'
+import { LogOut, Settings } from 'lucide-react'
+
 import {
   Sidebar,
   SidebarContent,
@@ -10,31 +11,30 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { UserAvatar, type UserAvatarProps } from '../../shared/UserAvatar'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
 
-// Презентационная оболочка кабинета. Данные пользователя и обработчики
-// (создание формы, выход) прокидывает роут _app — сайдбар не тянет фичи напрямую.
+// Презентационная оболочка кабинета. Данные пользователя и выход прокидывает роут
+// `_app` — сайдбар не тянет фичи напрямую.
 //
-// ТРИ ЯРУСА, И ПУНКТ ПОПАДАЕТ В ЯРУС ПО СВОЕМУ УРОВНЮ, А НЕ ПО ЧАСТОТЕ: вверху
-// работа («Формы», «Шаблоны»), в середине контекст (пространства), внизу аккаунт
-// (тариф, настройки, выход). «Тариф» и «Настройки» стояли в общем списке наравне
-// с «Формами» и одновременно дублировались в нижнем меню — теперь они только внизу.
+// ПУНКТ СТОИТ НА ТОМ УРОВНЕ, КОМУ ОН ПРИНАДЛЕЖИТ. Наверху — пространство и его
+// разделы (`workspaceNav`), внизу — личное: настройки аккаунта и выход. Яруса «тип
+// объекта» («Формы», «Шаблоны» рядом с пространствами) больше нет: почти всё в
+// продукте принадлежит пространству, и ярус, притворявшийся глобальным, обязан был
+// угадывать пространство из адреса — отсюда росли три дефекта сразу
+// (спека `docs/design/cabinet-navigation.md`).
+//
+// МЕНЮ АККАУНТА РАСКРЫТО В ПАНЕЛЬ (решение владельца 2026-09-06). Оно держало три
+// пункта, из которых «Тариф» аккаунту не принадлежал вовсе (он уехал в разделы
+// пространства), а «Настройки» стоили клика по имени ради клика по пункту. Осталось
+// два входа, и оба видны: строка «Настройки» и выход значком на строке имени.
 //
 // СОЗДАНИЯ ФОРМЫ В САЙДБАРЕ НЕТ (решение владельца): форма заводится там, где видно,
-// куда она ляжет, — кнопкой на дашборде и «плюсом» у пространства. Кнопка над
-// навигацией называла место неявно, текущим пространством из адреса.
+// куда она ляжет, — кнопкой на списке форм пространства.
 export interface AppSidebarProps {
-  userEmail: string
   // person — поля для кружка (картинка или инициалы). Отдельным пропом, а не
   // объектом User: сайдбар презентационный, и знать про пароли и второй фактор
   // ему незачем.
@@ -45,107 +45,101 @@ export interface AppSidebarProps {
   userName: string
   onLogout: () => void
   loggingOut: boolean
-  // workspacesNav — блок «Пространства» готовым узлом. Он читает список с сервера
-  // и открывает окна состава, то есть тянет фичу, а сайдбар остаётся
-  // презентационным: собирает его маршрут `_app`, как и остальные обработчики.
-  workspacesNav: React.ReactNode
+  // workspaceNav — переключатель пространства и его разделы готовым узлом. Он читает
+  // список с сервера и права, то есть тянет фичу, а сайдбар остаётся
+  // презентационным: собирает его маршрут `_app` (импорт фичи из фичи запрещён,
+  // web/CLAUDE.md).
+  workspaceNav: React.ReactNode
 }
 
 export function AppSidebar({
-  userEmail,
   person,
   userName,
   onLogout,
   loggingOut,
-  workspacesNav,
+  workspaceNav,
 }: AppSidebarProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const formsActive = pathname === '/forms' || pathname.startsWith('/forms/')
-  const templatesActive = pathname.startsWith('/templates')
 
   return (
-    <Sidebar>
+    // СВЁРНУТАЯ ПАНЕЛЬ ОСТАЁТСЯ ПОЛОСОЙ ЗНАЧКОВ, а не уезжает за экран
+    // (`collapsible=icon`, решение владельца 2026-09-06). Полоса читается, потому что
+    // значок есть у КАЖДОГО раздела: место остаётся видимым буквой пространства, а
+    // имя раздела приезжает подсказкой. Заводишь раздел без значка — полоса на нём
+    // становится пустым местом.
+    <Sidebar collapsible="icon">
       {/* Высота шапки панели равна высоте верхнего бара (56px), а поля совпадают
           с его левым полем: логотип и крошки обязаны стоять на одной линии — они
           соседи по верхнему краю экрана, и разница в пару пикселей читается как
           съехавшая вёрстка. */}
-      <SidebarHeader className="h-14 justify-center px-3 py-0">
-        <div className="flex items-center gap-2">
-          <span className="flex-1 text-base font-bold tracking-tight">Trillix</span>
-          {/* Свернуть — отсюда, из самой панели. Развернуть обратно отсюда нельзя:
-              свёрнутая панель уезжает за экран целиком (collapsible=offcanvas), и
-              кнопка уезжает вместе с ней. Обратно её возвращает та же кнопка,
-              переехавшая в верхний бар (HeaderSidebarTrigger), — она появляется
-              ровно в этом состоянии. Плюс Ctrl/Cmd+B. */}
+      <SidebarHeader className="h-14 justify-center px-3 py-0 group-data-[collapsible=icon]:px-0">
+        <div className="flex items-center justify-center gap-2">
+          <span className="flex-1 text-base font-bold tracking-tight group-data-[collapsible=icon]:hidden">
+            Trillix
+          </span>
+          {/* Свернуть и развернуть — обе отсюда: полоса значков остаётся на экране
+              вместе со своей кнопкой. В верхнем баре кнопка нужна только на
+              мобильном, где панель — закрытая шторка (HeaderSidebarTrigger). Плюс
+              Ctrl/Cmd+B. */}
           <SidebarTrigger className="text-muted-foreground" />
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
-        <SidebarGroup>
+      <SidebarContent>{workspaceNav}</SidebarContent>
+
+      {/* Личный ярус отделён линией, а не отступом: без неё «Настройки» читались
+          пятым разделом пространства, а скачок роста у строки аккаунта (48px против
+          32px в списке выше) — сбоем вёрстки. */}
+      <SidebarSeparator />
+
+      <SidebarFooter>
+        <SidebarGroup className="p-0">
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={formsActive} tooltip="Формы">
-                  <Link to="/forms">
-                    <FileText className="size-4" />
-                    <span>Формы</span>
+                <SidebarMenuButton
+                  asChild
+                  isActive={pathname.startsWith('/settings')}
+                  tooltip="Настройки"
+                >
+                  <Link to="/settings/account">
+                    <Settings className="size-4" />
+                    <span>Настройки</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={templatesActive} tooltip="Шаблоны">
-                  <Link to="/templates">
-                    <LayoutTemplate className="size-4" />
-                    <span>Шаблоны</span>
+
+              {/* Имя — ссылка в настройки аккаунта, выход — своя кнопка рядом.
+                  Выход НЕ строка списка: он необратим одним нажатием, а строка в
+                  ряду одинаковых строк нажимается по инерции. Значок с подписью для
+                  скринридера — тот же приём, что у действий строки пространства. */}
+              <SidebarMenuItem className="flex items-center gap-1">
+                <SidebarMenuButton asChild size="lg" className="min-w-0 flex-1" tooltip={userName}>
+                  <Link to="/settings/account">
+                    <UserAvatar person={person} />
+                    <span className="truncate text-sm group-data-[collapsible=icon]:hidden">
+                      {userName}
+                    </span>
                   </Link>
                 </SidebarMenuButton>
+                {/* В свёрнутой полосе выхода нет: две кнопки в 48px не помещаются, а
+                    ужимать до значка без подписи действие, которое одним нажатием
+                    заканчивает сеанс, — плохой размен. Разворачивается панель
+                    Ctrl/Cmd+B либо кнопкой в её шапке. */}
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden"
+                  onClick={onLogout}
+                  disabled={loggingOut}
+                >
+                  <LogOut className="size-4" />
+                  <span className="sr-only">{loggingOut ? 'Выходим…' : 'Выйти'}</span>
+                </Button>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-
-        {workspacesNav}
-      </SidebarContent>
-
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton
-                  size="lg"
-                  className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-                >
-                  <UserAvatar person={person} />
-                  <span className="truncate text-sm">{userName}</span>
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start" className="w-56">
-                <DropdownMenuLabel className="truncate font-normal text-muted-foreground">
-                  {userEmail}
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link to="/settings/plan">
-                    <CreditCard className="size-4" />
-                    Тариф
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link to="/settings/account">
-                    <Settings className="size-4" />
-                    Настройки
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={onLogout} disabled={loggingOut}>
-                  <LogOut className="size-4" />
-                  {loggingOut ? 'Выходим…' : 'Выйти'}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </SidebarMenuItem>
-        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   )

@@ -28,6 +28,30 @@ type Workspace struct {
 	// (ListByUser), где его считает тот же запрос. У создания и переименования
 	// он ноль: их ответ — сама вывеска, а не сводка, и список кабинет перечитает.
 	FormCount int64
+	// Frozen — пространство закрыто ДЛЯ СПРАШИВАЮЩЕГО: тариф владельца больше не
+	// покрывает столько пространств либо столько участников (ADR §10). Считает
+	// сервис (ListForUser), а не запрос: лимиты знает только entitlements.
+	//
+	// Заморозка — состояние ПАРЫ «пространство и человек», а не пространства:
+	// лишними мёрзнут именно участники сверх мест, и владелец не мёрзнет никогда.
+	// Поэтому поле живёт в списке, который и так строится под конкретного
+	// спрашивающего, — как и IsPersonal рядом.
+	Frozen bool
+}
+
+// WorkspaceAccess — строка списка вместе с тем, по чему решается заморозка.
+// Отдельный тип, а не поля в Workspace: ранги нужны одному расчёту в сервисе и
+// наружу не отдаются, а в DTO попадает только его результат.
+type WorkspaceAccess struct {
+	Workspace
+	// OwnerID — чей это тариф. Лимит пространств спрашивается у ВЛАДЕЛЬЦА, а не
+	// у спрашивающего: пространство работает по плану своего владельца.
+	OwnerID uuid.UUID
+	// TeamRank — какое это по счёту НЕЛИЧНОЕ пространство владельца (1-based).
+	TeamRank int64
+	// MemberRank — какой по счёту участник этого пространства спрашивает
+	// (1-based; владелец всегда первый).
+	MemberRank int64
 }
 
 // Repo — доступ к данным workspaces поверх sqlc-запросов. Методы принимают
@@ -36,16 +60,19 @@ type Repo struct{}
 
 // ListByUser возвращает воркспейсы, в которых состоит пользователь (членство
 // обеспечивает сам запрос — JOIN через workspace_members).
-func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Workspace, error) {
+func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]WorkspaceAccess, error) {
 	rows, err := postgres.New(db).ListWorkspacesByUser(ctx, userID)
 	if err != nil {
 		return nil, fmt.Errorf("list workspaces by user: %w", err)
 	}
-	out := make([]Workspace, len(rows))
+	out := make([]WorkspaceAccess, len(rows))
 	for i, r := range rows {
-		out[i] = Workspace{
-			ID: r.ID, Slug: r.Slug, Name: r.Name, IsPersonal: r.IsPersonal,
-			CreatedAt: r.CreatedAt.Time, FormCount: r.FormCount,
+		out[i] = WorkspaceAccess{
+			Workspace: Workspace{
+				ID: r.ID, Slug: r.Slug, Name: r.Name, IsPersonal: r.IsPersonal,
+				CreatedAt: r.CreatedAt.Time, FormCount: r.FormCount,
+			},
+			OwnerID: r.OwnerID, TeamRank: r.TeamRank, MemberRank: r.MemberRank,
 		}
 	}
 	return out, nil

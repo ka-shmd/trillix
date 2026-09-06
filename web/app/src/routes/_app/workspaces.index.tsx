@@ -1,100 +1,70 @@
-import { createFileRoute, useNavigate } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
 import { SquarePlus } from 'lucide-react'
+
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { CreateWorkspaceDialog } from '../../features/workspaces/CreateWorkspaceDialog'
-import { WorkspaceSection } from '../../features/workspaces/WorkspaceSection'
-import { WorkspaceFormList } from '../../features/forms/WorkspaceFormList'
-import { NEW_FORM_SLUG } from '../../features/forms/draft'
+import { WorkspaceRow } from '../../features/workspaces/WorkspaceRow'
 import { formKeys } from '../../features/forms/keys'
-import type { Workspace } from '../../entities/workspace'
 import { PageActions, PageCrumbs } from '../../shared/page/headerPortals'
+import { PageContainer } from '../../shared/page/PageContainer'
+import { PageHeader } from '../../shared/page/PageHeader'
+import { ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
-import { Skeleton } from '@/components/ui/skeleton'
 
-// Обзор пространств (/workspaces): пространство — надпись с кружками участников,
-// под ней его формы списком. Отдельного экрана участников нет — состав и
-// приглашения живут в диалоге за кластером кружков.
+// Все пространства (/workspaces) — единственный экран, отвечающий на вопрос «какие
+// у меня вообще пространства». Формы под каждым он больше не показывает: тот же
+// список, в другом виде и по другому адресу, показывал экран самого пространства.
+// Здесь остались действия НАД пространством: завести, переименовать, удалить.
 export const Route = createFileRoute('/_app/workspaces/')({
   component: WorkspacesPage,
 })
 
 function WorkspacesPage() {
   const workspaces = useQuery(workspacesQueryOptions)
-  const navigate = useNavigate()
   const qc = useQueryClient()
   const [creating, setCreating] = useState(false)
 
-  // «+» открывает редактор нового черновика ЭТОГО пространства; самой формы ещё нет —
-  // её заводит первая правка (features/forms/draft.ts). Кнопка сайдбара «Новая форма»
-  // так не умеет: она берёт пространство из ?w= адреса, которого на обзоре нет, — то
-  // есть всегда клала бы форму в личное. Пространство едет в адрес редактора по общему
-  // правилу кабинета (пусто = личное): из адреса его прочтёт и создание, и следующая
-  // созданная оттуда форма.
-  function createForm(workspace: Workspace) {
-    void navigate({
-      to: '/forms/$slug/edit',
-      params: { slug: NEW_FORM_SLUG },
-      search: workspace.isPersonal ? {} : { w: workspace.slug },
-    })
-  }
-
   return (
-    <div className="mx-auto w-full max-w-5xl p-6">
-      {/* Название страницы и создание живут в верхнем баре кабинета. */}
+    <PageContainer>
       <PageCrumbs items={['Пространства']} />
       <PageActions>
         <Button variant="ghost" size="sm" className="gap-2" onClick={() => setCreating(true)}>
-          {/* Квадрат с плюсом — «завести пространство»; голый Plus в шапке
-              кабинета уже занят смыслом «новая форма» (кнопка сайдбара). */}
+          {/* Квадрат с плюсом — «завести пространство»; голый Plus в кабинете уже
+              занят смыслом «новая форма». */}
           <SquarePlus className="size-4" />
           Новое пространство
         </Button>
       </PageActions>
-      {/* Заголовок остаётся в разметке, но не на экране: без него страница
-          начиналась бы с h2 названий пространств, и структура документа
-          рассыпалась бы. Видимое имя страницы — крошка выше. */}
-      <h1 className="sr-only">Пространства</h1>
 
-      {workspaces.isPending && (
-        <div className="space-y-6">
-          <Skeleton className="h-24 w-full" />
-          <Skeleton className="h-24 w-full" />
-        </div>
-      )}
+      <PageHeader
+        title="Пространства"
+        description="Формы, расписания, участники и тариф принадлежат пространству. Личное есть у каждого, командные заводите под общую работу."
+      />
 
-      {workspaces.isError && (
-        <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-          <p className="mb-3 text-sm">Не удалось загрузить пространства.</p>
-          <Button variant="outline" size="sm" onClick={() => workspaces.refetch()}>
-            Повторить
-          </Button>
-        </div>
-      )}
-
-      {workspaces.data && (
-        <div className="space-y-4">
-          {workspaces.data.map((ws) => (
-            <WorkspaceSection
-              key={ws.id}
-              workspace={ws}
-              onCreateForm={() => createForm(ws)}
-              // Формы удалённого ушли вместе с ним; их страницы остались бы в
-              // кэше и всплыли бы на дашборде по прямой ссылке ?w=<id>. Ключи
-              // форм — чужая фича, поэтому чистка живёт здесь, а не в мутации.
-              onDeleted={() => qc.invalidateQueries({ queryKey: formKeys.list() })}
-            >
-              <WorkspaceFormList workspaceId={ws.id} />
-            </WorkspaceSection>
-          ))}
-        </div>
-      )}
+      <div className="mt-8 flex flex-col gap-2">
+        {workspaces.isPending && <LoadingRows rows={2} />}
+        {workspaces.isError && (
+          <ErrorState
+            title="Не удалось загрузить пространства."
+            onRetry={() => void workspaces.refetch()}
+            retryLabel="Повторить"
+          />
+        )}
+        {workspaces.data?.map((ws) => (
+          <WorkspaceRow
+            key={ws.id}
+            workspace={ws}
+            // Формы удалённого ушли вместе с ним; их страницы остались бы в кэше и
+            // всплыли бы по прямой ссылке. Ключи форм — чужая фича, поэтому чистка
+            // живёт здесь, а не в мутации.
+            onDeleted={() => qc.invalidateQueries({ queryKey: formKeys.list() })}
+          />
+        ))}
+      </div>
 
       <CreateWorkspaceDialog open={creating} onOpenChange={setCreating} />
-    </div>
+    </PageContainer>
   )
 }
-
-// Крошки страницы: дом → «Пространства». Тот же вид, что у крошек редактора
-// (BuilderScreen): один верхний бар — один способ назвать текущее место.

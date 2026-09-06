@@ -4797,9 +4797,21 @@ const listWorkspacesByUser = `-- name: ListWorkspacesByUser :many
 
 SELECT w.id, w.slug, w.name, w.created_at,
        (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal,
-       (SELECT count(*) FROM forms f WHERE f.workspace_id = w.id)::bigint AS form_count
+       (SELECT count(*) FROM forms f WHERE f.workspace_id = w.id)::bigint AS form_count,
+       o.user_id AS owner_id,
+       CASE WHEN m.role = 'owner' THEN 1
+            ELSE 1 + (SELECT count(*) FROM workspace_members m2
+                       WHERE m2.workspace_id = m.workspace_id AND m2.role <> 'owner'
+                         AND (m2.created_at, m2.user_id) <= (m.created_at, m.user_id))
+       END::bigint AS member_rank,
+       (SELECT count(*) FROM workspaces w2
+          JOIN workspace_members o2 ON o2.workspace_id = w2.id AND o2.role = 'owner'
+         WHERE o2.user_id = o.user_id
+           AND w2.personal_user_id IS NULL
+           AND (w2.created_at, w2.id) <= (w.created_at, w.id))::bigint AS team_rank
 FROM workspace_members m
 JOIN workspaces w ON w.id = m.workspace_id
+JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner'
 WHERE m.user_id = $1
 ORDER BY w.created_at ASC
 `
@@ -4811,6 +4823,9 @@ type ListWorkspacesByUserRow struct {
 	CreatedAt  pgtype.Timestamptz
 	IsPersonal bool
 	FormCount  int64
+	OwnerID    uuid.UUID
+	MemberRank int64
+	TeamRank   int64
 }
 
 // Запросы модуля workspaces. Схема — migrations/0002_auth (таблицы workspaces,
@@ -4829,6 +4844,12 @@ type ListWorkspacesByUserRow struct {
 // Подзапрос, а не второй поход в forms: обзор рисует ВСЕ пространства разом, и
 // отдельный запрос на каждое был бы N+1 ради одного числа. Мягкого удаления у
 // форм нет — считаются все строки, включая черновики.
+//
+// owner_id и два ранга — ровно те же три величины и по тем же правилам, что у
+// GetAccessContext (см. ниже), только на ВЕСЬ список сразу. По ним сервис решает,
+// заморожено ли пространство для спрашивающего: сам список ходит на каждом экране
+// кабинета, и вызывать checkFrozen построчно значило бы платить N+1 за вывеску.
+// Лимиты сюда не читаются намеренно — их знает только entitlements.
 func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]ListWorkspacesByUserRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspacesByUser, userID)
 	if err != nil {
@@ -4845,6 +4866,9 @@ func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([
 			&i.CreatedAt,
 			&i.IsPersonal,
 			&i.FormCount,
+			&i.OwnerID,
+			&i.MemberRank,
+			&i.TeamRank,
 		); err != nil {
 			return nil, err
 		}
@@ -5196,6 +5220,82 @@ func (q *Queries) ScheduleInWorkspace(ctx context.Context, arg ScheduleInWorkspa
 	var exists bool
 	err := row.Scan(&exists)
 	return exists, err
+}
+
+const searchFormsForUser = `-- name: SearchFormsForUser :many
+SELECT f.id, f.slug, f.name, f.title, f.status, f.updated_at,
+       w.slug AS workspace_slug, w.name AS workspace_name
+FROM forms f
+JOIN workspaces w ON w.id = f.workspace_id
+JOIN workspace_members m ON m.workspace_id = f.workspace_id AND m.user_id = $1
+WHERE coalesce(f.name, f.title) ILIKE '%' || $2::text || '%'
+ORDER BY f.updated_at DESC, f.id DESC
+LIMIT $3
+`
+
+type SearchFormsForUserParams struct {
+	UserID    uuid.UUID
+	Search    string
+	PageLimit int32
+}
+
+type SearchFormsForUserRow struct {
+	ID            uuid.UUID
+	Slug          string
+	Name          pgtype.Text
+	Title         string
+	Status        string
+	UpdatedAt     pgtype.Timestamptz
+	WorkspaceSlug string
+	WorkspaceName string
+}
+
+// Поиск формы ПО ВСЕМ пространствам, где человек состоит: он не помнит, в каком
+// из них лежит форма, а экрана «все мои формы» в кабинете нет — формы адресуются
+// через пространство.
+//
+// Запрос СВОЙ, а не режим списка (ListFormsPage), и это решение, а не дубль. Список
+// тянет на каждую форму счётчики ответов и визитов двумя LATERAL и строит курсор;
+// поиску не нужно ни одно из трёх — ему нужны имя, место и ссылка. Прогонять
+// тяжёлый запрос по всем пространствам ради строки результата значило бы платить за
+// то, что тут же выбрасывается.
+//
+// Право доступа обеспечивает JOIN по членству — ровно тем же способом, что список
+// пространств: чужая форма не может попасть в выдачу, потому что не может пройти
+// соединение (инвариант безопасности 1).
+//
+// Поиск по ОТОБРАЖАЕМОМУ имени (coalesce(name, title)) — по тому же полю и с тем же
+// экранированием LIKE, что список: искать по тому, что человек видит на карточке.
+//
+// Порядок — по свежести правки: у поиска без ранжирования это единственный ответ на
+// «какая из двух похожих мне нужна», и он же ставит наверх ту, с которой работали.
+func (q *Queries) SearchFormsForUser(ctx context.Context, arg SearchFormsForUserParams) ([]SearchFormsForUserRow, error) {
+	rows, err := q.db.Query(ctx, searchFormsForUser, arg.UserID, arg.Search, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchFormsForUserRow
+	for rows.Next() {
+		var i SearchFormsForUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Title,
+			&i.Status,
+			&i.UpdatedAt,
+			&i.WorkspaceSlug,
+			&i.WorkspaceName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const setFormClosed = `-- name: SetFormClosed :one

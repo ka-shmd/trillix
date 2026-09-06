@@ -339,12 +339,25 @@ function SidebarFooter({ className, ...props }: React.ComponentProps<'div'>) {
   )
 }
 
+// НАША ПРАВКА: `w-auto` дописан модификатором ориентации.
+//
+// У `Separator` ширина задана как `data-[orientation=horizontal]:w-full` — утилита под
+// атрибутным селектором, специфичность (0,2,0). Плоский `w-auto` из этой строки —
+// (0,1,0), и `cn` их не сливает: у них РАЗНЫЕ модификаторы, то есть для tailwind-merge
+// это разные ключи, и в разметке остаются оба класса. Побеждает более специфичный, то
+// есть `width: 100%`, а вместе с `mx-2` это 100% + 16px — панель получает
+// горизонтальную прокрутку. Отчёт владельца 2026-09-06.
+//
+// Лечится тем же модификатором: одинаковый ключ — и лишний класс уходит на сборке.
 function SidebarSeparator({ className, ...props }: React.ComponentProps<typeof Separator>) {
   return (
     <Separator
       data-slot="sidebar-separator"
       data-sidebar="separator"
-      className={cn('mx-2 w-auto bg-sidebar-border', className)}
+      className={cn(
+        'mx-2 w-auto data-[orientation=horizontal]:w-auto bg-sidebar-border',
+        className,
+      )}
       {...props}
     />
   )
@@ -452,8 +465,21 @@ function SidebarMenuItem({ className, ...props }: React.ComponentProps<'li'>) {
   )
 }
 
+// НАША ПРАВКА (у shadcn выбранный пункт красится тем же `sidebar-accent`, что и
+// наведение): ВЫБРАННЫЙ ПУНКТ НЕСЁТ `--primary`, как того требует правило ролей цвета
+// (DESIGN-SYSTEM §6 — «действие: кнопки, ссылки, активный таб»). До правки выбор и
+// наведение отличались только весом шрифта, а подложка у обоих давала 1.045:1 к фону
+// панели — то есть сайдбар не отвечал на вопрос «на какой я странице».
+//
+// Пары `hover:`/`active:` продублированы ПОД `data-[active=true]` намеренно: у базовых
+// `hover:bg-sidebar-accent` и `data-[active=true]:bg-…` одинаковая специфичность, и
+// победил бы порядок в сгенерированном CSS (web/CLAUDE.md, «конфликтующие утилиты»).
+// Составной селектор `[data-active=true]:hover` специфичнее — исход перестаёт зависеть
+// от порядка.
+//
+// Переустановишь компонент из shadcn — правка вернётся к дефолту.
 const sidebarMenuButtonVariants = cva(
-  'peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-accent data-[active=true]:font-medium data-[active=true]:text-sidebar-accent-foreground data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0',
+  'peer/menu-button flex w-full items-center gap-2 overflow-hidden rounded-md p-2 text-left text-sm ring-sidebar-ring outline-hidden transition-[width,height,padding] group-has-data-[sidebar=menu-action]/menu-item:pr-8 group-data-[collapsible=icon]:size-8! group-data-[collapsible=icon]:p-2! hover:bg-sidebar-accent hover:text-sidebar-accent-foreground focus-visible:ring-2 active:bg-sidebar-accent active:text-sidebar-accent-foreground disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-[active=true]:bg-sidebar-primary-soft data-[active=true]:font-semibold data-[active=true]:text-sidebar-primary-ink data-[active=true]:hover:bg-sidebar-primary-soft data-[active=true]:hover:text-sidebar-primary-ink data-[active=true]:active:bg-sidebar-primary-soft data-[active=true]:active:text-sidebar-primary-ink data-[state=open]:hover:bg-sidebar-accent data-[state=open]:hover:text-sidebar-accent-foreground [&>span:last-child]:truncate [&>svg]:size-4 [&>svg]:shrink-0',
   {
     variants: {
       variant: {

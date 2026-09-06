@@ -32,7 +32,10 @@ export function ShareView({ form }: { form: FormDetail }) {
         description="Опубликуйте её в редакторе — здесь появятся ссылка, карточка для мессенджеров и код для вставки на сайт."
         action={
           <Button asChild>
-            <Link to="/forms/$slug/edit" params={{ slug: form.slug }} search={(prev) => prev}>
+            <Link
+              to="/w/$workspaceSlug/forms/$slug/edit"
+              params={{ workspaceSlug: form.workspaceSlug, slug: form.slug }}
+            >
               Открыть редактор
             </Link>
           </Button>

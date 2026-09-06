@@ -15,6 +15,7 @@ import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
 import { SlashEditor } from './SlashEditor'
+import { WorkspaceAddressProvider } from '../../../shared/workspaceContext'
 
 // Пустое полотно — единственный экран, который новичок видит сразу после «Новая форма»,
 // и на нём не должно быть ничего, кроме приглашения начать: кнопка отправки у формы без
@@ -36,19 +37,24 @@ function setup(blocks: FormSchema['blocks']) {
   const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
 
   const rootRoute = createRootRoute({
+    // Провайдер пространства стоит ВНУТРИ роутера (он читает адрес): ссылка на
+    // шаблоны ведёт в галерею текущего пространства, а адрес `/` его не называет —
+    // отвечает личное.
     component: () => (
-      <QueryClientProvider client={qc}>
-        <BuilderStoreContext.Provider value={store}>
-          <FocusEngineProvider value={engine}>
-            <SlashEditor formId="f" engine={engine} onOpenDesign={() => {}} />
-          </FocusEngineProvider>
-        </BuilderStoreContext.Provider>
-      </QueryClientProvider>
+      <WorkspaceAddressProvider personalSlug="ws-1">
+        <QueryClientProvider client={qc}>
+          <BuilderStoreContext.Provider value={store}>
+            <FocusEngineProvider value={engine}>
+              <SlashEditor formId="f" engine={engine} onOpenDesign={() => {}} />
+            </FocusEngineProvider>
+          </BuilderStoreContext.Provider>
+        </QueryClientProvider>
+      </WorkspaceAddressProvider>
     ),
   })
   const templatesRoute = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/templates',
+    path: '/w/$workspaceSlug/templates',
     component: () => null,
   })
   const router = createRouter({
@@ -84,7 +90,7 @@ describe('пустое полотно', () => {
   it('приглашение называет оба пути: Enter и шаблон', async () => {
     setup([])
     const link = (await screen.findByText('Использовать шаблон')).closest('a')
-    expect(link?.getAttribute('href')).toBe('/templates')
+    expect(link?.getAttribute('href')).toBe('/w/ws-1/templates')
     expect(document.body.textContent).toContain('Нажмите')
     expect(document.body.textContent).toContain('чтобы начать')
     // «/» и «@» ушли из подсказок в описание — обещать их полотно не перестало, и

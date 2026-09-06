@@ -98,6 +98,12 @@ type fakeStore struct {
 	lastListAfter  bool
 	lastListSort   string
 	lastListSearch string
+
+	searchHits      []SearchHit
+	searchErr       error
+	lastSearchUser  uuid.UUID
+	lastSearchQuery string
+	lastSearchLimit int32
 }
 
 func (f *fakeStore) GetPersonalWorkspace(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (uuid.UUID, error) {
@@ -241,6 +247,13 @@ func (f *fakeStore) GetFormBySlug(_ context.Context, _ postgres.DBTX, slug strin
 	form := f.form
 	form.Slug = slug
 	return form, nil
+}
+
+func (f *fakeStore) SearchForms(_ context.Context, _ postgres.DBTX, userID uuid.UUID, search string, limit int32) ([]SearchHit, error) {
+	f.lastSearchUser = userID
+	f.lastSearchQuery = search
+	f.lastSearchLimit = limit
+	return f.searchHits, f.searchErr
 }
 
 func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
@@ -2143,5 +2156,65 @@ func TestDelete_PastBookingsDoNotBlock(t *testing.T) {
 	}
 	if !store.deleted {
 		t.Fatal("форма не удалена")
+	}
+}
+
+// Поиск по всем пространствам не спрашивает право ни у одного из них: пространство
+// в запросе не названо, а чужую форму физически не пускает в выдачу соединение по
+// членству (проверяется интеграционным тестом против настоящей БД). Здесь —
+// договор сервиса: что уходит в репозиторий и что считается пустым запросом.
+func TestSearch_TrimsEscapesAndCaps(t *testing.T) {
+	uid := uuid.New()
+	store := &fakeStore{searchHits: []SearchHit{{Title: "Анкета"}}}
+	svc := newTestService(store)
+
+	got, err := svc.Search(context.Background(), uid, "  50%_опрос  ")
+	if err != nil {
+		t.Fatalf("Search: %v", err)
+	}
+	if len(got) != 1 {
+		t.Fatalf("результатов = %d, ожидался 1", len(got))
+	}
+	if store.lastSearchUser != uid {
+		t.Errorf("userID в репозиторий = %s, ожидался %s", store.lastSearchUser, uid)
+	}
+	// Пробелы обрезаны, спецсимволы LIKE обезврежены: без экранирования «50%»
+	// находит любую форму, а «_» — любой символ.
+	if store.lastSearchQuery != `50\%\_опрос` {
+		t.Errorf("запрос в репозиторий = %q, ожидался экранированный", store.lastSearchQuery)
+	}
+	if store.lastSearchLimit != int32(MaxSearchResults) {
+		t.Errorf("потолок выдачи = %d, ожидался %d", store.lastSearchLimit, MaxSearchResults)
+	}
+}
+
+// Пустой запрос — пустой ответ, а не отказ: строка поиска пуста ровно до первой
+// набранной буквы, и 422 на этом состоянии был бы ошибкой на ровном месте.
+func TestSearch_EmptyQueryIsNotAnError(t *testing.T) {
+	store := &fakeStore{searchHits: []SearchHit{{Title: "Анкета"}}}
+	svc := newTestService(store)
+
+	for _, q := range []string{"", "   ", "\t\n"} {
+		got, err := svc.Search(context.Background(), uuid.New(), q)
+		if err != nil {
+			t.Fatalf("Search(%q): %v", q, err)
+		}
+		if got != nil {
+			t.Fatalf("Search(%q) = %+v, ожидался пустой ответ", q, got)
+		}
+		if store.lastSearchQuery != "" {
+			t.Fatalf("на пустом запросе сходили в репозиторий с %q", store.lastSearchQuery)
+		}
+	}
+}
+
+// Слишком длинный запрос — отказ валидации, а не шаблон в десятки килобайт в ILIKE:
+// query-строку не стережёт MaxBytesReader (он про тело), а инвариант 3 требует
+// проверять любой ввод на бэке.
+func TestSearch_TooLongRejected(t *testing.T) {
+	svc := newTestService(&fakeStore{})
+	long := strings.Repeat("я", MaxSearchLen+1)
+	if _, err := svc.Search(context.Background(), uuid.New(), long); !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("err = %v, ожидался ErrValidation", err)
 	}
 }

@@ -496,6 +496,54 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 // ListFormsPage — страница списка форм воркспейса: поиск, сортировка и курсор
 // одним запросом (фаза 8.5 шаг 8). Пустой search — без фильтра; nil-курсор —
 // первая страница. Экранирование спецсимволов LIKE — на вызывающем (service).
+// SearchHit — форма в результатах поиска по всем пространствам. Свой тип, а не
+// Form: у поиска нет ни счётчиков, ни схемы, ни версии — ему нужны имя, место и
+// ссылка, и лишние нулевые поля в этом ответе врали бы (как врёт SubmissionCount у
+// результатов мутаций).
+type SearchHit struct {
+	ID    uuid.UUID
+	Slug  string
+	Name  *string
+	Title string
+	// Status — статус формы: строка результата ведёт черновик в редактор, а
+	// розданную форму — на ответы, ровно как карточка списка.
+	Status string
+	// WorkspaceSlug и WorkspaceName — ГДЕ лежит найденное. Несущее здесь имя: без
+	// него список результатов из разных пространств неотличим от списка одного, а
+	// именно «в каком из них форма» человек и не помнил.
+	WorkspaceSlug string
+	WorkspaceName string
+	UpdatedAt     time.Time
+}
+
+// SearchForms — формы по всем пространствам с членством. Право доступа держит
+// сам запрос (JOIN по членству), поэтому отдельной проверки здесь нет: спросить
+// «можно ли» было бы не у чего — пространство не названо, их много.
+func (Repo) SearchForms(ctx context.Context, db postgres.DBTX, userID uuid.UUID, search string, limit int32) ([]SearchHit, error) {
+	rows, err := postgres.New(db).SearchFormsForUser(ctx, postgres.SearchFormsForUserParams{
+		UserID:    userID,
+		Search:    search,
+		PageLimit: limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("search forms: %w", err)
+	}
+	out := make([]SearchHit, len(rows))
+	for i, r := range rows {
+		hit := SearchHit{
+			ID: r.ID, Slug: r.Slug, Title: r.Title, Status: r.Status,
+			WorkspaceSlug: r.WorkspaceSlug, WorkspaceName: r.WorkspaceName,
+			UpdatedAt: r.UpdatedAt.Time,
+		}
+		if r.Name.Valid {
+			name := r.Name.String
+			hit.Name = &name
+		}
+		out[i] = hit
+	}
+	return out, nil
+}
+
 func (Repo) ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
 	params := postgres.ListFormsPageParams{
 		WorkspaceID: workspaceID,
