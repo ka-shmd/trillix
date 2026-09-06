@@ -17,7 +17,13 @@ const PREVIEW_QUESTIONS = 4
 // сейчас работает (undefined = личное либо «ещё не знаем», см. маршрут). Приезжает
 // пропом, а не читается отсюда: текущее пространство резолвит фича пространств, а
 // импорт фичи из фичи запрещён (web/CLAUDE.md) — связывает их маршрут.
-export function TemplatesView({ workspaceId }: { workspaceId?: string }) {
+export function TemplatesView({
+  workspaceId,
+  workspaceSlug,
+}: {
+  workspaceId?: string
+  workspaceSlug: string
+}) {
   const navigate = useNavigate()
   const create = useCreateFormFromTemplate()
   // Какую карточку нажали: мутация одна на всю галерею, а «Создаём…» и ошибка
@@ -30,9 +36,8 @@ export function TemplatesView({ workspaceId }: { workspaceId?: string }) {
       {
         onSuccess: (form) =>
           navigate({
-            to: '/forms/$slug/edit',
-            params: { slug: form.slug },
-            search: (prev) => prev,
+            to: '/w/$workspaceSlug/forms/$slug/edit',
+            params: { workspaceSlug, slug: form.slug },
           }),
       },
     )

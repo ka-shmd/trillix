@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
+import { usePlanLink } from '../../shared/planLink'
 import { useQuery } from '@tanstack/react-query'
 
 import {
@@ -141,6 +142,7 @@ function NoRows() {
 // известным источником: плашка, рекламирующая пустоту, не продаёт ничего
 // (docs/ANALYTICS.md §9).
 function Sources({ data }: { data: VisitsBreakdown }) {
+  const planLink = usePlanLink()
   if (data.sourcesLocked) {
     return (
       <EmptyState
@@ -152,7 +154,7 @@ function Sources({ data }: { data: VisitsBreakdown }) {
         description="Разбивка по источникам доступна на платном тарифе."
         action={
           <Button asChild size="sm">
-            <Link to="/settings/plan">Посмотреть тариф</Link>
+            <Link {...planLink}>Посмотреть тариф</Link>
           </Button>
         }
       />

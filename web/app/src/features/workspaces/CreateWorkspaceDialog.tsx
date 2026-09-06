@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { usePlanLink } from '../../shared/planLink'
 import { useNavigate } from '@tanstack/react-router'
 import { toast } from 'sonner'
 import { MAX_WORKSPACE_NAME_LEN } from '../../entities/workspace'
@@ -38,6 +39,7 @@ export function CreateWorkspaceDialog({
   const create = useCreateWorkspace()
   const [name, setName] = useState('')
   const trimmed = name.trim()
+  const planLink = usePlanLink()
 
   // Ни набранное, ни отказ не переживают закрытие: следующее открытие должно
   // начинаться с чистого поля, а не с прошлой попытки. Одной функцией на все
@@ -60,16 +62,13 @@ export function CreateWorkspaceDialog({
         if (!(error instanceof ApiError) || error.code !== 'plan_required') return
         close()
         toast.error('На текущем тарифе больше пространств завести нельзя.')
-        void navigate({ to: '/settings/plan' })
+        void navigate(planLink)
       },
     })
   }
 
   return (
-    <Dialog
-      open={open}
-      onOpenChange={(next) => (next ? onOpenChange(true) : close())}
-    >
+    <Dialog open={open} onOpenChange={(next) => (next ? onOpenChange(true) : close())}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
           <DialogTitle>Новое пространство</DialogTitle>

@@ -22,11 +22,9 @@ import { ErrorState, LoadingRows } from '../../shared/page/states'
 //
 // Вид вставки — в адресе: три кнопки на «Поделиться» ведут каждая на свой, ссылка
 // на «форму виджетом» сохраняется в закладки, «Назад» браузера работает. Мусор в
-// параметре гасит catch — умолчание вместо упавшего экрана. `w` (текущее
-// пространство) проносится через search, как во всех ссылках кабинета.
+// параметре гасит catch — умолчание вместо упавшего экрана.
 const embedSearchSchema = z.object({
   mode: embedModeSchema.optional().catch(undefined),
-  w: z.string().optional().catch(undefined),
 })
 
 export const Route = createFileRoute('/_app/forms/$slug/embed')({

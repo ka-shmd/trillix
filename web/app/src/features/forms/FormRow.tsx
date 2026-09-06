@@ -38,7 +38,7 @@ import {
 // месте проступают кнопки. Прятать действия за прозрачностью, а не за display:none,
 // обязательно — иначе они выпадают из порядка табуляции; видимыми при фокусе их
 // делает group-focus-within, поэтому невидимой кнопки под фокусом не бывает.
-export function FormRow({ form }: { form: Form }) {
+export function FormRow({ form, workspaceSlug }: { form: Form; workspaceSlug: string }) {
   const [editing, setEditing] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const rename = useUpdateFormName()
@@ -71,13 +71,14 @@ export function FormRow({ form }: { form: Form }) {
       <Link
         // Куда ведёт название — то же правило, что на карточке дашборда: черновик
         // в редактор, розданную форму на «Ответы».
-        to={form.status === 'draft' ? '/forms/$slug/edit' : '/forms/$slug/responses'}
-        params={{ slug: form.slug }}
-        // ПРОСТРАНСТВО ЕДЕТ С АДРЕСОМ (`search={(prev) => prev}`): текущее пространство
-        // живёт в `?w=`, и ссылка без него уводит в редактор «личного» — а там гейты
-        // тарифа и остаток сообщений ассистента спрашивают план не того пространства,
-        // в котором лежит форма. Тот же приём у соседней ссылки на «Ответы».
-        search={(prev) => prev}
+        // Редактор адресуется через пространство (см. FormCard), поэтому строка
+        // получает его пропом от списка.
+        {...(form.status === 'draft'
+          ? {
+              to: '/w/$workspaceSlug/forms/$slug/edit' as const,
+              params: { workspaceSlug, slug: form.slug },
+            }
+          : { to: '/forms/$slug/responses' as const, params: { slug: form.slug } })}
         className={`min-w-0 flex-1 truncate text-sm font-medium hover:text-primary ${
           isPlaceholder ? 'text-muted-foreground' : ''
         }`}

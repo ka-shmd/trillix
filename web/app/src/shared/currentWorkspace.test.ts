@@ -1,33 +1,36 @@
 import { describe, expect, it } from 'vitest'
-import { workspaceSlugFromLocation } from './currentWorkspace'
+import { workspaceSlugFromPath } from './currentWorkspace'
 
-describe('workspaceSlugFromLocation', () => {
-  it('без пространства в адресе — личное (пустая строка)', () => {
-    expect(workspaceSlugFromLocation('/forms', {})).toBe('')
-    expect(workspaceSlugFromLocation('/forms', { q: 'анкета' })).toBe('')
+describe('workspaceSlugFromPath', () => {
+  it('читает пространство из корня раздела', () => {
+    expect(workspaceSlugFromPath('/w/ws-1')).toBe('ws-1')
+    expect(workspaceSlugFromPath('/w/ws-1/')).toBe('ws-1')
   })
 
-  it('читает ?w= на любом маршруте', () => {
-    expect(workspaceSlugFromLocation('/forms', { w: 'ws-1' })).toBe('ws-1')
-    expect(workspaceSlugFromLocation('/forms/abc/edit', { w: 'ws-1' })).toBe('ws-1')
+  it('читает пространство на любой глубине раздела', () => {
+    expect(workspaceSlugFromPath('/w/ws-1/forms')).toBe('ws-1')
+    expect(workspaceSlugFromPath('/w/ws-1/schedules/018f-abc')).toBe('ws-1')
+    expect(workspaceSlugFromPath('/w/ws-1/forms/abc/edit')).toBe('ws-1')
   })
 
-  it('читает id из пути страницы пространства', () => {
-    expect(workspaceSlugFromLocation('/workspaces/ws-1', {})).toBe('ws-1')
-    expect(workspaceSlugFromLocation('/workspaces/ws-1/', {})).toBe('ws-1')
+  it('раскодирует slug из адреса', () => {
+    expect(workspaceSlugFromPath('/w/ws%201/forms')).toBe('ws 1')
   })
 
-  it('путь важнее ?w=: он и есть текущий экран', () => {
-    expect(workspaceSlugFromLocation('/workspaces/ws-1', { w: 'ws-2' })).toBe('ws-1')
+  // `null`, а не пустая строка: «путь пространства не называет» и «названо пустое» —
+  // разные новости, и вторая невозможна. Отличать их обязан вызывающий: по
+  // неназванному отвечает память оболочки, а по названному — только оно само.
+  it('адрес без пространства — null, а не пустая строка', () => {
+    expect(workspaceSlugFromPath('/forms/abc/share')).toBeNull()
+    expect(workspaceSlugFromPath('/settings/account')).toBeNull()
+    expect(workspaceSlugFromPath('/workspaces')).toBeNull()
+    expect(workspaceSlugFromPath('/')).toBeNull()
   })
 
-  it('обзор пространств пространством не является', () => {
-    expect(workspaceSlugFromLocation('/workspaces', {})).toBe('')
-    expect(workspaceSlugFromLocation('/workspaces/', {})).toBe('')
-  })
-
-  it('мусор в ?w= не роняет разбор', () => {
-    expect(workspaceSlugFromLocation('/forms', { w: 42 })).toBe('')
-    expect(workspaceSlugFromLocation('/forms', { w: null })).toBe('')
+  // Корень `/w` без slug'а — не пространство: маршрута с таким адресом нет, и
+  // прочитать из него имя нечего.
+  it('корень /w пространством не является', () => {
+    expect(workspaceSlugFromPath('/w')).toBeNull()
+    expect(workspaceSlugFromPath('/w/')).toBeNull()
   })
 })

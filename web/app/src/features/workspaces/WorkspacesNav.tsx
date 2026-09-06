@@ -127,12 +127,15 @@ function WorkspaceNavItem({
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const [membersOpen, setMembersOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
-  const isCurrent = pathname === `/workspaces/${workspace.slug}`
+  // Разделы пространства живут под одним корнем, поэтому строка активна на любом
+  // из них, а не только на списке форм.
+  const isCurrent =
+    pathname === `/w/${workspace.slug}` || pathname.startsWith(`/w/${workspace.slug}/`)
 
   return (
     <SidebarMenuItem>
       <SidebarMenuButton asChild isActive={isCurrent}>
-        <Link to="/workspaces/$workspaceSlug" params={{ workspaceSlug: workspace.slug }}>
+        <Link to="/w/$workspaceSlug/forms" params={{ workspaceSlug: workspace.slug }}>
           <span className="truncate">{workspace.name}</span>
         </Link>
       </SidebarMenuButton>

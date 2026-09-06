@@ -14,8 +14,8 @@ import { planSnapshotQueryOptions } from './queries'
 // равно на бэке (инвариант 3, «фронт прячет ради UX, бэк отказывает ради правды»).
 // По той же причине сбой запроса тарифа ничего не запирает.
 //
-// Пространство берётся из адреса (?w= или путь страницы пространства), пустое
-// значит личное; перевод slug'а адреса в id для запроса делает useCurrentWorkspace.
+// Пространство берётся из адреса либо из самой формы — что из двух, решает
+// `shared/workspaceContext.tsx`; перевод slug'а в id делает useCurrentWorkspace.
 export function useFeatureAllowed(key: string): boolean {
   const workspace = useCurrentWorkspace()
   const plan = useQuery({
@@ -37,11 +37,13 @@ export function useFeatureAllowed(key: string): boolean {
 // refresh обязателен рядом со значением: расход меняется действиями самого автора на
 // том же экране (каждая реплика ассистенту — минус одна), и без обновления индикатор
 // показывал бы число, верное на момент открытия.
-export function usePlanQuota(key: string): {
-  used: number
-  limit: number | null
-  refresh: () => void
-} | undefined {
+export function usePlanQuota(key: string):
+  | {
+      used: number
+      limit: number | null
+      refresh: () => void
+    }
+  | undefined {
   const workspace = useCurrentWorkspace()
   const qc = useQueryClient()
   const workspaceId = workspace?.id ?? ''

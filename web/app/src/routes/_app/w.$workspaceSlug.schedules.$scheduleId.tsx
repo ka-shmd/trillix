@@ -66,7 +66,7 @@ import {
 // Расписание адресуется ID, а не slug'ом: slug'ов у него нет — публичной сущностью
 // оно не является, наружу уезжает только свободное время формы. Пространство при этом
 // стоит в пути (см. соседний index): так адрес не может умолчать, чьё это расписание.
-export const Route = createFileRoute('/_app/workspaces/$workspaceSlug/schedules/$scheduleId')({
+export const Route = createFileRoute('/_app/w/$workspaceSlug/schedules/$scheduleId')({
   component: SchedulePage,
 })
 
@@ -97,10 +97,10 @@ function SchedulePage() {
   const [cancelling, setCancelling] = useState<Booking | null>(null)
 
   const crumbs = [
-    <Link key="ws" to="/workspaces/$workspaceSlug" params={{ workspaceSlug }}>
+    <Link key="ws" to="/w/$workspaceSlug/forms" params={{ workspaceSlug }}>
       {workspace?.name ?? '…'}
     </Link>,
-    <Link key="schedules" to="/workspaces/$workspaceSlug/schedules" params={{ workspaceSlug }}>
+    <Link key="schedules" to="/w/$workspaceSlug/schedules" params={{ workspaceSlug }}>
       Расписания
     </Link>,
   ]
@@ -239,7 +239,7 @@ function SchedulePage() {
                         remove.mutate(undefined, {
                           onSuccess: () =>
                             void navigate({
-                              to: '/workspaces/$workspaceSlug/schedules',
+                              to: '/w/$workspaceSlug/schedules',
                               params: { workspaceSlug },
                             }),
                           onError: (e) => toast.error(humanError(e)),

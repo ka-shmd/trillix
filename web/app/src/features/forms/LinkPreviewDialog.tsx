@@ -1,4 +1,5 @@
 import { useRef, useState, type ChangeEvent, type ReactNode } from 'react'
+import { usePlanLink } from '../../shared/planLink'
 import { Link } from '@tanstack/react-router'
 import { ImagePlus, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
@@ -50,6 +51,7 @@ export function LinkPreviewDialog({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
+  const planLink = usePlanLink()
   // ПОЛЯ ЗАПОЛНЕНЫ ТЕКСТОМ, А НЕ ПЛЕЙСХОЛДЕРОМ (решение владельца 2026-08-27): в
   // инпутах стоит действующая карточка — своя, где автор её задал, и дефолтная там,
   // где нет. Плейсхолдер показывал бы то же самое серым, но не давал бы взяться за
@@ -125,7 +127,7 @@ export function LinkPreviewDialog({
             Карточку можно настроить и сейчас, но чтобы она применилась к опубликованной форме,
             нужен платный тариф.{' '}
             <Link
-              to="/settings/plan"
+              {...planLink}
               className="font-medium underline underline-offset-4 hover:no-underline"
             >
               Перейти на тариф

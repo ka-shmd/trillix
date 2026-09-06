@@ -13,12 +13,21 @@ import { Skeleton } from '@/components/ui/skeleton'
 const FORMS_PER_WORKSPACE = 10
 
 // WorkspaceFormList — формы одного пространства плоским списком: тело секции в
-// обзоре (/workspaces) и на странице пространства (/workspaces/{id}).
+// обзоре пространств (/workspaces).
 //
 // Живёт в фиче ФОРМ, а не пространств, хотя рисуется внутри секции пространства:
 // снаружи ему нужен только id, а внутри — ключи, запросы и строки форм. Секция
 // принимает его детьми (импорт фичи из фичи запрещён, web/CLAUDE.md).
-export function WorkspaceFormList({ workspaceId }: { workspaceId: string }) {
+export function WorkspaceFormList({
+  workspaceId,
+  workspaceSlug,
+}: {
+  workspaceId: string
+  // slug того же пространства: строке формы он нужен для ссылки в редактор, которая
+  // адресуется через пространство (см. FormCard). Оба поля берутся из одного объекта
+  // списка — переводить одно в другое здесь не из чего.
+  workspaceSlug: string
+}) {
   const query = useInfiniteQuery(
     formsListQueryOptions({
       q: '',
@@ -57,7 +66,7 @@ export function WorkspaceFormList({ workspaceId }: { workspaceId: string }) {
     <>
       <ul className="space-y-1.5">
         {forms.map((form) => (
-          <FormRow key={form.id} form={form} />
+          <FormRow key={form.id} form={form} workspaceSlug={workspaceSlug} />
         ))}
       </ul>
       {query.hasNextPage && (

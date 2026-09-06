@@ -32,7 +32,7 @@ import {
 // команды потом не находила его в списке (отчёт владельца 2026-09-03). Адрес, который
 // не может не назвать пространство, делает это состояние недостижимым; подписи и
 // умолчания лечили бы симптом.
-export const Route = createFileRoute('/_app/workspaces/$workspaceSlug/schedules/')({
+export const Route = createFileRoute('/_app/w/$workspaceSlug/schedules/')({
   component: SchedulesPage,
 })
 
@@ -52,7 +52,7 @@ function SchedulesPage() {
     <>
       <PageCrumbs
         items={[
-          <Link key="ws" to="/workspaces/$workspaceSlug" params={{ workspaceSlug }}>
+          <Link key="ws" to="/w/$workspaceSlug/forms" params={{ workspaceSlug }}>
             {workspace?.name ?? '…'}
           </Link>,
           'Расписания',
@@ -109,7 +109,7 @@ function SchedulesPage() {
           {schedules.data?.map((s) => (
             <Link
               key={s.id}
-              to="/workspaces/$workspaceSlug/schedules/$scheduleId"
+              to="/w/$workspaceSlug/schedules/$scheduleId"
               params={{ workspaceSlug, scheduleId: s.id }}
               className="flex flex-col gap-1 rounded-lg border p-4 transition-colors hover:bg-accent/50"
             >
@@ -166,7 +166,7 @@ function CreateDialog({
           onOpenChange(false)
           setName('')
           void navigate({
-            to: '/workspaces/$workspaceSlug/schedules/$scheduleId',
+            to: '/w/$workspaceSlug/schedules/$scheduleId',
             params: { workspaceSlug, scheduleId: s.id },
           })
         },

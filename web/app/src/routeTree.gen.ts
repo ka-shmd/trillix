@@ -28,11 +28,14 @@ import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
 import { Route as AppSettingsAccountRouteImport } from './routes/_app/settings.account'
 import { Route as AppWorkspacesWorkspaceSlugIndexRouteImport } from './routes/_app/workspaces.$workspaceSlug.index'
+import { Route as AppWWorkspaceSlugTemplatesRouteImport } from './routes/_app/w.$workspaceSlug.templates'
+import { Route as AppWWorkspaceSlugPlanRouteImport } from './routes/_app/w.$workspaceSlug.plan'
 import { Route as AppFormsSlugEmbedRouteImport } from './routes/_app/forms.$slug.embed'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
-import { Route as AppWorkspacesWorkspaceSlugSchedulesIndexRouteImport } from './routes/_app/workspaces.$workspaceSlug.schedules.index'
-import { Route as AppWorkspacesWorkspaceSlugSchedulesScheduleIdRouteImport } from './routes/_app/workspaces.$workspaceSlug.schedules.$scheduleId'
+import { Route as AppWWorkspaceSlugSchedulesIndexRouteImport } from './routes/_app/w.$workspaceSlug.schedules.index'
+import { Route as AppWWorkspaceSlugFormsIndexRouteImport } from './routes/_app/w.$workspaceSlug.forms.index'
+import { Route as AppWWorkspaceSlugSchedulesScheduleIdRouteImport } from './routes/_app/w.$workspaceSlug.schedules.$scheduleId'
 import { Route as AppFormsSlugManageSummaryRouteImport } from './routes/_app/forms.$slug._manage.summary'
 import { Route as AppFormsSlugManageSubmissionsRouteImport } from './routes/_app/forms.$slug._manage.submissions'
 import { Route as AppFormsSlugManageShareRouteImport } from './routes/_app/forms.$slug._manage.share'
@@ -43,6 +46,7 @@ import { Route as AppFormsSlugManageInsightsRouteImport } from './routes/_app/fo
 import { Route as AppFormsSlugManageFunnelRouteImport } from './routes/_app/forms.$slug._manage.funnel'
 import { Route as AppFormsSlugManageSubmissionsIndexRouteImport } from './routes/_app/forms.$slug._manage.submissions.index'
 import { Route as AppFormsSlugManageInsightsIndexRouteImport } from './routes/_app/forms.$slug._manage.insights.index'
+import { Route as AppWWorkspaceSlugFormsSlugEditRouteImport } from './routes/_app/w.$workspaceSlug.forms.$slug.edit'
 import { Route as AppFormsSlugManageSubmissionsPartialRouteImport } from './routes/_app/forms.$slug._manage.submissions.partial'
 import { Route as AppFormsSlugManageSubmissionsCompletedRouteImport } from './routes/_app/forms.$slug._manage.submissions.completed'
 import { Route as AppFormsSlugManageSubmissionsAllRouteImport } from './routes/_app/forms.$slug._manage.submissions.all'
@@ -144,6 +148,17 @@ const AppWorkspacesWorkspaceSlugIndexRoute =
     path: '/workspaces/$workspaceSlug/',
     getParentRoute: () => AppRoute,
   } as any)
+const AppWWorkspaceSlugTemplatesRoute =
+  AppWWorkspaceSlugTemplatesRouteImport.update({
+    id: '/w/$workspaceSlug/templates',
+    path: '/w/$workspaceSlug/templates',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppWWorkspaceSlugPlanRoute = AppWWorkspaceSlugPlanRouteImport.update({
+  id: '/w/$workspaceSlug/plan',
+  path: '/w/$workspaceSlug/plan',
+  getParentRoute: () => AppRoute,
+} as any)
 const AppFormsSlugEmbedRoute = AppFormsSlugEmbedRouteImport.update({
   id: '/forms/$slug/embed',
   path: '/forms/$slug/embed',
@@ -159,16 +174,22 @@ const AppFormsSlugManageRoute = AppFormsSlugManageRouteImport.update({
   path: '/forms/$slug',
   getParentRoute: () => AppRoute,
 } as any)
-const AppWorkspacesWorkspaceSlugSchedulesIndexRoute =
-  AppWorkspacesWorkspaceSlugSchedulesIndexRouteImport.update({
-    id: '/workspaces/$workspaceSlug/schedules/',
-    path: '/workspaces/$workspaceSlug/schedules/',
+const AppWWorkspaceSlugSchedulesIndexRoute =
+  AppWWorkspaceSlugSchedulesIndexRouteImport.update({
+    id: '/w/$workspaceSlug/schedules/',
+    path: '/w/$workspaceSlug/schedules/',
     getParentRoute: () => AppRoute,
   } as any)
-const AppWorkspacesWorkspaceSlugSchedulesScheduleIdRoute =
-  AppWorkspacesWorkspaceSlugSchedulesScheduleIdRouteImport.update({
-    id: '/workspaces/$workspaceSlug/schedules/$scheduleId',
-    path: '/workspaces/$workspaceSlug/schedules/$scheduleId',
+const AppWWorkspaceSlugFormsIndexRoute =
+  AppWWorkspaceSlugFormsIndexRouteImport.update({
+    id: '/w/$workspaceSlug/forms/',
+    path: '/w/$workspaceSlug/forms/',
+    getParentRoute: () => AppRoute,
+  } as any)
+const AppWWorkspaceSlugSchedulesScheduleIdRoute =
+  AppWWorkspaceSlugSchedulesScheduleIdRouteImport.update({
+    id: '/w/$workspaceSlug/schedules/$scheduleId',
+    path: '/w/$workspaceSlug/schedules/$scheduleId',
     getParentRoute: () => AppRoute,
   } as any)
 const AppFormsSlugManageSummaryRoute =
@@ -230,6 +251,12 @@ const AppFormsSlugManageInsightsIndexRoute =
     path: '/',
     getParentRoute: () => AppFormsSlugManageInsightsRoute,
   } as any)
+const AppWWorkspaceSlugFormsSlugEditRoute =
+  AppWWorkspaceSlugFormsSlugEditRouteImport.update({
+    id: '/w/$workspaceSlug/forms/$slug/edit',
+    path: '/w/$workspaceSlug/forms/$slug/edit',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppFormsSlugManageSubmissionsPartialRoute =
   AppFormsSlugManageSubmissionsPartialRouteImport.update({
     id: '/partial',
@@ -287,6 +314,8 @@ export interface FileRoutesByFullPath {
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
+  '/w/$workspaceSlug/plan': typeof AppWWorkspaceSlugPlanRoute
+  '/w/$workspaceSlug/templates': typeof AppWWorkspaceSlugTemplatesRoute
   '/workspaces/$workspaceSlug/': typeof AppWorkspacesWorkspaceSlugIndexRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
   '/forms/$slug/insights': typeof AppFormsSlugManageInsightsRouteWithChildren
@@ -296,14 +325,16 @@ export interface FileRoutesByFullPath {
   '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
   '/forms/$slug/submissions': typeof AppFormsSlugManageSubmissionsRouteWithChildren
   '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
-  '/workspaces/$workspaceSlug/schedules/$scheduleId': typeof AppWorkspacesWorkspaceSlugSchedulesScheduleIdRoute
-  '/workspaces/$workspaceSlug/schedules/': typeof AppWorkspacesWorkspaceSlugSchedulesIndexRoute
+  '/w/$workspaceSlug/schedules/$scheduleId': typeof AppWWorkspaceSlugSchedulesScheduleIdRoute
+  '/w/$workspaceSlug/forms/': typeof AppWWorkspaceSlugFormsIndexRoute
+  '/w/$workspaceSlug/schedules/': typeof AppWWorkspaceSlugSchedulesIndexRoute
   '/forms/$slug/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
   '/forms/$slug/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
   '/forms/$slug/insights/visits': typeof AppFormsSlugManageInsightsVisitsRoute
   '/forms/$slug/submissions/all': typeof AppFormsSlugManageSubmissionsAllRoute
   '/forms/$slug/submissions/completed': typeof AppFormsSlugManageSubmissionsCompletedRoute
   '/forms/$slug/submissions/partial': typeof AppFormsSlugManageSubmissionsPartialRoute
+  '/w/$workspaceSlug/forms/$slug/edit': typeof AppWWorkspaceSlugFormsSlugEditRoute
   '/forms/$slug/insights/': typeof AppFormsSlugManageInsightsIndexRoute
   '/forms/$slug/submissions/': typeof AppFormsSlugManageSubmissionsIndexRoute
 }
@@ -327,6 +358,8 @@ export interface FileRoutesByTo {
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
+  '/w/$workspaceSlug/plan': typeof AppWWorkspaceSlugPlanRoute
+  '/w/$workspaceSlug/templates': typeof AppWWorkspaceSlugTemplatesRoute
   '/workspaces/$workspaceSlug': typeof AppWorkspacesWorkspaceSlugIndexRoute
   '/forms/$slug/funnel': typeof AppFormsSlugManageFunnelRoute
   '/forms/$slug/integrations': typeof AppFormsSlugManageIntegrationsRoute
@@ -334,14 +367,16 @@ export interface FileRoutesByTo {
   '/forms/$slug/settings': typeof AppFormsSlugManageSettingsRoute
   '/forms/$slug/share': typeof AppFormsSlugManageShareRoute
   '/forms/$slug/summary': typeof AppFormsSlugManageSummaryRoute
-  '/workspaces/$workspaceSlug/schedules/$scheduleId': typeof AppWorkspacesWorkspaceSlugSchedulesScheduleIdRoute
-  '/workspaces/$workspaceSlug/schedules': typeof AppWorkspacesWorkspaceSlugSchedulesIndexRoute
+  '/w/$workspaceSlug/schedules/$scheduleId': typeof AppWWorkspaceSlugSchedulesScheduleIdRoute
+  '/w/$workspaceSlug/forms': typeof AppWWorkspaceSlugFormsIndexRoute
+  '/w/$workspaceSlug/schedules': typeof AppWWorkspaceSlugSchedulesIndexRoute
   '/forms/$slug/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
   '/forms/$slug/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
   '/forms/$slug/insights/visits': typeof AppFormsSlugManageInsightsVisitsRoute
   '/forms/$slug/submissions/all': typeof AppFormsSlugManageSubmissionsAllRoute
   '/forms/$slug/submissions/completed': typeof AppFormsSlugManageSubmissionsCompletedRoute
   '/forms/$slug/submissions/partial': typeof AppFormsSlugManageSubmissionsPartialRoute
+  '/w/$workspaceSlug/forms/$slug/edit': typeof AppWWorkspaceSlugFormsSlugEditRoute
   '/forms/$slug/insights': typeof AppFormsSlugManageInsightsIndexRoute
   '/forms/$slug/submissions': typeof AppFormsSlugManageSubmissionsIndexRoute
 }
@@ -368,6 +403,8 @@ export interface FileRoutesById {
   '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/_app/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
+  '/_app/w/$workspaceSlug/plan': typeof AppWWorkspaceSlugPlanRoute
+  '/_app/w/$workspaceSlug/templates': typeof AppWWorkspaceSlugTemplatesRoute
   '/_app/workspaces/$workspaceSlug/': typeof AppWorkspacesWorkspaceSlugIndexRoute
   '/_app/forms/$slug/_manage/funnel': typeof AppFormsSlugManageFunnelRoute
   '/_app/forms/$slug/_manage/insights': typeof AppFormsSlugManageInsightsRouteWithChildren
@@ -377,14 +414,16 @@ export interface FileRoutesById {
   '/_app/forms/$slug/_manage/share': typeof AppFormsSlugManageShareRoute
   '/_app/forms/$slug/_manage/submissions': typeof AppFormsSlugManageSubmissionsRouteWithChildren
   '/_app/forms/$slug/_manage/summary': typeof AppFormsSlugManageSummaryRoute
-  '/_app/workspaces/$workspaceSlug/schedules/$scheduleId': typeof AppWorkspacesWorkspaceSlugSchedulesScheduleIdRoute
-  '/_app/workspaces/$workspaceSlug/schedules/': typeof AppWorkspacesWorkspaceSlugSchedulesIndexRoute
+  '/_app/w/$workspaceSlug/schedules/$scheduleId': typeof AppWWorkspaceSlugSchedulesScheduleIdRoute
+  '/_app/w/$workspaceSlug/forms/': typeof AppWWorkspaceSlugFormsIndexRoute
+  '/_app/w/$workspaceSlug/schedules/': typeof AppWWorkspaceSlugSchedulesIndexRoute
   '/_app/forms/$slug/_manage/insights/answers': typeof AppFormsSlugManageInsightsAnswersRoute
   '/_app/forms/$slug/_manage/insights/drop-offs': typeof AppFormsSlugManageInsightsDropOffsRoute
   '/_app/forms/$slug/_manage/insights/visits': typeof AppFormsSlugManageInsightsVisitsRoute
   '/_app/forms/$slug/_manage/submissions/all': typeof AppFormsSlugManageSubmissionsAllRoute
   '/_app/forms/$slug/_manage/submissions/completed': typeof AppFormsSlugManageSubmissionsCompletedRoute
   '/_app/forms/$slug/_manage/submissions/partial': typeof AppFormsSlugManageSubmissionsPartialRoute
+  '/_app/w/$workspaceSlug/forms/$slug/edit': typeof AppWWorkspaceSlugFormsSlugEditRoute
   '/_app/forms/$slug/_manage/insights/': typeof AppFormsSlugManageInsightsIndexRoute
   '/_app/forms/$slug/_manage/submissions/': typeof AppFormsSlugManageSubmissionsIndexRoute
 }
@@ -410,6 +449,8 @@ export interface FileRouteTypes {
     | '/forms/$slug'
     | '/forms/$slug/edit'
     | '/forms/$slug/embed'
+    | '/w/$workspaceSlug/plan'
+    | '/w/$workspaceSlug/templates'
     | '/workspaces/$workspaceSlug/'
     | '/forms/$slug/funnel'
     | '/forms/$slug/insights'
@@ -419,14 +460,16 @@ export interface FileRouteTypes {
     | '/forms/$slug/share'
     | '/forms/$slug/submissions'
     | '/forms/$slug/summary'
-    | '/workspaces/$workspaceSlug/schedules/$scheduleId'
-    | '/workspaces/$workspaceSlug/schedules/'
+    | '/w/$workspaceSlug/schedules/$scheduleId'
+    | '/w/$workspaceSlug/forms/'
+    | '/w/$workspaceSlug/schedules/'
     | '/forms/$slug/insights/answers'
     | '/forms/$slug/insights/drop-offs'
     | '/forms/$slug/insights/visits'
     | '/forms/$slug/submissions/all'
     | '/forms/$slug/submissions/completed'
     | '/forms/$slug/submissions/partial'
+    | '/w/$workspaceSlug/forms/$slug/edit'
     | '/forms/$slug/insights/'
     | '/forms/$slug/submissions/'
   fileRoutesByTo: FileRoutesByTo
@@ -450,6 +493,8 @@ export interface FileRouteTypes {
     | '/forms/$slug'
     | '/forms/$slug/edit'
     | '/forms/$slug/embed'
+    | '/w/$workspaceSlug/plan'
+    | '/w/$workspaceSlug/templates'
     | '/workspaces/$workspaceSlug'
     | '/forms/$slug/funnel'
     | '/forms/$slug/integrations'
@@ -457,14 +502,16 @@ export interface FileRouteTypes {
     | '/forms/$slug/settings'
     | '/forms/$slug/share'
     | '/forms/$slug/summary'
-    | '/workspaces/$workspaceSlug/schedules/$scheduleId'
-    | '/workspaces/$workspaceSlug/schedules'
+    | '/w/$workspaceSlug/schedules/$scheduleId'
+    | '/w/$workspaceSlug/forms'
+    | '/w/$workspaceSlug/schedules'
     | '/forms/$slug/insights/answers'
     | '/forms/$slug/insights/drop-offs'
     | '/forms/$slug/insights/visits'
     | '/forms/$slug/submissions/all'
     | '/forms/$slug/submissions/completed'
     | '/forms/$slug/submissions/partial'
+    | '/w/$workspaceSlug/forms/$slug/edit'
     | '/forms/$slug/insights'
     | '/forms/$slug/submissions'
   id:
@@ -490,6 +537,8 @@ export interface FileRouteTypes {
     | '/_app/forms/$slug/_manage'
     | '/_app/forms/$slug/edit'
     | '/_app/forms/$slug/embed'
+    | '/_app/w/$workspaceSlug/plan'
+    | '/_app/w/$workspaceSlug/templates'
     | '/_app/workspaces/$workspaceSlug/'
     | '/_app/forms/$slug/_manage/funnel'
     | '/_app/forms/$slug/_manage/insights'
@@ -499,14 +548,16 @@ export interface FileRouteTypes {
     | '/_app/forms/$slug/_manage/share'
     | '/_app/forms/$slug/_manage/submissions'
     | '/_app/forms/$slug/_manage/summary'
-    | '/_app/workspaces/$workspaceSlug/schedules/$scheduleId'
-    | '/_app/workspaces/$workspaceSlug/schedules/'
+    | '/_app/w/$workspaceSlug/schedules/$scheduleId'
+    | '/_app/w/$workspaceSlug/forms/'
+    | '/_app/w/$workspaceSlug/schedules/'
     | '/_app/forms/$slug/_manage/insights/answers'
     | '/_app/forms/$slug/_manage/insights/drop-offs'
     | '/_app/forms/$slug/_manage/insights/visits'
     | '/_app/forms/$slug/_manage/submissions/all'
     | '/_app/forms/$slug/_manage/submissions/completed'
     | '/_app/forms/$slug/_manage/submissions/partial'
+    | '/_app/w/$workspaceSlug/forms/$slug/edit'
     | '/_app/forms/$slug/_manage/insights/'
     | '/_app/forms/$slug/_manage/submissions/'
   fileRoutesById: FileRoutesById
@@ -655,6 +706,20 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppWorkspacesWorkspaceSlugIndexRouteImport
       parentRoute: typeof AppRoute
     }
+    '/_app/w/$workspaceSlug/templates': {
+      id: '/_app/w/$workspaceSlug/templates'
+      path: '/w/$workspaceSlug/templates'
+      fullPath: '/w/$workspaceSlug/templates'
+      preLoaderRoute: typeof AppWWorkspaceSlugTemplatesRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/w/$workspaceSlug/plan': {
+      id: '/_app/w/$workspaceSlug/plan'
+      path: '/w/$workspaceSlug/plan'
+      fullPath: '/w/$workspaceSlug/plan'
+      preLoaderRoute: typeof AppWWorkspaceSlugPlanRouteImport
+      parentRoute: typeof AppRoute
+    }
     '/_app/forms/$slug/embed': {
       id: '/_app/forms/$slug/embed'
       path: '/forms/$slug/embed'
@@ -676,18 +741,25 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppFormsSlugManageRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/workspaces/$workspaceSlug/schedules/': {
-      id: '/_app/workspaces/$workspaceSlug/schedules/'
-      path: '/workspaces/$workspaceSlug/schedules'
-      fullPath: '/workspaces/$workspaceSlug/schedules/'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceSlugSchedulesIndexRouteImport
+    '/_app/w/$workspaceSlug/schedules/': {
+      id: '/_app/w/$workspaceSlug/schedules/'
+      path: '/w/$workspaceSlug/schedules'
+      fullPath: '/w/$workspaceSlug/schedules/'
+      preLoaderRoute: typeof AppWWorkspaceSlugSchedulesIndexRouteImport
       parentRoute: typeof AppRoute
     }
-    '/_app/workspaces/$workspaceSlug/schedules/$scheduleId': {
-      id: '/_app/workspaces/$workspaceSlug/schedules/$scheduleId'
-      path: '/workspaces/$workspaceSlug/schedules/$scheduleId'
-      fullPath: '/workspaces/$workspaceSlug/schedules/$scheduleId'
-      preLoaderRoute: typeof AppWorkspacesWorkspaceSlugSchedulesScheduleIdRouteImport
+    '/_app/w/$workspaceSlug/forms/': {
+      id: '/_app/w/$workspaceSlug/forms/'
+      path: '/w/$workspaceSlug/forms'
+      fullPath: '/w/$workspaceSlug/forms/'
+      preLoaderRoute: typeof AppWWorkspaceSlugFormsIndexRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/w/$workspaceSlug/schedules/$scheduleId': {
+      id: '/_app/w/$workspaceSlug/schedules/$scheduleId'
+      path: '/w/$workspaceSlug/schedules/$scheduleId'
+      fullPath: '/w/$workspaceSlug/schedules/$scheduleId'
+      preLoaderRoute: typeof AppWWorkspaceSlugSchedulesScheduleIdRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/forms/$slug/_manage/summary': {
@@ -759,6 +831,13 @@ declare module '@tanstack/react-router' {
       fullPath: '/forms/$slug/insights/'
       preLoaderRoute: typeof AppFormsSlugManageInsightsIndexRouteImport
       parentRoute: typeof AppFormsSlugManageInsightsRoute
+    }
+    '/_app/w/$workspaceSlug/forms/$slug/edit': {
+      id: '/_app/w/$workspaceSlug/forms/$slug/edit'
+      path: '/w/$workspaceSlug/forms/$slug/edit'
+      fullPath: '/w/$workspaceSlug/forms/$slug/edit'
+      preLoaderRoute: typeof AppWWorkspaceSlugFormsSlugEditRouteImport
+      parentRoute: typeof AppRoute
     }
     '/_app/forms/$slug/_manage/submissions/partial': {
       id: '/_app/forms/$slug/_manage/submissions/partial'
@@ -888,9 +967,13 @@ interface AppRouteChildren {
   AppFormsSlugManageRoute: typeof AppFormsSlugManageRouteWithChildren
   AppFormsSlugEditRoute: typeof AppFormsSlugEditRoute
   AppFormsSlugEmbedRoute: typeof AppFormsSlugEmbedRoute
+  AppWWorkspaceSlugPlanRoute: typeof AppWWorkspaceSlugPlanRoute
+  AppWWorkspaceSlugTemplatesRoute: typeof AppWWorkspaceSlugTemplatesRoute
   AppWorkspacesWorkspaceSlugIndexRoute: typeof AppWorkspacesWorkspaceSlugIndexRoute
-  AppWorkspacesWorkspaceSlugSchedulesScheduleIdRoute: typeof AppWorkspacesWorkspaceSlugSchedulesScheduleIdRoute
-  AppWorkspacesWorkspaceSlugSchedulesIndexRoute: typeof AppWorkspacesWorkspaceSlugSchedulesIndexRoute
+  AppWWorkspaceSlugSchedulesScheduleIdRoute: typeof AppWWorkspaceSlugSchedulesScheduleIdRoute
+  AppWWorkspaceSlugFormsIndexRoute: typeof AppWWorkspaceSlugFormsIndexRoute
+  AppWWorkspaceSlugSchedulesIndexRoute: typeof AppWWorkspaceSlugSchedulesIndexRoute
+  AppWWorkspaceSlugFormsSlugEditRoute: typeof AppWWorkspaceSlugFormsSlugEditRoute
 }
 
 const AppRouteChildren: AppRouteChildren = {
@@ -903,11 +986,14 @@ const AppRouteChildren: AppRouteChildren = {
   AppFormsSlugManageRoute: AppFormsSlugManageRouteWithChildren,
   AppFormsSlugEditRoute: AppFormsSlugEditRoute,
   AppFormsSlugEmbedRoute: AppFormsSlugEmbedRoute,
+  AppWWorkspaceSlugPlanRoute: AppWWorkspaceSlugPlanRoute,
+  AppWWorkspaceSlugTemplatesRoute: AppWWorkspaceSlugTemplatesRoute,
   AppWorkspacesWorkspaceSlugIndexRoute: AppWorkspacesWorkspaceSlugIndexRoute,
-  AppWorkspacesWorkspaceSlugSchedulesScheduleIdRoute:
-    AppWorkspacesWorkspaceSlugSchedulesScheduleIdRoute,
-  AppWorkspacesWorkspaceSlugSchedulesIndexRoute:
-    AppWorkspacesWorkspaceSlugSchedulesIndexRoute,
+  AppWWorkspaceSlugSchedulesScheduleIdRoute:
+    AppWWorkspaceSlugSchedulesScheduleIdRoute,
+  AppWWorkspaceSlugFormsIndexRoute: AppWWorkspaceSlugFormsIndexRoute,
+  AppWWorkspaceSlugSchedulesIndexRoute: AppWWorkspaceSlugSchedulesIndexRoute,
+  AppWWorkspaceSlugFormsSlugEditRoute: AppWWorkspaceSlugFormsSlugEditRoute,
 }
 
 const AppRouteWithChildren = AppRoute._addFileChildren(AppRouteChildren)

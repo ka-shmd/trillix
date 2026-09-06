@@ -42,7 +42,7 @@ const statusVariants: Record<Form['status'], 'secondary' | 'default' | 'outline'
 // FormCard — карточка формы: заголовок ведёт в редактор, инлайн-переименование
 // и удаление с подтверждением. Правки формы — серверный стейт, идут через мутации
 // (инвалидируют список), локален только UI-стейт режима редактирования/диалога.
-export function FormCard({ form }: { form: Form }) {
+export function FormCard({ form, workspaceSlug }: { form: Form; workspaceSlug: string }) {
   const [editing, setEditing] = useState(false)
   const [confirmOpen, setConfirmOpen] = useState(false)
   const rename = useUpdateFormName()
@@ -77,13 +77,16 @@ export function FormCard({ form }: { form: Form }) {
             // она роздана, и ежедневный вопрос к ней — «что написали?», а не «где
             // ссылка?» (ссылка и сводка — соседние табы в один клик). Черновик — в
             // редактор: показывать ему три пустых таба вместо недоделанной формы незачем.
-            to={form.status === 'draft' ? '/forms/$slug/edit' : '/forms/$slug/responses'}
-            params={{ slug: form.slug }}
-            // ПРОСТРАНСТВО ЕДЕТ С АДРЕСОМ (`search={(prev) => prev}`): текущее пространство
-            // живёт в `?w=`, и ссылка без него уводит в редактор «личного» — а там гейты
-            // тарифа и остаток сообщений ассистента спрашивают план не того пространства,
-            // в котором лежит форма. Тот же приём у соседней ссылки на «Ответы».
-            search={(prev) => prev}
+            // Редактор адресуется ЧЕРЕЗ ПРОСТРАНСТВО (он же обслуживает черновик,
+            // который назвать своё пространство не может), поэтому карточка получает
+            // его пропом от списка. Экраны сохранённой формы пространства не несут:
+            // она знает его сама.
+            {...(form.status === 'draft'
+              ? {
+                  to: '/w/$workspaceSlug/forms/$slug/edit' as const,
+                  params: { workspaceSlug, slug: form.slug },
+                }
+              : { to: '/forms/$slug/responses' as const, params: { slug: form.slug } })}
             className={`break-words text-base font-semibold hover:text-primary ${
               isPlaceholder ? 'text-muted-foreground' : ''
             }`}
@@ -99,11 +102,7 @@ export function FormCard({ form }: { form: Form }) {
             </DropdownMenuTrigger>
             <DropdownMenuContent align="end">
               <DropdownMenuItem asChild>
-                <Link
-                  to="/forms/$slug/responses"
-                  search={(prev) => prev}
-                  params={{ slug: form.slug }}
-                >
+                <Link to="/forms/$slug/responses" params={{ slug: form.slug }}>
                   Ответы ({form.submissionCount})
                 </Link>
               </DropdownMenuItem>

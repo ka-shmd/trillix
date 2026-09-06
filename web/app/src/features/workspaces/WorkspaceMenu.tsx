@@ -96,10 +96,7 @@ export function WorkspaceMenu({
               отсюда, а не из верхнего яруса сайдбара (отчёт владельца 2026-09-03:
               пункт без пространства в адресе молча заводил расписания в личное). */}
           <DropdownMenuItem asChild>
-            <Link
-              to="/workspaces/$workspaceSlug/schedules"
-              params={{ workspaceSlug: workspace.slug }}
-            >
+            <Link to="/w/$workspaceSlug/schedules" params={{ workspaceSlug: workspace.slug }}>
               <CalendarClock className="size-4" />
               Расписания
             </Link>
@@ -172,8 +169,8 @@ function DeleteWorkspaceDialog({
           <AlertDialogTitle>Удалить пространство «{workspace.name}»?</AlertDialogTitle>
           <AlertDialogDescription>
             Вместе с ним безвозвратно удалятся все его формы ({workspace.formCount}), ответы
-            респондентов и загруженные к ним файлы. Участники потеряют доступ. Отменить это
-            нельзя. Введите название пространства, чтобы подтвердить.
+            респондентов и загруженные к ним файлы. Участники потеряют доступ. Отменить это нельзя.
+            Введите название пространства, чтобы подтвердить.
           </AlertDialogDescription>
         </AlertDialogHeader>
         <Label htmlFor="confirm-delete-workspace" className="sr-only">

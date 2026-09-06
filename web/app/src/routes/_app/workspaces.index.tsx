@@ -27,16 +27,12 @@ function WorkspacesPage() {
   const [creating, setCreating] = useState(false)
 
   // «+» открывает редактор нового черновика ЭТОГО пространства; самой формы ещё нет —
-  // её заводит первая правка (features/forms/draft.ts). Кнопка сайдбара «Новая форма»
-  // так не умеет: она берёт пространство из ?w= адреса, которого на обзоре нет, — то
-  // есть всегда клала бы форму в личное. Пространство едет в адрес редактора по общему
-  // правилу кабинета (пусто = личное): из адреса его прочтёт и создание, и следующая
-  // созданная оттуда форма.
+  // её заводит первая правка (features/forms/draft.ts). Пространство стоит В ПУТИ
+  // редактора: оттуда его прочтёт создание, и умолчать его адрес не может.
   function createForm(workspace: Workspace) {
     void navigate({
-      to: '/forms/$slug/edit',
-      params: { slug: NEW_FORM_SLUG },
-      search: workspace.isPersonal ? {} : { w: workspace.slug },
+      to: '/w/$workspaceSlug/forms/$slug/edit',
+      params: { workspaceSlug: workspace.slug, slug: NEW_FORM_SLUG },
     })
   }
 
@@ -85,7 +81,7 @@ function WorkspacesPage() {
               // форм — чужая фича, поэтому чистка живёт здесь, а не в мутации.
               onDeleted={() => qc.invalidateQueries({ queryKey: formKeys.list() })}
             >
-              <WorkspaceFormList workspaceId={ws.id} />
+              <WorkspaceFormList workspaceId={ws.id} workspaceSlug={ws.slug} />
             </WorkspaceSection>
           ))}
         </div>

@@ -3,8 +3,8 @@ import { createPortal } from 'react-dom'
 import { Link } from '@tanstack/react-router'
 import { House } from 'lucide-react'
 
-import { withoutPeriod } from '../period'
 import { useAppChromeSlots } from '../appChrome'
+import { useWorkspaceAddress } from '../workspaceContext'
 import {
   Breadcrumb,
   BreadcrumbItem,
@@ -28,13 +28,24 @@ import {
 // табы говорят одно и то же дважды.
 export function PageCrumbs({ items }: { items: React.ReactNode[] }) {
   const { left } = useAppChromeSlots()
+  // Дом — список форм ТЕКУЩЕГО пространства, а не общий: плоского списка форм в
+  // кабинете нет, формы адресуются через пространство.
+  const { slug } = useWorkspaceAddress()
   if (!left) return null
 
   // Дом добавляется ЗДЕСЬ, а не каждым экраном: он одинаков всюду, и передавать
   // его первым элементом означало бы повторить одну и ту же ссылку в десятке
   // мест — и однажды где-нибудь забыть.
   const trail: React.ReactNode[] = [
-    <Link key="home" to="/forms" search={withoutPeriod} aria-label="Главная">
+    <Link
+      key="home"
+      // Пустой slug — список пространств ещё не приехал; старый адрес остался
+      // маршрутом-редиректом и дождётся его сам.
+      {...(slug === ''
+        ? { to: '/forms' as const }
+        : { to: '/w/$workspaceSlug/forms' as const, params: { workspaceSlug: slug } })}
+      aria-label="Главная"
+    >
       <House className="size-4" />
     </Link>,
     ...items,

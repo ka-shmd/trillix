@@ -97,6 +97,7 @@ import { prevRow, stopNeighbor } from './navigation'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { useWorkspaceAddress } from '../../../shared/workspaceContext'
 
 // Дефолтный тип новой строки — «text» (неотвечаемый абзац). Пишешь текст, а «/»
 // превращает строку в поле нужного типа — как в Notion/Tally.
@@ -1853,9 +1854,7 @@ function StepButtonEditor({
           </button>
         </PopoverTrigger>
         <PopoverContent align="start" className="w-72">
-          <Label htmlFor={fieldId}>
-            {fieldLabel}
-          </Label>
+          <Label htmlFor={fieldId}>{fieldLabel}</Label>
           <Input
             id={fieldId}
             value={value}
@@ -1928,6 +1927,7 @@ function EmptyStarter({
   // Открыть разговор с ассистентом (фаза 26). Не задан — строки нет.
   onOpenChat?: () => void
 }) {
+  const { slug: workspaceSlug } = useWorkspaceAddress()
   // Пустое полотно — тоже поверхность карты (§7): Enter/«/»/печатный символ. Блочных
   // клавиш нет — блока ещё не существует.
   const rowFocus = useRowFocus(CANVAS_ROW, 'canvas')
@@ -1968,7 +1968,7 @@ function EmptyStarter({
           Нажмите <Kbd>Enter</Kbd>, чтобы начать
         </span>
       </button>
-      <Link to="/templates" className={HINT_ROW}>
+      <Link to="/w/$workspaceSlug/templates" params={{ workspaceSlug }} className={HINT_ROW}>
         <LayoutTemplate className="size-4 shrink-0" aria-hidden="true" />
         <span>Использовать шаблон</span>
       </Link>

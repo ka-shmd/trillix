@@ -13,6 +13,8 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { UserAvatar, type UserAvatarProps } from '../../shared/UserAvatar'
+import { usePlanLink } from '../../shared/planLink'
+import { useWorkspaceAddress } from '../../shared/workspaceContext'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -60,8 +62,12 @@ export function AppSidebar({
   workspacesNav,
 }: AppSidebarProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const formsActive = pathname === '/forms' || pathname.startsWith('/forms/')
-  const templatesActive = pathname.startsWith('/templates')
+  // Разделы адресуются через пространство, поэтому пункт знает, В КАКОЕ вести
+  // (`shared/workspaceContext.tsx`), а активность считается по хвосту адреса.
+  const { slug: workspaceSlug } = useWorkspaceAddress()
+  const planLink = usePlanLink()
+  const formsActive = pathname.endsWith('/forms') || pathname.includes('/forms/')
+  const templatesActive = pathname.endsWith('/templates')
 
   return (
     <Sidebar>
@@ -87,7 +93,13 @@ export function AppSidebar({
             <SidebarMenu>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={formsActive} tooltip="Формы">
-                  <Link to="/forms">
+                  {/* Пустой slug — список пространств ещё не приехал; ведём на
+                      старый адрес-редирект, который дождётся его сам. */}
+                  <Link
+                    {...(workspaceSlug === ''
+                      ? { to: '/forms' as const }
+                      : { to: '/w/$workspaceSlug/forms' as const, params: { workspaceSlug } })}
+                  >
                     <FileText className="size-4" />
                     <span>Формы</span>
                   </Link>
@@ -95,7 +107,11 @@ export function AppSidebar({
               </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton asChild isActive={templatesActive} tooltip="Шаблоны">
-                  <Link to="/templates">
+                  <Link
+                    {...(workspaceSlug === ''
+                      ? { to: '/templates' as const }
+                      : { to: '/w/$workspaceSlug/templates' as const, params: { workspaceSlug } })}
+                  >
                     <LayoutTemplate className="size-4" />
                     <span>Шаблоны</span>
                   </Link>
@@ -127,7 +143,7 @@ export function AppSidebar({
                 </DropdownMenuLabel>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem asChild>
-                  <Link to="/settings/plan">
+                  <Link {...planLink}>
                     <CreditCard className="size-4" />
                     Тариф
                   </Link>

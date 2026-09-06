@@ -1,4 +1,5 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
+import { usePlanLink } from '../../shared/planLink'
 import { useQuery } from '@tanstack/react-query'
 
 import { type FormFunnel } from '../../entities/funnel'
@@ -27,6 +28,7 @@ export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/drop-of
 })
 
 function FunnelPage() {
+  const planLink = usePlanLink()
   // URL адресует форму slug'ом; UUID для запроса берём из загруженной формы — как на
   // страницах ответов и сводки.
   const { slug } = Route.useParams()
@@ -70,7 +72,7 @@ function FunnelPage() {
         }
         action={
           <Button asChild size="sm">
-            <Link to="/settings/plan">Посмотреть тариф</Link>
+            <Link {...planLink}>Посмотреть тариф</Link>
           </Button>
         }
       />
