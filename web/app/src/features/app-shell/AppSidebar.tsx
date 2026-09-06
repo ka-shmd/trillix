@@ -1,5 +1,6 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { CreditCard, FileText, LayoutTemplate, LogOut, Settings } from 'lucide-react'
+import { LogOut, Settings } from 'lucide-react'
+
 import {
   Sidebar,
   SidebarContent,
@@ -13,30 +14,26 @@ import {
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { UserAvatar, type UserAvatarProps } from '../../shared/UserAvatar'
-import { usePlanLink } from '../../shared/planLink'
-import { useWorkspaceAddress } from '../../shared/workspaceContext'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuLabel,
-  DropdownMenuSeparator,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+import { Button } from '@/components/ui/button'
 
-// Презентационная оболочка кабинета. Данные пользователя и обработчики
-// (создание формы, выход) прокидывает роут _app — сайдбар не тянет фичи напрямую.
+// Презентационная оболочка кабинета. Данные пользователя и выход прокидывает роут
+// `_app` — сайдбар не тянет фичи напрямую.
 //
-// ТРИ ЯРУСА, И ПУНКТ ПОПАДАЕТ В ЯРУС ПО СВОЕМУ УРОВНЮ, А НЕ ПО ЧАСТОТЕ: вверху
-// работа («Формы», «Шаблоны»), в середине контекст (пространства), внизу аккаунт
-// (тариф, настройки, выход). «Тариф» и «Настройки» стояли в общем списке наравне
-// с «Формами» и одновременно дублировались в нижнем меню — теперь они только внизу.
+// ПУНКТ СТОИТ НА ТОМ УРОВНЕ, КОМУ ОН ПРИНАДЛЕЖИТ. Наверху — пространство и его
+// разделы (`workspaceNav`), внизу — личное: настройки аккаунта и выход. Яруса «тип
+// объекта» («Формы», «Шаблоны» рядом с пространствами) больше нет: почти всё в
+// продукте принадлежит пространству, и ярус, притворявшийся глобальным, обязан был
+// угадывать пространство из адреса — отсюда росли три дефекта сразу
+// (спека `docs/design/cabinet-navigation.md`).
+//
+// МЕНЮ АККАУНТА РАСКРЫТО В ПАНЕЛЬ (решение владельца 2026-09-06). Оно держало три
+// пункта, из которых «Тариф» аккаунту не принадлежал вовсе (он уехал в разделы
+// пространства), а «Настройки» стоили клика по имени ради клика по пункту. Осталось
+// два входа, и оба видны: строка «Настройки» и выход значком на строке имени.
 //
 // СОЗДАНИЯ ФОРМЫ В САЙДБАРЕ НЕТ (решение владельца): форма заводится там, где видно,
-// куда она ляжет, — кнопкой на дашборде и «плюсом» у пространства. Кнопка над
-// навигацией называла место неявно, текущим пространством из адреса.
+// куда она ляжет, — кнопкой на списке форм пространства.
 export interface AppSidebarProps {
-  userEmail: string
   // person — поля для кружка (картинка или инициалы). Отдельным пропом, а не
   // объектом User: сайдбар презентационный, и знать про пароли и второй фактор
   // ему незачем.
@@ -47,27 +44,21 @@ export interface AppSidebarProps {
   userName: string
   onLogout: () => void
   loggingOut: boolean
-  // workspacesNav — блок «Пространства» готовым узлом. Он читает список с сервера
-  // и открывает окна состава, то есть тянет фичу, а сайдбар остаётся
-  // презентационным: собирает его маршрут `_app`, как и остальные обработчики.
-  workspacesNav: React.ReactNode
+  // workspaceNav — переключатель пространства и его разделы готовым узлом. Он читает
+  // список с сервера и права, то есть тянет фичу, а сайдбар остаётся
+  // презентационным: собирает его маршрут `_app` (импорт фичи из фичи запрещён,
+  // web/CLAUDE.md).
+  workspaceNav: React.ReactNode
 }
 
 export function AppSidebar({
-  userEmail,
   person,
   userName,
   onLogout,
   loggingOut,
-  workspacesNav,
+  workspaceNav,
 }: AppSidebarProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  // Разделы адресуются через пространство, поэтому пункт знает, В КАКОЕ вести
-  // (`shared/workspaceContext.tsx`), а активность считается по хвосту адреса.
-  const { slug: workspaceSlug } = useWorkspaceAddress()
-  const planLink = usePlanLink()
-  const formsActive = pathname.endsWith('/forms') || pathname.includes('/forms/')
-  const templatesActive = pathname.endsWith('/templates')
 
   return (
     <Sidebar>
@@ -87,81 +78,50 @@ export function AppSidebar({
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
-        <SidebarGroup>
+      <SidebarContent>{workspaceNav}</SidebarContent>
+
+      <SidebarFooter>
+        <SidebarGroup className="p-0">
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={formsActive} tooltip="Формы">
-                  {/* Пустой slug — список пространств ещё не приехал; ведём на
-                      старый адрес-редирект, который дождётся его сам. */}
-                  <Link
-                    {...(workspaceSlug === ''
-                      ? { to: '/forms' as const }
-                      : { to: '/w/$workspaceSlug/forms' as const, params: { workspaceSlug } })}
-                  >
-                    <FileText className="size-4" />
-                    <span>Формы</span>
+                <SidebarMenuButton
+                  asChild
+                  isActive={pathname.startsWith('/settings')}
+                  tooltip="Настройки"
+                >
+                  <Link to="/settings/account">
+                    <Settings className="size-4" />
+                    <span>Настройки</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={templatesActive} tooltip="Шаблоны">
-                  <Link
-                    {...(workspaceSlug === ''
-                      ? { to: '/templates' as const }
-                      : { to: '/w/$workspaceSlug/templates' as const, params: { workspaceSlug } })}
-                  >
-                    <LayoutTemplate className="size-4" />
-                    <span>Шаблоны</span>
+
+              {/* Имя — ссылка в настройки аккаунта, выход — своя кнопка рядом.
+                  Выход НЕ строка списка: он необратим одним нажатием, а строка в
+                  ряду одинаковых строк нажимается по инерции. Значок с подписью для
+                  скринридера — тот же приём, что у действий строки пространства. */}
+              <SidebarMenuItem className="flex items-center gap-1">
+                <SidebarMenuButton asChild size="lg" className="min-w-0 flex-1">
+                  <Link to="/settings/account">
+                    <UserAvatar person={person} />
+                    <span className="truncate text-sm">{userName}</span>
                   </Link>
                 </SidebarMenuButton>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="size-8 shrink-0 text-muted-foreground"
+                  onClick={onLogout}
+                  disabled={loggingOut}
+                >
+                  <LogOut className="size-4" />
+                  <span className="sr-only">{loggingOut ? 'Выходим…' : 'Выйти'}</span>
+                </Button>
               </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
-
-        {workspacesNav}
-      </SidebarContent>
-
-      <SidebarFooter>
-        <SidebarMenu>
-          <SidebarMenuItem>
-            <DropdownMenu>
-              <DropdownMenuTrigger asChild>
-                <SidebarMenuButton
-                  size="lg"
-                  className="data-[state=open]:bg-sidebar-accent data-[state=open]:text-sidebar-accent-foreground"
-                >
-                  <UserAvatar person={person} />
-                  <span className="truncate text-sm">{userName}</span>
-                </SidebarMenuButton>
-              </DropdownMenuTrigger>
-              <DropdownMenuContent side="top" align="start" className="w-56">
-                <DropdownMenuLabel className="truncate font-normal text-muted-foreground">
-                  {userEmail}
-                </DropdownMenuLabel>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem asChild>
-                  <Link {...planLink}>
-                    <CreditCard className="size-4" />
-                    Тариф
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem asChild>
-                  <Link to="/settings/account">
-                    <Settings className="size-4" />
-                    Настройки
-                  </Link>
-                </DropdownMenuItem>
-                <DropdownMenuItem onClick={onLogout} disabled={loggingOut}>
-                  <LogOut className="size-4" />
-                  {loggingOut ? 'Выходим…' : 'Выйти'}
-                </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </SidebarMenuItem>
-        </SidebarMenu>
       </SidebarFooter>
     </Sidebar>
   )

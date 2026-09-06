@@ -1,11 +1,8 @@
 import { createFileRoute, redirect, useNavigate, Outlet } from '@tanstack/react-router'
-import { useQuery, useQueryClient } from '@tanstack/react-query'
+import { useQuery } from '@tanstack/react-query'
 import { meQueryOptions, useLogout } from '../features/auth/queries'
 import { displayName } from '../entities/user'
-import type { Workspace } from '../entities/workspace'
-import { NEW_FORM_SLUG } from '../features/forms/draft'
-import { formKeys } from '../features/forms/keys'
-import { WorkspacesNav } from '../features/workspaces/WorkspacesNav'
+import { WorkspaceNav } from '../features/workspaces/WorkspaceNav'
 import { workspacesQueryOptions } from '../features/workspaces/queries'
 import { useMemo, useState } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
@@ -40,7 +37,6 @@ function AppLayout() {
     select: (list) => list.find((w) => w.isPersonal)?.slug ?? null,
   })
   const logout = useLogout()
-  const qc = useQueryClient()
   // DOM-узлы хрома: две половины верхнего бара (слева путь, справа действия) и
   // подвал у нижнего края. Страницы порталят в них через PageCrumbs/PageActions
   // (shared/page/headerPortals.tsx) и PageFooter (shared/page/PageFooter.tsx).
@@ -57,35 +53,15 @@ function AppLayout() {
   // Гард гарантирует наличие user; на всякий случай не рендерим оболочку без него.
   if (!user) return null
 
-  // «+» у пространства в сайдбаре НИЧЕГО не создаёт: открывается редактор
-  // несуществующего черновика, а форма заводится первой правкой
-  // (features/forms/draft.ts). Пространство стоит В ПУТИ редактора — оттуда его
-  // прочтёт и создание, и умолчать его адрес не может.
-  function handleCreateIn(workspace: Workspace) {
-    void navigate({
-      to: '/w/$workspaceSlug/forms/$slug/edit',
-      params: { workspaceSlug: workspace.slug, slug: NEW_FORM_SLUG },
-    })
-  }
-
   return (
     <WorkspaceAddressProvider personalSlug={personal.data ?? null}>
       <SidebarProvider>
         <AppSidebar
-          userEmail={user.email}
           person={user}
           userName={displayName(user)}
           onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}
           loggingOut={logout.isPending}
-          workspacesNav={
-            <WorkspacesNav
-              onCreateForm={handleCreateIn}
-              // Формы снесённого пространства ушли вместе с ним; их страницы
-              // остались бы в кэше и всплыли бы по прямой ссылке на список. Ключи
-              // форм — чужая фича, поэтому чистка живёт здесь, а не в мутации.
-              onWorkspaceDeleted={() => qc.invalidateQueries({ queryKey: formKeys.list() })}
-            />
-          }
+          workspaceNav={<WorkspaceNav />}
         />
         {/* ОБОЛОЧКА СЪЕЗЖАЕТ ВМЕСТЕ С ВЫЕЗЖАЮЩЕЙ ШТОРКОЙ. Ширину открытой шторки
           кладёт в --app-drawer тот, кто её открыл (DesignDrawer); закрытая — 0px.
