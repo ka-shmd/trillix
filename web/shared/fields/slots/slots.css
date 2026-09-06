@@ -3,49 +3,181 @@
    качал бы каждый респондент любой формы.
 
    Токены — те же --rf-*, что у остальных полей: пикер часть формы, а не виджет со
-   своим языком. */
+   своим языком.
+
+   Две секции: лента дат (шапка .rf-slots-head плюс .rf-slots-week) и времена выбранного
+   дня (.rf-slots-hours). Обе — во всю ширину блока, как остальные вопросы формы: лента, отступившая от левого
+   края ради шеврона, вставала бы в форме криво. Шевроны поэтому уехали в строку над
+   лентой, а не встали по её бокам. */
+/* Заглушка вида для кабинета (SlotStub): та же разметка, но ничего не нажимается —
+   ни курсора-руки, ни подсветки наведения. Внутри неё вместо кнопок div'ы, поэтому
+   гасить нужно только вид. */
+.rf-slots--stub {
+  pointer-events: none;
+}
 
 .rf-slots {
   display: flex;
   flex-direction: column;
-  gap: 0.5rem;
+  gap: 0.75rem;
 }
 
-/* Лента дат: горизонтальная прокрутка со snap'ом — на телефоне её ведут пальцем. */
-.rf-slots-days {
+/* ШАПКА ЛЕНТЫ: месяц слева, шевроны справа. */
+.rf-slots-head {
   display: flex;
-  gap: 0.375rem;
-  overflow-x: auto;
-  scroll-snap-type: x proximity;
-  padding-bottom: 0.25rem;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.375rem;
 }
 
-.rf-slots-day {
+/* Месяц — подпись, а не заголовок: он отвечает на «какой это месяц», а не называет
+   секцию. Когда страница лежит в двух месяцах, названы оба (monthLabel). */
+.rf-slots-month {
+  margin: 0;
+  font-size: calc(var(--rf-font-size) * 0.875);
+  color: var(--rf-muted);
+}
+
+/* Пара шевронов вынесена вправо за край ленты на свой внутренний отступ: так стрелки
+   стоят над крайним квадратом, а не отступают от него на пустое место. */
+.rf-slots-turn {
+  display: flex;
+  gap: 0.125rem;
+  margin-right: -0.375rem;
+}
+
+/* Шеврон — прозрачная кнопка без карточки: лента листается им, но сам он не вариант
+   выбора и спорить за внимание с квадратами не должен. */
+.rf-slots-arrow {
   flex: 0 0 auto;
-  scroll-snap-align: start;
-  padding: 0.375rem 0.75rem;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 1.75rem;
+  height: 1.75rem;
+  padding: 0;
+  border: 0;
+  border-radius: var(--rf-radius);
+  background: none;
+  color: var(--rf-muted);
+  cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+.rf-slots-arrow:not(:disabled):hover {
+  background: color-mix(in srgb, var(--rf-primary) 7%, transparent);
+}
+
+.rf-slots-arrow:disabled {
+  opacity: 0.3;
+  cursor: default;
+}
+
+.rf-slots-arrow:focus-visible {
+  outline: none;
+  box-shadow: var(--rf-focus-shadow);
+}
+
+/* Колонок столько же, сколько квадратов в странице, — и на неполной последней тоже:
+   размер квадрата не должен зависеть от того, сколько дней осталось до конца горизонта.
+   Число колонок ставит компонент инлайном (colsFor от ширины ленты).
+
+   ⚠ Зазор обязан совпадать с GAP в slotList.ts: по нему там считается, сколько
+   квадратов влезает. */
+.rf-slots-week {
+  display: grid;
+  gap: 0.375rem;
+}
+
+/* Квадрат дня: число, под ним день недели. aspect-ratio держит квадрат, min-height —
+   палец: на узком телефоне колонка уже 44px, и там квадрат становится столбиком, а не
+   нажимаемой точкой в 34px. */
+.rf-slots-date {
+  box-sizing: border-box;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.0625rem;
+  aspect-ratio: 1;
+  min-height: 2.75rem;
+  padding: 0.25rem;
   border: 0;
   border-radius: var(--rf-radius);
   font: inherit;
-  font-size: calc(var(--rf-font-size) * 0.875);
   color: var(--rf-text);
   background: var(--rf-field-bg);
   box-shadow: var(--rf-field-shadow);
   cursor: pointer;
-  white-space: nowrap;
+  transition: background-color 0.12s ease;
 }
 
-.rf-slots-day--on {
+/* День без свободного времени показан, а не выброшен: дыра в ленте читалась бы как
+   сбой выдачи, а погашенный квадрат — как «в этот день не принимают». */
+.rf-slots-date:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+/* Наведение подкрашивает заливку, а не меняет тень: тень собрана из токенов в :root,
+   и «плоское» оформление формы гасит её целиком (--rf-field-shadow: none) — своя тень
+   на hover вернула бы карточкам края там, где автор их убрал. */
+.rf-slots-date:not(:disabled):not(.rf-slots-date--on):hover,
+.rf-slots-time:not(:disabled):hover {
+  background: color-mix(in srgb, var(--rf-primary) 7%, var(--rf-field-bg));
+}
+
+.rf-slots-date--on {
   color: var(--rf-primary-foreground);
   background: var(--rf-primary);
   box-shadow: none;
 }
 
-/* Времена — сетка автозаполнения: на телефоне два-три столбца, на широком экране
-   шесть, и это решает браузер, а не медиазапрос. */
+.rf-slots-date:focus-visible {
+  outline: none;
+  box-shadow: var(--rf-focus-shadow);
+}
+
+.rf-slots-num {
+  font-size: calc(var(--rf-font-size) * 1.0625);
+  font-weight: 500;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.rf-slots-dow {
+  font-size: calc(var(--rf-font-size) * 0.75);
+  line-height: 1.1;
+  color: var(--rf-muted);
+}
+
+/* Внутри выбранного квадрата подпись дня недели идёт цветом заливки: приглушённый
+   --rf-muted на тёмном фоне пропадает. */
+.rf-slots-date--on .rf-slots-dow {
+  color: inherit;
+  opacity: 0.7;
+}
+
+/* ВРЕМЕНА ВЫБРАННОГО ДНЯ. Ни карусели, ни своей прокрутки: времена одного дня
+   помещаются целиком, а сетка переносит их сама. */
+.rf-slots-hours {
+  display: flex;
+  flex-direction: column;
+  gap: 0.375rem;
+}
+
+.rf-slots-chosen {
+  margin: 0;
+  font-size: calc(var(--rf-font-size) * 0.875);
+  color: var(--rf-muted);
+}
+
+/* Сетка автозаполнения: на телефоне два-три столбца, на широком экране пять, и это
+   решает браузер, а не медиазапрос. */
 .rf-slots-times {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(5.5rem, 1fr));
+  grid-template-columns: repeat(auto-fill, minmax(4.75rem, 1fr));
   gap: 0.375rem;
 }
 
@@ -53,6 +185,7 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  justify-content: center;
   gap: 0.125rem;
   min-height: var(--rf-control-h);
   padding: 0.25rem 0.5rem;
@@ -64,11 +197,39 @@
   background: var(--rf-field-bg);
   box-shadow: var(--rf-field-shadow);
   cursor: pointer;
+  transition: background-color 0.12s ease;
+}
+
+/* Выбранное время — та же заливка, что у выбранного дня: один язык «это выбрано» на
+   обе секции. Блок при выборе не подменяется — лента и сетка остаются на месте, и
+   отменить выбор можно повторным нажатием по этой же кнопке. */
+.rf-slots-time--on {
+  color: var(--rf-primary-foreground);
+  background: var(--rf-primary);
+  box-shadow: none;
+}
+
+.rf-slots-time--on .rf-slots-left {
+  color: inherit;
+  opacity: 0.7;
 }
 
 .rf-slots-time:disabled {
   opacity: 0.4;
   cursor: default;
+}
+
+.rf-slots-time:focus-visible {
+  outline: none;
+  box-shadow: var(--rf-focus-shadow);
+}
+
+/* Строка «выбрано» под сеткой. Нужна потому, что подсветка видна только на своей
+   странице ленты: пролистав дальше, человек иначе не знает, на что записывается. */
+.rf-slots-picked {
+  margin: 0;
+  font-size: calc(var(--rf-font-size) * 0.875);
+  color: var(--rf-text);
 }
 
 /* Остаток мест — служебная строка под временем, кегль как у подсказки. */
@@ -97,6 +258,7 @@
 }
 
 .rf-slots-note {
+  margin: 0;
   font-size: calc(var(--rf-font-size) * 0.875);
   color: var(--rf-muted);
 }

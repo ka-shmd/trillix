@@ -1,6 +1,6 @@
 import { useEffect, useState, type ComponentType } from 'react'
 
-import { useSlotSource, useSlotZone } from '../booking'
+import { useSlotSource, useSlotStub, useSlotZone } from '../booking'
 import { LOCALE } from '../locale'
 import { type SlotPickerProps } from '../slots/SlotPicker'
 import { type Control, type ControlProps, textValue } from './contract'
@@ -47,14 +47,22 @@ export const slotControl: Control = (p) => <SlotField {...p} />
 
 function SlotField(p: ControlProps) {
   const source = useSlotSource()
+  const Stub = useSlotStub()
   const Picker = useSlotPicker()
   const value = textValue(p.value)
 
-  // Источника нет — поверхность без живого выбора (полотно, превью, печать). Он же
-  // отсутствует у формы без расписания: тогда вопрос честно ничего не предлагает.
-  // Пикер ещё едет — плашка стоит на его месте, ростом с него: скачок размера на
-  // глазах у респондента дороже пары строк разметки.
-  if (!source || p.disabled || p.readOnly || !Picker) return <SlotPlate value={value} />
+  // Выключенное и только для чтения — плашка всегда: там показывают ОТВЕТ (печатный
+  // лист, просмотр записи), а не приглашение выбрать.
+  if (p.disabled || p.readOnly) return <SlotPlate value={value} />
+
+  // Источника нет — живого выбора на поверхности нет. Кабинет кладёт сюда заглушку вида
+  // (превью), и тогда автор видит вопрос целиком; у формы БЕЗ РАСПИСАНИЯ заглушки нет —
+  // респонденту рисуется плашка, и вопрос честно ничего не предлагает.
+  if (!source) return Stub && value === '' ? <Stub /> : <SlotPlate value={value} />
+
+  // Пикер ещё едет — плашка стоит на его месте: скачок размера на глазах у респондента
+  // дороже пары строк разметки.
+  if (!Picker) return <SlotPlate value={value} />
 
   return (
     <Picker

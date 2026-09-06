@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { fits, groupByDay, timeLabel, zoneNote } from '@fields/slots/slotList'
+import {
+  colsFor,
+  dayStrip,
+  fits,
+  fullDayLabel,
+  groupByDay,
+  monthLabel,
+  timeLabel,
+  zoneNote,
+} from '@fields/slots/slotList'
 
 // Чистая часть пикера времени (фаза 27). Тест живёт в кабинете: у web/shared своего
 // vitest нет — то же место, где проверяются ряды вариантов.
@@ -75,5 +84,102 @@ describe('места', () => {
     [0, 1, false],
   ])('остаток %i, просят %i → %s', (remaining, seats, expected) => {
     expect(fits(slot('2026-09-10T08:00:00Z', remaining), seats)).toBe(expected)
+  })
+})
+
+describe('лента дат', () => {
+  it('дни без свободного времени остаются в ленте погашенными', () => {
+    // Лента КАЛЕНДАРНАЯ: между 10-м и 13-м стоят 11-е и 12-е, просто без времён.
+    // Выброси их — и «10, 13» прочтётся как сбой выдачи, а не как «в эти дни не
+    // принимают».
+    const cells = dayStrip([
+      { key: '2026-09-10', slots: [slot('2026-09-10T08:00:00Z')] },
+      { key: '2026-09-13', slots: [slot('2026-09-13T08:00:00Z')] },
+    ])
+    expect(cells.map((c) => c.key)).toEqual([
+      '2026-09-10',
+      '2026-09-11',
+      '2026-09-12',
+      '2026-09-13',
+    ])
+    expect(cells.map((c) => c.slots.length)).toEqual([1, 0, 0, 1])
+  })
+
+  it('лента начинается с первого СВОБОДНОГО дня', () => {
+    const cells = dayStrip([{ key: '2026-10-05', slots: [slot('2026-10-05T08:00:00Z')] }])
+    expect(cells).toHaveLength(1)
+    expect(cells[0]!.key).toBe('2026-10-05')
+  })
+
+  it('пустая выдача даёт пустую ленту', () => {
+    expect(dayStrip([])).toEqual([])
+  })
+
+  it('квадрат несёт число и день недели', () => {
+    const cells = dayStrip([{ key: '2026-09-10', slots: [slot('2026-09-10T08:00:00Z')] }])
+    expect(cells[0]!.num).toBe('10')
+    // Четверг — по календарю, а не по строке: сокращение даёт локаль.
+    expect(cells[0]!.weekday).toBe(
+      new Date(2026, 8, 10).toLocaleDateString('ru-RU', { weekday: 'short' }),
+    )
+  })
+})
+
+describe('подпись месяца над лентой', () => {
+  const strip = (from: string, to: string) =>
+    dayStrip([
+      { key: from, slots: [] },
+      { key: to, slots: [] },
+    ])
+
+  it('окно внутри месяца называет один месяц с годом', () => {
+    expect(monthLabel(strip('2026-09-10', '2026-09-16'))).toBe('сентябрь 2026')
+  })
+
+  it('окно через границу месяца называет оба', () => {
+    expect(monthLabel(strip('2026-09-28', '2026-10-02'))).toBe('сентябрь — октябрь 2026')
+  })
+
+  it('окно через границу года называет год у каждого месяца', () => {
+    expect(monthLabel(strip('2026-12-30', '2027-01-02'))).toBe('декабрь 2026 — январь 2027')
+  })
+
+  it('пустое окно не подписывается', () => {
+    expect(monthLabel([])).toBe('')
+  })
+})
+
+describe('заголовок над сеткой времён', () => {
+  it('называет день полным именем', () => {
+    const cells = dayStrip([{ key: '2026-09-10', slots: [] }])
+    expect(fullDayLabel(cells[0]!)).toBe(
+      new Date(2026, 8, 10).toLocaleDateString('ru-RU', {
+        weekday: 'long',
+        day: 'numeric',
+        month: 'long',
+      }),
+    )
+  })
+})
+
+describe('сколько квадратов влезает в ленту', () => {
+  it('на широкой колонке дней больше, чем на узкой', () => {
+    expect(colsFor(700)).toBeGreaterThan(colsFor(360))
+  })
+
+  it('узкая колонка всё равно показывает неделю', () => {
+    // Пол в семь дней: на телефоне квадраты ужимаются, но неделя видна целиком —
+    // лента из четырёх дней заставляла бы листать ради завтра.
+    expect(colsFor(320)).toBe(7)
+    expect(colsFor(120)).toBe(7)
+  })
+
+  it('очень широкая колонка не разворачивается в месяц', () => {
+    expect(colsFor(4000)).toBe(14)
+  })
+
+  it('ширина, которой ещё нет, даёт неделю', () => {
+    // До первого замера (и там, где ResizeObserver нет вовсе) лента показывает неделю.
+    expect(colsFor(0)).toBe(7)
   })
 })

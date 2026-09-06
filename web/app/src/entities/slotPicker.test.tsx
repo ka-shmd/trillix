@@ -52,7 +52,7 @@ describe('выбор времени', () => {
     expect(screen.getByRole('button', { name: at('2026-09-10T09:00:00Z') })).toBeTruthy()
   })
 
-  it('выбор времени берёт холд и показывает выбранное', async () => {
+  it('выбор времени берёт холд и подсвечивает выбранное, не подменяя блок', async () => {
     const hold = vi.fn(() => Promise.resolve({ bookingId: 'bk-7' }))
     render(<Harness src={source({ hold })} />)
     await settle()
@@ -61,10 +61,19 @@ describe('выбор времени', () => {
     await settle()
 
     expect(hold).toHaveBeenCalledWith({ startsAt: '2026-09-10T08:00:00Z', seats: 1 })
-    expect(screen.getByRole('button', { name: 'Выбрать другое время' })).toBeTruthy()
+    // Сетка осталась на месте: соседнее время по-прежнему предлагается, а выбранное
+    // отмечено нажатым.
+    const chosen = screen.getByRole('button', { name: at('2026-09-10T08:00:00Z') })
+    expect(chosen.getAttribute('aria-pressed')).toBe('true')
+    expect(
+      screen
+        .getByRole('button', { name: at('2026-09-10T09:00:00Z') })
+        .getAttribute('aria-pressed'),
+    ).toBe('false')
+    expect(screen.getByText(/Выбрано:/)).toBeTruthy()
   })
 
-  it('«выбрать другое время» очищает ответ, а не только показ', async () => {
+  it('повторный клик по выбранному времени очищает ответ, а не только подсветку', async () => {
     // РЕГРЕССИЯ. Первая редакция гасила только показ: значение оставалось прежним id
     // брони. Респондент, передумавший и не выбравший ничего взамен, отправлял форму со
     // старой бронью — экран показывал список, а сервер подтверждал живой холд.
@@ -83,7 +92,36 @@ describe('выбор времени', () => {
     await settle()
     expect(seen.at(-1)).toBe('bk-9')
 
-    fireEvent.click(screen.getByRole('button', { name: 'Выбрать другое время' }))
+    fireEvent.click(screen.getByRole('button', { name: at('2026-09-10T08:00:00Z') }))
+    await settle()
+    expect(seen.at(-1)).toBe('')
+    expect(
+      screen
+        .getByRole('button', { name: at('2026-09-10T08:00:00Z') })
+        .getAttribute('aria-pressed'),
+    ).toBe('false')
+  })
+
+  it('смена числа мест роняет уже взятый холд', async () => {
+    // Холд взят НА ПРЕЖНЕЕ ЧИСЛО МЕСТ, и блок при выборе больше не подменяется —
+    // селект остаётся доступным. Оставь ответ прежним, и в письме поедет бронь на одно
+    // место у того, кто выбрал три.
+    const seen: string[] = []
+    function Spy({ src }: { src: SlotSource }) {
+      const [value, setValue] = useState('')
+      seen.push(value)
+      return (
+        <SlotPicker source={src} value={value} onChange={setValue} label="Время" invalid={false} />
+      )
+    }
+    render(<Spy src={source({ maxSeats: 3 })} />)
+    await settle()
+
+    fireEvent.click(screen.getByRole('button', { name: at('2026-09-10T08:00:00Z') }))
+    await settle()
+    expect(seen.at(-1)).toBe('bk-1')
+
+    fireEvent.change(screen.getByRole('combobox'), { target: { value: '3' } })
     await settle()
     expect(seen.at(-1)).toBe('')
   })
@@ -136,5 +174,58 @@ describe('выбор времени', () => {
     await settle()
 
     expect(screen.getByRole('button', { name: 'Повторить' })).toBeTruthy()
+  })
+})
+
+describe('лента дат', () => {
+  // Сутки берутся МЕСТНЫЕ, а не фиксированный UTC: лента режется по календарю
+  // читателя, и жёсткая дата уехала бы на день в CI с другим TZ.
+  const inDays = (offset: number, hour: number) => {
+    const d = new Date()
+    d.setDate(d.getDate() + offset)
+    d.setHours(hour, 0, 0, 0)
+    return d.toISOString()
+  }
+
+  it('день без свободного времени стоит в ленте погашенным', async () => {
+    const list = () => Promise.resolve([slot(inDays(0, 9)), slot(inDays(2, 9))])
+    render(<Harness src={source({ list })} />)
+    await settle()
+
+    const days = screen.getAllByRole('tab')
+    expect(days).toHaveLength(3)
+    expect(days[0]).toHaveProperty('disabled', false)
+    expect(days[1]).toHaveProperty('disabled', true)
+    expect(days[2]).toHaveProperty('disabled', false)
+  })
+
+  it('листание НЕ трогает выбранный день', async () => {
+    // Двенадцать дней ленты: свободны первый и девятый. Человек листает, чтобы
+    // посмотреть, — его выбор при этом остаётся на месте, и времена под лентой
+    // продолжают показывать выбранный день, а не первый свободный новой страницы.
+    const list = () => Promise.resolve([slot(inDays(0, 9)), slot(inDays(8, 15))])
+    render(<Harness src={source({ list })} />)
+    await settle()
+
+    expect(screen.getByRole('button', { name: at(inDays(0, 9)) })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Следующие дни' }))
+    await settle()
+
+    // Лента показала вторую страницу: девятый день в ней есть, первого нет.
+    expect(screen.getAllByRole('tab')).toHaveLength(2)
+    // А времена — по-прежнему выбранного дня.
+    expect(screen.getByRole('button', { name: at(inDays(0, 9)) })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: at(inDays(8, 15)) })).toBeNull()
+  })
+
+  it('шеврон назад погашен на первой странице', async () => {
+    render(<Harness src={source()} />)
+    await settle()
+
+    expect(screen.getByRole('button', { name: 'Предыдущие дни' })).toHaveProperty(
+      'disabled',
+      true,
+    )
   })
 })
