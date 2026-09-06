@@ -1,5 +1,4 @@
 import { useState, type ReactNode } from 'react'
-import { usePlanLink } from '../../../shared/planLink'
 import { Link, useNavigate } from '@tanstack/react-router'
 import { Link2, X } from 'lucide-react'
 import { toast } from 'sonner'
@@ -123,7 +122,6 @@ export function PublishControls({
 }) {
   const publish = usePublishForm()
   const navigate = useNavigate()
-  const planLink = usePlanLink()
   const design = useBuilderStore((s) => s.design)
   const blocks = useBuilderStore((s) => s.blocks)
   const setDesign = useBuilderStore((s) => s.setDesign)
@@ -251,7 +249,7 @@ export function PublishControls({
             >
               Убрать платное оформление
             </Button>
-            <AlertDialogAction onClick={() => navigate(planLink)}>
+            <AlertDialogAction onClick={() => navigate({ to: '/settings/plan' })}>
               Оформить подписку
             </AlertDialogAction>
           </AlertDialogFooter>
@@ -266,7 +264,7 @@ export function PublishControls({
           {planMessage !== null ? (
             <>
               {planMessage}{' '}
-              <Link {...planLink} className="underline underline-offset-2">
+              <Link to="/settings/plan" className="underline underline-offset-2">
                 Тариф
               </Link>
             </>

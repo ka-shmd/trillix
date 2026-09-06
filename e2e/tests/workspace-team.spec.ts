@@ -132,14 +132,17 @@ test('приглашение в пространство: коллега при�
   // permissions с сервера, а не по роли, вычисленной на фронте.
   await expect(matePage.getByRole('button', { name: 'Пригласить' })).toHaveCount(0)
   await expect(matePage.getByRole('button', { name: 'Снять доступ' })).toHaveCount(0)
-  // Пункта «Тариф» в панели у редактора тоже нет: право `billing.view` только у
-  // владельца, и пункт, который заведомо откажет, стоять не должен.
-  await expect(matePage.getByRole('link', { name: 'Тариф' })).toHaveCount(0)
+  // Пункт «Тариф» в панели есть и у редактора — он про СВОЙ аккаунт, а не про
+  // пространство (ADR §10): у коллеги свой план, и смотреть его он вправе.
+  await expect(matePage.getByRole('link', { name: 'Тариф' })).toHaveCount(1)
 
-  // Тариф чужого пространства не отдаёт сам сервер, и прячется он не кнопкой:
-  // приходим по прямому адресу.
+  // Чужой план по-прежнему недоступен, и прячется он не кнопкой: старый адрес
+  // тарифа пространства ведёт на аккаунтную страницу, а в её списке расхода стоят
+  // только пространства, которыми человек ВЛАДЕЕТ. Чужого там нет.
   await matePage.goto(`/w/${spaceSlug}/plan`)
-  await expect(matePage.getByText('Не удалось загрузить тариф.')).toBeVisible()
+  await expect(matePage).toHaveURL(/\/settings\/plan$/)
+  await expect(matePage.getByRole('heading', { name: 'Тариф' })).toBeVisible()
+  await expect(matePage.getByRole('link', { name: spaceName })).toHaveCount(0)
 
   // --- Владелец отзывает доступ ---
   // Перезагрузка нужна за данными: коллега принял приглашение в другом контексте,

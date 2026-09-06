@@ -154,8 +154,12 @@ func (stubStore) EntitlementsForUser(context.Context, postgres.DBTX, uuid.UUID, 
 	return Row{}, nil
 }
 
-func (stubStore) AccountEntitlements(context.Context, postgres.DBTX, uuid.UUID) (Row, error) {
+func (stubStore) AccountEntitlements(context.Context, postgres.DBTX, uuid.UUID, time.Time) (Row, error) {
 	return Row{}, nil
+}
+
+func (stubStore) OwnedWorkspaceUsage(context.Context, postgres.DBTX, uuid.UUID, time.Time) ([]WorkspaceRow, error) {
+	return nil, nil
 }
 
 func (stubStore) EntitlementsWithMembers(context.Context, postgres.DBTX, uuid.UUID, time.Time) (Row, error) {
