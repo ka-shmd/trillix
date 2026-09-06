@@ -22,6 +22,19 @@
    единственный свободный: он читается другим рядом с синим и не путается ни с одним
    статусным.
 
+   ВЫБРАННЫЙ ПУНКТ САЙДБАРА — своя пара `--sidebar-primary-soft` (подложка) и
+   `--sidebar-primary-ink` (чернила), а не прозрачность от `--sidebar-primary`. Причина
+   та же и замеренная та же, что у метки тарифа: синие чернила базовой светлоты на
+   собственной приглушённой подложке дают 4.19:1 — ниже AA. Ступень темнее (L 0.50)
+   даёт 5.29:1 в светлой теме и 5.98:1 в тёмной. Правишь пару — меряй чернила НА
+   подложке, а не на фоне панели.
+
+   Отдельно про `--sidebar-accent`: это ТОЛЬКО наведение. Пока им же красился и
+   выбранный пункт, панель не отвечала на вопрос «где я»: подложка давала 1.045:1 к
+   фону (невидимо), а наведение и выбор отличались лишь весом шрифта. Теперь выбор
+   несёт `--primary`, как того и требует правило ролей, а наведение углублено до
+   1.09:1 в светлой и 1.29:1 в тёмной, чтобы вообще ощущаться.
+
    ЕДИНСТВЕННОЕ ИСКЛЮЧЕНИЕ ИЗ «второй акцент не красит нажимаемое» — метка платной
    возможности (решение владельца 2026-08-26, `shared/ProTag.tsx`). Она нажимаема
    (ведёт на страницу тарифа), но синей быть не должна: на экране, где рядом стоит
@@ -141,7 +154,9 @@
   --sidebar-foreground: oklch(0.32 0.012 70);
   --sidebar-primary: oklch(0.55 0.19 260);
   --sidebar-primary-foreground: oklch(0.985 0.004 80);
-  --sidebar-accent: oklch(0.97 0.005 80);
+  --sidebar-primary-soft: oklch(0.945 0.025 260);
+  --sidebar-primary-ink: oklch(0.5 0.19 260);
+  --sidebar-accent: oklch(0.955 0.006 80);
   --sidebar-accent-foreground: oklch(0.32 0.012 70);
   --sidebar-border: oklch(0.925 0.006 80);
   --sidebar-ring: oklch(0.55 0.19 260);
@@ -197,8 +212,14 @@
   --sidebar: oklch(0.25 0.007 70);
   --sidebar-foreground: oklch(0.96 0.005 80);
   --sidebar-primary: oklch(0.72 0.14 260);
-  --sidebar-primary-foreground: oklch(0.985 0.004 80);
-  --sidebar-accent: oklch(0.29 0.007 70);
+  /* Чернила НА заливке акцента, а не рядом с ней: в тёмной теме заливка светло-синяя,
+     и почти белая надпись давала на ней 2.39:1 — ниже любого порога. Тёмная даёт 6.41:1.
+     Видно это было на инициалах аватарки — единственном месте, где заливка и есть фон
+     текста. */
+  --sidebar-primary-foreground: oklch(0.25 0.007 70);
+  --sidebar-primary-soft: oklch(0.335 0.045 260);
+  --sidebar-primary-ink: oklch(0.78 0.11 260);
+  --sidebar-accent: oklch(0.325 0.008 70);
   --sidebar-accent-foreground: oklch(0.96 0.005 80);
   --sidebar-border: oklch(1 0 0 / 10%);
   --sidebar-ring: oklch(0.72 0.14 260);
@@ -254,6 +275,8 @@
   --color-sidebar-foreground: var(--sidebar-foreground);
   --color-sidebar-primary: var(--sidebar-primary);
   --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary-soft: var(--sidebar-primary-soft);
+  --color-sidebar-primary-ink: var(--sidebar-primary-ink);
   --color-sidebar-accent: var(--sidebar-accent);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);

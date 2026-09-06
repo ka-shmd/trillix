@@ -112,4 +112,31 @@ describe('навигация пространства в сайдбаре', () =
     await renderNav('/w/team/templates', ['billing.view'])
     expect(screen.getByRole('link', { name: 'Формы' }).dataset.active).toBe('true')
   })
+
+  // СТОРОЖ ВЕНДОРЕННОЙ ПРАВКИ. У shadcn выбранный пункт красится тем же
+  // `sidebar-accent`, что и наведение: подложка давала 1.045:1 к фону панели, а выбор
+  // от наведения отличался только весом шрифта — то есть панель не отвечала, на какой
+  // человек странице. Переустановка компонента из shadcn вернёт дефолт молча, и
+  // заметить это можно только здесь: класс на элементе есть в обоих случаях, разный у
+  // них токен.
+  it('выбранный раздел красится акцентом, а не подложкой наведения', async () => {
+    await renderNav('/w/team/schedules', ['billing.view'])
+    const active = screen.getByRole('link', { name: 'Расписания' })
+    expect(active.dataset.active).toBe('true')
+    expect(active.className).toContain('data-[active=true]:bg-sidebar-primary-soft')
+    expect(active.className).toContain('data-[active=true]:text-sidebar-primary-ink')
+    expect(active.className).not.toContain('data-[active=true]:bg-sidebar-accent')
+  })
+
+  // Переключатель обязан читаться местом, а не пятым пунктом списка: буква
+  // пространства и подпись, чем оно является.
+  it('переключатель называет пространство буквой и видом', async () => {
+    await renderNav('/w/team/forms', ['billing.view'])
+    expect(screen.getByText('К')).toBeTruthy()
+    expect(screen.getByText('Командное')).toBeTruthy()
+
+    cleanup()
+    await renderNav('/w/personal/forms', ['billing.view'])
+    expect(screen.getByText('Личное')).toBeTruthy()
+  })
 })

@@ -11,6 +11,7 @@ import {
   SidebarMenu,
   SidebarMenuButton,
   SidebarMenuItem,
+  SidebarSeparator,
   SidebarTrigger,
 } from '@/components/ui/sidebar'
 import { UserAvatar, type UserAvatarProps } from '../../shared/UserAvatar'
@@ -79,6 +80,11 @@ export function AppSidebar({
       </SidebarHeader>
 
       <SidebarContent>{workspaceNav}</SidebarContent>
+
+      {/* Личный ярус отделён линией, а не отступом: без неё «Настройки» читались
+          пятым разделом пространства, а скачок роста у строки аккаунта (48px против
+          32px в списке выше) — сбоем вёрстки. */}
+      <SidebarSeparator className="mx-2" />
 
       <SidebarFooter>
         <SidebarGroup className="p-0">

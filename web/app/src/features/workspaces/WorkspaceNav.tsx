@@ -22,6 +22,7 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarMenuSkeleton,
+  SidebarSeparator,
 } from '@/components/ui/sidebar'
 import {
   DropdownMenu,
@@ -103,8 +104,18 @@ export function WorkspaceNav() {
             <SidebarMenuItem>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
-                  <SidebarMenuButton className="data-[state=open]:bg-sidebar-accent">
-                    <span className="min-w-0 flex-1 truncate font-medium">{current.name}</span>
+                  {/* Переключатель обязан читаться МЕСТОМ, а не пятым пунктом списка:
+                      квадрат с буквой пространства, имя в полный вес и подпись, чем оно
+                      является. Пока строка отличалась от раздела одним шевроном, верх
+                      панели не сообщал, где человек находится. */}
+                  <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent">
+                    <WorkspaceMark name={current.name} />
+                    <span className="grid min-w-0 flex-1 text-left leading-tight">
+                      <span className="truncate text-sm font-semibold">{current.name}</span>
+                      <span className="truncate text-xs text-muted-foreground">
+                        {current.isPersonal ? 'Личное' : 'Командное'}
+                      </span>
+                    </span>
                     <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
                   </SidebarMenuButton>
                 </DropdownMenuTrigger>
@@ -115,6 +126,7 @@ export function WorkspaceNav() {
                   {workspaces.data?.map((ws) => (
                     <DropdownMenuItem key={ws.id} asChild>
                       <Link to="/w/$workspaceSlug/forms" params={{ workspaceSlug: ws.slug }}>
+                        <WorkspaceMark name={ws.name} />
                         <span className="min-w-0 flex-1 truncate">{ws.name}</span>
                         {/* Галочка у текущего, а не подсветка строки: подсветка в
                             меню означает наведение, и два смысла у одного вида
@@ -140,6 +152,11 @@ export function WorkspaceNav() {
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>
+
+      {/* Разделитель, а не отступ: три яруса панели (место, его разделы, личное) были
+          тремя группами только в разметке — на экране они шли одной лентой одинаковых
+          строк. */}
+      <SidebarSeparator />
 
       <SidebarGroup>
         <SidebarGroupContent>
@@ -192,5 +209,20 @@ export function WorkspaceNav() {
 
       <CreateWorkspaceDialog open={creating} onOpenChange={setCreating} />
     </>
+  )
+}
+
+// Квадрат с первой буквой пространства — та же роль, что у инициалов в аватарке
+// человека: место опознаётся пятном раньше, чем читается имя. И это единственное
+// применение акцента в панели помимо выбранного раздела — до правки синий цвет в
+// сайдбаре не использовался вообще.
+function WorkspaceMark({ name }: { name: string }) {
+  return (
+    <span
+      aria-hidden="true"
+      className="flex size-6 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground"
+    >
+      {[...name.trim()][0]?.toUpperCase() ?? '?'}
+    </span>
   )
 }
