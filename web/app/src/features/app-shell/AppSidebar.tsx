@@ -62,19 +62,25 @@ export function AppSidebar({
   const pathname = useRouterState({ select: (s) => s.location.pathname })
 
   return (
-    <Sidebar>
+    // СВЁРНУТАЯ ПАНЕЛЬ ОСТАЁТСЯ ПОЛОСОЙ ЗНАЧКОВ, а не уезжает за экран
+    // (`collapsible=icon`, решение владельца 2026-09-06). Раньше значок был у двух
+    // пунктов из четырёх, и полоса показывала бы почти пустоту; теперь значок есть у
+    // каждого раздела — это ровно то, ради чего их и рисуют. Место при этом остаётся
+    // видимым буквой пространства, а имя раздела приезжает подсказкой.
+    <Sidebar collapsible="icon">
       {/* Высота шапки панели равна высоте верхнего бара (56px), а поля совпадают
           с его левым полем: логотип и крошки обязаны стоять на одной линии — они
           соседи по верхнему краю экрана, и разница в пару пикселей читается как
           съехавшая вёрстка. */}
-      <SidebarHeader className="h-14 justify-center px-3 py-0">
-        <div className="flex items-center gap-2">
-          <span className="flex-1 text-base font-bold tracking-tight">Trillix</span>
-          {/* Свернуть — отсюда, из самой панели. Развернуть обратно отсюда нельзя:
-              свёрнутая панель уезжает за экран целиком (collapsible=offcanvas), и
-              кнопка уезжает вместе с ней. Обратно её возвращает та же кнопка,
-              переехавшая в верхний бар (HeaderSidebarTrigger), — она появляется
-              ровно в этом состоянии. Плюс Ctrl/Cmd+B. */}
+      <SidebarHeader className="h-14 justify-center px-3 py-0 group-data-[collapsible=icon]:px-0">
+        <div className="flex items-center justify-center gap-2">
+          <span className="flex-1 text-base font-bold tracking-tight group-data-[collapsible=icon]:hidden">
+            Trillix
+          </span>
+          {/* Свернуть и развернуть — обе отсюда: полоса значков остаётся на экране
+              вместе со своей кнопкой. В верхнем баре кнопка нужна только на
+              мобильном, где панель — закрытая шторка (HeaderSidebarTrigger). Плюс
+              Ctrl/Cmd+B. */}
           <SidebarTrigger className="text-muted-foreground" />
         </div>
       </SidebarHeader>
@@ -108,16 +114,22 @@ export function AppSidebar({
                   ряду одинаковых строк нажимается по инерции. Значок с подписью для
                   скринридера — тот же приём, что у действий строки пространства. */}
               <SidebarMenuItem className="flex items-center gap-1">
-                <SidebarMenuButton asChild size="lg" className="min-w-0 flex-1">
+                <SidebarMenuButton asChild size="lg" className="min-w-0 flex-1" tooltip={userName}>
                   <Link to="/settings/account">
                     <UserAvatar person={person} />
-                    <span className="truncate text-sm">{userName}</span>
+                    <span className="truncate text-sm group-data-[collapsible=icon]:hidden">
+                      {userName}
+                    </span>
                   </Link>
                 </SidebarMenuButton>
+                {/* В свёрнутой полосе выхода нет: две кнопки в 48px не помещаются, а
+                    ужимать до значка без подписи действие, которое одним нажатием
+                    заканчивает сеанс, — плохой размен. Разворачивается панель
+                    Ctrl/Cmd+B либо кнопкой в её шапке. */}
                 <Button
                   variant="ghost"
                   size="icon"
-                  className="size-8 shrink-0 text-muted-foreground"
+                  className="size-8 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden"
                   onClick={onLogout}
                   disabled={loggingOut}
                 >

@@ -108,15 +108,22 @@ export function WorkspaceNav() {
                       квадрат с буквой пространства, имя в полный вес и подпись, чем оно
                       является. Пока строка отличалась от раздела одним шевроном, верх
                       панели не сообщал, где человек находится. */}
-                  <SidebarMenuButton size="lg" className="data-[state=open]:bg-sidebar-accent">
+                  <SidebarMenuButton
+                    size="lg"
+                    tooltip={current.name}
+                    className="data-[state=open]:bg-sidebar-accent"
+                  >
+                    {/* В свёрнутой полосе от переключателя остаётся буква
+                        пространства: место обязано быть видно и там, а имя приезжает
+                        подсказкой. */}
                     <WorkspaceMark name={current.name} />
-                    <span className="grid min-w-0 flex-1 text-left leading-tight">
+                    <span className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
                       <span className="truncate text-sm font-semibold">{current.name}</span>
                       <span className="truncate text-xs text-muted-foreground">
                         {current.isPersonal ? 'Личное' : 'Командное'}
                       </span>
                     </span>
-                    <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground" />
+                    <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
                   </SidebarMenuButton>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent
