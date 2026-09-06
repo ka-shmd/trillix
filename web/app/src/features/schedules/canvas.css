@@ -39,10 +39,15 @@
 
   /* Свои цвета слоёв. Приём — заливка, а не карточка: автор смотрит СКВОЗЬ неё на
      записи, и плотная плашка мешала бы. */
-  --sc-av: color-mix(in oklab, var(--primary) 10%, transparent);
-  --sc-av-line: color-mix(in oklab, var(--primary) 55%, transparent);
-  --sc-av-ex: color-mix(in oklab, var(--highlight) 14%, transparent);
-  --sc-av-ex-line: color-mix(in oklab, var(--highlight) 65%, transparent);
+  /* Часы приёма ЕЛЕ ЗАМЕТНЫ (решение владельца 2026-09-05): на полотне они справка,
+     а не предмет работы — автор смотрит на записи и занятость, а приём подсказывает,
+     куда те попадают. Приглушены заливка и линия разом: одна заливка в 5% перестаёт
+     читаться как отрезок, а линия прежней плотности при бледной заливке становится
+     самым заметным на полотне. */
+  --sc-av: color-mix(in oklab, var(--primary) 5%, transparent);
+  --sc-av-line: color-mix(in oklab, var(--primary) 22%, transparent);
+  --sc-av-ex: color-mix(in oklab, var(--highlight) 7%, transparent);
+  --sc-av-ex-line: color-mix(in oklab, var(--highlight) 30%, transparent);
   --sc-block-stripe: color-mix(in oklab, var(--foreground) 8%, transparent);
 
   font-size: 0.8125rem;
@@ -86,8 +91,10 @@
 .sc-canvas .sc-av {
   background: var(--sc-av);
   border: 0;
-  border-left: 2px solid var(--sc-av-line);
+  border-left: 1px solid var(--sc-av-line);
   border-radius: 0 4px 4px 0;
+  /* Полоса НАЖИМАЕТСЯ (клик убирает окно приёма), но мышью не двигается — курсор
+     обязан обещать ровно это. */
   cursor: pointer;
 }
 
@@ -402,16 +409,6 @@
   width: 10px;
 }
 
-/* ПОВЕРХНОСТЬ «ПРИЁМ»: в шапке колонки только имя дня. Здесь оно не подпись к числу,
-   а сам заголовок — поэтому крупнее, не приглушено и не строчными: колонка означает
-   «каждый вторник», и называться она должна в полный голос. */
-.sc-rule .sc-day-name {
-  color: var(--foreground);
-  font-size: 0.8125rem;
-  font-weight: 600;
-  text-transform: none;
-}
-
 /* ЧЬЯ ЭТО ФОРМА — ТОТ ЖЕ ТОН, ЧТО У СТРОКИ В СПИСКЕ БЛИЖАЙШИХ (`formColor.ts`):
    подложка и полоса слева. Номер тона считает общая функция по id формы, поэтому
    список и полотно не разъедутся; здесь остаётся только «номер → токен», и статикой
@@ -457,18 +454,6 @@
 .sc-canvas .sc-tone-8 {
   background: color-mix(in oklab, var(--chart-8) 14%, var(--card));
   border-left-color: var(--chart-8);
-}
-
-/* ЧАСЫ ПРИЁМА — ПОДЛОЖКА, и курсор обязан говорить об этом честно: нажать на неё
-   нельзя. Указатель возвращается только тому дню, часы которого правят. */
-.sc-canvas .sc-av {
-  cursor: default;
-}
-
-.sc-canvas .sc-av-edit {
-  cursor: pointer;
-  outline: 2px solid var(--sc-av-line);
-  outline-offset: -2px;
 }
 
 /* Шапка дня — кнопка меню исключений. Выглядит она по-прежнему шапкой: рамка и фон
@@ -520,33 +505,4 @@
 
 .sc-canvas .sc-day-special .sc-day-num {
   position: relative;
-}
-
-/* ЧАСЫ ПРИЁМА НА «КАЛЕНДАРЕ» — ЕЛЕ ЗАМЕТНЫ (решение владельца 2026-09-05). Здесь они
-   справка, а не предмет работы: автор смотрит на записи и занятость, а приём просто
-   подсказывает, куда они попадают. На поверхности «Приём» полоса остаётся яркой —
-   там она и есть содержимое, поэтому приглушение навешено на класс календаря, а не
-   на общие токены.
-
-   Приглушены и заливка, и линия слева: одна заливка в 5% без линии перестаёт читаться
-   как отрезок, а линия прежней плотности при бледной заливке становится самым
-   заметным на полотне — ровно наоборот тому, что нужно. */
-.sc-cal {
-  --sc-av: color-mix(in oklab, var(--primary) 5%, transparent);
-  --sc-av-line: color-mix(in oklab, var(--primary) 22%, transparent);
-  --sc-av-ex: color-mix(in oklab, var(--highlight) 7%, transparent);
-  --sc-av-ex-line: color-mix(in oklab, var(--highlight) 30%, transparent);
-}
-
-.sc-cal .sc-av {
-  border-left-width: 1px;
-}
-
-/* ⚠ ПРАВИМЫЙ ДЕНЬ ИЗ ПРИГЛУШЕНИЯ ВЫВЕДЕН. Пока автор правит часы одного дня, полоса
-   этого дня — предмет работы, и её надо видеть и хватать мышью; приглушённая рамка
-   режима читалась бы как его отсутствие. Цвет здесь свой, а не токен: токен на этой
-   поверхности как раз и приглушён. */
-.sc-cal .sc-av-edit {
-  border-left-width: 2px;
-  outline-color: color-mix(in oklab, var(--primary) 55%, transparent);
 }

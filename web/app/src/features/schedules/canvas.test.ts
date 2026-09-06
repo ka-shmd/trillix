@@ -10,8 +10,6 @@ import {
   onlyLabel,
   selectionRect,
   minutesOfNaive,
-  ruleSpans,
-  RULE_WEEK_DATES,
   shiftDate,
   spansIn,
   weekStart,
@@ -335,51 +333,6 @@ describe('полоса подсказки', () => {
 
   it('пустая ось не делится на ноль', () => {
     expect(bandBox({ from: '10:00', to: '11:00' }, { min: '10:00', max: '10:00' }, lane)).toBeNull()
-  })
-})
-
-describe('поверхность «Приём» — неделя без дат', () => {
-  it('колонки идут с понедельника по воскресенье', () => {
-    expect(RULE_WEEK_DATES).toHaveLength(7)
-    expect(weekdayOf(RULE_WEEK_DATES[0]!)).toBe('mon')
-    expect(weekdayOf(RULE_WEEK_DATES[6]!)).toBe('sun')
-  })
-
-  // Сторож мины из canvas.ts: жест области `weekly` снимает исключение со своей даты,
-  // и опорная неделя внутри горизонта записи означала бы, что правка правила молча
-  // стирает исключения, которых автор в этот момент не видит.
-  it('опорная неделя лежит вне горизонта записи', () => {
-    const yearsBack = new Date().getUTCFullYear() - Number(RULE_WEEK_DATES[0]!.slice(0, 4))
-    expect(yearsBack).toBeGreaterThan(1)
-  })
-
-  it('исключения по датам на правило не попадают', () => {
-    const withException: Availability = {
-      weekly: { mon: [{ from: '10:00', to: '18:00' }] },
-      // Исключение ровно на опорный понедельник — самый недобрый случай: попади оно
-      // в выдачу, автор правил бы на «Приёме» один день вместо каждого понедельника.
-      exceptions: [{ date: RULE_WEEK_DATES[0]!, windows: [{ from: '07:00', to: '08:00' }] }],
-    }
-    const spans = ruleSpans(withException)
-    expect(spans).toHaveLength(1)
-    expect(spans[0]!.window).toEqual({ from: '10:00', to: '18:00' })
-    expect(spans[0]!.source).toBe('weekly')
-  })
-
-  it('правка правила на опорной неделе не трогает исключения настоящих дат', () => {
-    const doc: Availability = {
-      weekly: { tue: [{ from: '10:00', to: '18:00' }] },
-      exceptions: [{ date: '2026-09-16', windows: [{ from: '11:00', to: '12:00' }] }],
-    }
-    // Вторник опорной недели — тот же день недели, что и 16 сентября 2026.
-    const tuesday = RULE_WEEK_DATES[1]!
-    const next = applyGesture(
-      doc,
-      { kind: 'create', dates: [tuesday], window: { from: '09:00', to: '10:00' } },
-      'weekly',
-    )
-    expect(next.weekly.tue).toEqual([{ from: '09:00', to: '18:00' }])
-    expect(next.exceptions).toEqual(doc.exceptions)
   })
 })
 

@@ -48,29 +48,15 @@ describe('класс события полотна', () => {
       date: '2026-09-15',
       window: { from: '10:00', to: '18:00' },
       source: 'weekly',
-      editing: false,
     })
     const exception = at({
       layer: 'availability',
       date: '2026-09-15',
       window: { from: '10:00', to: '18:00' },
       source: 'exception',
-      editing: false,
     })
     expect(weekly).toContain('sc-av-weekly')
     expect(exception).toContain('sc-av-ex')
-    expect(weekly).not.toContain('sc-av-edit')
-  })
-
-  it('правимый день помечен на самой полосе', () => {
-    const cls = at({
-      layer: 'availability',
-      date: '2026-09-15',
-      window: { from: '10:00', to: '18:00' },
-      source: 'weekly',
-      editing: true,
-    })
-    expect(cls).toContain('sc-av-edit')
   })
 
   it('блокировка — свой слой', () => {

@@ -7,12 +7,12 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu'
 
-// Шапка колонки дня на поверхности «Календарь» — она же вход в исключения по датам.
+// Шапка колонки дня — она же вход в исключения по датам.
 //
-// ИСКЛЮЧЕНИЯ ДЕЛЯТСЯ НАДВОЕ ЧЕСТНО. «Не принимаю 14-го» — отпуск, праздник, уехал —
-// это девять случаев из десяти, и стоит оно одного нажатия. «В этот день принимаю
-// иначе» случается редко и требует правки часов, поэтому включает режим, в котором
-// подложка этого дня на время становится редактируемой.
+// ЗДЕСЬ ТОЛЬКО САМЫЙ ЧАСТЫЙ СЛУЧАЙ. «Не принимаю 14-го» — отпуск, праздник, уехал —
+// это девять исключений из десяти, и стоит оно одного нажатия. «В этот день принимаю
+// иначе» делается той же протяжкой по колонке с ответом «только 14 сентября»: свой
+// пункт в меню был бы вторым способом сделать то же самое.
 //
 // Меню висит на самой шапке, а не на отдельном значке: у колонки один заголовок, и
 // второй орган управления рядом с ним читался бы как что-то ещё.
@@ -23,20 +23,14 @@ export function DayHeader({
   number,
   today,
   state,
-  editing,
   onCloseDay,
-  onEditHours,
   onResetDay,
 }: {
   name: string
   number: string
   today: boolean
   state: DayState
-  // editing — у этого дня прямо сейчас правят часы. Меню тогда предлагает выход, а
-  // не вход: режим, из которого не видно выхода, — ловушка.
-  editing: boolean
   onCloseDay: () => void
-  onEditHours: () => void
   onResetDay: () => void
 }) {
   return (
@@ -56,15 +50,8 @@ export function DayHeader({
         </button>
       </DropdownMenuTrigger>
       <DropdownMenuContent align="center">
-        {editing ? (
-          <DropdownMenuItem onSelect={onEditHours}>Готово</DropdownMenuItem>
-        ) : (
-          <>
-            {state !== 'closed' && (
-              <DropdownMenuItem onSelect={onCloseDay}>Не принимаю в этот день</DropdownMenuItem>
-            )}
-            <DropdownMenuItem onSelect={onEditHours}>Изменить часы этого дня</DropdownMenuItem>
-          </>
+        {state !== 'closed' && (
+          <DropdownMenuItem onSelect={onCloseDay}>Не принимаю в этот день</DropdownMenuItem>
         )}
         {/* «Как обычно» есть только там, где обычное уже перебито: пункт, снимающий
             то, чего нет, — это обещание действия без действия. */}

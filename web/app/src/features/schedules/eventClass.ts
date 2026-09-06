@@ -20,10 +20,6 @@ export type EventProps =
       date: string
       window: TimeWindow
       source: string
-      // editing — окно принадлежит дню, часы которого правят прямо сейчас. Лежит в
-      // самом событии, потому что вид красит эта функция, а до состояния экрана она
-      // не дотягивается.
-      editing: boolean
     }
   | { layer: 'block'; block: ScheduleBlock }
   | { layer: 'booking'; booking: Booking }
@@ -35,10 +31,7 @@ export function eventClass(info: { event: { extendedProps: Record<string, unknow
   // (отчёт владельца 2026-09-04). Своего вида у чужого события быть не должно.
   if (!props?.layer) return 'sc-ev sc-ghost'
   if (props.layer === 'availability') {
-    const source = props.source === 'exception' ? 'sc-av-ex' : 'sc-av-weekly'
-    // Правимый день выделен и на самой полосе: режим, который виден только по
-    // открытому меню, автор забудет закрыть.
-    return `sc-ev sc-av ${source}${props.editing ? ' sc-av-edit' : ''}`
+    return `sc-ev sc-av ${props.source === 'exception' ? 'sc-av-ex' : 'sc-av-weekly'}`
   }
   if (props.layer === 'block') return 'sc-ev sc-block'
   // ЧЬЯ ЭТО ФОРМА — тем же тоном и тем же способом, что в списке ближайших
