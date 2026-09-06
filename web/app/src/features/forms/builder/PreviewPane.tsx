@@ -15,12 +15,14 @@ import {
   splitThankYou,
 } from '@fields/groups'
 import { planForm, withVisibleOptions } from '@fields/logic'
+import { SlotStubProvider } from '@fields/booking'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { Badge } from '@fields/Badge'
 import { customStyleSheet } from '@fields/customCss'
 import { designClasses, designToVars } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { groupClass } from '@fields/space'
+import { SlotStub } from '@fields/slots/SlotStub'
 import { StepBar } from '@fields/stepBar'
 
 import { useBuilderStore } from './storeContext'
@@ -112,156 +114,160 @@ export function PreviewPane({
     // страницы, логотип внутри. WYSIWYG держится на общем выводе, а не на похожей
     // вёрстке в двух местах.
     // Контейнер темы обнимает обложку и страницу разом — как на полотне.
-    <MentionContext.Provider value={mentions}>
-      <div className={`rf-theme ${designClasses(design)}`} style={designToVars(design)}>
-        {/* СВОЙ CSS АВТОРА — ровно теми же двумя строками, что у респондента
+    // Заглушка вида записи — та же, что на полотне: превью показывает вопрос целиком,
+    // хотя живого свободного времени в кабинете нет (booking.ts, SlotStubProvider).
+    <SlotStubProvider value={SlotStub}>
+      <MentionContext.Provider value={mentions}>
+        <div className={`rf-theme ${designClasses(design)}`} style={designToVars(design)}>
+          {/* СВОЙ CSS АВТОРА — ровно теми же двумя строками, что у респондента
           (FormView): правила автора, следом сторож текста согласия. Безопасно это
           не потому, что мы что-то вычистили, а потому, что превью живёт в отдельном
           документе (PreviewFrame, TD-60) — за его пределы стиль не выходит физически.
           React вставляет строку текстовым узлом, а не разметкой (инвариант 4). */}
-        {customCss && <style>{customCss}</style>}
-        <CoverBand cover={chrome ? cover : undefined} />
-        <div className={pageClass(chrome ? cover : undefined)}>
-          {chrome && <LogoMark logo={logo} over={Boolean(cover)} />}
-          {chrome &&
-            (formTitle ? (
-              <BlockField block={formTitle} />
-            ) : (
-              title.trim() && <h1 className="rf-title">{title.trim()}</h1>
-            ))}
-          {/* «Скрыто условиями» говорим только когда условия в форме ЕСТЬ. Пустой план
+          {customCss && <style>{customCss}</style>}
+          <CoverBand cover={chrome ? cover : undefined} />
+          <div className={pageClass(chrome ? cover : undefined)}>
+            {chrome && <LogoMark logo={logo} over={Boolean(cover)} />}
+            {chrome &&
+              (formTitle ? (
+                <BlockField block={formTitle} />
+              ) : (
+                title.trim() && <h1 className="rf-title">{title.trim()}</h1>
+              ))}
+            {/* «Скрыто условиями» говорим только когда условия в форме ЕСТЬ. Пустой план
             бывает и без логики — например у документа из одного разрыва страницы (он
             инертен, ни одной страницы не открывает), и там правильный текст — второй:
             добавьте блоки. Найдено ревью ветки фазы. */}
-          {!done && plan.pages.every((p) => p.length === 0) && hasRules ? (
-            <p className="rf-empty">
-              Все вопросы скрыты условиями — ответьте выше или поправьте блок условия.
-            </p>
-          ) : !done && plan.pages.every((p) => p.length === 0) ? (
-            <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
-          ) : (
-            <div className="rf-form">
-              {rows.map((row) => {
-                const renderGroup = (group: (typeof row)[number][number]) => (
-                  // Ступень воздуха перед вопросом — по типу его первого блока
-                  // (@fields/space), тем же кодом, что у рендерера и полотна.
-                  <div key={group.id} className={groupClass(group.blocks)}>
-                    {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
+            {!done && plan.pages.every((p) => p.length === 0) && hasRules ? (
+              <p className="rf-empty">
+                Все вопросы скрыты условиями — ответьте выше или поправьте блок условия.
+              </p>
+            ) : !done && plan.pages.every((p) => p.length === 0) ? (
+              <p className="rf-empty">Пока нечего показать — добавьте блоки в редакторе.</p>
+            ) : (
+              <div className="rf-form">
+                {rows.map((row) => {
+                  const renderGroup = (group: (typeof row)[number][number]) => (
+                    // Ступень воздуха перед вопросом — по типу его первого блока
+                    // (@fields/space), тем же кодом, что у рендерера и полотна.
+                    <div key={group.id} className={groupClass(group.blocks)}>
+                      {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
                     бок той же обёрткой .rf-row. Ряд из одного остаётся прямым
                     ребёнком .rf-group — лишний div не меняет вид, но шумит в DOM. */}
-                    {packGroupRows(group.blocks).map((innerRow) => {
-                      const render = (block: (typeof innerRow)[number][number]) => (
-                        <BlockField
-                          key={block.id}
-                          block={withVisibleOptions(block, plan)}
-                          captionText={groups.get(block.groupId)?.caption}
-                          captionRequired={groups.get(block.groupId)?.required}
-                          value={answers[block.id]}
-                          onChange={(value: Answer) => onChange(block.id, value)}
-                          // disabled=true — умолчание BlockField (превью было
-                          // декоративным). С фазы 21 превью заполняется: иначе автор не
-                          // увидит ни одной своей ветки — она показывается ОТ ОТВЕТА.
-                          disabled={false}
-                        />
-                      )
-                      const innerWidths = blockRowWidths(innerRow)
-                      return innerRow.length > 1 ? (
-                        <div key={innerRow[0]![0]!.id} className="rf-row">
-                          {innerRow.map((cell, i) => (
-                            <div
-                              key={cell[0]!.id}
-                              className="rf-cell"
-                              style={cellVars(innerWidths, i)}
-                            >
-                              {cell.map(render)}
-                            </div>
-                          ))}
+                      {packGroupRows(group.blocks).map((innerRow) => {
+                        const render = (block: (typeof innerRow)[number][number]) => (
+                          <BlockField
+                            key={block.id}
+                            block={withVisibleOptions(block, plan)}
+                            captionText={groups.get(block.groupId)?.caption}
+                            captionRequired={groups.get(block.groupId)?.required}
+                            value={answers[block.id]}
+                            onChange={(value: Answer) => onChange(block.id, value)}
+                            // disabled=true — умолчание BlockField (превью было
+                            // декоративным). С фазы 21 превью заполняется: иначе автор не
+                            // увидит ни одной своей ветки — она показывается ОТ ОТВЕТА.
+                            disabled={false}
+                          />
+                        )
+                        const innerWidths = blockRowWidths(innerRow)
+                        return innerRow.length > 1 ? (
+                          <div key={innerRow[0]![0]!.id} className="rf-row">
+                            {innerRow.map((cell, i) => (
+                              <div
+                                key={cell[0]!.id}
+                                className="rf-cell"
+                                style={cellVars(innerWidths, i)}
+                              >
+                                {cell.map(render)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          render(innerRow[0]![0]!)
+                        )
+                      })}
+                    </div>
+                  )
+                  // Обёртка rf-row — только у настоящей пары колонок: одиночный ряд остаётся
+                  // прямым ребёнком rf-form (лишний div не меняет вид, но шумит в DOM).
+                  // В колонке может стоять СТОПКА групп (§5): правая колонка ряда с длинным
+                  // блоком слева. Слева стопки не бывает — там всегда тот, кто открыл ряд.
+                  const first = row[0]?.[0]
+                  if (!first) return null
+                  // Доли колонок — тем же правилом, что у рендерера: превью обязано
+                  // показывать ровно то, что увидит респондент (критерий 13.3).
+                  const widths = groupRowWidths(row)
+                  return row.length > 1 ? (
+                    <div key={first.id} className="rf-row">
+                      {row.map((cell, i) => (
+                        <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
+                          {cell.map(renderGroup)}
                         </div>
-                      ) : (
-                        render(innerRow[0]![0]!)
-                      )
-                    })}
-                  </div>
-                )
-                // Обёртка rf-row — только у настоящей пары колонок: одиночный ряд остаётся
-                // прямым ребёнком rf-form (лишний div не меняет вид, но шумит в DOM).
-                // В колонке может стоять СТОПКА групп (§5): правая колонка ряда с длинным
-                // блоком слева. Слева стопки не бывает — там всегда тот, кто открыл ряд.
-                const first = row[0]?.[0]
-                if (!first) return null
-                // Доли колонок — тем же правилом, что у рендерера: превью обязано
-                // показывать ровно то, что увидит респондент (критерий 13.3).
-                const widths = groupRowWidths(row)
-                return row.length > 1 ? (
-                  <div key={first.id} className="rf-row">
-                    {row.map((cell, i) => (
-                      <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
-                        {cell.map(renderGroup)}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  renderGroup(first)
-                )
-              })}
-            </div>
-          )}
-          {/* Кнопки шага — рабочие: превью для того и нужно, чтобы автор прошёл форму
+                      ))}
+                    </div>
+                  ) : (
+                    renderGroup(first)
+                  )
+                })}
+              </div>
+            )}
+            {/* Кнопки шага — рабочие: превью для того и нужно, чтобы автор прошёл форму
           так же, как её пройдёт респондент. Кнопка отправки по-прежнему без
           обработчика (клик ничего не делает), но выглядит как у респондента —
           активной, и только на последней странице. */}
-          {done ? (
-            // Возврат к форме — контрол ПРОСМОТРА, а не формы, и потому не .rf-nav:
-            // у респондента с этого экрана уйти некуда, и рисовать ему кнопку было бы
-            // ложью. Автору она нужна — иначе просмотр упирается в тупик.
-            <button
-              type="button"
-              className="mt-6 text-sm text-muted-foreground underline hover:text-foreground"
-              onClick={() => setDone(false)}
-            >
-              ← Вернуться к форме
-            </button>
-          ) : (
-            <div className="rf-nav">
-              {/* Коробка кнопки — та же, что у респондента (FormView): рядом с кнопкой
+            {done ? (
+              // Возврат к форме — контрол ПРОСМОТРА, а не формы, и потому не .rf-nav:
+              // у респондента с этого экрана уйти некуда, и рисовать ему кнопку было бы
+              // ложью. Автору она нужна — иначе просмотр упирается в тупик.
+              <button
+                type="button"
+                className="mt-6 text-sm text-muted-foreground underline hover:text-foreground"
+                onClick={() => setDone(false)}
+              >
+                ← Вернуться к форме
+              </button>
+            ) : (
+              <div className="rf-nav">
+                {/* Коробка кнопки — та же, что у респондента (FormView): рядом с кнопкой
                 стоит бейдж площадки, и выравнивание задаётся внутри коробки. */}
-              <div className="rf-nav-main">
-                {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
+                <div className="rf-nav-main">
+                  {/* «Скрыть кнопку» — то же, что у респондента: кнопки нет вовсе. Иначе
                   автор проверял бы ветку-тупик на превью и видел работающую отправку. */}
-                {plan.blocked && page === lastPage ? null : page < lastPage ? (
-                  <button
-                    type="button"
-                    className="rf-submit rf-next"
-                    onClick={() => setPage(page + 1)}
-                  >
-                    {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
-                  </button>
-                ) : (
-                  // Кнопка отправки ведёт на страницу «Спасибо», если автор её собрал.
-                  // Формы без неё получают экран-заглушку рендерера, и здесь кнопка
-                  // остаётся без обработчика — как и была.
-                  <button
-                    type="button"
-                    className="rf-submit"
-                    onClick={thankYou ? () => setDone(true) : undefined}
-                  >
-                    {label}
-                  </button>
-                )}
-              </div>
-              {/* Бейдж — в строке с кнопкой, как у респондента. Ряд рисуется только до
+                  {plan.blocked && page === lastPage ? null : page < lastPage ? (
+                    <button
+                      type="button"
+                      className="rf-submit rf-next"
+                      onClick={() => setPage(page + 1)}
+                    >
+                      {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
+                    </button>
+                  ) : (
+                    // Кнопка отправки ведёт на страницу «Спасибо», если автор её собрал.
+                    // Формы без неё получают экран-заглушку рендерера, и здесь кнопка
+                    // остаётся без обработчика — как и была.
+                    <button
+                      type="button"
+                      className="rf-submit"
+                      onClick={thankYou ? () => setDone(true) : undefined}
+                    >
+                      {label}
+                    </button>
+                  )}
+                </div>
+                {/* Бейдж — в строке с кнопкой, как у респондента. Ряд рисуется только до
                 отправки, поэтому на экране «Спасибо» бейдж стоит ниже сам по себе. */}
-              {badge && <Badge />}
-            </div>
-          )}
-          {/* Линии шагов — тот же компонент и то же место, что у респондента: некликабельны
+                {badge && <Badge />}
+              </div>
+            )}
+            {/* Линии шагов — тот же компонент и то же место, что у респондента: некликабельны
             и здесь (ход назад снят целиком, 2026-08-22) — вид обязан совпадать. Автор
             листает превью только вперёд, ровно как респондент. На экране после отправки
             шагов нет: он не шаг формы. */}
-          {!done && progress && <StepBar pages={pages.length} page={page} />}
-          {badge && done && <Badge />}
+            {!done && progress && <StepBar pages={pages.length} page={page} />}
+            {badge && done && <Badge />}
+          </div>
         </div>
-      </div>
-    </MentionContext.Provider>
+      </MentionContext.Provider>
+    </SlotStubProvider>
   )
 }

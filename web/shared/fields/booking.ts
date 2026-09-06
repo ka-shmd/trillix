@@ -1,4 +1,4 @@
-import { createContext, useContext } from 'react'
+import { createContext, useContext, type ComponentType } from 'react'
 
 // Как вопрос о записи получает свободное время (фаза 27, docs/design/booking.md).
 //
@@ -40,6 +40,24 @@ export const SlotSourceProvider = SlotSourceContext.Provider
 // useSlotSource — источник свободного времени; null там, где живого выбора нет.
 export function useSlotSource(): SlotSource | null {
   return useContext(SlotSourceContext)
+}
+
+// ЗАГЛУШКА ВИДА ДЛЯ КАБИНЕТА. Полотно и превью обязаны показывать вопрос таким, каким
+// его увидит респондент (WYSIWYG), а живого выбора там нет: расписание считает публичная
+// ручка по опубликованной форме. Заглушка приходит контекстом по той же причине, что и
+// источник, — она нужна только кабинету. Втяни её в @fields напрямую, и разметка пикера
+// уехала бы в общий чанк формы вторым экземпляром, мимо ленивой границы (ADR §10).
+//
+// Полотно редактора надевает SlotStub само (у него свой контрол); контекст нужен превью,
+// где вопрос рисует общий реестр полей.
+const SlotStubContext = createContext<ComponentType | null>(null)
+
+export const SlotStubProvider = SlotStubContext.Provider
+
+// useSlotStub — чем рисовать вопрос там, где выбирать нечего, но показать надо всё.
+// null — в рендерере и в печати: там заглушке взяться неоткуда и незачем.
+export function useSlotStub(): ComponentType | null {
+  return useContext(SlotStubContext)
 }
 
 // HOLD_CONFLICT — код, которым источник сообщает «время только что заняли». Строкой, а
