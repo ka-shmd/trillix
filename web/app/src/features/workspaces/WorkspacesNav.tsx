@@ -4,7 +4,6 @@ import { useQuery } from '@tanstack/react-query'
 import { ChevronDown, MoreHorizontal, Plus } from 'lucide-react'
 import type { Workspace } from '../../entities/workspace'
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
-import { MembersDialog } from './MembersDialog'
 import { RenameWorkspaceDialog } from './RenameWorkspaceDialog'
 import { WorkspaceMenu } from './WorkspaceMenu'
 import { workspacesQueryOptions } from './queries'
@@ -125,7 +124,6 @@ function WorkspaceNavItem({
 }) {
   const navigate = useNavigate()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
-  const [membersOpen, setMembersOpen] = useState(false)
   const [renaming, setRenaming] = useState(false)
   // Разделы пространства живут под одним корнем, поэтому строка активна на любом
   // из них, а не только на списке форм.
@@ -147,7 +145,6 @@ function WorkspaceNavItem({
         workspace={workspace}
         align="end"
         onRename={() => setRenaming(true)}
-        onMembers={() => setMembersOpen(true)}
         onDeleted={() => {
           onDeleted()
           // Стояли на странице снесённого пространства — уходим с неё: маршрут
@@ -166,7 +163,6 @@ function WorkspaceNavItem({
         <span className="sr-only">Новая форма в пространстве «{workspace.name}»</span>
       </SidebarMenuAction>
 
-      <MembersDialog workspace={workspace} open={membersOpen} onOpenChange={setMembersOpen} />
       <RenameWorkspaceDialog workspace={workspace} open={renaming} onOpenChange={setRenaming} />
     </SidebarMenuItem>
   )

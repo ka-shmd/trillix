@@ -1,6 +1,5 @@
 import { createFileRoute, Link, Outlet, useMatchRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
 import { Copy, Pencil } from 'lucide-react'
 
 import { type Form, displayFormTitle } from '../../entities/form'
@@ -8,7 +7,6 @@ import { FormActionsMenu } from '../../features/forms/FormActionsMenu'
 import { copyFormLink } from '../../features/forms/copyLink'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { MemberCluster } from '../../features/workspaces/MemberCluster'
-import { MembersDialog } from '../../features/workspaces/MembersDialog'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
 import { useDeclareWorkspace } from '../../shared/workspaceContext'
@@ -81,7 +79,6 @@ function ManageLayout() {
   // ещё едет либо slug чужой) — кластер не рисуем: пустое место честнее, чем кружки
   // не тех людей.
   const workspace = useCurrentWorkspace()
-  const [membersOpen, setMembersOpen] = useState(false)
 
   // Форма не найдена — общий экран на всю группу: рисовать табы над «формы нет»
   // бессмысленно. Свои error-стейты данных у экранов внутри остаются.
@@ -125,7 +122,6 @@ function ManageLayout() {
           {workspace && (
             <MemberCluster
               workspace={workspace}
-              onOpen={() => setMembersOpen(true)}
               className="px-0 hover:bg-transparent dark:hover:bg-transparent"
             />
           )}
@@ -170,12 +166,6 @@ function ManageLayout() {
             </Button>
           )}
         </PageActions>
-
-        {/* Окно состава живёт на странице, а не в портале бара: портал несёт только
-          то, что видно в самом баре. */}
-        {workspace && (
-          <MembersDialog workspace={workspace} open={membersOpen} onOpenChange={setMembersOpen} />
-        )}
 
         <PageHeader
           title={title}

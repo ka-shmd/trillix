@@ -30,6 +30,7 @@ import { Route as AppSettingsAccountRouteImport } from './routes/_app/settings.a
 import { Route as AppWorkspacesWorkspaceSlugIndexRouteImport } from './routes/_app/workspaces.$workspaceSlug.index'
 import { Route as AppWWorkspaceSlugTemplatesRouteImport } from './routes/_app/w.$workspaceSlug.templates'
 import { Route as AppWWorkspaceSlugPlanRouteImport } from './routes/_app/w.$workspaceSlug.plan'
+import { Route as AppWWorkspaceSlugMembersRouteImport } from './routes/_app/w.$workspaceSlug.members'
 import { Route as AppFormsSlugEmbedRouteImport } from './routes/_app/forms.$slug.embed'
 import { Route as AppFormsSlugEditRouteImport } from './routes/_app/forms.$slug.edit'
 import { Route as AppFormsSlugManageRouteImport } from './routes/_app/forms.$slug._manage'
@@ -159,6 +160,12 @@ const AppWWorkspaceSlugPlanRoute = AppWWorkspaceSlugPlanRouteImport.update({
   path: '/w/$workspaceSlug/plan',
   getParentRoute: () => AppRoute,
 } as any)
+const AppWWorkspaceSlugMembersRoute =
+  AppWWorkspaceSlugMembersRouteImport.update({
+    id: '/w/$workspaceSlug/members',
+    path: '/w/$workspaceSlug/members',
+    getParentRoute: () => AppRoute,
+  } as any)
 const AppFormsSlugEmbedRoute = AppFormsSlugEmbedRouteImport.update({
   id: '/forms/$slug/embed',
   path: '/forms/$slug/embed',
@@ -314,6 +321,7 @@ export interface FileRoutesByFullPath {
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
+  '/w/$workspaceSlug/members': typeof AppWWorkspaceSlugMembersRoute
   '/w/$workspaceSlug/plan': typeof AppWWorkspaceSlugPlanRoute
   '/w/$workspaceSlug/templates': typeof AppWWorkspaceSlugTemplatesRoute
   '/workspaces/$workspaceSlug/': typeof AppWorkspacesWorkspaceSlugIndexRoute
@@ -358,6 +366,7 @@ export interface FileRoutesByTo {
   '/forms/$slug': typeof AppFormsSlugManageRouteWithChildren
   '/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
+  '/w/$workspaceSlug/members': typeof AppWWorkspaceSlugMembersRoute
   '/w/$workspaceSlug/plan': typeof AppWWorkspaceSlugPlanRoute
   '/w/$workspaceSlug/templates': typeof AppWWorkspaceSlugTemplatesRoute
   '/workspaces/$workspaceSlug': typeof AppWorkspacesWorkspaceSlugIndexRoute
@@ -403,6 +412,7 @@ export interface FileRoutesById {
   '/_app/forms/$slug/_manage': typeof AppFormsSlugManageRouteWithChildren
   '/_app/forms/$slug/edit': typeof AppFormsSlugEditRoute
   '/_app/forms/$slug/embed': typeof AppFormsSlugEmbedRoute
+  '/_app/w/$workspaceSlug/members': typeof AppWWorkspaceSlugMembersRoute
   '/_app/w/$workspaceSlug/plan': typeof AppWWorkspaceSlugPlanRoute
   '/_app/w/$workspaceSlug/templates': typeof AppWWorkspaceSlugTemplatesRoute
   '/_app/workspaces/$workspaceSlug/': typeof AppWorkspacesWorkspaceSlugIndexRoute
@@ -449,6 +459,7 @@ export interface FileRouteTypes {
     | '/forms/$slug'
     | '/forms/$slug/edit'
     | '/forms/$slug/embed'
+    | '/w/$workspaceSlug/members'
     | '/w/$workspaceSlug/plan'
     | '/w/$workspaceSlug/templates'
     | '/workspaces/$workspaceSlug/'
@@ -493,6 +504,7 @@ export interface FileRouteTypes {
     | '/forms/$slug'
     | '/forms/$slug/edit'
     | '/forms/$slug/embed'
+    | '/w/$workspaceSlug/members'
     | '/w/$workspaceSlug/plan'
     | '/w/$workspaceSlug/templates'
     | '/workspaces/$workspaceSlug'
@@ -537,6 +549,7 @@ export interface FileRouteTypes {
     | '/_app/forms/$slug/_manage'
     | '/_app/forms/$slug/edit'
     | '/_app/forms/$slug/embed'
+    | '/_app/w/$workspaceSlug/members'
     | '/_app/w/$workspaceSlug/plan'
     | '/_app/w/$workspaceSlug/templates'
     | '/_app/workspaces/$workspaceSlug/'
@@ -718,6 +731,13 @@ declare module '@tanstack/react-router' {
       path: '/w/$workspaceSlug/plan'
       fullPath: '/w/$workspaceSlug/plan'
       preLoaderRoute: typeof AppWWorkspaceSlugPlanRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/w/$workspaceSlug/members': {
+      id: '/_app/w/$workspaceSlug/members'
+      path: '/w/$workspaceSlug/members'
+      fullPath: '/w/$workspaceSlug/members'
+      preLoaderRoute: typeof AppWWorkspaceSlugMembersRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/forms/$slug/embed': {
@@ -967,6 +987,7 @@ interface AppRouteChildren {
   AppFormsSlugManageRoute: typeof AppFormsSlugManageRouteWithChildren
   AppFormsSlugEditRoute: typeof AppFormsSlugEditRoute
   AppFormsSlugEmbedRoute: typeof AppFormsSlugEmbedRoute
+  AppWWorkspaceSlugMembersRoute: typeof AppWWorkspaceSlugMembersRoute
   AppWWorkspaceSlugPlanRoute: typeof AppWWorkspaceSlugPlanRoute
   AppWWorkspaceSlugTemplatesRoute: typeof AppWWorkspaceSlugTemplatesRoute
   AppWorkspacesWorkspaceSlugIndexRoute: typeof AppWorkspacesWorkspaceSlugIndexRoute
@@ -986,6 +1007,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppFormsSlugManageRoute: AppFormsSlugManageRouteWithChildren,
   AppFormsSlugEditRoute: AppFormsSlugEditRoute,
   AppFormsSlugEmbedRoute: AppFormsSlugEmbedRoute,
+  AppWWorkspaceSlugMembersRoute: AppWWorkspaceSlugMembersRoute,
   AppWWorkspaceSlugPlanRoute: AppWWorkspaceSlugPlanRoute,
   AppWWorkspaceSlugTemplatesRoute: AppWWorkspaceSlugTemplatesRoute,
   AppWorkspacesWorkspaceSlugIndexRoute: AppWorkspacesWorkspaceSlugIndexRoute,

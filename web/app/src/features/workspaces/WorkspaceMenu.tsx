@@ -30,24 +30,27 @@ import { Label } from '@/components/ui/label'
 // поверхности (строка обзора и строка блока в сайдбаре), чтобы состав пунктов и
 // прятание по правам не разъезжались между ними.
 //
-// Окно удаления живёт ВНУТРИ меню, а состав и переименование — снаружи
-// (`onMembers`, `onRename`). Причина одна на оба: у них есть второй вход. Состав
-// открывает ещё и кластер кружков, переименование на обзоре правится прямо в
-// строке — а два владельца одного состояния дали бы два окна на один состав.
+// В меню только ДЕЙСТВИЯ. Разделы пространства (участники, расписания, тариф)
+// адресуются путём и живут в навигации: пункт меню, ведущий в раздел, и есть та
+// причина, по которой расписания в кабинете было не найти
+// (`docs/design/cabinet-navigation.md` §2). Ссылки ниже — переходные, до переезда
+// навигации в сайдбар.
+//
+// Окно удаления живёт ВНУТРИ меню, а переименование — снаружи (`onRename`): оно
+// правится прямо в строке обзора, и два владельца одного состояния дали бы две
+// формы на одно имя.
 //
 // `onDeleted` зовётся после успешного удаления: формы снесённого пространства
 // ушли вместе с ним, но ключи форм принадлежат чужой фиче — чистит их вызывающий.
 export function WorkspaceMenu({
   workspace,
   onRename,
-  onMembers,
   onDeleted,
   trigger,
   align = 'start',
 }: {
   workspace: Workspace
   onRename: () => void
-  onMembers: () => void
   onDeleted?: () => void
   // trigger — своя кнопка вместо стандартной: в сайдбаре ей нужен вид
   // SidebarMenuAction, а не ghost-кнопки строки обзора.
@@ -88,13 +91,12 @@ export function WorkspaceMenu({
               Переименовать
             </DropdownMenuItem>
           )}
-          <DropdownMenuItem onClick={onMembers}>
-            <Users className="size-4" />
-            Участники
+          <DropdownMenuItem asChild>
+            <Link to="/w/$workspaceSlug/members" params={{ workspaceSlug: workspace.slug }}>
+              <Users className="size-4" />
+              Участники
+            </Link>
           </DropdownMenuItem>
-          {/* Расписания записи принадлежат ПРОСТРАНСТВУ, поэтому и вход к ним —
-              отсюда, а не из верхнего яруса сайдбара (отчёт владельца 2026-09-03:
-              пункт без пространства в адресе молча заводил расписания в личное). */}
           <DropdownMenuItem asChild>
             <Link to="/w/$workspaceSlug/schedules" params={{ workspaceSlug: workspace.slug }}>
               <CalendarClock className="size-4" />
