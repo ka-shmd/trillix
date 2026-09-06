@@ -491,3 +491,44 @@ describe('прилипание не предлагает того, что сер
     }
   })
 })
+
+// Исключение перебивает день целиком, поэтому разовое окно утаскивает в исключение и
+// обычные часы этого дня. Красить их обоих как «только в этот день» — врать: первое
+// автор не трогал (отчёт владельца 2026-09-05).
+describe('источник окна считается по окну, а не по дню', () => {
+  const wednesdayRule: Availability = {
+    weekly: { wed: [{ from: '10:00', to: '14:00' }] },
+    exceptions: [],
+  }
+  // 16 сентября 2026 — среда.
+  const wed = '2026-09-16'
+
+  it('разовое окно особое, а обычные часы того же дня — нет', () => {
+    const next = applyGesture(
+      wednesdayRule,
+      { kind: 'create', dates: [wed], window: { from: '16:00', to: '18:00' } },
+      'date',
+    )
+    // Документ при этом честно держит оба окна в исключении: день перебит целиком.
+    expect(next.exceptions[0]!.windows).toHaveLength(2)
+
+    const spans = spansIn(next, [wed])
+    expect(spans.map((s) => `${s.window.from} ${s.source}`)).toEqual([
+      '10:00 weekly',
+      '16:00 exception',
+    ])
+  })
+
+  it('изменённые часы того же дня остаются особыми', () => {
+    const shifted: Availability = {
+      ...wednesdayRule,
+      exceptions: [{ date: wed, windows: [{ from: '11:00', to: '14:00' }] }],
+    }
+    // Час начала сдвинут — в правиле такого окна нет, и особым оно быть обязано.
+    expect(spansIn(shifted, [wed]).map((s) => s.source)).toEqual(['exception'])
+  })
+
+  it('день без исключения красится правилом целиком', () => {
+    expect(spansIn(wednesdayRule, [wed]).map((s) => s.source)).toEqual(['weekly'])
+  })
+})

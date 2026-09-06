@@ -71,13 +71,32 @@ export function effectiveWindows(
 }
 
 // spansIn — часы приёма на перечисленных датах, готовые к отрисовке.
+//
+// ⚠ ИСТОЧНИК СЧИТАЕТСЯ ПО ОКНУ, А НЕ ПО ДНЮ. Исключение перебивает день ЦЕЛИКОМ
+// (иначе «в этот день принимаю только два часа» невыразимо), поэтому добавленное на
+// одну дату окно утаскивает в исключение и обычные часы этого дня: правило среды
+// 10:00–14:00 плюс разовое 16:00–18:00 дают исключение из ДВУХ окон. Красить их обоих
+// как «только в этот день» — врать: первое автор не трогал, оно ровно то же, что
+// каждую среду (отчёт владельца 2026-09-05).
+//
+// Поэтому окно исключения, СОВПАДАЮЩЕЕ с окном недельного правила этого дня недели,
+// красится правилом, и особым остаётся только то, чего в правиле нет.
+//
+// Цена названа вслух: такое окно всё-таки заморожено — поменяется правило среды, и
+// эта дата за ним не последует. Что день выпал из правила, говорит метка в его шапке
+// (`sc-day-special`); цвет отвечает на другой вопрос — какой ИМЕННО отрезок здесь
+// необычный.
 export function spansIn(a: Availability, dates: string[]): AvailabilitySpan[] {
   const out: AvailabilitySpan[] = []
   for (const date of dates) {
     const { windows, source } = effectiveWindows(a, date)
+    const rule = source === 'exception' ? (a.weekly[weekdayOf(date)] ?? []) : []
     for (const window of windows) {
       const span = toSpan(date, window)
-      if (span) out.push({ date, window, source, ...span })
+      if (!span) continue
+      const asRule =
+        source === 'weekly' || rule.some((w) => w.from === window.from && w.to === window.to)
+      out.push({ date, window, source: asRule ? 'weekly' : 'exception', ...span })
     }
   }
   return out
