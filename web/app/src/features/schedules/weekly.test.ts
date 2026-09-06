@@ -3,7 +3,6 @@ import { describe, expect, it } from 'vitest'
 import { DEFAULT_SCHEDULE } from '../../entities/schedule'
 import { clampSeats, clockToMinutes, weekSummary, windowsError } from './weekly'
 
-
 describe('проверка правила — зеркало сервера', () => {
   it.each([
     ['вывернутое окно', [{ from: '18:00', to: '10:00' }], 'Конец окна должен быть позже начала'],

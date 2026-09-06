@@ -50,15 +50,14 @@ export function minutesToClock(minutes: number): string {
   return `${String(h).padStart(2, '0')}:${String(m).padStart(2, '0')}`
 }
 
-// weekSummary — правило одной строкой для списка расписаний: «пн–пт, 10:00–18:00».
-//
-// Подряд идущие дни с ОДИНАКОВЫМИ окнами сворачиваются в диапазон: список из семи
-// строк на карточке нечитаем, а «пн, вт, ср, чт, пт» вместо «пн–пт» — тот же список,
-// только длиннее.
 function dayWindows(a: Availability, day: Weekday): TimeWindow[] {
   return a.weekly[day] ?? []
 }
 
+// weekSummary — правило одной строкой для списка расписаний: «пн–пт, 10:00–18:00».
+//
+// Подряд идущие дни с ОДИНАКОВЫМИ окнами сворачиваются в диапазон: «пн, вт, ср, чт,
+// пт» — тот же список, только длиннее.
 export function weekSummary(a: Availability): string {
   const groups: { days: Weekday[]; hours: string }[] = []
   for (const day of WEEKDAYS) {
@@ -78,8 +77,7 @@ export function weekSummary(a: Availability): string {
     .map((g) => {
       const from = WEEKDAY_SHORT[g.days[0]!]
       const to = WEEKDAY_SHORT[g.days[g.days.length - 1]!]
-      const days = g.days.length === 1 ? from : `${from}–${to}`
-      return `${days}, ${g.hours}`
+      return `${g.days.length === 1 ? from : `${from}–${to}`}, ${g.hours}`
     })
     .join(' · ')
 }

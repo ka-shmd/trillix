@@ -423,3 +423,59 @@ func coveredByBlock(start, end time.Time, blocks []Busy) bool {
 	}
 	return false
 }
+
+// MoveAligned — годится ли эта точка старта для переноса брони автором.
+//
+// Защищает счёт занятости: он считается по РАВЕНСТВУ точки старта (queries.sql,
+// TakenSeatsAt*), поэтому бронь мимо сетки не встретится в счёте ни с чем, и в
+// соседний слот при вместимости 1 сядет второй человек.
+//
+// Часы приёма, упреждение и горизонт не проверяются: автор вправе поставить человека
+// и вне приёма (ADR §10). Точка годится, если верно одно из двух:
+//
+//   - внутри окна приёма — отстоит от его начала на целое число шагов;
+//   - вне всех окон — её минута от полуночи кратна шагу.
+func MoveAligned(s Schedule, at time.Time) bool {
+	loc, err := LoadScheduleLocation(s.Timezone)
+	if err != nil {
+		return false
+	}
+	step := s.SlotMinutes + s.BufferMinutes
+	if step <= 0 {
+		return false
+	}
+	local := at.In(loc)
+	if local.Second() != 0 || local.Nanosecond() != 0 {
+		return false
+	}
+	minutes := local.Hour()*60 + local.Minute()
+
+	date := time.Date(local.Year(), local.Month(), local.Day(), 0, 0, 0, 0, loc)
+	inWindow := false
+	for _, w := range windowsForDate(s.Availability, date) {
+		from, err := parseClock(w.From)
+		if err != nil {
+			continue
+		}
+		to, err := parseClock(w.To)
+		if err != nil {
+			continue
+		}
+		if minutes < from || minutes >= to {
+			// Продолжение сетки ЗА конец окна не годится: 13:30 при окне 10:00–13:00
+			// и шаге 70 кратно шагу от начала, но накрыло бы слот 14:00.
+			continue
+		}
+		inWindow = true
+		if (minutes-from)%step == 0 {
+			return true
+		}
+	}
+	// Внутри окна кратность шагу от полуночи не годится: у окна своя сетка. При окне
+	// с 10:00 и шаге 70 слоты идут 10:00 и 11:10, а 11:40 кратно 70 — попало бы в час
+	// приёма мимо всех слотов.
+	if inWindow {
+		return false
+	}
+	return minutes%step == 0
+}

@@ -71,13 +71,25 @@ export function effectiveWindows(
 }
 
 // spansIn — часы приёма на перечисленных датах, готовые к отрисовке.
+//
+// Источник считается по окну, а не по дню. Исключение перебивает день целиком,
+// поэтому разовое окно утаскивает в исключение и обычные часы того же дня: правило
+// среды 10:00–14:00 плюс разовое 16:00–18:00 дают исключение из двух окон. Особым
+// красится только то, чего нет в недельном правиле.
+//
+// Такое окно всё-таки заморожено: правило среды изменится, а эта дата за ним не
+// последует. Что день выпал из правила, говорит метка в его шапке (`sc-day-special`).
 export function spansIn(a: Availability, dates: string[]): AvailabilitySpan[] {
   const out: AvailabilitySpan[] = []
   for (const date of dates) {
     const { windows, source } = effectiveWindows(a, date)
+    const rule = source === 'exception' ? (a.weekly[weekdayOf(date)] ?? []) : []
     for (const window of windows) {
       const span = toSpan(date, window)
-      if (span) out.push({ date, window, source, ...span })
+      if (!span) continue
+      const asRule =
+        source === 'weekly' || rule.some((w) => w.from === window.from && w.to === window.to)
+      out.push({ date, window, source: asRule ? 'weekly' : 'exception', ...span })
     }
   }
   return out
@@ -142,7 +154,7 @@ export const WEEKDAY_EVERY: Record<Weekday, string> = {
 // «вторник с 10:00 до полуночи, среда целиком, четверг до 14:00». Для правила приёма
 // это бессмыслица — правило описывает ЧАСЫ, а не одну длинную смену. Автор,
 // протянувший мышь на соседнюю колонку, ждёт те же часы на каждом задетом дне
-// (отчёт владельца 2026-09-04), и здесь отрезок пересчитывается в прямоугольник.
+//, и здесь отрезок пересчитывается в прямоугольник.
 //
 // null — выделение нулевой высоты (протяжка вбок ровно по горизонтали): создавать
 // нечего.
@@ -239,4 +251,47 @@ export function shiftDate(date: string, days: number): string {
   const [y, m, d] = date.split('-').map(Number)
   const at = Date.UTC(y ?? 1970, (m ?? 1) - 1, d ?? 1) + days * 86_400_000
   return new Date(at).toISOString().slice(0, 10)
+}
+
+// AXIS — границы оси полотна: целые сутки. Ими же меряется прямоугольник подсказки
+// (bandBox), поэтому значение одно на файл.
+export const AXIS = { min: '00:00', max: '24:00' }
+
+// scrollStart — на каком часе открыть сетку: за час до самого раннего окна приёма.
+// Сутки видны целиком, но начинать разглядывать их с полуночи незачем — приёма там
+// нет ни у кого. Час запаса не красота: без него окно приёма прижато к верхнему краю,
+// и протянуть новое перед ним некуда.
+//
+// Считается по САМОМУ ПРАВИЛУ, а не по занятому времени: занятость приезжает
+// отдельным запросом, и полотно прыгало бы после её загрузки.
+export function scrollStart(a: Availability): string {
+  const clocks: number[] = []
+  for (const day of Object.values(a.weekly)) {
+    for (const w of day ?? []) {
+      const from = clockToMinutes(w.from)
+      if (from !== null) clocks.push(from)
+    }
+  }
+  for (const ex of a.exceptions) {
+    for (const w of ex.windows) {
+      const from = clockToMinutes(w.from)
+      if (from !== null) clocks.push(from)
+    }
+  }
+  // Пустое расписание открывается на утре рабочего дня, а не в полночь: полотно, на
+  // котором ещё ничего нет, должно открываться там, где приём заводят.
+  const min = clocks.length > 0 ? Math.min(...clocks) : 9 * 60
+  return minutesToClock(Math.max(0, Math.floor((min - 60) / 60) * 60))
+}
+
+// dateByNumber — какая из показанных дат стоит в колонке с этим числом.
+//
+// Обходит двойное прочтение библиотечного Date: в именованном поясе он бывает и
+// моментом начала суток, и «маркером», у которого UTC-поля хранят местное время.
+// Прочтения расходятся на сутки при отрицательном смещении пояса, и меню дня
+// подействовало бы на соседний. Число месяца в отрезке не длиннее недели однозначно.
+export function dateByNumber(dates: string[], dayNumberText: string): string | undefined {
+  const n = Number(dayNumberText)
+  if (!Number.isInteger(n)) return undefined
+  return dates.find((d) => Number(d.slice(8, 10)) === n)
 }

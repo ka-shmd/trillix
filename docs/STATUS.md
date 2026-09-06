@@ -62,7 +62,7 @@ Postgres), замером сборки и зелёным CI на PR. ⚠ **Де�
   `forms`, `geo`, `httpserver`, `integrations`, `mail`, `media`, `oauth`, `periodic`,
   `pgtest`, `postgres`, `printer`, `ratelimit`, `submissions`, `token`, `visits`,
   `workspaces`).
-- **PostgreSQL 16** — 51 миграция (`0001`…`0051_booking_quota`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
+- **PostgreSQL 16** — 52 миграции (`0001`…`0052_booking_revision`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui; графики аналитики —
   recharts за ленивой загрузкой, в общий чанк не входят.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 60 КиБ gzip** (сейчас

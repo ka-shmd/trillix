@@ -300,15 +300,21 @@ func (Repo) BookingsInRange(ctx context.Context, db postgres.DBTX, scheduleID uu
 	return out, nil
 }
 
-func (Repo) CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int64, error) {
-	n, err := postgres.New(db).CancelBookingByAuthor(ctx, postgres.CancelBookingByAuthorParams{
+// CancelBooking отменяет запись из кабинета и возвращает НОМЕР РЕДАКЦИИ отменённой
+// строки. pgx.ErrNoRows означает «нет такой записи или уже отменена» — вызывающий
+// различает это сам.
+func (Repo) CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int, error) {
+	rev, err := postgres.New(db).CancelBookingByAuthor(ctx, postgres.CancelBookingByAuthorParams{
 		ID:         id,
 		ScheduleID: scheduleID,
 	})
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, err
+		}
 		return 0, fmt.Errorf("cancel booking %s: %w", id, err)
 	}
-	return n, nil
+	return int(rev), nil
 }
 
 // scheduleFrom — строка БД в доменное расписание. Документ правила разбирается
@@ -490,6 +496,59 @@ type BookingCard struct {
 }
 
 // BookingForCancel — карточка записи для страницы отмены.
+// BookingMove — бронь перед переносом: что двигаем и сколько мест это займёт.
+type BookingMove struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    *uuid.UUID
+	StartsAt        time.Time
+	DurationMinutes int
+	Seats           int
+}
+
+func (Repo) BookingForMove(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (BookingMove, error) {
+	row, err := postgres.New(db).BookingForMove(ctx, postgres.BookingForMoveParams{ID: id, ScheduleID: scheduleID})
+	if err != nil {
+		return BookingMove{}, err
+	}
+	move := BookingMove{
+		ID:              row.ID,
+		FormID:          row.FormID,
+		StartsAt:        row.StartsAt.Time.UTC(),
+		DurationMinutes: int(row.DurationMinutes),
+		Seats:           int(row.Seats),
+	}
+	if row.SubmissionID.Valid {
+		id := uuid.UUID(row.SubmissionID.Bytes)
+		move.SubmissionID = &id
+	}
+	return move, nil
+}
+
+// TakenAtExcept — занятость точки без учёта самой переносимой брони.
+func (Repo) TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, bookingID uuid.UUID) (int, error) {
+	n, err := postgres.New(db).TakenSeatsAtExcept(ctx, postgres.TakenSeatsAtExceptParams{
+		ScheduleID: scheduleID,
+		StartsAt:   pgtype.Timestamptz{Time: startsAt, Valid: true},
+		ID:         bookingID,
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int(n), nil
+}
+
+// MoveBooking двигает бронь и возвращает НОВЫЙ номер редакции — тот, с которым уедет
+// приглашение. pgx.ErrNoRows — строку между чтением и правкой отменили.
+func (Repo) MoveBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID, startsAt time.Time) (int, error) {
+	rev, err := postgres.New(db).MoveBooking(ctx, postgres.MoveBookingParams{
+		ID:         id,
+		ScheduleID: scheduleID,
+		StartsAt:   pgtype.Timestamptz{Time: startsAt, Valid: true},
+	})
+	return int(rev), err
+}
+
 func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error) {
 	row, err := postgres.New(db).GetBookingForCancel(ctx, id)
 	if err != nil {
@@ -513,12 +572,15 @@ func (Repo) BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID
 }
 
 // CancelByID отменяет запись по ссылке из письма. Право предъявил токен.
-func (Repo) CancelByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int64, error) {
-	n, err := postgres.New(db).CancelBookingByID(ctx, id)
+func (Repo) CancelByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int, error) {
+	rev, err := postgres.New(db).CancelBookingByID(ctx, id)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return 0, err
+		}
 		return 0, fmt.Errorf("cancel booking %s: %w", id, err)
 	}
-	return n, nil
+	return int(rev), nil
 }
 
 // PurgeExpiredHolds убирает протухшие холды старше before. Место они не держат и так

@@ -493,6 +493,30 @@ if ! cmp -s web/app/public/og-preview.png web/renderer/public/og-preview.png; th
 fi
 ok_if_clean "картинка карточки ссылки по умолчанию одинакова в обоих фронтах"
 
+# --- 10. Тона форм на полотне расписания: класс ↔ правило --------------------
+# Цвет записи собирается ИМЕНЕМ КЛАССА (`sc-tone-N`, eventClass.ts), а рисуется
+# правилом в canvas.css. Между ними нет ничего: класс без правила компилируется,
+# проходит линт и молча даёт белую карточку — ровно так тона и пропали, а заметил
+# это владелец глазами. Юнит-тест сторожит только половину пары: css-импорт vitest
+# не обрабатывает, а `node:fs` валит `tsc -b` (типов Node в кабинете нет).
+# Мутация: переименуй `.sc-tone-8` в canvas.css → краснеет.
+begin
+tones_css=web/app/src/features/schedules/canvas.css
+tones_ts=web/app/src/features/schedules/formColor.ts
+tones_want=$(grep -oP '^const TONES = \K\d+' "$tones_ts" || true)
+tones_got=$(grep -c '^\.sc-canvas \.sc-tone-[0-9]* {' "$tones_css" || true)
+if [ -z "$tones_want" ]; then
+	err "formColor.ts: не найдено «const TONES = N» — сверять правила тонов не с чем" "$tones_ts"
+elif [ "$tones_want" != "$tones_got" ]; then
+	err "canvas.css: правил .sc-tone-* — $tones_got, а тонов формы $tones_want" \
+		"класс без правила рисует белую карточку, правило без класса — мёртвые строки"
+fi
+if ! grep -q 'sc-tone-\${' web/app/src/features/schedules/eventClass.ts; then
+	err "eventClass.ts: класс записи собирается без префикса sc-tone-" \
+		"голый номер тона ни с одним правилом не совпадёт — карточка выйдет белой"
+fi
+ok_if_clean "тона форм на полотне: класс собирается и правило для него есть"
+
 echo
 if [ $fail -ne 0 ]; then
 	echo "Проверка документов НЕ пройдена — почини расхождение и повтори."

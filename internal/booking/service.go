@@ -44,9 +44,16 @@ type Store interface {
 	DeleteBlock(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int64, error)
 	UpcomingBookings(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from time.Time, limit int32) ([]Booking, error)
 	BookingsInRange(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time) ([]Booking, error)
-	CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int64, error)
+	// CancelBooking возвращает номер редакции отменённой строки; pgx.ErrNoRows —
+	// «нет такой записи или уже отменена».
+	CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int, error)
 	// BookingForCancel — карточка записи: письму об отмене нужны время и ответ.
 	BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error)
+	// Перенос записи: лок, счёт, правка — как у публичного холда.
+	BookingForMove(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (BookingMove, error)
+	LockSlot(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time) error
+	TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, bookingID uuid.UUID) (int, error)
+	MoveBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID, startsAt time.Time) (int, error)
 }
 
 var _ Store = Repo{}
@@ -66,20 +73,22 @@ const BlocksHorizonDays = 365
 
 // Service — расписания записи: кабинетная половина фазы 27.
 type Service struct {
-	db     postgres.DBTX
+	db postgres.DBTX
+	// tx — перенос записи: лок, счёт мест и правка одной транзакцией.
+	tx     TxRunner
 	repo   Store
 	access Access
 	plans  Plans
-	// notifier — письмо об отмене записи (фаза 27, слайс I).
-	notifier CancelNotifier
+	// notifier — письма кабинета о чужой встрече: отмена и перенос.
+	notifier BookingNotifier
 	// now — часы сервиса. Инжектируются, потому что стоп-кран удаления и список
 	// ближайших записей отвечают «начиная с сейчас», и в тестах это «сейчас»
 	// должно быть управляемым.
 	now func() time.Time
 }
 
-func NewService(db postgres.DBTX, repo Store, access Access, plans Plans) *Service {
-	return &Service{db: db, repo: repo, access: access, plans: plans, now: time.Now}
+func NewService(db postgres.DBTX, tx TxRunner, repo Store, access Access, plans Plans) *Service {
+	return &Service{db: db, tx: tx, repo: repo, access: access, plans: plans, now: time.Now}
 }
 
 // WithClock подменяет часы сервиса (тесты).
@@ -88,9 +97,9 @@ func (s *Service) WithClock(now func() time.Time) *Service {
 	return s
 }
 
-// WithNotifier подключает письмо об отмене записи из кабинета. Без него отмена
-// молчалива: место возвращается, а записавшийся об этом не узнаёт.
-func (s *Service) WithNotifier(n CancelNotifier) *Service {
+// WithNotifier подключает письма кабинета. Без него отмена и перенос молчаливы:
+// место переезжает, а записавшийся об этом не узнаёт.
+func (s *Service) WithNotifier(n BookingNotifier) *Service {
 	s.notifier = n
 	return s
 }
@@ -307,21 +316,99 @@ func (s *Service) CancelBooking(ctx context.Context, userID, scheduleID, booking
 	// Карточка читается ДО отмены: письму нужны время, длительность и ответ, а после
 	// отмены статус уже другой, и отличить «отменил я» от «было отменено» нечем.
 	card, cardErr := s.repo.BookingForCancel(ctx, s.db, bookingID)
-	n, err := s.repo.CancelBooking(ctx, s.db, bookingID, scheduleID)
+	// Номер редакции — у самой отмены: между чтением карточки выше и этим UPDATE
+	// запись могли перенести.
+	revision, err := s.repo.CancelBooking(ctx, s.db, bookingID, scheduleID)
 	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// «Нет такой записи» и «уже отменена» для клиента одно: в обоих случаях
+			// делать больше нечего, а второй ответ раскрывал бы существование чужих
+			// записей перебором.
+			return domain.ErrNotFound
+		}
 		return err
 	}
-	if n > 0 && cardErr == nil && s.notifier != nil && card.SubmissionID != nil {
+	if cardErr == nil && s.notifier != nil && card.SubmissionID != nil {
 		// Best-effort, как и всё остальное вокруг отмены: сбой почты уже
 		// освобождённое место не занимает.
 		s.notifier.NotifyBookingCanceled(ctx, card.FormID, *card.SubmissionID, bookingID,
-			card.StartsAt, card.DurationMinutes, card.Timezone)
+			card.StartsAt, card.DurationMinutes, revision+1, card.Timezone)
 	}
-	if n == 0 {
-		// Ноль строк — это и «нет такой записи», и «уже отменена». Для клиента
-		// различать их незачем: в обоих случаях действие делать больше нечего,
-		// а второй ответ раскрывал бы существование чужих записей перебором.
-		return domain.ErrNotFound
+	return nil
+}
+
+// MoveBooking — перенос записи автором на другое время.
+//
+// Ограничений два (ADR §10): вместимость слота и шаг сетки. Часы приёма, упреждение и
+// горизонт не спрашиваются — автор вправе поставить человека и вне приёма. Шаг сетки
+// обязателен: занятость считается по РАВЕНСТВУ точки старта, и съехавшая бронь не
+// встретится в счёте ни с чем.
+//
+// Гонка закрывается тем же, что у публичного холда: advisory-lock по паре «расписание
+// + начало слота», счёт под локом, правка одной транзакцией.
+func (s *Service) MoveBooking(
+	ctx context.Context, userID, scheduleID, bookingID uuid.UUID, startsAt time.Time,
+) error {
+	sch, err := s.forAction(ctx, userID, scheduleID, domain.ActionFormWrite)
+	if err != nil {
+		return err
+	}
+	if s.tx == nil {
+		return fmt.Errorf("booking: перенос без транзакции")
+	}
+	if !domain.MoveAligned(sch.Schedule, startsAt) {
+		return fmt.Errorf("%w: это время не совпадает с шагом сетки расписания", domain.ErrValidation)
+	}
+	// Карточка читается ДО правки: письму нужны длительность и ответ, а после неё
+	// прежнее время уже не спросить.
+	card, err := s.repo.BookingForMove(ctx, s.db, bookingID, scheduleID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Отменённая и чужая неотличимы от несуществующей — тем же доводом, что
+			// и у отмены: второй ответ раскрывал бы чужие записи перебором.
+			return domain.ErrNotFound
+		}
+		return err
+	}
+	if card.StartsAt.Equal(startsAt) {
+		return fmt.Errorf("%w: запись уже стоит на это время", domain.ErrValidation)
+	}
+
+	// Номер редакции для приглашения. Присваивается тем же UPDATE, что двигает строку:
+	// два переноса одной брони в разные слоты берут разные локи и друг друга не ждут,
+	// поэтому прочитанный заранее номер у них совпал бы.
+	revision := 0
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.LockSlot(ctx, tx, scheduleID, startsAt); err != nil {
+			return err
+		}
+		// Счёт под локом и без самой переносимой брони: она уже лежит в таблице.
+		taken, err := s.repo.TakenAtExcept(ctx, tx, scheduleID, startsAt, bookingID)
+		if err != nil {
+			return err
+		}
+		if taken+card.Seats > sch.Capacity {
+			return errSlotTaken(sch.Capacity - taken)
+		}
+		rev, err := s.repo.MoveBooking(ctx, tx, bookingID, scheduleID, startsAt)
+		if err != nil {
+			if errors.Is(err, pgx.ErrNoRows) {
+				// Между чтением карточки и правкой запись отменили.
+				return domain.ErrNotFound
+			}
+			return err
+		}
+		revision = rev
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if s.notifier != nil && card.SubmissionID != nil {
+		// Best-effort: сбой почты состоявшийся перенос не откатывает.
+		s.notifier.NotifyBookingRescheduled(ctx, card.FormID, *card.SubmissionID, bookingID,
+			card.StartsAt, startsAt, card.DurationMinutes, revision, sch.Timezone)
 	}
 	return nil
 }

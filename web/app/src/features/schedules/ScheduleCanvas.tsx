@@ -31,20 +31,38 @@ import { Button } from '@/components/ui/button'
 import { humanError } from '../../shared/api/errors'
 import { LOCALE } from '../../shared/format'
 import {
+  AXIS,
+  bandBox,
   clockOfNaive,
+  dateByNumber,
   dateKeys,
   dateOfNaive,
-  bandBox,
   effectiveWindows,
+  scrollStart,
   selectionRect,
   shiftDate,
   spansIn,
   weekStart,
   type AvailabilitySpan,
 } from './canvas'
-import { applyGesture, docError, SNAP_MINUTES, type Gesture, type Scope } from './canvasEdit'
+import {
+  applyGesture,
+  closeDay,
+  dayState,
+  docError,
+  resetDay,
+  snapToGrid,
+  SNAP_MINUTES,
+  type Gesture,
+  type Scope,
+} from './canvasEdit'
 import { clockToMinutes, minutesToClock } from './weekly'
-import { CanvasPopover, type Anchor, type DrawStep } from './CanvasPopover'
+import { MoveBookingDialog } from './MoveBookingDialog'
+import { CanvasPopover, type Anchor } from './CanvasPopover'
+import { DayHeader } from './DayHeader'
+import { DrawDialog, type DrawRequest } from './DrawDialog'
+import { eventClass, type EventProps } from './eventClass'
+import { WindowPopover, type WindowAnchor } from './WindowPopover'
 import { zonedParts, zonedToUTC } from './zone'
 
 // Полотно недели: часы приёма, исключения, занятое время и записи одним экраном.
@@ -61,8 +79,7 @@ export function ScheduleCanvas({
   schedule,
   goToDate,
   onRange,
-  onOpenSubmission,
-  onCancelBooking,
+  onOpenBooking,
 }: {
   schedule: Schedule
   // goToDate — дата, выбранная снаружи (мини-календарь слева, строка ближайшей
@@ -72,13 +89,10 @@ export function ScheduleCanvas({
   // onRange — какой отрезок сейчас показан. Нужен мини-календарю, чтобы подсветить
   // видимые дни: без этого две половины экрана живут каждая своей неделей.
   onRange?: (dates: string[]) => void
-  // Окно ответа рисует страница: компонент окна живёт в фиче ответов, а импорт фичи
-  // из фичи запрещён. Полотно только сообщает, что нажали.
-  onOpenSubmission: (booking: Booking) => void
-  // Отмена тоже спрашивается СТРАНИЦЕЙ: тот же диалог открывается из списка
-  // ближайших записей слева, и два его экземпляра — это два разных обещания на одно
-  // действие.
-  onCancelBooking: (booking: Booking) => void
+  // Карточку записи рисует СТРАНИЦА: ей нужны почта из ответа и схема формы, а это
+  // чужие фичи — импорт фичи из фичи запрещён (web/CLAUDE.md). Полотно только
+  // сообщает наверх, на какую запись нажали.
+  onOpenBooking: (booking: Booking) => void
 }) {
   const controller = useCalendarController()
   // Видимая неделя нужна ЭКРАНУ (от неё зависит запрос за занятым временем), но
@@ -93,9 +107,16 @@ export function ScheduleCanvas({
     narrowScreen() ? 'timeGridDay' : 'timeGridWeek',
   )
   const [anchor, setAnchor] = useState<Anchor | null>(null)
+  // Окно приёма спрашивается своим попапом: у него один вопрос (убрать — и в каком
+  // объёме), и разворачивать ради него диалог незачем.
+  const [windowAnchor, setWindowAnchor] = useState<WindowAnchor | null>(null)
   const [error, setError] = useState<string | null>(null)
-  // Документ ДО жеста: чип переключает область действия пересчётом от него.
-  const beforeGesture = useRef<Schedule | null>(null)
+  // Что выделено протяжкой, пока окно спрашивает. До ответа документ не меняется.
+  const [draw, setDraw] = useState<DrawRequest | null>(null)
+  // Перенос ждёт подтверждения: карточка в полотне уже переехала, а в базе нет.
+  // `revert` возвращает её на место, если автор откажется.
+  const [moving, setMoving] = useState<{ booking: Booking; startsAt: string } | null>(null)
+  const revertMove = useRef<(() => void) | null>(null)
   // Контейнер нужен ИМПЕРАТИВНО: подсказка перерисовывается на каждое движение мыши,
   // и гонять через состояние React перерисовку всего полотна на каждый кадр —
   // заведомо рвано.
@@ -157,69 +178,48 @@ export function ScheduleCanvas({
   // saveAvailability — правка правила уходит на сервер СРАЗУ: полотно живёт по
   // законам календаря, а не формы с кнопкой «Сохранить». Параметры записи ниже по
   // странице сохраняются по-прежнему своей кнопкой — они не жест, а настройка.
-  function saveAvailability(next: Schedule, onDone?: () => void) {
-    const bad = docError(next.availability)
+  function saveAvailability(next: Availability) {
+    const bad = docError(next)
     if (bad) {
       setError(bad)
       return
     }
     setError(null)
-    update.mutate(toInput(next), {
-      onError: (e) => setError(humanError(e)),
-      onSuccess: () => onDone?.(),
-    })
+    update.mutate(toInput(schedule, next), { onError: (e) => setError(humanError(e)) })
   }
 
-  // runGesture — жест ПЕРЕТАСКИВАНИЯ: применить областью по умолчанию и предложить
-  // вторую чипом. Умолчание — «каждый вторник»: правило описывает обычную неделю, и
-  // чаще правят именно его; исключение — это «в этот раз иначе», случай более редкий.
-  //
-  // ⚠ У ПРОТЯЖКИ ПО ПУСТОМУ МЕСТУ УМОЛЧАНИЯ НЕТ ВОВСЕ (см. select ниже). Разница не в
-  // осторожности, а в том, что там неизвестен сам слой: перетаскивая окно приёма,
-  // автор двигает уже названное время, и угадывать нечего.
-  function runGesture(gesture: Gesture, at: { x: number; y: number }, dates: string[]) {
-    beforeGesture.current = schedule
-    const next = withAvailability(schedule, applyGesture(schedule.availability, gesture, 'weekly'))
-    saveAvailability(next)
-    setAnchor({ kind: 'scope', x: at.x, y: at.y, dates, gesture, scope: 'weekly' })
+  function apply(gesture: Gesture, scope: Scope) {
+    saveAvailability(applyGesture(schedule.availability, gesture, scope))
   }
 
-  // closePopover — закрыть попап И снять выделение. Одной функцией, потому что это
-  // один момент: пока попап открыт, подсказка показывает, о чём его спрашивают.
+  // Закрыть спрашивающее И снять выделение: пока вопрос открыт, подсказка на полотне
+  // показывает, о чём спрашивают.
   function closePopover() {
     calendarRef.current?.unselect()
     clearBand()
     setAnchor(null)
   }
 
-  // switchScope — пересчёт ОТ ИСХОДНОГО документа, а не отмена применённого: щёлкать
-  // чип можно сколько угодно, состояние не накапливается. Это же и ПЕРВОЕ применение
-  // свежей протяжки: до ответа на чип её в документе нет, и «переключить» с пустого
-  // места — та же самая операция.
-  function switchScope(gesture: Gesture, scope: Scope) {
-    const before = beforeGesture.current ?? schedule
-    saveAvailability(withAvailability(before, applyGesture(before.availability, gesture, scope)))
-    setAnchor((a) => (a && (a.kind === 'scope' || a.kind === 'draw') ? { ...a, scope } : a))
+  function closeDraw() {
+    calendarRef.current?.unselect()
+    clearBand()
+    setDraw(null)
   }
 
-  // closeTime — второй ответ на «что это за время»: размечена не работа, а занятость.
-  // Правило не трогается вовсе — восстанавливать нечего, потому что до ответа жест не
-  // применялся.
-  function closeTime(gesture: Extract<Gesture, { kind: 'create' }>) {
-    // По блокировке на каждый задетый день: занятое время — точки на оси, и одной
-    // строкой «со вторника по четверг» они не выражаются (иначе закрытой оказалась бы
-    // и ночь между днями).
-    for (const date of gesture.dates) {
+  function closeTime(rect: DrawRequest, note: string) {
+    // По блокировке на каждый задетый день: занятость — точки на оси, и одной строкой
+    // «со вторника по четверг» она не выражается (закрытой стала бы и ночь между
+    // днями).
+    for (const date of rect.dates) {
       addBlock.mutate(
         {
-          startsAt: zonedToUTC(date, gesture.window.from, schedule.timezone),
-          endsAt: zonedToUTC(date, endClock(gesture.window.to), schedule.timezone),
-          note: '',
+          startsAt: zonedToUTC(date, rect.window.from, schedule.timezone),
+          endsAt: zonedToUTC(date, endClock(rect.window.to), schedule.timezone),
+          note,
         },
         { onError: (e) => setError(humanError(e)) },
       )
     }
-    closePopover()
   }
 
   return (
@@ -246,7 +246,7 @@ export function ScheduleCanvas({
             <ChevronRight className="size-4" />
           </Button>
           <span className="ml-2 text-base font-semibold">{rangeTitle(dates, view)}</span>
-          {/* «Сегодня» стоит ПОСЛЕ дат (решение владельца 2026-09-04): стрелки и
+          {/* «Сегодня» стоит ПОСЛЕ дат: стрелки и
               заголовок отрезка — про то, где мы сейчас, а возврат к текущему дню
               читается следом, как выход из прогулки по календарю. */}
           <Button variant="ghost" size="sm" className="ml-2" onClick={() => controller.today()}>
@@ -337,7 +337,7 @@ export function ScheduleCanvas({
           // «11:00 – 12:00» рядом с названием переносит его на вторую строку и
           // обрезает на полуслове.
           displayEventEnd={false}
-          // СУТКИ ЦЕЛИКОМ (решение владельца 2026-09-04). Ось, обрезанная по часам
+          // СУТКИ ЦЕЛИКОМ. Ось, обрезанная по часам
           // приёма, отвечала не на тот вопрос: она показывала, что уже настроено, и
           // ровно этим не давала настроить остальное — ночную смену, ранний час,
           // встречу до открытия приёма. Открывается сетка всё равно на рабочих
@@ -362,19 +362,34 @@ export function ScheduleCanvas({
               {info.text}
             </span>
           )}
-          dayHeaderContent={(info) =>
+          dayHeaderContent={(info) => {
             // В ОКНЕ «ещё N» шапка — заголовок окна, а не колонка недели: нужна
             // полная дата, а наша разметка колонки дала бы там одинокое число без
             // месяца (имя дня в этом месте библиотека не считает).
-            info.inPopover ? (
-              <span className="sc-pop-title">{info.text}</span>
-            ) : (
-              <span className={`sc-day-head${info.isToday ? ' sc-day-today' : ''}`}>
-                <span className="sc-day-name">{info.weekdayText}</span>
-                <span className="sc-day-num">{info.dayNumberText}</span>
-              </span>
+            if (info.inPopover) return <span className="sc-pop-title">{info.text}</span>
+            // В МЕСЯЦЕ шапка называет день недели, а не дату: колонок семь, а клеток
+            // тридцать, и меню исключений вешать не на что.
+            if (month) {
+              return (
+                <span className="sc-day-head">
+                  <span className="sc-day-name">{info.weekdayText}</span>
+                </span>
+              )
+            }
+            // Дата колонки — по числу в её шапке, а не по `info.date`: см. canvas.ts.
+            const date = dateByNumber(dates, info.dayNumberText)
+            if (!date) return null
+            return (
+              <DayHeader
+                name={info.weekdayText}
+                number={info.dayNumberText}
+                today={info.isToday}
+                state={dayState(schedule.availability, date)}
+                onCloseDay={() => saveAvailability(closeDay(schedule.availability, date))}
+                onResetDay={() => saveAvailability(resetDay(schedule.availability, date))}
+              />
             )
-          }
+          }}
           // В МЕСЯЦЕ полос приёма нет — там их было бы тридцать штук, и клетка
           // превратилась бы в кашу. Вместо них приглушается день, в который приёма
           // нет вовсе: «работаю — не работаю» иначе не видно ничем.
@@ -405,6 +420,9 @@ export function ScheduleCanvas({
             })
           }}
           selectable
+          // Порог, ниже которого нажатие не считается выделением: без него простой
+          // клик по пустому месту открывает окно с получасовым отрезком.
+          selectMinDistance={5}
           // Клик по попапу выделение НЕ СНИМАЕТ: по умолчанию библиотека гасит его от
           // любого нажатия за пределами сетки, а попап живёт в портале вне её — и
           // подсказка исчезала бы от первого же ответа на вопрос.
@@ -436,34 +454,19 @@ export function ScheduleCanvas({
           events={events}
           eventClass={eventClass}
           select={(info) => {
+            calendarRef.current = info.view.calendar
             // Протяжка на соседнюю колонку — ПРЯМОУГОЛЬНИК: те же часы на каждом
             // задетом дне, а не непрерывный отрезок «остаток вторника плюс начало
             // среды» (canvas.ts, selectionRect).
-            // ⚠ ВЫДЕЛЕНИЕ СНИМАЕТСЯ СРАЗУ. Иначе библиотека оставляет на полотне свой
-            // мираж — непрерывный отрезок «остаток понедельника, вторник целиком, среда
-            // до 19:00», — и он остаётся висеть поверх созданных окон, показывая ровно
-            // то, чего мы не делали.
-            // ⚠ ВЫДЕЛЕНИЕ ОСТАЁТСЯ НА ПОЛОТНЕ, пока попап спрашивает: это предмет
-            // вопроса, и без него «что это за время?» задаётся про пустое место.
-            // Снимает его closePopover. Прямоугольником оно остаётся само —
-            // `data-sc-band` выставлен последним кадром протяжки и до закрытия не
-            // сбрасывается.
-            calendarRef.current = info.view.calendar
             const rect = selectionRect(info.startStr, info.endStr)
-            if (!rect) return
-            // ⚠ ЖЕСТ ЗАПОМИНАЕТСЯ, НО НЕ ПРИМЕНЯЕТСЯ. Полотно не знает, что за время
-            // размечено: приём и занятость рисуются одним движением мыши, и выбрать
-            // за автора приём значит время от времени молча открывать запись там, где
-            // человек занят. Сначала вопрос — что это за время, потом вопрос об
-            // объёме, и только потом правка.
-            beforeGesture.current = schedule
-            setAnchor({
-              kind: 'draw',
-              ...pointOf(info.jsEvent),
-              gesture: { kind: 'create', ...rect },
-              step: 'what',
-              scope: null,
-            })
+            if (!rect) {
+              info.view.calendar.unselect()
+              clearBand()
+              return
+            }
+            // Жест запоминается, но не применяется: что за время размечено, знает
+            // только автор. Выделение остаётся на полотне, пока окно спрашивает.
+            setDraw(rect)
           }}
           eventDrop={(info) => {
             const props = info.event.extendedProps as EventProps
@@ -471,66 +474,68 @@ export function ScheduleCanvas({
               moveBlock(props.block, info.event.startStr, info.event.endStr)
               return
             }
-            if (props.layer !== 'availability' || !info.event.startStr) return
-            const date = dateOfNaive(info.event.startStr)
-            const win = windowOf(info.event.startStr, info.event.endStr)
-            const gesture: Gesture =
-              date === props.date
-                ? { kind: 'update', date, orig: props.window, window: win }
-                : { kind: 'move', fromDate: props.date, orig: props.window, date, window: win }
-            runGesture(gesture, pointOf(info.jsEvent), [date])
+            if (props.layer === 'booking') {
+              askMove(props.booking, info.event.startStr, info.revert)
+              return
+            }
+            // Часы приёма помечены нередактируемыми, и библиотека сюда не доводит:
+            // перетаскивание полосы — тот же двусмысленный жест «каждый вторник или
+            // только 16-го». Меняют их протяжкой заново.
           }}
           eventResize={(info) => {
             const props = info.event.extendedProps as EventProps
             if (props.layer === 'block') {
               moveBlock(props.block, info.event.startStr, info.event.endStr)
-              return
             }
-            if (props.layer !== 'availability') return
-            runGesture(
-              {
-                kind: 'update',
-                date: props.date,
-                orig: props.window,
-                window: windowOf(info.event.startStr, info.event.endStr),
-              },
-              pointOf(info.jsEvent),
-              [props.date],
-            )
           }}
           eventClick={(info) => {
             const props = info.event.extendedProps as EventProps
             const at = pointOf(info.jsEvent)
             if (props.layer === 'availability') {
-              setAnchor({ ...at, kind: 'window', date: props.date, window: props.window })
+              setWindowAnchor({ ...at, date: props.date, window: props.window })
             } else if (props.layer === 'block') {
               setAnchor({ ...at, kind: 'block', block: props.block })
             } else {
-              setAnchor({ ...at, kind: 'booking', booking: props.booking })
+              onOpenBooking(props.booking)
             }
           }}
         />
       </div>
 
+      <WindowPopover
+        anchor={windowAnchor}
+        onClose={() => setWindowAnchor(null)}
+        onRemove={(date, w, scope) => {
+          apply({ kind: 'remove', date, orig: w }, scope)
+          setWindowAnchor(null)
+        }}
+      />
+
+      <DrawDialog
+        request={draw}
+        onClose={closeDraw}
+        onHours={(rect, scope) => {
+          apply({ kind: 'create', dates: rect.dates, window: rect.window }, scope)
+          closeDraw()
+        }}
+        onBusy={(rect, note) => {
+          closeTime(rect, note)
+          closeDraw()
+        }}
+      />
+
+      <MoveBookingDialog
+        scheduleId={schedule.id}
+        move={moving}
+        timezone={schedule.timezone}
+        outsideHours={moving !== null && !insideHours(schedule, moving.startsAt)}
+        onClose={finishMove}
+      />
+
       <CanvasPopover
         anchor={anchor}
         schedule={schedule}
         onClose={closePopover}
-        onDrawStep={(step: DrawStep) =>
-          setAnchor((a) => (a && a.kind === 'draw' ? { ...a, step } : a))
-        }
-        onScope={switchScope}
-        onCloseTime={closeTime}
-        onRemoveWindow={(date, w, scope) => {
-          beforeGesture.current = schedule
-          const gesture: Gesture = { kind: 'remove', date, orig: w }
-          saveAvailability(
-            withAvailability(schedule, applyGesture(schedule.availability, gesture, scope)),
-          )
-          closePopover()
-        }}
-        onOpenSubmission={onOpenSubmission}
-        onCancelBooking={onCancelBooking}
         onRemoveBlock={(id) => {
           removeBlock.mutate(id, { onError: (e) => setError(humanError(e)) })
           closePopover()
@@ -539,13 +544,15 @@ export function ScheduleCanvas({
     </div>
   )
 
-  // paintBand — переписать позицию подсказки под прямоугольник. Обёртки подсказки
-  // позиционируются inline (`top`/`height` в пикселях), поэтому переопределяет их
-  // правило с `!important`, читающее эти две переменные (canvas.css).
+  // paintBand — ПОДСКАЗКА ПРОТЯЖКИ ЭТО ПРЯМОУГОЛЬНИК, а не непрерывный отрезок.
+  // Библиотека рисует по слайсу на день и позиционирует их inline (`top`/`height` в
+  // пикселях): первый день от начала протяжки до низа, средние целиком, последний
+  // сверху до курсора — автор видел одно, а получал другое (canvas.ts,
+  // selectionRect). Правится двумя переменными на контейнере, которыми правило в
+  // canvas.css переписывает позицию обёртки слайса.
   //
   // Пиксели, а не проценты: колонка — это ровно ось часов, и её высота меряется по
-  // месту. Считать проценты от времени пришлось бы, зная, что колонка нигде не
-  // обрезана; замер честнее.
+  // месту, потому что полотно бывает разной высоты.
   function paintBand(startStr: string, endStr: string) {
     const el = canvasRef.current
     if (!el) return
@@ -570,6 +577,29 @@ export function ScheduleCanvas({
     delete canvasRef.current?.dataset.scBand
   }
 
+  // askMove — карточку бросили, спрашиваем подтверждение. Время прилипает к сетке
+  // здесь (canvasEdit, snapToGrid), поэтому диалог называет то, которое уедет.
+  function askMove(booking: Booking, startStr: string, revert: () => void) {
+    const date = dateOfNaive(startStr)
+    const dropped = clockToMinutes(clockOfNaive(startStr))
+    if (dropped === null) {
+      revert()
+      return
+    }
+    const step = schedule.slotMinutes + schedule.bufferMinutes
+    const at = snapToGrid(schedule.availability, date, dropped, step)
+    revertMove.current = revert
+    setMoving({ booking, startsAt: zonedToUTC(date, minutesToClock(at), schedule.timezone) })
+  }
+
+  // finishMove — исход диалога. При отказе карточку возвращаем: данные не менялись,
+  // и сама она назад не поедет.
+  function finishMove(moved: boolean) {
+    if (!moved) revertMove.current?.()
+    revertMove.current = null
+    setMoving(null)
+  }
+
   function moveBlock(block: ScheduleBlock, startStr: string, endStr: string) {
     // Блокировка переезжает удалением и заведением: своей правки у неё нет, а
     // заводить ручку PATCH ради перетаскивания дороже, чем два запроса.
@@ -588,19 +618,21 @@ export function ScheduleCanvas({
   }
 }
 
-// EventProps — что полотно знает о своём событии. Слой обязателен: обработчики
-// приходят одни на все четыре, и различать их по виду события нечем.
-type EventProps =
-  | { layer: 'availability'; date: string; window: { from: string; to: string }; source: string }
-  | { layer: 'block'; block: ScheduleBlock }
-  | { layer: 'booking'; booking: Booking }
-
+// ЧАСЫ ПРИЁМА — ОБЫЧНОЕ СОБЫТИЕ, НО НЕРЕДАКТИРУЕМОЕ (ADR §10). Фоновое подошло бы по
+// виду, но фоновое библиотека не даёт и НАЖАТЬ — а нажатие здесь единственный способ
+// убрать окно приёма. Поэтому событие обычное, а мышью не двигается и не тянется:
+// перетаскивание полосы — тот же двусмысленный жест «каждый вторник или только
+// 16-го», ради ухода от которого заведено окно протяжки.
+//
+// Вид у полосы всё равно подложечный (`canvas.css`): на полотне часы приёма —
+// справка, а не предмет работы.
 function availabilityEvent(span: AvailabilitySpan) {
   return {
     id: `av:${span.date}:${span.window.from}-${span.window.to}`,
     start: span.start,
     end: span.end,
-    display: 'auto',
+    startEditable: false,
+    durationEditable: false,
     extendedProps: {
       layer: 'availability',
       date: span.date,
@@ -627,37 +659,11 @@ function bookingEvent(booking: Booking) {
     start: booking.startsAt,
     end: new Date(start.getTime() + booking.durationMinutes * 60_000).toISOString(),
     title: booking.formTitle,
-    // Записи не двигаются и не тянутся: время встречи — договорённость с человеком.
-    startEditable: false,
+    // Запись двигается, но не тянется: длительность — снимок нарезки на момент
+    // записи (0050).
     durationEditable: false,
     extendedProps: { layer: 'booking', booking } satisfies EventProps,
   }
-}
-
-// eventClass — слой красится классом, а не цветом в данных: цвета живут в токенах
-// дизайн-системы, и второй набор в этом файле разъехался бы с ними.
-//
-// Строкой, а не списком: опция принимает одно имя класса (`ClassNameInput`), и массив
-// молча не доехал бы.
-function eventClass(info: { event: { extendedProps: Record<string, unknown> } }): string {
-  const props = info.event.extendedProps as EventProps | undefined
-  // ⚠ СОБЫТИЕ БЕЗ СЛОЯ — ЧУЖОЕ: мираж перетаскивания, который библиотека рисует сама.
-  // До правки оно проваливалось в ветку записи и вылезало на полотне синей кляксой
-  // (отчёт владельца 2026-09-04). Своего вида у чужого события быть не должно.
-  if (!props?.layer) return 'sc-ev sc-ghost'
-  if (props.layer === 'availability') {
-    return `sc-ev sc-av ${props.source === 'exception' ? 'sc-av-ex' : 'sc-av-weekly'}`
-  }
-  if (props.layer === 'block') return 'sc-ev sc-block'
-  return 'sc-ev sc-booking'
-}
-
-// windowOf — пара отметок календаря в окно правила. Полночь СЛЕДУЮЩИХ суток — это
-// «24:00» конца окна, а не ноль: иначе окно до полуночи схлопывалось бы в нулевое.
-function windowOf(startStr: string, endStr: string): { from: string; to: string } {
-  const from = clockOfNaive(startStr)
-  const to = dateOfNaive(endStr) === dateOfNaive(startStr) ? clockOfNaive(endStr) : '24:00'
-  return { from, to }
 }
 
 // endClock — «24:00» в отметку, которую понимает перевод в UTC.
@@ -669,18 +675,14 @@ function pointOf(e: MouseEvent | null): { x: number; y: number } {
   return { x: e?.clientX ?? 0, y: e?.clientY ?? 0 }
 }
 
-function withAvailability(s: Schedule, availability: Schedule['availability']): Schedule {
-  return { ...s, availability }
-}
-
 // toInput — расписание в тело PATCH. Перечислением, а не выбрасыванием служебных
 // полей: новое поле обязано попасть сюда осознанно, иначе правка полотна молча
 // сбрасывала бы его к прежнему значению.
-function toInput(s: Schedule): ScheduleInput {
+function toInput(s: Schedule, availability: Availability): ScheduleInput {
   return {
     name: s.name,
     timezone: s.timezone,
-    availability: s.availability,
+    availability,
     slotMinutes: s.slotMinutes,
     bufferMinutes: s.bufferMinutes,
     horizonDays: s.horizonDays,
@@ -741,36 +743,19 @@ const VIEWS = [
 
 type ViewName = (typeof VIEWS)[number]['name']
 
-// AXIS — границы оси: целые сутки. Ими же меряется прямоугольник подсказки
-// (bandBox), поэтому значение одно на весь файл: разъехавшись, они сдвинули бы
-// подсказку относительно сетки, по которой она рисуется.
-const AXIS = { min: '00:00', max: '24:00' }
-
-// scrollStart — на каком часе открыть сетку: за час до самого раннего окна приёма.
-// Сутки видны целиком, но начинать разглядывать их с полуночи незачем — приёма там
-// нет ни у кого. Час запаса не красота: без него окно приёма прижато к верхнему краю,
-// и протянуть новое перед ним некуда.
-//
-// Считается по САМОМУ ПРАВИЛУ, а не по занятому времени: занятость приезжает
-// отдельным запросом, и полотно прыгало бы после её загрузки.
-function scrollStart(a: Availability): string {
-  const clocks: number[] = []
-  for (const day of Object.values(a.weekly)) {
-    for (const w of day ?? []) {
-      const from = clockToMinutes(w.from)
-      if (from !== null) clocks.push(from)
-    }
-  }
-  for (const ex of a.exceptions) {
-    for (const w of ex.windows) {
-      const from = clockToMinutes(w.from)
-      if (from !== null) clocks.push(from)
-    }
-  }
-  // Пустое расписание открывается на утре рабочего дня, а не в полночь: полотно, на
-  // котором ещё ничего нет, должно открываться там, где приём заводят.
-  const min = clocks.length > 0 ? Math.min(...clocks) : 9 * 60
-  return minutesToClock(Math.max(0, Math.floor((min - 60) / 60) * 60))
+// insideHours — лежит ли эта точка внутри часов приёма. Отказом это не является
+// (автор вправе поставить человека и вне приёма), но диалог обязан сказать об этом
+// вслух: время вне приёма формой не предлагается, и вернуть его в оборот отменой уже
+// не выйдет.
+function insideHours(schedule: Schedule, iso: string): boolean {
+  const { date, clock } = zonedParts(new Date(iso), schedule.timezone)
+  const minutes = clockToMinutes(clock)
+  if (minutes === null) return false
+  return effectiveWindows(schedule.availability, date).windows.some((w) => {
+    const from = clockToMinutes(w.from)
+    const to = clockToMinutes(w.to)
+    return from !== null && to !== null && minutes >= from && minutes < to
+  })
 }
 
 // dateKeyOf — календарная дата момента В ПОЯСЕ РАСПИСАНИЯ: клетка месяца приходит

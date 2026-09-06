@@ -21,7 +21,7 @@ export type Scope = 'weekly' | 'date'
 export type Gesture =
   // Протяжка по пустому месту. ДАТ МОЖЕТ БЫТЬ НЕСКОЛЬКО: протяжка мышью на соседнюю
   // колонку выделяет ПРЯМОУГОЛЬНИК — тот же диапазон часов на каждом задетом дне
-  // (отчёт владельца 2026-09-04). Непрерывный отрезок «остаток вторника плюс начало
+  //. Непрерывный отрезок «остаток вторника плюс начало
   // среды» здесь бессмыслен: правило описывает часы приёма, а не одну длинную смену.
   | { kind: 'create'; dates: string[]; window: TimeWindow }
   // Растягивание или перенос внутри дня: orig опознаёт окно на дате.
@@ -134,3 +134,65 @@ export function docError(a: Availability): string | null {
 // snapMinutes — шаг прилипания жеста, в минутах. Полотно рисует сетку тем же шагом:
 // нарисованное мышью окно обязано совпасть с линией, к которой оно прилипло.
 export const SNAP_MINUTES = 15
+
+// closeDay — «не принимаю в этот день»: исключение с ПУСТЫМ списком окон. Исключение
+// перебивает день целиком (domain, ScheduleException), поэтому пустой список и
+// означает закрытый день.
+export function closeDay(a: Availability, date: string): Availability {
+  const others = a.exceptions.filter((e) => e.date !== date)
+  return {
+    ...a,
+    exceptions: [...others, { date, windows: [] }].sort((x, y) => x.date.localeCompare(y.date)),
+  }
+}
+
+// resetDay — «принимаю как обычно»: исключение снимается, день возвращается под
+// недельное правило.
+export function resetDay(a: Availability, date: string): Availability {
+  return { ...a, exceptions: a.exceptions.filter((e) => e.date !== date) }
+}
+
+// dayState — что сейчас с этим днём: обычная неделя, свои часы или «не принимаю».
+// По нему меню колонки решает, показывать ли «принимаю как обычно».
+export function dayState(a: Availability, date: string): 'weekly' | 'exception' | 'closed' {
+  const ex = a.exceptions.find((e) => e.date === date)
+  if (!ex) return 'weekly'
+  return ex.windows.length === 0 ? 'closed' : 'exception'
+}
+
+// snapToGrid — куда встанет карточка записи, брошенная в эту минуту.
+//
+// ЗЕРКАЛО СЕРВЕРА, А НЕ ЗАМЕНА ЕМУ: то же правило написано в Go (domain.MoveAligned)
+// и решает там (инвариант 3). Здесь оно затем, чтобы промах в семь минут не
+// превращался в 422: карточка липнет к ближайшей годной точке, её и называет диалог.
+//
+// Кандидаты — начала слотов внутри окон приёма и кратные шагу от полуночи вне их.
+// Побеждает ближайший, при равном расстоянии — более ранний.
+export function snapToGrid(a: Availability, date: string, minutes: number, step: number): number {
+  if (step <= 0) return minutes
+  const windows = effectiveWindows(a, date)
+    .windows.map((w) => ({ from: clockToMinutes(w.from), to: clockToMinutes(w.to) }))
+    .filter((w): w is { from: number; to: number } => w.from !== null && w.to !== null)
+
+  const candidates: number[] = []
+  for (const w of windows) {
+    // Ровно внутри `from…to`: сервер принимает сетку окна только там.
+    for (let at = w.from; at < w.to; at += step) {
+      if (Math.abs(at - minutes) <= step) candidates.push(at)
+    }
+  }
+  // Вне окон своей сетки нет — там годится кратность шагу от полуночи. Внутри окна
+  // такая точка не подходит: у окна сетка своя (domain.MoveAligned).
+  for (const c of [Math.floor(minutes / step) * step, Math.ceil(minutes / step) * step]) {
+    if (!windows.some((w) => c >= w.from && c < w.to)) candidates.push(c)
+  }
+
+  const inDay = candidates.filter((c) => c >= 0 && c < 24 * 60)
+  // Годной точки в сутках нет (шаг длиннее суток): отказ придёт от сервера.
+  if (inDay.length === 0) return minutes
+  return inDay.reduce((best, c) => {
+    const closer = Math.abs(c - minutes) < Math.abs(best - minutes)
+    const tie = Math.abs(c - minutes) === Math.abs(best - minutes) && c < best
+    return closer || tie ? c : best
+  })
+}

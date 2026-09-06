@@ -502,8 +502,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey)
 	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
-	// числа расписаний — у entitlements; своей транзакции у модуля нет.
-	bookingSvc := booking.NewService(pool, booking.Repo{}, workspacesSvc, entitlementsSvc)
+	// числа расписаний — у entitlements. Транзакция нужна одному действию — переносу
+	// записи: лок слота, счёт мест и правка обязаны быть одной.
+	bookingSvc := booking.NewService(pool, postgres.TxRunner{Pool: pool}, booking.Repo{}, workspacesSvc, entitlementsSvc)
 	bookingHandler := booking.NewHandler(bookingSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	// Подтверждение брони в приёме ответа: работает внутри транзакции submissions,
 	// поэтому ни пула, ни своих часов ему не даётся.

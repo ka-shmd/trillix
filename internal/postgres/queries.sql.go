@@ -54,6 +54,49 @@ func (q *Queries) BlocksInRange(ctx context.Context, arg BlocksInRangeParams) ([
 	return items, nil
 }
 
+const bookingForMove = `-- name: BookingForMove :one
+SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
+       b.starts_at, b.duration_minutes, b.seats, b.status
+FROM bookings b
+WHERE b.id = $1 AND b.schedule_id = $2 AND b.status = 'confirmed'
+`
+
+type BookingForMoveParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+}
+
+type BookingForMoveRow struct {
+	ID              uuid.UUID
+	ScheduleID      uuid.UUID
+	FormID          uuid.UUID
+	SubmissionID    pgtype.UUID
+	StartsAt        pgtype.Timestamptz
+	DurationMinutes int32
+	Seats           int32
+	Status          string
+}
+
+// Бронь перед переносом: что двигаем и сколько мест это займёт на новом месте.
+// Расписание спрашивается вместе с ней — id из адреса правом не является, и строка
+// чужого расписания обязана быть неотличима от несуществующей.
+// Номера редакции здесь нет: его отдаёт сам перенос (RETURNING).
+func (q *Queries) BookingForMove(ctx context.Context, arg BookingForMoveParams) (BookingForMoveRow, error) {
+	row := q.db.QueryRow(ctx, bookingForMove, arg.ID, arg.ScheduleID)
+	var i BookingForMoveRow
+	err := row.Scan(
+		&i.ID,
+		&i.ScheduleID,
+		&i.FormID,
+		&i.SubmissionID,
+		&i.StartsAt,
+		&i.DurationMinutes,
+		&i.Seats,
+		&i.Status,
+	)
+	return i, err
+}
+
 const bookingsInRange = `-- name: BookingsInRange :many
 SELECT b.id, b.schedule_id, b.form_id, b.submission_id,
        b.starts_at, b.duration_minutes, b.seats, b.status,
@@ -153,9 +196,10 @@ func (q *Queries) BumpAIGenerations(ctx context.Context, arg BumpAIGenerationsPa
 	return err
 }
 
-const cancelBookingByAuthor = `-- name: CancelBookingByAuthor :execrows
+const cancelBookingByAuthor = `-- name: CancelBookingByAuthor :one
 UPDATE bookings SET status = 'canceled', canceled_at = now()
 WHERE id = $1 AND schedule_id = $2 AND status <> 'canceled'
+RETURNING revision
 `
 
 type CancelBookingByAuthorParams struct {
@@ -166,29 +210,32 @@ type CancelBookingByAuthorParams struct {
 // Отмена записи автором из кабинета. Место освобождается тем же утверждением:
 // строка перестаёт считаться занятой в тот же момент, когда меняется статус.
 //
-// Повторная отмена даёт 0 строк — для вызывающего это «уже отменена», а не ошибка.
-func (q *Queries) CancelBookingByAuthor(ctx context.Context, arg CancelBookingByAuthorParams) (int64, error) {
-	result, err := q.db.Exec(ctx, cancelBookingByAuthor, arg.ID, arg.ScheduleID)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// Повторная отмена не даёт строк — для вызывающего это «уже отменена», а не ошибка.
+//
+// Номер редакции возвращается отсюда же: отмена уезжает со следующим.
+func (q *Queries) CancelBookingByAuthor(ctx context.Context, arg CancelBookingByAuthorParams) (int32, error) {
+	row := q.db.QueryRow(ctx, cancelBookingByAuthor, arg.ID, arg.ScheduleID)
+	var revision int32
+	err := row.Scan(&revision)
+	return revision, err
 }
 
-const cancelBookingByID = `-- name: CancelBookingByID :execrows
+const cancelBookingByID = `-- name: CancelBookingByID :one
 UPDATE bookings SET status = 'canceled', canceled_at = now()
 WHERE id = $1 AND status <> 'canceled'
+RETURNING revision
 `
 
 // Отмена по ссылке из письма. Право предъявляет сам токен (подпись покрывает id и
 // срок), поэтому в условии только id и «ещё не отменена»: повторный переход по той же
-// ссылке даёт 0 строк, и для человека это «уже отменено», а не ошибка.
-func (q *Queries) CancelBookingByID(ctx context.Context, id uuid.UUID) (int64, error) {
-	result, err := q.db.Exec(ctx, cancelBookingByID, id)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
+// ссылке не даёт строк, и для человека это «уже отменено», а не ошибка.
+//
+// Номер редакции — отсюда же, по тому же доводу, что у отмены из кабинета.
+func (q *Queries) CancelBookingByID(ctx context.Context, id uuid.UUID) (int32, error) {
+	row := q.db.QueryRow(ctx, cancelBookingByID, id)
+	var revision int32
+	err := row.Scan(&revision)
+	return revision, err
 }
 
 const claimSubmissionFile = `-- name: ClaimSubmissionFile :execrows
@@ -5021,6 +5068,35 @@ func (q *Queries) MarkVisitSubmitted(ctx context.Context, arg MarkVisitSubmitted
 	return result.RowsAffected(), nil
 }
 
+const moveBooking = `-- name: MoveBooking :one
+UPDATE bookings SET starts_at = $3, revision = revision + 1
+WHERE id = $1 AND schedule_id = $2 AND status = 'confirmed'
+RETURNING revision
+`
+
+type MoveBookingParams struct {
+	ID         uuid.UUID
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+}
+
+// Перенос брони на новое время. НОМЕР РЕДАКЦИИ РАСТЁТ ТЕМ ЖЕ УТВЕРЖДЕНИЕМ: разъедься
+// они, приглашение уехало бы с номером, который чужой календарь уже видел, и правка
+// была бы отброшена как устаревшая.
+//
+// Длительность НЕ пересчитывается по нынешней нарезке: она снимок момента записи
+// (0050), и перенос встречи её менять не должен.
+//
+// Номер возвращается этим же утверждением: два переноса одной брони в разные слоты
+// берут разные advisory-lock'и и друг друга не ждут, а UPDATE'ы одной строки Postgres
+// сериализует сам.
+func (q *Queries) MoveBooking(ctx context.Context, arg MoveBookingParams) (int32, error) {
+	row := q.db.QueryRow(ctx, moveBooking, arg.ID, arg.ScheduleID, arg.StartsAt)
+	var revision int32
+	err := row.Scan(&revision)
+	return revision, err
+}
+
 const nextFormVersion = `-- name: NextFormVersion :one
 SELECT (coalesce(max(version), 0) + 1)::int AS next_version
 FROM form_versions
@@ -5357,6 +5433,30 @@ type TakenSeatsAtParams struct {
 // То же для ОДНОЙ точки — счёт под advisory-lock перед взятием холда.
 func (q *Queries) TakenSeatsAt(ctx context.Context, arg TakenSeatsAtParams) (int64, error) {
 	row := q.db.QueryRow(ctx, takenSeatsAt, arg.ScheduleID, arg.StartsAt, arg.ClientID)
+	var column_1 int64
+	err := row.Scan(&column_1)
+	return column_1, err
+}
+
+const takenSeatsAtExcept = `-- name: TakenSeatsAtExcept :one
+SELECT coalesce(sum(seats), 0)::bigint
+FROM bookings
+WHERE schedule_id = $1 AND starts_at = $2 AND id <> $3
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+`
+
+type TakenSeatsAtExceptParams struct {
+	ScheduleID uuid.UUID
+	StartsAt   pgtype.Timestamptz
+	ID         uuid.UUID
+}
+
+// Сколько мест занято в точке, НЕ СЧИТАЯ саму переносимую бронь.
+//
+// Исключение по id, а не по client_id: переносимая строка уже лежит в таблице и не
+// должна считать себя.
+func (q *Queries) TakenSeatsAtExcept(ctx context.Context, arg TakenSeatsAtExceptParams) (int64, error) {
+	row := q.db.QueryRow(ctx, takenSeatsAtExcept, arg.ScheduleID, arg.StartsAt, arg.ID)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err

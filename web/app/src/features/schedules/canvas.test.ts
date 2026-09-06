@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { DEFAULT_SCHEDULE, type Availability } from '../../entities/schedule'
 import {
+  dateByNumber,
   dateKeys,
   effectiveWindows,
   bandBox,
@@ -14,7 +15,16 @@ import {
   weekStart,
   weekdayOf,
 } from './canvas'
-import { applyGesture, docError, type Gesture } from './canvasEdit'
+import { clockToMinutes } from './weekly'
+import {
+  applyGesture,
+  closeDay,
+  dayState,
+  docError,
+  resetDay,
+  snapToGrid,
+  type Gesture,
+} from './canvasEdit'
 
 const base: Availability = {
   weekly: {
@@ -205,7 +215,7 @@ describe('жест мышью', () => {
   })
 })
 
-// ПРОТЯЖКА НА СОСЕДНЮЮ КОЛОНКУ — ПРЯМОУГОЛЬНИК (отчёт владельца 2026-09-04).
+// ПРОТЯЖКА НА СОСЕДНЮЮ КОЛОНКУ — ПРЯМОУГОЛЬНИК.
 // Библиотека отдаёт непрерывный отрезок: «вторник с 10:00 до полуночи, среда целиком,
 // четверг до 14:00». Для правила приёма это бессмыслица — оно описывает часы, а не
 // одну длинную смену; автор ждёт те же часы на каждом задетом дне.
@@ -323,5 +333,202 @@ describe('полоса подсказки', () => {
 
   it('пустая ось не делится на ноль', () => {
     expect(bandBox({ from: '10:00', to: '11:00' }, { min: '10:00', max: '10:00' }, lane)).toBeNull()
+  })
+})
+
+describe('исключения по датам — действия на дне', () => {
+  const doc: Availability = {
+    weekly: { tue: [{ from: '10:00', to: '18:00' }] },
+    exceptions: [],
+  }
+
+  it('«не принимаю в этот день» — исключение с пустыми окнами, а не снятое правило', () => {
+    const next = closeDay(doc, '2026-09-15')
+    expect(next.exceptions).toEqual([{ date: '2026-09-15', windows: [] }])
+    // Правило дня недели не тронуто: закрыт ОДИН вторник, а не все.
+    expect(next.weekly.tue).toEqual(doc.weekly.tue)
+    expect(effectiveWindows(next, '2026-09-15').windows).toEqual([])
+    expect(effectiveWindows(next, '2026-09-22').windows).toEqual(doc.weekly.tue)
+  })
+
+  it('«принимаю как обычно» возвращает день под недельное правило', () => {
+    const closed = closeDay(doc, '2026-09-15')
+    expect(resetDay(closed, '2026-09-15').exceptions).toEqual([])
+    expect(effectiveWindows(resetDay(closed, '2026-09-15'), '2026-09-15').windows).toEqual(
+      doc.weekly.tue,
+    )
+  })
+
+  it.each([
+    ['обычный день', doc, 'weekly'],
+    ['закрытый день', closeDay(doc, '2026-09-15'), 'closed'],
+    [
+      'день со своими часами',
+      { ...doc, exceptions: [{ date: '2026-09-15', windows: [{ from: '11:00', to: '12:00' }] }] },
+      'exception',
+    ],
+  ])('%s опознаётся меню', (_name, a, state) => {
+    expect(dayState(a as Availability, '2026-09-15')).toBe(state)
+  })
+
+  it('закрытый день не теряет закрытия от повторного нажатия', () => {
+    const twice = closeDay(closeDay(doc, '2026-09-15'), '2026-09-15')
+    expect(twice.exceptions).toEqual([{ date: '2026-09-15', windows: [] }])
+  })
+})
+
+describe('дата колонки по числу в шапке', () => {
+  // Сторож двойного прочтения библиотечного Date: у отрицательного смещения пояса
+  // «маркер» и настоящий момент расходятся на сутки, и меню дня закрыло бы соседний.
+  const week = dateKeys('2026-09-14', 7)
+
+  it('находит дату по числу месяца', () => {
+    expect(dateByNumber(week, '16')).toBe('2026-09-16')
+    expect(dateByNumber(week, '20')).toBe('2026-09-20')
+  })
+
+  it('через границу месяца число остаётся однозначным', () => {
+    const across = dateKeys('2026-09-28', 7)
+    expect(dateByNumber(across, '30')).toBe('2026-09-30')
+    expect(dateByNumber(across, '1')).toBe('2026-10-01')
+  })
+
+  it('чужое число — не дата', () => {
+    expect(dateByNumber(week, '31')).toBeUndefined()
+    expect(dateByNumber(week, 'вт')).toBeUndefined()
+  })
+})
+
+// snapToGrid — зеркало domain.MoveAligned. Решает сервер, но промах в семь минут не
+// должен превращаться в 422: карточка обязана прилипнуть к годной точке сама.
+describe('прилипание переносимой записи к сетке', () => {
+  const doc: Availability = {
+    weekly: { tue: [{ from: '10:00', to: '18:00' }] },
+    exceptions: [],
+  }
+  // 15 сентября 2026 — вторник.
+  const tue = '2026-09-15'
+
+  it('промах в семь минут возвращается на слот', () => {
+    expect(snapToGrid(doc, tue, 11 * 60 + 7, 60)).toBe(11 * 60)
+  })
+
+  it('окно с получаса даёт свою сетку, а не кратность полуночи', () => {
+    const odd: Availability = { weekly: { tue: [{ from: '10:30', to: '18:00' }] }, exceptions: [] }
+    expect(snapToGrid(odd, tue, 11 * 60 + 20, 60)).toBe(11 * 60 + 30)
+  })
+
+  it('вне часов приёма прилипает к шагу от полуночи', () => {
+    // Ночь: окон приёма нет вовсе, но перенос туда законен.
+    expect(snapToGrid(doc, tue, 2 * 60 + 25, 60)).toBe(2 * 60)
+  })
+
+  it('буфер входит в шаг', () => {
+    // Шаг 70: слоты окна идут 10:00, 11:10, 12:20.
+    expect(snapToGrid(doc, tue, 11 * 60 + 20, 70)).toBe(11 * 60 + 10)
+  })
+
+  it('за край суток не выносит', () => {
+    const late: Availability = { weekly: { tue: [{ from: '23:00', to: '24:00' }] }, exceptions: [] }
+    expect(snapToGrid(late, tue, 23 * 60 + 50, 60)).toBeLessThan(24 * 60)
+  })
+
+  it('исключение по дате перебивает правило и здесь', () => {
+    const withEx: Availability = {
+      ...doc,
+      exceptions: [{ date: tue, windows: [{ from: '10:30', to: '12:00' }] }],
+    }
+    expect(snapToGrid(withEx, tue, 11 * 60 + 20, 60)).toBe(11 * 60 + 30)
+  })
+})
+
+// КОНТРАКТ ЗЕРКАЛА: всё, что предлагает клиент, сервер обязан принять. Предикат
+// ниже — это `domain.MoveAligned` словами теста: точка годится, если кратна шагу от
+// полуночи ЛИБО отстоит от начала окна приёма на целое неотрицательное число шагов.
+// Клиент, предложивший точку вне этого множества, получает 422 на время, которое сам
+// же и выбрал, — и карточка отскакивает без объяснения.
+function serverAccepts(a: Availability, date: string, minutes: number, step: number): boolean {
+  let inWindow = false
+  for (const w of effectiveWindows(a, date).windows) {
+    const from = clockToMinutes(w.from)
+    const to = clockToMinutes(w.to)
+    if (from === null || to === null) continue
+    if (minutes < from || minutes >= to) continue
+    inWindow = true
+    if ((minutes - from) % step === 0) return true
+  }
+  // Внутри окна кратность шагу от полуночи не спасает: у окна сетка своя.
+  return inWindow ? false : minutes % step === 0
+}
+
+describe('прилипание не предлагает того, что сервер отвергнет', () => {
+  const tue = '2026-09-15'
+  const cases: { name: string; windows: { from: string; to: string }[]; step: number }[] = [
+    { name: 'окно на круглом часе', windows: [{ from: '10:00', to: '18:00' }], step: 60 },
+    // Ровно этот случай и ломался: начало окна не кратно шагу, и округление к
+    // ближайшему уводило точку ПЕРЕД окном.
+    { name: 'окно с получаса', windows: [{ from: '10:30', to: '18:00' }], step: 60 },
+    { name: 'шаг с буфером', windows: [{ from: '10:30', to: '18:00' }], step: 70 },
+    {
+      name: 'два окна с перерывом',
+      windows: [
+        { from: '09:45', to: '13:00' },
+        { from: '14:20', to: '18:00' },
+      ],
+      step: 45,
+    },
+    { name: 'день без приёма', windows: [], step: 60 },
+  ]
+
+  it.each(cases)('$name', ({ windows, step }) => {
+    const a: Availability = { weekly: { tue: windows }, exceptions: [] }
+    for (let m = 0; m < 24 * 60; m += 5) {
+      const snapped = snapToGrid(a, tue, m, step)
+      expect(
+        serverAccepts(a, tue, snapped, step),
+        `бросок на ${m} мин прилип к ${snapped}, а сервер такую точку не принимает`,
+      ).toBe(true)
+    }
+  })
+})
+
+// Исключение перебивает день целиком, поэтому разовое окно утаскивает в исключение и
+// обычные часы этого дня. Красить их обоих как «только в этот день» — врать: первое
+// автор не трогал.
+describe('источник окна считается по окну, а не по дню', () => {
+  const wednesdayRule: Availability = {
+    weekly: { wed: [{ from: '10:00', to: '14:00' }] },
+    exceptions: [],
+  }
+  // 16 сентября 2026 — среда.
+  const wed = '2026-09-16'
+
+  it('разовое окно особое, а обычные часы того же дня — нет', () => {
+    const next = applyGesture(
+      wednesdayRule,
+      { kind: 'create', dates: [wed], window: { from: '16:00', to: '18:00' } },
+      'date',
+    )
+    // Документ при этом честно держит оба окна в исключении: день перебит целиком.
+    expect(next.exceptions[0]!.windows).toHaveLength(2)
+
+    const spans = spansIn(next, [wed])
+    expect(spans.map((s) => `${s.window.from} ${s.source}`)).toEqual([
+      '10:00 weekly',
+      '16:00 exception',
+    ])
+  })
+
+  it('изменённые часы того же дня остаются особыми', () => {
+    const shifted: Availability = {
+      ...wednesdayRule,
+      exceptions: [{ date: wed, windows: [{ from: '11:00', to: '14:00' }] }],
+    }
+    // Час начала сдвинут — в правиле такого окна нет, и особым оно быть обязано.
+    expect(spansIn(shifted, [wed]).map((s) => s.source)).toEqual(['exception'])
+  })
+
+  it('день без исключения красится правилом целиком', () => {
+    expect(spansIn(wednesdayRule, [wed]).map((s) => s.source)).toEqual(['weekly'])
   })
 })

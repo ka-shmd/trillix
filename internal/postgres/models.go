@@ -22,6 +22,7 @@ type Booking struct {
 	ClientID        uuid.UUID
 	CreatedAt       pgtype.Timestamptz
 	CanceledAt      pgtype.Timestamptz
+	Revision        int32
 }
 
 type EmailChangeToken struct {
