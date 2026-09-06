@@ -3,9 +3,8 @@ import { formTone } from './formColor'
 
 // Каким классом красится событие полотна.
 //
-// ⚠ ОТДЕЛЬНЫЙ ЧИСТЫЙ МОДУЛЬ — чтобы проверяться тестом: имя класса собирается
-// строкой, и потерянный кусок ничего не ломает ни в типах, ни в сборке. Так уехал
-// префикс `sc-tone-`, и записи вышли белыми.
+// Отдельный чистый модуль — чтобы проверяться тестом: имя класса собирается строкой,
+// и потерянный кусок не ломает ни типы, ни сборку.
 //
 // Строкой, а не списком: опция библиотеки принимает одно имя (`ClassNameInput`).
 
@@ -23,8 +22,7 @@ export type EventProps =
 
 export function eventClass(info: { event: { extendedProps: Record<string, unknown> } }): string {
   const props = info.event.extendedProps as EventProps | undefined
-  // ⚠ СОБЫТИЕ БЕЗ СЛОЯ — ЧУЖОЕ: мираж перетаскивания, который библиотека рисует сама.
-  // Своего вида у него быть не должно.
+  // Событие без слоя — чужое: мираж перетаскивания, который библиотека рисует сама.
   if (!props?.layer) return 'sc-ev sc-ghost'
   if (props.layer === 'availability') {
     return `sc-ev sc-av ${props.source === 'exception' ? 'sc-av-ex' : 'sc-av-weekly'}`

@@ -32,8 +32,7 @@ export function MoveBookingDialog({
   // move — что и куда двигают. Пусто, пока никто ничего не тянул.
   move: { booking: Booking; startsAt: string } | null
   timezone: string
-  // outsideHours — новое время лежит вне часов приёма. Не отказ, а предупреждение:
-  // автор вправе поставить человека и туда, договорившись по телефону.
+  // outsideHours — новое время вне часов приёма. Предупреждение, не отказ.
   outsideHours: boolean
   // onClose получает исход: при отказе полотно возвращает карточку на место.
   onClose: (moved: boolean) => void

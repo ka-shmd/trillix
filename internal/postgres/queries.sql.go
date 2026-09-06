@@ -80,8 +80,7 @@ type BookingForMoveRow struct {
 // Бронь перед переносом: что двигаем и сколько мест это займёт на новом месте.
 // Расписание спрашивается вместе с ней — id из адреса правом не является, и строка
 // чужого расписания обязана быть неотличима от несуществующей.
-// Номера редакции здесь НЕТ: его отдаёт сам перенос (RETURNING), потому что
-// прочитанный заранее одинаков у двух одновременных переносов.
+// Номера редакции здесь нет: его отдаёт сам перенос (RETURNING).
 func (q *Queries) BookingForMove(ctx context.Context, arg BookingForMoveParams) (BookingForMoveRow, error) {
 	row := q.db.QueryRow(ctx, bookingForMove, arg.ID, arg.ScheduleID)
 	var i BookingForMoveRow
@@ -213,8 +212,7 @@ type CancelBookingByAuthorParams struct {
 //
 // Повторная отмена не даёт строк — для вызывающего это «уже отменена», а не ошибка.
 //
-// Номер редакции возвращается отсюда же: отмена уезжает со СЛЕДУЮЩИМ, и прочитанный
-// заранее разошёлся бы с переносом, случившимся между чтением и этим UPDATE.
+// Номер редакции возвращается отсюда же: отмена уезжает со следующим.
 func (q *Queries) CancelBookingByAuthor(ctx context.Context, arg CancelBookingByAuthorParams) (int32, error) {
 	row := q.db.QueryRow(ctx, cancelBookingByAuthor, arg.ID, arg.ScheduleID)
 	var revision int32
@@ -5089,11 +5087,9 @@ type MoveBookingParams struct {
 // Длительность НЕ пересчитывается по нынешней нарезке: она снимок момента записи
 // (0050), и перенос встречи её менять не должен.
 //
-// НОМЕР ВОЗВРАЩАЕТСЯ ЭТИМ ЖЕ УТВЕРЖДЕНИЕМ, а не читается заранее: два переноса одной
-// брони в РАЗНЫЕ слоты берут разные advisory-lock'и и друг друга не ждут, поэтому
-// прочитанный до транзакции номер у обоих одинаков — и оба письма уехали бы с общим
-// SEQUENCE. Здесь их разводит блокировка строки: UPDATE'ы одной строки Postgres
-// сериализует сам, и RETURNING отдаёт каждому свой номер.
+// Номер возвращается этим же утверждением: два переноса одной брони в разные слоты
+// берут разные advisory-lock'и и друг друга не ждут, а UPDATE'ы одной строки Postgres
+// сериализует сам.
 func (q *Queries) MoveBooking(ctx context.Context, arg MoveBookingParams) (int32, error) {
 	row := q.db.QueryRow(ctx, moveBooking, arg.ID, arg.ScheduleID, arg.StartsAt)
 	var revision int32
@@ -5457,9 +5453,8 @@ type TakenSeatsAtExceptParams struct {
 
 // Сколько мест занято в точке, НЕ СЧИТАЯ саму переносимую бронь.
 //
-// Исключение по id, а не по client_id (как у публичного холда): переносу нужно не
-// «мой холд не мешает мне», а «эта самая строка не считает себя дважды» — она уже
-// лежит в таблице, и без исключения перенос внутри одного слота отказал бы сам себе.
+// Исключение по id, а не по client_id: переносимая строка уже лежит в таблице и не
+// должна считать себя.
 func (q *Queries) TakenSeatsAtExcept(ctx context.Context, arg TakenSeatsAtExceptParams) (int64, error) {
 	row := q.db.QueryRow(ctx, takenSeatsAtExcept, arg.ScheduleID, arg.StartsAt, arg.ID)
 	var column_1 int64

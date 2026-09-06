@@ -49,7 +49,7 @@ type Store interface {
 	CancelBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (int, error)
 	// BookingForCancel — карточка записи: письму об отмене нужны время и ответ.
 	BookingForCancel(ctx context.Context, db postgres.DBTX, id uuid.UUID) (BookingCard, error)
-	// Перенос записи: та же тройка «лок, счёт, правка», что у публичного холда.
+	// Перенос записи: лок, счёт, правка — как у публичного холда.
 	BookingForMove(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (BookingMove, error)
 	LockSlot(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time) error
 	TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, bookingID uuid.UUID) (int, error)
@@ -74,7 +74,7 @@ const BlocksHorizonDays = 365
 // Service — расписания записи: кабинетная половина фазы 27.
 type Service struct {
 	db postgres.DBTX
-	// tx — транзакция переноса записи: лок, счёт мест и правка одной транзакцией.
+	// tx — перенос записи: лок, счёт мест и правка одной транзакцией.
 	tx     TxRunner
 	repo   Store
 	access Access
@@ -317,7 +317,7 @@ func (s *Service) CancelBooking(ctx context.Context, userID, scheduleID, booking
 	// отмены статус уже другой, и отличить «отменил я» от «было отменено» нечем.
 	card, cardErr := s.repo.BookingForCancel(ctx, s.db, bookingID)
 	// Номер редакции — у самой отмены: между чтением карточки выше и этим UPDATE
-	// запись могли перенести, и прочитанный раньше номер уже не был бы наибольшим.
+	// запись могли перенести.
 	revision, err := s.repo.CancelBooking(ctx, s.db, bookingID, scheduleID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

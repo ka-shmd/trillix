@@ -45,9 +45,7 @@ type CancelNotifier interface {
 		startsAt time.Time, durationMinutes int, sequence int, timezone string)
 }
 
-// BookingNotifier — письма о чужой встрече, которые шлёт КАБИНЕТ. Отмена у него общая
-// с отменой по ссылке, а перенос бывает только отсюда: респонденту переноса не дано
-// (ADR §10), у него в письме одна кнопка — отменить.
+// BookingNotifier — письма кабинета о чужой встрече: отмена и перенос.
 type BookingNotifier interface {
 	CancelNotifier
 	NotifyBookingRescheduled(ctx context.Context, formID, submissionID, bookingID uuid.UUID,
@@ -143,10 +141,8 @@ func (s *CancelService) Cancel(ctx context.Context, tok string) (Card, error) {
 		return card, nil
 	}
 	id, _ := ParseCancelToken(s.secret, tok, s.now())
-	// НОМЕР РЕДАКЦИИ БЕРЁТСЯ У САМОЙ ОТМЕНЫ, а не из карточки, показанной раньше:
-	// между показом и нажатием запись могли перенести, и номер из карточки оказался
-	// бы не больше уже выданного — такую отмену клиент вправе отбросить как
-	// устаревшую, и встреча осталась бы в календаре навсегда.
+	// Номер редакции — у самой отмены: между показом карточки и нажатием запись могли
+	// перенести, а отмену с номером не больше выданного клиент вправе отбросить.
 	revision, err := s.repo.CancelByID(ctx, s.db, id)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {

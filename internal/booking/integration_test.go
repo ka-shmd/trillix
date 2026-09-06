@@ -307,8 +307,7 @@ func TestScheduleBlocks(t *testing.T) {
 	}
 }
 
-// Стоп-кран удаления: живая БУДУЩАЯ запись отказывает 409, прошлая — не мешает
-// (решение владельца 2026-09-03, ADR §10).
+// Стоп-кран удаления: живая будущая запись отказывает 409, прошлая — не мешает.
 func TestSchedules_DeleteBlockedByFutureBooking(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
@@ -871,7 +870,7 @@ func TestBookings_Move(t *testing.T) {
 	}
 
 	// Вне часов приёма перенос ПРОХОДИТ: автор не респондент, и договорённость по
-	// телефону сильнее его же расписания (решение владельца 2026-09-05).
+	// телефону сильнее его же расписания.
 	r = move(id, at(420))
 	closeBody(t, r)
 	if r.StatusCode != http.StatusNoContent {

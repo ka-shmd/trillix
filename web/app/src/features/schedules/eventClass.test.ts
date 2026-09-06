@@ -4,10 +4,8 @@ import { eventClass, type EventProps } from './eventClass'
 import { formTone } from './formColor'
 import type { Booking, ScheduleBlock } from '../../entities/schedule'
 
-// Имя класса — единственное, чем красится полотно, и собирается оно строкой. Ни
-// типы, ни сборка потерянного куска этой строки не видят: класс `sc-ev sc-booking 3`
-// компилируется, проходит линт и рисует белую карточку. Поймано отчётом владельца
-// 2026-09-05 — «цвет записей не работает, они просто белые».
+// Имя класса собирается строкой, и потерянный кусок не видят ни типы, ни сборка:
+// `sc-ev sc-booking 3` компилируется, проходит линт и рисует белую карточку.
 const at = (props: EventProps) => eventClass({ event: { extendedProps: props } })
 
 const booking = (formId: string) => ({ formId }) as Booking
@@ -63,8 +61,7 @@ describe('класс события полотна', () => {
     expect(at({ layer: 'block', block: { id: 'b1' } as ScheduleBlock })).toContain('sc-block')
   })
 
-  // Мираж перетаскивания библиотека рисует сама, и своих свойств у него нет. До
-  // правки он проваливался в ветку записи и вылезал синей кляксой во всю колонку.
+  // Мираж перетаскивания библиотека рисует сама, и своих свойств у него нет.
   it('чужое событие не красится нашими слоями', () => {
     const cls = eventClass({ event: { extendedProps: {} } })
     expect(cls).toContain('sc-ghost')

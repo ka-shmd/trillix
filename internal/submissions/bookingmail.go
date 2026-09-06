@@ -84,9 +84,8 @@ func (s *Service) notifyBooking(
 			"cancel_link": link,
 			"form_link":   s.formBaseURL + "/r/" + slug,
 		},
-		// SEQUENCE 0 — нулевой номер редакции события: письмо о самой записи уходит
-		// в момент её создания, когда `bookings.revision` ещё нулевой. Дальше номер
-		// ведёт сама строка, и присылает его тот, кто её правил.
+		// SEQUENCE 0: письмо уходит в момент создания брони, когда её
+		// `bookings.revision` ещё нулевой.
 		Inline: []mail.File{s.invite(domain.ICSRequest, 0, b, owner.PublicTitle, to, link)},
 	}
 	if err := s.mail.EnqueueEmail(ctx, s.db, msg); err != nil {
@@ -196,10 +195,8 @@ func (s *Service) NotifyBookingCanceled(
 			"when":       bookingWhen(startsAt, timezone),
 			"form_link":  s.formBaseURL + "/r/" + owner.Slug,
 		},
-		// НОМЕР ПРИСЫЛАЕТ МОДУЛЬ ЗАПИСИ, и он всегда больше выданного: клиент вправе
-		// проигнорировать отмену с номером не выше принятого, приняв её за
-		// устаревшую. Константы здесь стояла единица — она врала с первого же
-		// переноса, потому что перенос тоже уезжает REQUEST'ом и поднимает номер.
+		// Номер присылает модуль записи, и он всегда больше выданного: отмену с
+		// номером не выше принятого клиент вправе отбросить.
 		Inline: []mail.File{s.invite(domain.ICSCancel, sequence, b, owner.PublicTitle, to, "")},
 	}
 	if err := s.mail.EnqueueEmail(ctx, s.db, msg); err != nil {
