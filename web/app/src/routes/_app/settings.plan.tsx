@@ -1,7 +1,7 @@
-import { createFileRoute, Link } from '@tanstack/react-router'
+import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 
-import { type PlanFeature, type PlanWorkspace } from '../../entities/plan'
+import { type PlanFeature } from '../../entities/plan'
 import { accountPlanQueryOptions } from '../../features/plan/queries'
 import { humanError } from '../../shared/api/errors'
 import { formatDate } from '../../shared/format'
@@ -10,8 +10,6 @@ import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
 import { Section } from '../../shared/page/Section'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
-import { formatFileSize } from '@fields/fileUpload'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 
@@ -24,9 +22,10 @@ import { Progress } from '@/components/ui/progress'
 // показывала свой остаток сообщений ассистенту — и обещала этим тариф, которого у
 // пространства нет.
 //
-// Воркспейс-квоты (ответы, участники, файлы, расписания) при этом честно
-// принадлежат пространству, поэтому показываются строкой на пространство, а не
-// прячутся и не складываются: лимит у каждого свой, и сумма ответила бы неправду.
+// ВОРКСПЕЙС-КВОТ ЗДЕСЬ НЕТ ВОВСЕ (решение владельца там же): ни списком пространств,
+// ни суммой. Страница отвечает на один вопрос — «за что я плачу», — а расход
+// пространства это вопрос про пространство. Следствие названо вслух в BILLING §12:
+// включённый лимит ответов не виден в кабинете до тех пор, пока в него не упрутся.
 //
 // Денег страница НЕ принимает: платёжного провайдера в проекте нет (нет ИП, оферты
 // и договора — фаза платежей отдельная). Кнопка ведёт на заглушку, и это сказано
@@ -52,8 +51,7 @@ function PlanPage() {
         description={
           plan.data ? (
             <>
-              Текущий план — <span className="text-foreground">{plan.data.planTitle}</span>. Он
-              один на аккаунт: по нему работают все ваши пространства.
+              Текущий план — <span className="text-foreground">{plan.data.planTitle}</span>.
             </>
           ) : (
             'Что входит в ваш план и сколько из него израсходовано.'
@@ -99,19 +97,6 @@ function PlanPage() {
               </Section>
             )}
 
-            {plan.data.workspaces.length > 0 && (
-              <Section
-                title="Пространства"
-                description="Ответы, участники, файлы и расписания принадлежат пространству, поэтому и считаются по нему."
-              >
-                <div className="flex flex-col gap-4">
-                  {plan.data.workspaces.map((ws) => (
-                    <WorkspaceCard key={ws.id} workspace={ws} periodEnd={plan.data.periodEnd} />
-                  ))}
-                </div>
-              </Section>
-            )}
-
             <Section title="Оплата">
               <p className="text-sm">
                 Оплата тарифов ещё не подключена — мы её готовим. Ничего не потеряется: все
@@ -128,59 +113,15 @@ function PlanPage() {
   )
 }
 
-// WorkspaceCard — расход одного пространства. Имя — ссылка в само пространство:
-// увидев упёршийся счётчик, человек идёт туда, а не ищет его в панели заново.
-function WorkspaceCard({
-  workspace,
-  periodEnd,
-}: {
-  workspace: PlanWorkspace
-  periodEnd: string
-}) {
-  // Безлимитные квоты в строке пространства не показываются, в отличие от
-  // аккаунтных: там их три-четыре и они отвечают «что мне дали», а здесь их столько
-  // же НА КАЖДОЕ пространство — список «без ограничения» в дюжину строк не
-  // сообщает ничего и прячет те, у которых лимит есть.
-  const limited = workspace.features.filter((f) => f.limit !== null)
-
-  return (
-    <div className="rounded-lg border p-4">
-      <div className="flex flex-wrap items-center gap-2">
-        <Link
-          to="/w/$workspaceSlug/forms"
-          params={{ workspaceSlug: workspace.slug }}
-          className="text-base font-semibold hover:underline"
-        >
-          {workspace.name}
-        </Link>
-        {workspace.isPersonal && <Badge variant="secondary">Личное</Badge>}
-      </div>
-      {limited.length === 0 ? (
-        <p className="mt-2 text-sm text-muted-foreground">
-          План не ограничивает это пространство ни в ответах, ни в участниках, ни в файлах.
-        </p>
-      ) : (
-        <div className="mt-4 flex flex-col gap-4">
-          {limited.map((f) => (
-            <QuotaRow key={f.key} feature={f} periodEnd={periodEnd} />
-          ))}
-        </div>
-      )}
-    </div>
-  )
-}
-
 // QuotaRow — числовой лимит: «87 из 100» плюс полоса. Безлимит (limit === null)
 // полосы не имеет: рисовать заполненность у бесконечности нечем.
 function QuotaRow({ feature, periodEnd }: { feature: PlanFeature; periodEnd: string }) {
   const { key, title, used, limit } = feature
-  // ПЕРИОД ЕСТЬ НЕ У ВСЯКОЙ КВОТЫ. Ответы и сообщения ассистенту копятся за месяц и
-  // обнуляются первого числа; участники, файлы, расписания и пространства — это
-  // «сколько занято сейчас», и обещание «обнулится 1 октября» было бы про них
-  // прямой неправдой (внутри — Meter каталога, здесь — его отражение).
-  const periodic = key === 'submissions_per_month' || key === 'ai_generations'
-  const bytes = key === 'storage_per_workspace'
-  const amount = (n: number) => (bytes ? formatFileSize(n) : String(n))
+  // ПЕРИОД ЕСТЬ НЕ У ВСЯКОЙ КВОТЫ. Сообщения ассистенту копятся за месяц и обнуляются
+  // первого числа; число пространств — это «сколько занято сейчас», и обещание
+  // «обнулится 1 октября» было бы про него прямой неправдой (внутри — Meter каталога,
+  // здесь — его отражение).
+  const periodic = key === 'ai_generations'
 
   if (limit === null) {
     return (
@@ -199,19 +140,13 @@ function QuotaRow({ feature, periodEnd }: { feature: PlanFeature; periodEnd: str
       <div className="flex items-baseline justify-between gap-3 text-sm">
         <span>{title}</span>
         <span className={exhausted ? 'text-destructive' : 'text-muted-foreground'}>
-          {amount(used)} из {amount(limit)}
+          {used} из {limit}
         </span>
       </div>
       <Progress value={percent} className="mt-2" />
-      {(periodic || exhausted) && (
+      {periodic && (
         <p className="mt-1 text-xs text-muted-foreground">
-          {periodic && `Расход обнулится ${formatDate(periodEnd)}.`}
-          {/* Про сохранение сверхлимитных говорится только там, где это правда:
-              ответ сверх квоты принимается и ждёт апгрейда, а сообщение ассистенту
-              сверх квоты просто не отправляется. */}
-          {exhausted &&
-            key === 'submissions_per_month' &&
-            ' Ответы сверх лимита продолжают приниматься и сохраняться — они скрыты до перехода на тариф, который их вмещает.'}
+          Расход обнулится {formatDate(periodEnd)}.
         </p>
       )}
     </div>

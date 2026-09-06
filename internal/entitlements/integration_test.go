@@ -346,13 +346,13 @@ func TestConsumeAIGeneration_CountsPerAccount(t *testing.T) {
 	}
 }
 
-// Снимок тарифа аккаунта: аккаунтное — одним числом наверху, воркспейсное —
-// строкой на пространство, и только на то, которым аккаунт ВЛАДЕЕТ.
-func TestAccountSnapshot_SplitsAccountAndWorkspaceQuotas(t *testing.T) {
+// Снимок тарифа аккаунта: план, его возможности и расход того, что оплачено
+// человеком. Воркспейс-квоты в него не входят — расход пространства это вопрос про
+// пространство, и лимит у каждого свой.
+func TestAccountSnapshot_AccountLevelOnly(t *testing.T) {
 	ctx := context.Background()
 	first, ownerID := seedWorkspace(t, "free")
-	second := seedWorkspaceFor(t, ownerID)
-	foreign, _ := seedWorkspace(t, "free") // чужое: в снимок попасть не должно
+	seedWorkspaceFor(t, ownerID)
 
 	setLimit(t, "free", "ai_generations", "30")
 	setLimit(t, "free", "submissions_per_month", "10")
@@ -361,7 +361,6 @@ func TestAccountSnapshot_SplitsAccountAndWorkspaceQuotas(t *testing.T) {
 	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
 	setAIUsage(t, ownerID, "2026-08-01", 5)
 	setUsage(t, first, "2026-08-01", 7)
-	setUsage(t, second, "2026-08-01", 1)
 
 	svc := entitlements.NewService(testPool, entitlements.Repo{}, func() time.Time { return now })
 	snap, err := svc.AccountSnapshot(ctx, ownerID)
@@ -369,38 +368,25 @@ func TestAccountSnapshot_SplitsAccountAndWorkspaceQuotas(t *testing.T) {
 		t.Fatalf("AccountSnapshot: %v", err)
 	}
 
-	// Наверху — аккаунтные квоты и возможности плана.
 	ai := snap.Features[entitlements.AIGenerations]
 	if ai.Used != 5 || ai.Limit == nil || *ai.Limit != 30 {
 		t.Errorf("сообщения ассистенту = %d/%v, ждали 5/30", ai.Used, ai.Limit)
 	}
+	// Оба пространства считаются, хотя расход ассистента общий: это разные счётчики.
 	if ws := snap.Features[entitlements.Workspaces]; ws.Used != 2 {
 		t.Errorf("пространств у аккаунта = %d, ждали 2", ws.Used)
 	}
 	if _, ok := snap.Features[entitlements.AnalyticsFunnel]; !ok {
-		t.Error("возможности плана не показаны в аккаунтной части")
+		t.Error("возможности плана не показаны: их решает план, а он у аккаунта один")
 	}
-	// Воркспейс-квоты наверх не поднимаются: сложить расход пространств в одно
-	// число нельзя — лимит у каждого свой.
+	// Воркспейс-квоты в аккаунтный снимок не попадают ни числом, ни суммой: у
+	// каждого пространства свой расход, и одно число на всех было бы неправдой.
 	if _, ok := snap.Features[entitlements.SubmissionsPerMonth]; ok {
 		t.Error("воркспейс-квота показана как аккаунтная")
 	}
-
-	if len(snap.Workspaces) != 2 {
-		t.Fatalf("пространств в снимке = %d, ждали 2 (чужое не считается)", len(snap.Workspaces))
-	}
-	used := map[uuid.UUID]int64{}
-	for _, ws := range snap.Workspaces {
-		if ws.ID == foreign {
-			t.Fatal("чужое пространство попало в снимок аккаунта (анти-IDOR)")
-		}
-		if _, ok := ws.Features[entitlements.AIGenerations]; ok {
-			t.Error("аккаунтная квота повторена в строке пространства")
-		}
-		used[ws.ID] = ws.Features[entitlements.SubmissionsPerMonth].Used
-	}
-	if used[first] != 7 || used[second] != 1 {
-		t.Errorf("расход по пространствам = %d и %d, ждали 7 и 1", used[first], used[second])
+	// Конец периода — общий: аккаунтный расход обнуляется вместе с воркспейсным.
+	if got := snap.PeriodEnd.Format("2006-01-02"); got != "2026-09-01" {
+		t.Errorf("конец периода = %s, ждали 2026-09-01", got)
 	}
 }
 

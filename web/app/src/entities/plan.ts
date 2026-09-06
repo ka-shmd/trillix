@@ -27,27 +27,15 @@ export const planSnapshotSchema = z.object({
 
 export type PlanSnapshot = z.infer<typeof planSnapshotSchema>
 
-// Пространство в аккаунтном снимке: его собственные квоты (ответы, участники,
-// файлы, расписания). Плана в строке нет — он у всех пространств аккаунта один.
-export const planWorkspaceSchema = z.object({
-  id: z.string(),
-  slug: z.string(),
-  name: z.string(),
-  isPersonal: z.boolean(),
-  features: z.array(planFeatureSchema),
-})
-
-export type PlanWorkspace = z.infer<typeof planWorkspaceSchema>
-
 // GET /account/entitlements: план АККАУНТА (платит человек, а не пространство —
 // ADR §10). features — возможности плана и аккаунтные квоты (сообщения ассистенту,
-// число пространств); воркспейс-квоты приезжают строкой на пространство.
+// число пространств). Воркспейс-квот здесь нет: расход пространства — вопрос про
+// пространство, и страница тарифа на него не отвечает.
 export const accountPlanSchema = z.object({
   planCode: z.string(),
   planTitle: z.string(),
   periodEnd: z.string(),
   features: z.array(planFeatureSchema),
-  workspaces: z.array(planWorkspaceSchema),
 })
 
 export type AccountPlan = z.infer<typeof accountPlanSchema>

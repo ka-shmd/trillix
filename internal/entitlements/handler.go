@@ -58,22 +58,11 @@ type featureResponse struct {
 	Limit   *int64 `json:"limit"`
 }
 
-// workspaceResponse — пространство аккаунта и его собственные квоты в аккаунтном
-// снимке.
-type workspaceResponse struct {
-	ID         string            `json:"id"`
-	Slug       string            `json:"slug"`
-	Name       string            `json:"name"`
-	IsPersonal bool              `json:"isPersonal"`
-	Features   []featureResponse `json:"features"`
-}
-
 type accountSnapshotResponse struct {
-	PlanCode   string              `json:"planCode"`
-	PlanTitle  string              `json:"planTitle"`
-	PeriodEnd  string              `json:"periodEnd"`
-	Features   []featureResponse   `json:"features"`
-	Workspaces []workspaceResponse `json:"workspaces"`
+	PlanCode  string            `json:"planCode"`
+	PlanTitle string            `json:"planTitle"`
+	PeriodEnd string            `json:"periodEnd"`
+	Features  []featureResponse `json:"features"`
 }
 
 type snapshotResponse struct {
@@ -120,7 +109,7 @@ func (h *Handler) snapshot(w http.ResponseWriter, r *http.Request) {
 }
 
 // accountSnapshot отдаёт снимок тарифа аккаунта. Проверять права не у кого и не о
-// чём: субъект — сам спрашивающий, а пространства отбирает запрос по владению.
+// чём: субъект — сам спрашивающий.
 func (h *Handler) accountSnapshot(w http.ResponseWriter, r *http.Request) {
 	u, ok := auth.UserFromContext(r.Context())
 	if !ok {
@@ -134,23 +123,11 @@ func (h *Handler) accountSnapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	workspaces := make([]workspaceResponse, 0, len(snap.Workspaces))
-	for _, ws := range snap.Workspaces {
-		workspaces = append(workspaces, workspaceResponse{
-			ID:         ws.ID.String(),
-			Slug:       ws.Slug,
-			Name:       ws.Name,
-			IsPersonal: ws.IsPersonal,
-			Features:   featureList(ws.Features),
-		})
-	}
-
 	httpserver.WriteJSON(w, r, http.StatusOK, accountSnapshotResponse{
-		PlanCode:   snap.PlanCode,
-		PlanTitle:  snap.PlanTitle,
-		PeriodEnd:  snap.PeriodEnd.Format("2006-01-02"),
-		Features:   featureList(snap.Features),
-		Workspaces: workspaces,
+		PlanCode:  snap.PlanCode,
+		PlanTitle: snap.PlanTitle,
+		PeriodEnd: snap.PeriodEnd.Format("2006-01-02"),
+		Features:  featureList(snap.Features),
 	})
 }
 

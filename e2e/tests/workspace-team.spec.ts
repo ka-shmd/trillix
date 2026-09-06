@@ -137,12 +137,12 @@ test('приглашение в пространство: коллега при�
   await expect(matePage.getByRole('link', { name: 'Тариф' })).toHaveCount(1)
 
   // Чужой план по-прежнему недоступен, и прячется он не кнопкой: старый адрес
-  // тарифа пространства ведёт на аккаунтную страницу, а в её списке расхода стоят
-  // только пространства, которыми человек ВЛАДЕЕТ. Чужого там нет.
+  // тарифа пространства ведёт на аккаунтную страницу — она про план САМОГО
+  // спрашивающего и про чужое пространство не говорит ничего.
   await matePage.goto(`/w/${spaceSlug}/plan`)
   await expect(matePage).toHaveURL(/\/settings\/plan$/)
   await expect(matePage.getByRole('heading', { name: 'Тариф' })).toBeVisible()
-  await expect(matePage.getByRole('link', { name: spaceName })).toHaveCount(0)
+  await expect(matePage.getByRole('heading', { name: 'Возможности' })).toBeVisible()
 
   // --- Владелец отзывает доступ ---
   // Перезагрузка нужна за данными: коллега принял приглашение в другом контексте,

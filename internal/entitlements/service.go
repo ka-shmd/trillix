@@ -51,22 +51,6 @@ type Row struct {
 	SchedulesCount int64
 }
 
-// WorkspaceRow — одно пространство аккаунта со своими воркспейс-счётчиками.
-// План в строку не входит: он у всех этих пространств один — план их общего
-// владельца, — и повторять его на строку значило бы приглашать к вопросу «а
-// почему у них разный».
-type WorkspaceRow struct {
-	ID         uuid.UUID
-	Slug       string
-	Name       string
-	IsPersonal bool
-
-	SubmissionsUsed int64
-	MembersCount    int64
-	StorageUsed     int64
-	SchedulesCount  int64
-}
-
 // Store — доступ к данным, объявленный на стороне потребителя. Реализация — Repo.
 type Store interface {
 	Entitlements(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error)
@@ -77,9 +61,6 @@ type Store interface {
 	// AccountEntitlements — план самого аккаунта и оба его счётчика: число
 	// пространств («здесь и сейчас») и расход ассистента (за период).
 	AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID, period time.Time) (Row, error)
-	// OwnedWorkspaceUsage — расход воркспейс-квот по каждому пространству, которым
-	// аккаунт владеет: строки аккаунтной страницы тарифа.
-	OwnedWorkspaceUsage(ctx context.Context, db postgres.DBTX, userID uuid.UUID, period time.Time) ([]WorkspaceRow, error)
 	// EntitlementsWithStorage — то же, что Entitlements, плюс расход хранилища
 	// (гейт файлов). Отдельным запросом по тому же доводу, что и счётчик
 	// участников: сумма по submission_files нужна одной операции.
@@ -130,10 +111,12 @@ type Snapshot struct {
 	Features  map[Key]Decision
 }
 
-// AccountSnapshot — картина тарифа АККАУНТА: то, за что человек платит, и то, что
-// из этого израсходовано — в двух ярусах. Наверху аккаунтное (план, его
-// возможности, число пространств, сообщения ассистенту), ниже — расход тех квот,
-// которые принадлежат пространству и на аккаунт не сводятся.
+// AccountSnapshot — картина тарифа АККАУНТА: план, его возможности и расход того,
+// что оплачено человеком (число пространств, сообщения ассистенту).
+//
+// Воркспейс-квот здесь нет намеренно (решение владельца 2026-09-06): расход
+// пространства — вопрос про пространство, и сводить его на аккаунт нечем — лимит
+// у каждого свой.
 type AccountSnapshot struct {
 	PlanCode  string
 	PlanTitle string
@@ -141,19 +124,6 @@ type AccountSnapshot struct {
 	PeriodEnd time.Time
 	// Features — возможности плана и АККАУНТНЫЕ квоты.
 	Features map[Key]Decision
-	// Workspaces — пространства, которыми аккаунт владеет, с их собственными
-	// квотами. Пусто у сироты без личного пространства (TD-53) — это законный
-	// ответ, а не ошибка.
-	Workspaces []WorkspaceSnapshot
-}
-
-// WorkspaceSnapshot — одно пространство аккаунта и его воркспейс-квоты.
-type WorkspaceSnapshot struct {
-	ID         uuid.UUID
-	Slug       string
-	Name       string
-	IsPersonal bool
-	Features   map[Key]Decision
 }
 
 // Service — единая точка проверки лимитов.
@@ -302,14 +272,12 @@ func (s *Service) Snapshot(ctx context.Context, userID, workspaceID uuid.UUID) (
 // даёт, оба аккаунтных счётчика и расход воркспейс-квот по каждому пространству,
 // которым аккаунт владеет.
 //
-// Права спрашивать не у кого: субъект — сам спрашивающий. Пространства берёт
-// запрос, отбирающий владение (`billing.view` есть ровно у владельца), поэтому
-// чужое сюда не попадает и на членство здесь не смотрят вовсе.
+// Права спрашивать не у кого и не о чем: субъект — сам спрашивающий.
 //
-// Возможности плана (Toggle) стоят в аккаунтной части, а не в строке каждого
-// пространства: их решает ПЛАН, а план у всех пространств владельца один. Квоты
-// разводит счётчик: аккаунтный — наверх, воркспейсный — в строку пространства
-// (Meter.AccountWide).
+// Возможности плана (Toggle) в снимок входят, воркспейс-квоты — нет, и делит их
+// СЧЁТЧИК: возможность решает план (один на все пространства человека), а расход
+// ответов, мест, файлов и расписаний копится в пространстве и на аккаунт не
+// сводится — Meter.AccountWide.
 func (s *Service) AccountSnapshot(ctx context.Context, userID uuid.UUID) (AccountSnapshot, error) {
 	period := s.PeriodStart()
 	acc, err := s.repo.AccountEntitlements(ctx, s.db, userID, period)
@@ -329,50 +297,13 @@ func (s *Service) AccountSnapshot(ctx context.Context, userID uuid.UUID) (Accoun
 	}
 	for key, f := range Catalog {
 		if f.Kind == Quota && !f.Meter.AccountWide() {
-			continue // воркспейс-квоты приезжают строкой на пространство
+			continue // воркспейс-квоты этот снимок не показывает
 		}
 		d, err := decide(f, acc, key)
 		if err != nil {
 			return AccountSnapshot{}, err
 		}
 		snap.Features[key] = d
-	}
-
-	rows, err := s.repo.OwnedWorkspaceUsage(ctx, s.db, userID, period)
-	if err != nil {
-		return AccountSnapshot{}, err
-	}
-	for _, r := range rows {
-		// Лимиты берутся из плана АККАУНТА, а не запрашиваются на пространство:
-		// пространство работает по плану своего владельца, а владелец здесь один и
-		// тот же — спрашивающий. Счётчики подставляются пространственные.
-		row := Row{
-			PlanCode:        acc.PlanCode,
-			PlanTitle:       acc.PlanTitle,
-			Limits:          acc.Limits,
-			SubmissionsUsed: r.SubmissionsUsed,
-			MembersCount:    r.MembersCount,
-			StorageUsed:     r.StorageUsed,
-			SchedulesCount:  r.SchedulesCount,
-		}
-		ws := WorkspaceSnapshot{
-			ID:         r.ID,
-			Slug:       r.Slug,
-			Name:       r.Name,
-			IsPersonal: r.IsPersonal,
-			Features:   make(map[Key]Decision, len(Catalog)),
-		}
-		for key, f := range Catalog {
-			if f.Kind != Quota || f.Meter.AccountWide() {
-				continue
-			}
-			d, err := decide(f, row, key)
-			if err != nil {
-				return AccountSnapshot{}, err
-			}
-			ws.Features[key] = d
-		}
-		snap.Workspaces = append(snap.Workspaces, ws)
 	}
 	return snap, nil
 }

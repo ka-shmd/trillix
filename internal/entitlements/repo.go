@@ -76,33 +76,6 @@ func (Repo) AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uu
 	}, nil
 }
 
-// OwnedWorkspaceUsage — расход воркспейс-квот по каждому пространству, которым
-// аккаунт ВЛАДЕЕТ: строки аккаунтной страницы тарифа. Пустой список — законный
-// ответ (личного пространства нет только у сироты, TD-53), а не ошибка.
-func (Repo) OwnedWorkspaceUsage(ctx context.Context, db postgres.DBTX, userID uuid.UUID, period time.Time) ([]WorkspaceRow, error) {
-	rows, err := postgres.New(db).ListOwnedWorkspaceUsage(ctx, postgres.ListOwnedWorkspaceUsageParams{
-		UserID: userID,
-		Period: pgtype.Date{Time: period, Valid: true},
-	})
-	if err != nil {
-		return nil, fmt.Errorf("list owned workspace usage of account %s: %w", userID, err)
-	}
-	out := make([]WorkspaceRow, 0, len(rows))
-	for _, row := range rows {
-		out = append(out, WorkspaceRow{
-			ID:              row.ID,
-			Slug:            row.Slug,
-			Name:            row.Name,
-			IsPersonal:      row.IsPersonal,
-			SubmissionsUsed: row.SubmissionsUsed,
-			MembersCount:    row.MembersCount,
-			StorageUsed:     row.StorageUsed,
-			SchedulesCount:  row.SchedulesCount,
-		})
-	}
-	return out, nil
-}
-
 // EntitlementsWithMembers — состояние тарифа плюс счётчик участников (гейт мест).
 func (Repo) EntitlementsWithMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) (Row, error) {
 	row, err := postgres.New(db).GetEntitlementsWithMembers(ctx, postgres.GetEntitlementsWithMembersParams{

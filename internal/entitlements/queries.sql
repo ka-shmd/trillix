@@ -178,38 +178,3 @@ LEFT JOIN workspace_usage u
 LEFT JOIN account_usage au
        ON au.user_id = o.user_id AND au.period = $2
 WHERE o.workspace_id = $1 AND o.role = 'owner';
-
--- Расход воркспейс-квот по КАЖДОМУ пространству аккаунта — для аккаунтной страницы
--- тарифа (ADR §10, 2026-09-06). Ответы, места, файлы и расписания принадлежат
--- пространству и на аккаунт не сводятся, поэтому страница показывает их строкой на
--- пространство, а не прячет.
---
--- Берутся только пространства, которыми аккаунт ВЛАДЕЕТ: тариф видит владелец
--- (`billing.view` в матрице ролей), и членство в чужом пространстве права смотреть
--- чужой план не даёт. Право обеспечивает сам запрос — id спрашивающего стоит в
--- WHERE, а не проверяется отдельно (тот же приём, что у GetEntitlementsForUser).
---
--- Подзапросов три на строку, и это осознанно: страница открывается редко и одним
--- запросом, а альтернатива — четыре поездки на пространство (N+1).
---
--- Личное пространство идёт первым: оно есть у всех и не удаляется, поэтому служит
--- якорем списка. Дальше — по времени создания, тай-брейк по id ради устойчивости.
--- name: ListOwnedWorkspaceUsage :many
-SELECT w.id,
-       w.slug,
-       w.name,
-       (w.personal_user_id IS NOT NULL)::boolean AS is_personal,
-       coalesce(u.submissions, 0)::bigint AS submissions_used,
-       (SELECT count(*) FROM workspace_members m
-          JOIN users mu ON mu.id = m.user_id AND mu.deleted_at IS NULL
-         WHERE m.workspace_id = w.id)::bigint AS members_count,
-       (SELECT coalesce(sum(f.size_bytes), 0) FROM submission_files f
-         WHERE f.workspace_id = w.id)::bigint AS storage_used,
-       (SELECT count(*) FROM schedules sc
-         WHERE sc.workspace_id = w.id)::bigint AS schedules_count
-FROM workspace_members o
-JOIN workspaces w ON w.id = o.workspace_id
-LEFT JOIN workspace_usage u
-       ON u.workspace_id = w.id AND u.period = $2
-WHERE o.user_id = $1 AND o.role = 'owner'
-ORDER BY w.personal_user_id IS NULL, w.created_at, w.id;
