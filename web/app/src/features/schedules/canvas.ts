@@ -293,14 +293,6 @@ export function scrollStart(a: Availability): string {
   return minutesToClock(Math.max(0, Math.floor((min - 60) / 60) * 60))
 }
 
-// windowOf — пара отметок календаря в окно правила. Полночь СЛЕДУЮЩИХ суток — это
-// «24:00» конца окна, а не ноль: иначе окно до полуночи схлопывалось бы в нулевое.
-export function windowOf(startStr: string, endStr: string): TimeWindow {
-  const from = clockOfNaive(startStr)
-  const to = dateOfNaive(endStr) === dateOfNaive(startStr) ? clockOfNaive(endStr) : '24:00'
-  return { from, to }
-}
-
 // dateByNumber — какая из показанных дат стоит в колонке с этим числом.
 //
 // ⚠ Обходит ДВОЙНОЕ ПРОЧТЕНИЕ библиотечного Date. В именованном поясе он бывает и

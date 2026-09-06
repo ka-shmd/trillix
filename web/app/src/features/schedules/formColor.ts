@@ -15,7 +15,7 @@
 const TONES = 8
 
 export function formTone(formId: string): number {
-  // djb2: одинаковый ответ на одном id в любой сессии и на любой поверхности.
+  // djb2: одинаковый ответ на одном id в любой сессии и на любом экране.
   let hash = 5381
   for (let i = 0; i < formId.length; i++) hash = (hash * 33 + formId.charCodeAt(i)) % 0xffffffff
   return (hash % TONES) + 1

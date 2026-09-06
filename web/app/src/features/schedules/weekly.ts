@@ -54,18 +54,12 @@ function dayWindows(a: Availability, day: Weekday): TimeWindow[] {
   return a.weekly[day] ?? []
 }
 
-// ruleGroups — правило, свёрнутое в группы «подряд идущие дни с одинаковыми часами».
+// weekSummary — правило одной строкой для списка расписаний: «пн–пт, 10:00–18:00».
 //
-// Подряд идущие дни с ОДИНАКОВЫМИ окнами сворачиваются в диапазон: список из семи
-// строк нечитаем, а «пн, вт, ср, чт, пт» вместо «пн–пт» — тот же список, только
-// длиннее. Из групп собираются обе подачи правила — строка карточки в списке
-// расписаний (weekSummary) и столбик сводки на поверхности «Приём» (RuleSummary):
-// считать их порознь значило бы держать два ответа на вопрос «как выглядит моя
-// неделя».
-export type RuleGroup = { days: Weekday[]; hours: string }
-
-export function ruleGroups(a: Availability): RuleGroup[] {
-  const groups: RuleGroup[] = []
+// Подряд идущие дни с ОДИНАКОВЫМИ окнами сворачиваются в диапазон: «пн, вт, ср, чт,
+// пт» — тот же список, только длиннее.
+export function weekSummary(a: Availability): string {
+  const groups: { days: Weekday[]; hours: string }[] = []
   for (const day of WEEKDAYS) {
     const windows = dayWindows(a, day)
     if (windows.length === 0) continue
@@ -78,26 +72,15 @@ export function ruleGroups(a: Availability): RuleGroup[] {
     if (last && last.hours === hours && adjacent) last.days.push(day)
     else groups.push({ days: [day], hours })
   }
+  if (groups.length === 0) return 'Приём не ведётся'
   return groups
+    .map((g) => {
+      const from = WEEKDAY_SHORT[g.days[0]!]
+      const to = WEEKDAY_SHORT[g.days[g.days.length - 1]!]
+      return `${g.days.length === 1 ? from : `${from}–${to}`}, ${g.hours}`
+    })
+    .join(' · ')
 }
-
-// groupDays — «пн–пт» или «сб»: как называется группа дней.
-export function groupDays(g: RuleGroup): string {
-  const from = WEEKDAY_SHORT[g.days[0]!]
-  const to = WEEKDAY_SHORT[g.days[g.days.length - 1]!]
-  return g.days.length === 1 ? from : `${from}–${to}`
-}
-
-// weekSummary — правило одной строкой для списка расписаний: «пн–пт, 10:00–18:00».
-export function weekSummary(a: Availability): string {
-  const groups = ruleGroups(a)
-  if (groups.length === 0) return NO_RULE
-  return groups.map((g) => `${groupDays(g)}, ${g.hours}`).join(' · ')
-}
-
-// NO_RULE — что показать вместо правила, которого нет. Одним словом на весь кабинет:
-// список расписаний и сводка полотна обязаны говорить это одинаково.
-export const NO_RULE = 'Приём не ведётся'
 
 export const WEEKDAY_SHORT: Record<Weekday, string> = {
   mon: 'пн',

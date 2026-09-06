@@ -16,7 +16,7 @@ import {
 //
 // Меню висит на самой шапке, а не на отдельном значке: у колонки один заголовок, и
 // второй орган управления рядом с ним читался бы как что-то ещё.
-export type DayState = 'weekly' | 'exception' | 'closed'
+type DayState = 'weekly' | 'exception' | 'closed'
 
 export function DayHeader({
   name,

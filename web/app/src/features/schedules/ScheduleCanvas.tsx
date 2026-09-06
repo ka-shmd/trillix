@@ -30,9 +30,9 @@ import {
 import { Button } from '@/components/ui/button'
 import { humanError } from '../../shared/api/errors'
 import { LOCALE } from '../../shared/format'
-import { clearBand as clearBandEl, paintBand as paintBandEl } from './band'
 import {
   AXIS,
+  bandBox,
   clockOfNaive,
   dateByNumber,
   dateKeys,
@@ -107,8 +107,8 @@ export function ScheduleCanvas({
     narrowScreen() ? 'timeGridDay' : 'timeGridWeek',
   )
   const [anchor, setAnchor] = useState<Anchor | null>(null)
-  // Окно приёма спрашивается ОТДЕЛЬНЫМ попапом: тот же вопрос задаёт поверхность
-  // «Приём», и два его экземпляра были бы двумя обещаниями на одно действие.
+  // Окно приёма спрашивается своим попапом: у него один вопрос (убрать — и в каком
+  // объёме), и разворачивать ради него диалог незачем.
   const [windowAnchor, setWindowAnchor] = useState<WindowAnchor | null>(null)
   const [error, setError] = useState<string | null>(null)
   // ЧТО ВЫДЕЛЕНО ПРОТЯЖКОЙ, пока окно спрашивает. До ответа в документе не меняется
@@ -409,13 +409,6 @@ export function ScheduleCanvas({
             workingDays.has(dateKeyOf(info.date, schedule.timezone)) ? '' : 'sc-day-off'
           }
           eventContent={eventContent}
-          // ⚠ У ФОНОВОГО СОБЫТИЯ СВОЯ ОПЦИЯ КЛАССА. `eventClass` библиотека спрашивает
-          // только у обычных событий, а фоновым классы даёт `backgroundEventClass` —
-          // без него часы приёма на этой поверхности рисуются библиотечным умолчанием,
-          // а палитру темы мы не подключаем вовсе, и подложка выходит НЕВИДИМОЙ.
-          // Поймано отчётом владельца 2026-09-05: «хочу видеть, какие часы отмечены в
-          // приёме» — их и не было видно.
-          backgroundEventClass={eventClass}
           // ⚠ СОСТОЯНИЕ СТАВИТСЯ ОТЛОЖЕННО, И ЭТО НЕ ПЕРЕСТРАХОВКА. `datesSet`
           // библиотека дёргает из обработчика смены своих пропсов, то есть ИЗ СВОЕЙ
           // ФАЗЫ РЕНДЕРА; setState оттуда React считает побочным эффектом рендера и
@@ -572,13 +565,37 @@ export function ScheduleCanvas({
     </div>
   )
 
-  // Подсказка протяжки живёт в band.ts — её рисуют обе поверхности полотна.
+  // paintBand — ПОДСКАЗКА ПРОТЯЖКИ ЭТО ПРЯМОУГОЛЬНИК, а не непрерывный отрезок.
+  // Библиотека рисует по слайсу на день и позиционирует их inline (`top`/`height` в
+  // пикселях): первый день от начала протяжки до низа, средние целиком, последний
+  // сверху до курсора — автор видел одно, а получал другое (canvas.ts,
+  // selectionRect). Правится двумя переменными на контейнере, которыми правило в
+  // canvas.css переписывает позицию обёртки слайса.
+  //
+  // Пиксели, а не проценты: колонка — это ровно ось часов, и её высота меряется по
+  // месту, потому что полотно бывает разной высоты.
   function paintBand(startStr: string, endStr: string) {
-    paintBandEl(canvasRef.current, startStr, endStr)
+    const el = canvasRef.current
+    if (!el) return
+    const rect = selectionRect(startStr, endStr)
+    const lane = el.querySelector('.sc-lane')
+    // Один день библиотека и так рисует верно — переписывать нечего.
+    if (!rect || rect.dates.length < 2 || !lane) {
+      clearBand()
+      return
+    }
+    const box = bandBox(rect.window, AXIS, lane.clientHeight)
+    if (!box) {
+      clearBand()
+      return
+    }
+    el.style.setProperty('--sc-band-top', `${box.top}px`)
+    el.style.setProperty('--sc-band-h', `${box.height}px`)
+    el.dataset.scBand = ''
   }
 
   function clearBand() {
-    clearBandEl(canvasRef.current)
+    delete canvasRef.current?.dataset.scBand
   }
 
   // askMove — карточку бросили, спрашиваем подтверждение.
