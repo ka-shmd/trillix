@@ -8,6 +8,10 @@ import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
 import { planSnapshotQueryOptions } from '../../features/plan/queries'
 import { formatDate } from '../../shared/format'
 import { PageCrumbs } from '../../shared/page/headerPortals'
+import { PageContainer } from '../../shared/page/PageContainer'
+import { PageHeader } from '../../shared/page/PageHeader'
+import { Section } from '../../shared/page/Section'
+import { ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 import { Progress } from '@/components/ui/progress'
 
@@ -37,82 +41,89 @@ function PlanPage() {
     enabled: workspace !== undefined,
   })
 
-  // Сбой списка воркспейсов разбирается ОТДЕЛЬНО: без него пространство остаётся
-  // undefined, запрос тарифа не включается, а выключенный запрос в TanStack v5
-  // вечно `pending` — страница показывала бы «Загрузка тарифа…» без конца и без
-  // кнопки повтора. Найдено ревью фазы 17.
-  if (workspaces.isError) {
-    return (
-      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-        <p className="mb-3 text-sm">Не удалось загрузить пространство.</p>
-        <Button variant="outline" size="sm" onClick={() => workspaces.refetch()}>
-          Повторить
-        </Button>
-      </div>
-    )
-  }
-  if (plan.isPending) {
-    return <p className="text-sm text-muted-foreground">Загрузка тарифа…</p>
-  }
-  if (plan.isError) {
-    return (
-      <div role="alert" className="rounded-lg border border-destructive/40 bg-destructive/5 p-6">
-        <p className="mb-3 text-sm">Не удалось загрузить тариф.</p>
-        <Button variant="outline" size="sm" onClick={() => plan.refetch()}>
-          Повторить
-        </Button>
-      </div>
-    )
-  }
+  const quotas = plan.data?.features.filter((f) => f.kind === 'quota') ?? []
+  const toggles = plan.data?.features.filter((f) => f.kind === 'toggle') ?? []
 
-  const { planTitle, periodEnd, features } = plan.data
-  const quotas = features.filter((f) => f.kind === 'quota')
-  const toggles = features.filter((f) => f.kind === 'toggle')
-
+  // Колонка, крошки и заголовок стоят ВНЕ ветвления состояний: экран, у которого на
+  // загрузке нет ни пути в баре, ни имени, читается как чужая страница, а не как
+  // «этот же раздел, данные едут» (DESIGN-SYSTEM §1).
   return (
-    <div className="mx-auto flex max-w-2xl flex-col gap-8">
+    <PageContainer>
       <PageCrumbs items={[workspaceCrumb, 'Тариф']} />
-      <section>
-        <h1 className="text-lg font-medium">Тариф</h1>
-        <p className="mt-1 text-sm text-muted-foreground">
-          Текущий план — <span className="text-foreground">{planTitle}</span>.
-        </p>
-      </section>
+      <PageHeader
+        title="Тариф"
+        description={
+          plan.data ? (
+            <>
+              Текущий план — <span className="text-foreground">{plan.data.planTitle}</span>.
+            </>
+          ) : (
+            'Что входит в план пространства и сколько из него израсходовано.'
+          )
+        }
+      />
 
-      {quotas.length > 0 && (
-        <section className="flex flex-col gap-4">
-          {quotas.map((f) => (
-            <QuotaRow key={f.key} feature={f} periodEnd={periodEnd} />
-          ))}
-        </section>
-      )}
+      <div className="mt-8 flex flex-col gap-12">
+        {/* Сбой списка пространств разбирается ОТДЕЛЬНО: без него пространство
+            остаётся undefined, запрос тарифа не включается, а выключенный запрос в
+            TanStack v5 вечно `pending` — страница показывала бы загрузку без конца и
+            без кнопки повтора. Найдено ревью фазы 17. */}
+        {workspaces.isError ? (
+          <ErrorState
+            title="Не удалось загрузить пространство."
+            onRetry={() => void workspaces.refetch()}
+            retryLabel="Повторить"
+          />
+        ) : plan.isError ? (
+          <ErrorState
+            title="Не удалось загрузить тариф."
+            onRetry={() => void plan.refetch()}
+            retryLabel="Повторить"
+          />
+        ) : plan.isPending ? (
+          <LoadingRows rows={3} />
+        ) : (
+          <>
+            {quotas.length > 0 && (
+              <Section title="Расход" description="Считается по пространству, а не по аккаунту.">
+                <div className="flex flex-col gap-4">
+                  {quotas.map((f) => (
+                    <QuotaRow key={f.key} feature={f} periodEnd={plan.data.periodEnd} />
+                  ))}
+                </div>
+              </Section>
+            )}
 
-      {toggles.length > 0 && (
-        <section>
-          <h2 className="mb-2 text-sm font-medium">Возможности</h2>
-          <ul className="flex flex-col gap-1 text-sm">
-            {toggles.map((f) => (
-              <li key={f.key} className="flex items-center justify-between gap-3">
-                <span className={f.allowed ? undefined : 'text-muted-foreground'}>{f.title}</span>
-                <span className={f.allowed ? 'text-sm' : 'text-sm text-muted-foreground'}>
-                  {f.allowed ? 'включено' : 'на платном тарифе'}
-                </span>
-              </li>
-            ))}
-          </ul>
-        </section>
-      )}
+            {toggles.length > 0 && (
+              <Section title="Возможности">
+                <ul className="flex flex-col gap-1 text-sm">
+                  {toggles.map((f) => (
+                    <li key={f.key} className="flex items-center justify-between gap-3">
+                      <span className={f.allowed ? undefined : 'text-muted-foreground'}>
+                        {f.title}
+                      </span>
+                      <span className={f.allowed ? 'text-sm' : 'text-sm text-muted-foreground'}>
+                        {f.allowed ? 'включено' : 'на платном тарифе'}
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </Section>
+            )}
 
-      <section className="rounded-lg border p-4">
-        <p className="text-sm">
-          Оплата тарифов ещё не подключена — мы её готовим. Ничего не потеряется: все собранные
-          ответы сохраняются независимо от плана.
-        </p>
-        <Button className="mt-3" size="sm" disabled>
-          Перейти на платный тариф
-        </Button>
-      </section>
-    </div>
+            <Section title="Оплата">
+              <p className="text-sm">
+                Оплата тарифов ещё не подключена — мы её готовим. Ничего не потеряется: все
+                собранные ответы сохраняются независимо от плана.
+              </p>
+              <Button className="self-start" size="sm" disabled>
+                Перейти на платный тариф
+              </Button>
+            </Section>
+          </>
+        )}
+      </div>
+    </PageContainer>
   )
 }
 

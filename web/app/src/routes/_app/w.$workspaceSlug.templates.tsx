@@ -4,6 +4,8 @@ import { TemplatesView } from '../../features/forms/templates/TemplatesView'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
 import { PageCrumbs } from '../../shared/page/headerPortals'
+import { PageContainer } from '../../shared/page/PageContainer'
+import { PageHeader } from '../../shared/page/PageHeader'
 
 // Шаблоны форм (/w/{slug}/templates): встроенные заготовки, с которых начинают вместо
 // пустого полотна.
@@ -22,9 +24,13 @@ function TemplatesPage() {
   const workspace = useCurrentWorkspace()
   const workspaceCrumb = useWorkspaceCrumb()
   return (
-    <>
+    <PageContainer>
       <PageCrumbs items={[workspaceCrumb, 'Шаблоны']} />
+      <PageHeader
+        title="Шаблоны"
+        description="Готовая форма вместо пустого полотна: берёте заготовку — получаете свою форму со всеми вопросами, дальше правите как обычно."
+      />
       <TemplatesView workspaceId={workspace?.id} workspaceSlug={workspaceSlug} />
-    </>
+    </PageContainer>
   )
 }
