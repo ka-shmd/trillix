@@ -11,6 +11,11 @@ export const formKeys = {
   // 50, обзор пространств по 10, и общий ключ склеил бы два разных списка в один.
   listWith: (params: { workspaceId: string; q: string; sort: string; limit?: number }) =>
     ['forms', 'list', params] as const,
+  // search() — выдача поиска по ВСЕМ пространствам; ключуется самим запросом.
+  // Отдельно от list(): у поиска нет ни пространства, ни сортировки, ни страниц, и
+  // общий префикс заставлял бы мутацию формы инвалидировать заодно все набранные
+  // запросы — а они всё равно перечитаются при следующем открытии окна.
+  search: (q: string) => ['forms', 'search', q] as const,
   // detail ключуется slug'ом формы (идентификатор URL кабинета), не UUID:
   // роут даёт slug, мутации патчат кэш по возвращённому form.slug.
   detail: (slug: string) => ['forms', 'detail', slug] as const,

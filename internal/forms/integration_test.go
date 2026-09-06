@@ -2431,3 +2431,133 @@ func TestForms_Password_UnlockHidesFormOfDeletedOwner(t *testing.T) {
 	}
 	closeBody(t, r)
 }
+
+type searchHitDTO struct {
+	ID            string `json:"id"`
+	Slug          string `json:"slug"`
+	Title         string `json:"title"`
+	Status        string `json:"status"`
+	WorkspaceSlug string `json:"workspaceSlug"`
+	WorkspaceName string `json:"workspaceName"`
+}
+
+type searchDTO struct {
+	Forms []searchHitDTO `json:"forms"`
+}
+
+func searchForms(t *testing.T, c *http.Client, srv *httptest.Server, q string) searchDTO {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms/search?q="+url.QueryEscape(q), "", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("поиск: статус %d, ожидалось 200", r.StatusCode)
+	}
+	var got searchDTO
+	decode(t, r, &got)
+	return got
+}
+
+// Поиск идёт ПО ВСЕМ пространствам с членством и называет, где найдено: ради этого
+// ручка и заведена — человек не помнит, в каком пространстве форма, а экрана «все
+// мои формы» в кабинете нет.
+func TestForms_SearchAcrossWorkspaces(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+
+	// Вторая площадка Алисы: форма в ней обязана найтись наравне с личной.
+	// Заводится напрямую в БД — ручек пространств в стенде форм нет, а предмет
+	// проверки здесь не создание пространства, а выдача поиска.
+	teamID := makeTeamWorkspace(t, "alice@example.com", "Команда")
+
+	createForm(t, alice, srv, "Анкета читателя")
+	rr := do(t, alice, http.MethodPost, srv.URL+"/api/v1/forms",
+		`{"title":"Анкета сотрудника","workspaceId":"`+teamID+`"}`, csrf(t, alice, srv.URL))
+	if rr.StatusCode != http.StatusCreated {
+		t.Fatalf("форма в команде: статус %d; тело=%s", rr.StatusCode, body2(t, rr))
+	}
+	closeBody(t, rr)
+
+	got := searchForms(t, alice, srv, "анкета")
+	if len(got.Forms) != 2 {
+		t.Fatalf("найдено %d, ожидалось 2 из разных пространств: %+v", len(got.Forms), got.Forms)
+	}
+	places := map[string]bool{}
+	for _, f := range got.Forms {
+		if f.WorkspaceName == "" || f.WorkspaceSlug == "" {
+			t.Fatalf("результат без места: %+v", f)
+		}
+		places[f.WorkspaceName] = true
+	}
+	if !places["Команда"] || !places["Личное пространство"] {
+		t.Fatalf("места = %v, ожидались оба пространства", places)
+	}
+
+	// Регистр не важен, а спецсимвол LIKE ищется буквально, а не как шаблон.
+	if len(searchForms(t, alice, srv, "АНКЕТА").Forms) != 2 {
+		t.Error("поиск оказался регистрозависимым")
+	}
+	if n := len(searchForms(t, alice, srv, "%").Forms); n != 0 {
+		t.Errorf("«%%» нашло %d форм — шаблон LIKE не экранирован", n)
+	}
+	// Пустой запрос — пустой ответ, а не вся база.
+	if n := len(searchForms(t, alice, srv, "  ").Forms); n != 0 {
+		t.Errorf("пустой запрос вернул %d форм", n)
+	}
+}
+
+// АНТИ-IDOR НОВОЙ РУЧКИ: чужая форма не попадает в выдачу никогда. Право здесь
+// держит не проверка в сервисе (пространство не названо — их много), а соединение
+// по членству в самом запросе, и проверяется это против настоящей БД.
+func TestForms_SearchNeverReturnsForeignForms(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	createForm(t, alice, srv, "Секретная анкета")
+	createForm(t, bob, srv, "Анкета Боба")
+
+	got := searchForms(t, bob, srv, "анкета")
+	if len(got.Forms) != 1 || got.Forms[0].Title != "Анкета Боба" {
+		t.Fatalf("выдача Боба = %+v, ожидалась ровно его форма", got.Forms)
+	}
+	for _, f := range got.Forms {
+		if f.Title == "Секретная анкета" {
+			t.Fatal("чужая форма просочилась в поиск")
+		}
+	}
+}
+
+// Поиск за гардом сессии: без неё — 401, как и весь приватный API.
+func TestForms_SearchRequiresSession(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	r := do(t, srv.Client(), http.MethodGet, srv.URL+"/api/v1/forms/search?q=анкета", "", "")
+	if r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("поиск без сессии: статус %d, ожидалось 401", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// makeTeamWorkspace — дополнительное пространство человека прямо в БД: ручек
+// модуля workspaces в стенде форм нет, а поиску нужно ВТОРОЕ место, чтобы было что
+// искать по всем.
+func makeTeamWorkspace(t *testing.T, email, name string) string {
+	t.Helper()
+	ctx := context.Background()
+	var userID, wsID string
+	if err := testPool.QueryRow(ctx, `SELECT id FROM users WHERE email = $1`, email).Scan(&userID); err != nil {
+		t.Fatalf("пользователь %s: %v", email, err)
+	}
+	if err := testPool.QueryRow(ctx,
+		`INSERT INTO workspaces (id, slug, name) VALUES (gen_random_uuid(), $1, $2) RETURNING id`,
+		"ws"+name, name).Scan(&wsID); err != nil {
+		t.Fatalf("создание пространства: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
+		wsID, userID); err != nil {
+		t.Fatalf("членство владельца: %v", err)
+	}
+	return wsID
+}

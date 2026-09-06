@@ -3,11 +3,13 @@ import {
   formSchema,
   formDetailSchema,
   formsPageSchema,
+  formSearchResponseSchema,
   type CloseSettingsInput,
   type Form,
   type FormDetail,
   type FormsPage,
   type FormsSort,
+  type FormSearchResponse,
   type BehaviorInput,
   type LinkPreview,
   type NotifyEmail,
@@ -36,6 +38,13 @@ export function listForms(
   if (opts?.limit) params.set('limit', String(opts.limit))
   const query = params.toString()
   return apiRequest(`/forms${query ? `?${query}` : ''}`, { schema: formsPageSchema })
+}
+
+// Поиск формы ПО ВСЕМ пространствам, где человек состоит. Отдельная ручка, а не
+// режим listForms: тот живёт внутри ОДНОГО пространства и тянет счётчики ответов и
+// визитов на каждую строку, а поиску нужны имя, место и ссылка.
+export function searchForms(q: string): Promise<FormSearchResponse> {
+  return apiRequest(`/forms/search?q=${encodeURIComponent(q)}`, { schema: formSearchResponseSchema })
 }
 
 // Форма по slug: URL кабинета (редактор/ответы/шаринг) адресует форму коротким

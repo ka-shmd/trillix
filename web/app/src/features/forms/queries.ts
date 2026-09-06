@@ -11,6 +11,7 @@ import {
   duplicateForm,
   getFormBySlug,
   listForms,
+  searchForms,
   publishForm,
   unpublishForm,
   updateBranding,
@@ -47,6 +48,22 @@ import {
 // терял остальные. Смена параметров = другой ключ = листание с первой страницы,
 // что заодно снимает риск уехать курсором прежней сортировки (сервер такой курсор
 // отвергает).
+// Поиск по всем пространствам. `enabled` закрыт на пустом запросе: до первой
+// набранной буквы спрашивать нечего, а сервер на пустой `q` и так отвечает пустым
+// списком — лишний поход к нему просто бесполезен.
+//
+// staleTime короткий, но не нулевой: пока окно открыто, человек стирает и дописывает
+// буквы, возвращаясь к уже набранному, — и повторять запрос за тот же запрос незачем.
+export function formsSearchQueryOptions(q: string) {
+  const query = q.trim()
+  return queryOptions({
+    queryKey: formKeys.search(query),
+    queryFn: () => searchForms(query),
+    enabled: query !== '',
+    staleTime: 30 * 1000,
+  })
+}
+
 export function formsListQueryOptions(params: {
   q: string
   sort: FormsSort

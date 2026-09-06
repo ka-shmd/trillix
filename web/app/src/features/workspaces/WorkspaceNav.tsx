@@ -49,7 +49,7 @@ import {
 // СЧЁТЧИКОВ У РАЗДЕЛОВ НЕТ: `formCount` приезжает со списком бесплатно, но числа
 // расписаний и участников стоили бы запроса на пространство (N+1, §6
 // WORKSPACES.md), а один счётчик из четырёх читается как сбой остальных.
-export function WorkspaceNav() {
+export function WorkspaceNav({ children }: { children?: React.ReactNode }) {
   const workspaces = useQuery(workspacesQueryOptions)
   const current = useCurrentWorkspace()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
@@ -186,6 +186,10 @@ export function WorkspaceNav() {
       <SidebarGroup>
         <SidebarGroupContent>
           <SidebarMenu>
+            {/* Поиск стоит НАД разделами и вне пространства: он единственный, кто
+                пространства не выбирает, — ищет по всем сразу. Отдаёт его маршрут
+                `_app` (импорт фичи из фичи запрещён, web/CLAUDE.md). */}
+            {children}
             <SidebarMenuItem>
               <SidebarMenuButton asChild isActive={formsActive} tooltip="Формы">
                 <Link to="/w/$workspaceSlug/forms" params={{ workspaceSlug: slug }}>

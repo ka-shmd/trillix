@@ -5222,6 +5222,82 @@ func (q *Queries) ScheduleInWorkspace(ctx context.Context, arg ScheduleInWorkspa
 	return exists, err
 }
 
+const searchFormsForUser = `-- name: SearchFormsForUser :many
+SELECT f.id, f.slug, f.name, f.title, f.status, f.updated_at,
+       w.slug AS workspace_slug, w.name AS workspace_name
+FROM forms f
+JOIN workspaces w ON w.id = f.workspace_id
+JOIN workspace_members m ON m.workspace_id = f.workspace_id AND m.user_id = $1
+WHERE coalesce(f.name, f.title) ILIKE '%' || $2::text || '%'
+ORDER BY f.updated_at DESC, f.id DESC
+LIMIT $3
+`
+
+type SearchFormsForUserParams struct {
+	UserID    uuid.UUID
+	Search    string
+	PageLimit int32
+}
+
+type SearchFormsForUserRow struct {
+	ID            uuid.UUID
+	Slug          string
+	Name          pgtype.Text
+	Title         string
+	Status        string
+	UpdatedAt     pgtype.Timestamptz
+	WorkspaceSlug string
+	WorkspaceName string
+}
+
+// Поиск формы ПО ВСЕМ пространствам, где человек состоит: он не помнит, в каком
+// из них лежит форма, а экрана «все мои формы» в кабинете нет — формы адресуются
+// через пространство.
+//
+// Запрос СВОЙ, а не режим списка (ListFormsPage), и это решение, а не дубль. Список
+// тянет на каждую форму счётчики ответов и визитов двумя LATERAL и строит курсор;
+// поиску не нужно ни одно из трёх — ему нужны имя, место и ссылка. Прогонять
+// тяжёлый запрос по всем пространствам ради строки результата значило бы платить за
+// то, что тут же выбрасывается.
+//
+// Право доступа обеспечивает JOIN по членству — ровно тем же способом, что список
+// пространств: чужая форма не может попасть в выдачу, потому что не может пройти
+// соединение (инвариант безопасности 1).
+//
+// Поиск по ОТОБРАЖАЕМОМУ имени (coalesce(name, title)) — по тому же полю и с тем же
+// экранированием LIKE, что список: искать по тому, что человек видит на карточке.
+//
+// Порядок — по свежести правки: у поиска без ранжирования это единственный ответ на
+// «какая из двух похожих мне нужна», и он же ставит наверх ту, с которой работали.
+func (q *Queries) SearchFormsForUser(ctx context.Context, arg SearchFormsForUserParams) ([]SearchFormsForUserRow, error) {
+	rows, err := q.db.Query(ctx, searchFormsForUser, arg.UserID, arg.Search, arg.PageLimit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []SearchFormsForUserRow
+	for rows.Next() {
+		var i SearchFormsForUserRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Slug,
+			&i.Name,
+			&i.Title,
+			&i.Status,
+			&i.UpdatedAt,
+			&i.WorkspaceSlug,
+			&i.WorkspaceName,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const setFormClosed = `-- name: SetFormClosed :one
 UPDATE forms
 SET status = 'closed', updated_at = now()

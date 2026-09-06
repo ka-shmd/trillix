@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { meQueryOptions, useLogout } from '../features/auth/queries'
 import { displayName } from '../entities/user'
 import { WorkspaceNav } from '../features/workspaces/WorkspaceNav'
+import { FormSearch } from '../features/forms/FormSearch'
 import { workspacesQueryOptions } from '../features/workspaces/queries'
 import { useMemo, useState } from 'react'
 import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
@@ -61,7 +62,11 @@ function AppLayout() {
           userName={displayName(user)}
           onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}
           loggingOut={logout.isPending}
-          workspaceNav={<WorkspaceNav />}
+          workspaceNav={
+            <WorkspaceNav>
+              <FormSearch />
+            </WorkspaceNav>
+          }
         />
         {/* ОБОЛОЧКА СЪЕЗЖАЕТ ВМЕСТЕ С ВЫЕЗЖАЮЩЕЙ ШТОРКОЙ. Ширину открытой шторки
           кладёт в --app-drawer тот, кто её открыл (DesignDrawer); закрытая — 0px.

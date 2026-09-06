@@ -45,6 +45,7 @@ type formsService interface {
 	Chat(ctx context.Context, userID, formID uuid.UUID, message string, history []ChatTurn, schema json.RawMessage) (ChatResult, error)
 	Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	List(ctx context.Context, userID uuid.UUID, opts ListOptions) (Page, error)
+	Search(ctx context.Context, userID uuid.UUID, query string) ([]SearchHit, error)
 	Get(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	// SubmissionOwner — адресат письма о новом ответе. Прав НЕ проверяет (это
 	// адресат, а не доступ), поэтому зовётся только ПОСЛЕ Get/GetBySlug, которые
@@ -143,6 +144,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// (оба матчат /forms/by-slug/submissions, ни один не специфичнее). Литеральный
 	// сегмент /forms/lookup специфичнее /forms/{id} — коллизии нет.
 	mux.Handle("GET /api/v1/forms/lookup", h.requireAuth(http.HandlerFunc(h.getBySlug)))
+	// Поиск по всем пространствам. Литеральный сегмент специфичнее /forms/{id} —
+	// тот же довод, что у /forms/lookup и /forms/generate.
+	mux.Handle("GET /api/v1/forms/search", h.requireAuth(http.HandlerFunc(h.search)))
 	mux.Handle("PATCH /api/v1/forms/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.update))))
 	mux.Handle("DELETE /api/v1/forms/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
 	mux.Handle("POST /api/v1/forms/{id}/duplicate", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.duplicate))))
@@ -721,6 +725,53 @@ func (h *Handler) getBySlug(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, h.formDetail(r.Context(), form))
+}
+
+// searchHitResponse — строка выдачи поиска по всем пространствам. Своё DTO, а не
+// formResponse: у найденной формы нет ни счётчиков, ни версии, и нули в этих полях
+// врали бы. Зато есть то, чего нет у списка, — ГДЕ она лежит.
+type searchHitResponse struct {
+	ID    string  `json:"id"`
+	Slug  string  `json:"slug"`
+	Name  *string `json:"name"`
+	Title string  `json:"title"`
+	// status — строка результата ведёт черновик в редактор, а розданную форму на
+	// ответы: то же правило, что у карточки списка.
+	Status string `json:"status"`
+	// workspaceSlug — им кабинет строит ссылку в редактор (он адресуется через
+	// пространство); workspaceName — подпись «где это лежит».
+	WorkspaceSlug string `json:"workspaceSlug"`
+	WorkspaceName string `json:"workspaceName"`
+}
+
+type searchResponse struct {
+	Forms []searchHitResponse `json:"forms"`
+}
+
+// search — формы по всем пространствам, где состоит спрашивающий. Пространство в
+// запросе не называется: смысл ручки ровно в том, что человек не помнит, в каком
+// из них форма (`GET /forms` для этого не годится — он живёт внутри одного).
+//
+// Пустой `q` отвечает пустым списком, а не 422: строка поиска пуста до первой
+// набранной буквы.
+func (h *Handler) search(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	hits, err := h.svc.Search(r.Context(), userID, r.URL.Query().Get("q"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	resp := searchResponse{Forms: make([]searchHitResponse, len(hits))}
+	for i, f := range hits {
+		resp.Forms[i] = searchHitResponse{
+			ID: f.ID.String(), Slug: f.Slug, Name: f.Name, Title: f.Title, Status: f.Status,
+			WorkspaceSlug: f.WorkspaceSlug, WorkspaceName: f.WorkspaceName,
+		}
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
 }
 
 func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
