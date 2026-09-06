@@ -21,7 +21,7 @@ const MaxNameLen = 60
 // Store — доступ к данным workspaces, объявленный на стороне потребителя
 // (сервиса). Реализация — Repo; в тестах подменяется фейком.
 type Store interface {
-	ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]Workspace, error)
+	ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]WorkspaceAccess, error)
 	// MemberRole — роль участника; pgx.ErrNoRows означает «не участник».
 	MemberRole(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (string, error)
 	GetWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Workspace, error)
@@ -95,9 +95,66 @@ func (s *Service) WithFiles(f Files) *Service {
 }
 
 // ListForUser возвращает пространства пользователя (личное — первым: оно старше
-// любого другого, а запрос сортирует по created_at).
+// любого другого, а запрос сортирует по created_at) вместе с признаком заморозки.
+//
+// ЗАМОРОЗКА СЧИТАЕТСЯ ЗДЕСЬ, А НЕ ВЫЗОВОМ checkFrozen НА КАЖДУЮ СТРОКУ. Список
+// читается на каждом экране кабинета (его держит сайдбар), и построчная проверка
+// стоила бы N+1 ради вывески. Лимиты спрашиваются ПО ВЛАДЕЛЬЦАМ, а их в списке
+// обычно один-два, а не по пространствам; у человека с одним личным пространством
+// не уходит ни одного лишнего запроса — обе ветки правила отсекаются без обращения
+// к тарифу.
+//
+// ⚠ ОТКАЗ ТАРИФА НЕ РОНЯЕТ СПИСОК. Заморозка — вывеска: без неё кабинет показывает
+// пространства как обычные, а настоящий запрет всё равно стоит на каждой операции
+// (Can → checkFrozen). Уронить единственный запрос, на котором держится вся
+// навигация, ради пометки — обмен не в ту сторону.
 func (s *Service) ListForUser(ctx context.Context, userID uuid.UUID) ([]Workspace, error) {
-	return s.repo.ListByUser(ctx, s.db, userID)
+	rows, err := s.repo.ListByUser(ctx, s.db, userID)
+	if err != nil {
+		return nil, err
+	}
+	// Лимит пространств у одного владельца один на все его пространства —
+	// спрашиваем по разу на владельца.
+	seen := make(map[uuid.UUID]*int64, 2)
+	out := make([]Workspace, len(rows))
+	for i, r := range rows {
+		w := r.Workspace
+		w.Frozen = s.frozenForList(ctx, r, seen)
+		out[i] = w
+	}
+	return out, nil
+}
+
+// frozenForList — то же правило, что у checkFrozen, но для строки списка и без
+// ошибок наружу (см. оговорку выше). Порядок веток обязан совпадать с checkFrozen:
+// лишние пространства, затем лишние участники. Совпадение проверяется тестом —
+// разъехавшись, они дадут худшее из состояний: кабинет показывает пространство
+// рабочим, а первое же действие отвечает 402.
+func (s *Service) frozenForList(ctx context.Context, r WorkspaceAccess, seen map[uuid.UUID]*int64) bool {
+	if !r.IsPersonal {
+		limit, ok := seen[r.OwnerID]
+		if !ok {
+			d, err := s.plans.CheckAccount(ctx, r.OwnerID, entitlements.Workspaces)
+			if err != nil {
+				return false
+			}
+			limit = d.Limit
+			seen[r.OwnerID] = limit
+		}
+		if overWorkspaceLimit(r.IsPersonal, r.TeamRank, limit) {
+			return true
+		}
+	}
+	// Владелец всегда первый и потому не мёрзнет НИКОГДА — на этом же экономится
+	// запрос: у самого частого случая второй поездки в БД не будет.
+	if r.MemberRank <= 1 {
+		return false
+	}
+	d, err := s.plans.CheckWorkspace(ctx, r.ID, entitlements.MembersPerWorkspace)
+	if err != nil {
+		return false
+	}
+	return overMemberLimit(r.MemberRank, d.Limit)
 }
 
 // Create заводит пространство и делает создателя его владельцем.

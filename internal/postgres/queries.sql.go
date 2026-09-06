@@ -4797,9 +4797,21 @@ const listWorkspacesByUser = `-- name: ListWorkspacesByUser :many
 
 SELECT w.id, w.slug, w.name, w.created_at,
        (w.personal_user_id IS NOT DISTINCT FROM m.user_id) AS is_personal,
-       (SELECT count(*) FROM forms f WHERE f.workspace_id = w.id)::bigint AS form_count
+       (SELECT count(*) FROM forms f WHERE f.workspace_id = w.id)::bigint AS form_count,
+       o.user_id AS owner_id,
+       CASE WHEN m.role = 'owner' THEN 1
+            ELSE 1 + (SELECT count(*) FROM workspace_members m2
+                       WHERE m2.workspace_id = m.workspace_id AND m2.role <> 'owner'
+                         AND (m2.created_at, m2.user_id) <= (m.created_at, m.user_id))
+       END::bigint AS member_rank,
+       (SELECT count(*) FROM workspaces w2
+          JOIN workspace_members o2 ON o2.workspace_id = w2.id AND o2.role = 'owner'
+         WHERE o2.user_id = o.user_id
+           AND w2.personal_user_id IS NULL
+           AND (w2.created_at, w2.id) <= (w.created_at, w.id))::bigint AS team_rank
 FROM workspace_members m
 JOIN workspaces w ON w.id = m.workspace_id
+JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner'
 WHERE m.user_id = $1
 ORDER BY w.created_at ASC
 `
@@ -4811,6 +4823,9 @@ type ListWorkspacesByUserRow struct {
 	CreatedAt  pgtype.Timestamptz
 	IsPersonal bool
 	FormCount  int64
+	OwnerID    uuid.UUID
+	MemberRank int64
+	TeamRank   int64
 }
 
 // Запросы модуля workspaces. Схема — migrations/0002_auth (таблицы workspaces,
@@ -4829,6 +4844,12 @@ type ListWorkspacesByUserRow struct {
 // Подзапрос, а не второй поход в forms: обзор рисует ВСЕ пространства разом, и
 // отдельный запрос на каждое был бы N+1 ради одного числа. Мягкого удаления у
 // форм нет — считаются все строки, включая черновики.
+//
+// owner_id и два ранга — ровно те же три величины и по тем же правилам, что у
+// GetAccessContext (см. ниже), только на ВЕСЬ список сразу. По ним сервис решает,
+// заморожено ли пространство для спрашивающего: сам список ходит на каждом экране
+// кабинета, и вызывать checkFrozen построчно значило бы платить N+1 за вывеску.
+// Лимиты сюда не читаются намеренно — их знает только entitlements.
 func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([]ListWorkspacesByUserRow, error) {
 	rows, err := q.db.Query(ctx, listWorkspacesByUser, userID)
 	if err != nil {
@@ -4845,6 +4866,9 @@ func (q *Queries) ListWorkspacesByUser(ctx context.Context, userID uuid.UUID) ([
 			&i.CreatedAt,
 			&i.IsPersonal,
 			&i.FormCount,
+			&i.OwnerID,
+			&i.MemberRank,
+			&i.TeamRank,
 		); err != nil {
 			return nil, err
 		}

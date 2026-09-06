@@ -3,7 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { LogOut, Mail, UserPlus, X } from 'lucide-react'
 
 import type { Workspace } from '../../entities/workspace'
-import { ApiError } from '../../shared/api/errors'
+import { ApiError, humanError } from '../../shared/api/errors'
 import { UserAvatar } from '../../shared/UserAvatar'
 import { Section } from '../../shared/page/Section'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
@@ -47,7 +47,7 @@ export function MembersView({
   if (state.isError) {
     return (
       <ErrorState
-        title={membersErrorText(state.error)}
+        title={humanError(state.error, 'Не удалось загрузить участников.')}
         onRetry={() => void state.refetch()}
         retryLabel="Повторить"
       />
@@ -160,20 +160,6 @@ export function MembersView({
       )}
     </div>
   )
-}
-
-// Заморозка — не поломка и не «оплатите возможность»: данные целы, вернуть
-// доступ можно возвратом тарифа. Поэтому у неё свой код и свой текст.
-function membersErrorText(error: unknown): string {
-  if (!(error instanceof ApiError)) return 'Не удалось загрузить участников.'
-  switch (error.code) {
-    case 'workspace_frozen':
-      return 'Доступ закрыт: тариф больше не покрывает столько пространств или участников. Формы и ответы целы — доступ вернётся вместе с тарифом.'
-    case 'not_found':
-      return 'Пространство не найдено или доступ к нему закрыт.'
-    default:
-      return 'Не удалось загрузить участников.'
-  }
 }
 
 function inviteErrorText(error: unknown): string {

@@ -10,6 +10,7 @@ import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { FormCard } from '../../features/forms/FormCard'
 import { FormsToolbar } from '../../features/forms/FormsToolbar'
 import { DEFAULT_FORMS_SORT, formsSortSchema, type FormsSort } from '../../entities/form'
+import { humanError } from '../../shared/api/errors'
 import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
@@ -154,7 +155,7 @@ function FormsDashboard() {
         <FormsSkeleton />
       ) : query.isError ? (
         <ErrorState
-          title="Не удалось загрузить формы."
+          title={humanError(query.error, 'Не удалось загрузить формы.')}
           onRetry={() => void query.refetch()}
           retryLabel="Повторить"
         />

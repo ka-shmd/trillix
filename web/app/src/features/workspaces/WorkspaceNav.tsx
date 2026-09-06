@@ -8,6 +8,7 @@ import {
   CreditCard,
   FileText,
   LayoutGrid,
+  Snowflake,
   SquarePlus,
   Users,
 } from 'lucide-react'
@@ -116,11 +117,18 @@ export function WorkspaceNav() {
                     {/* В свёрнутой полосе от переключателя остаётся буква
                         пространства: место обязано быть видно и там, а имя приезжает
                         подсказкой. */}
-                    <WorkspaceMark name={current.name} />
+                    <WorkspaceMark name={current.name} frozen={current.frozen} />
                     <span className="grid min-w-0 flex-1 text-left leading-tight group-data-[collapsible=icon]:hidden">
                       <span className="truncate text-sm font-semibold">{current.name}</span>
+                      {/* Заморозка говорится ВМЕСТО вида пространства, а не рядом:
+                          «Командное · закрыто» — два факта в строке, из которых
+                          важен один, и важный стоит вторым. */}
                       <span className="truncate text-xs text-muted-foreground">
-                        {current.isPersonal ? 'Личное' : 'Командное'}
+                        {current.frozen
+                          ? 'Закрыто — тариф'
+                          : current.isPersonal
+                            ? 'Личное'
+                            : 'Командное'}
                       </span>
                     </span>
                     <ChevronsUpDown className="size-4 shrink-0 text-muted-foreground group-data-[collapsible=icon]:hidden" />
@@ -133,8 +141,18 @@ export function WorkspaceNav() {
                   {workspaces.data?.map((ws) => (
                     <DropdownMenuItem key={ws.id} asChild>
                       <Link to="/w/$workspaceSlug/forms" params={{ workspaceSlug: ws.slug }}>
-                        <WorkspaceMark name={ws.name} />
-                        <span className="min-w-0 flex-1 truncate">{ws.name}</span>
+                        <WorkspaceMark name={ws.name} frozen={ws.frozen} />
+                        <span
+                          className={`min-w-0 flex-1 truncate ${ws.frozen ? 'text-muted-foreground' : ''}`}
+                        >
+                          {ws.name}
+                        </span>
+                        {/* Снежинка у закрытого: пометка обязана быть ДО входа —
+                            иначе человек узнаёт о состоянии, только упёршись в
+                            отказ на каждом экране внутри. */}
+                        {ws.frozen && (
+                          <Snowflake className="size-4 shrink-0 text-muted-foreground" />
+                        )}
                         {/* Галочка у текущего, а не подсветка строки: подсветка в
                             меню означает наведение, и два смысла у одного вида
                             читались бы как «выбрано то, на что навёл». */}
@@ -223,11 +241,17 @@ export function WorkspaceNav() {
 // человека: место опознаётся пятном раньше, чем читается имя. И это единственное
 // применение акцента в панели помимо выбранного раздела — до правки синий цвет в
 // сайдбаре не использовался вообще.
-function WorkspaceMark({ name }: { name: string }) {
+function WorkspaceMark({ name, frozen }: { name: string; frozen?: boolean }) {
   return (
     <span
       aria-hidden="true"
-      className="flex size-6 shrink-0 items-center justify-center rounded-md bg-sidebar-primary text-xs font-semibold text-sidebar-primary-foreground"
+      // Закрытое пространство теряет акцент: синим красится то, во что можно
+      // войти и работать, а здесь нельзя ни того, ни другого.
+      className={`flex size-6 shrink-0 items-center justify-center rounded-md text-xs font-semibold ${
+        frozen
+          ? 'bg-muted text-muted-foreground'
+          : 'bg-sidebar-primary text-sidebar-primary-foreground'
+      }`}
     >
       {[...name.trim()][0]?.toUpperCase() ?? '?'}
     </span>

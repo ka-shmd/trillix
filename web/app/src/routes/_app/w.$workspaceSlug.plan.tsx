@@ -6,6 +6,7 @@ import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
 import { planSnapshotQueryOptions } from '../../features/plan/queries'
+import { humanError } from '../../shared/api/errors'
 import { formatDate } from '../../shared/format'
 import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
@@ -76,7 +77,7 @@ function PlanPage() {
           />
         ) : plan.isError ? (
           <ErrorState
-            title="Не удалось загрузить тариф."
+            title={humanError(plan.error, 'Не удалось загрузить тариф.')}
             onRetry={() => void plan.refetch()}
             retryLabel="Повторить"
           />

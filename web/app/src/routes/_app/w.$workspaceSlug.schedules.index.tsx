@@ -91,7 +91,7 @@ function SchedulesPage() {
           )}
           {schedules.isError && (
             <ErrorState
-              title="Не удалось загрузить расписания."
+              title={humanError(schedules.error, 'Не удалось загрузить расписания.')}
               onRetry={() => void schedules.refetch()}
               retryLabel="Повторить"
             />

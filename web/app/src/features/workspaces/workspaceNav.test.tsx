@@ -27,16 +27,24 @@ const PERSONAL = {
   name: 'Личное пространство',
   isPersonal: true,
   formCount: 3,
+  frozen: false,
 }
-const TEAM = { id: 'ws-team', slug: 'team', name: 'Команда', isPersonal: false, formCount: 7 }
+const TEAM = {
+  id: 'ws-team',
+  slug: 'team',
+  name: 'Команда',
+  isPersonal: false,
+  formCount: 7,
+  frozen: false,
+}
 
 // Панель — навигация по РАЗДЕЛАМ ТЕКУЩЕГО пространства, и предмет проверки один:
 // адрес каждого пункта называет то пространство, в котором человек стоит. Пока
 // разделы жили в верхнем ярусе, пункт пространства не называл, и раздел молча
 // открывался в личном (спека docs/design/cabinet-navigation.md §2).
-async function renderNav(initial: string, permissions?: string[]) {
+async function renderNav(initial: string, permissions?: string[], frozenTeam = false) {
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
-  qc.setQueryData(workspaceKeys.list(), [PERSONAL, TEAM])
+  qc.setQueryData(workspaceKeys.list(), [PERSONAL, { ...TEAM, frozen: frozenTeam }])
   if (permissions) {
     qc.setQueryData(workspaceKeys.members(TEAM.id), { members: [], invites: [], permissions })
     qc.setQueryData(workspaceKeys.members(PERSONAL.id), { members: [], invites: [], permissions })
@@ -141,6 +149,16 @@ describe('навигация пространства в сайдбаре', () =
       expect(rule.className).not.toContain('data-[orientation=horizontal]:w-full')
       expect(rule.className).toContain('data-[orientation=horizontal]:w-auto')
     }
+  })
+
+  // Замороженное пространство обязано объяснять себя ДО входа: без пометки оно
+  // выглядит обычным, а каждый его экран отвечает 402 — то есть единственное
+  // состояние продукта, из которого человек не может выйти сам, было неотличимо от
+  // сетевого сбоя.
+  it('закрытое пространство названо закрытым, а не командным', async () => {
+    await renderNav('/w/team/forms', ['billing.view'], true)
+    expect(screen.getByText('Закрыто — тариф')).toBeTruthy()
+    expect(screen.queryByText('Командное')).toBeNull()
   })
 
   // Переключатель обязан читаться местом, а не пятым пунктом списка: буква

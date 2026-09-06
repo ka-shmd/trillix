@@ -86,6 +86,7 @@ type workspaceDTO struct {
 	Name       string `json:"name"`
 	IsPersonal bool   `json:"isPersonal"`
 	FormCount  int64  `json:"formCount"`
+	Frozen     bool   `json:"frozen"`
 }
 
 type listDTO struct {
@@ -996,6 +997,27 @@ func TestFreeze_OnOwnerDowngrade(t *testing.T) {
 	for _, w := range spaces.Workspaces {
 		if w.IsPersonal {
 			personalID = w.ID
+		}
+	}
+
+	// ВЫВЕСКА СОВПАДАЕТ С ЗАПРЕТОМ, и проверяется это на живой базе: список,
+	// который кабинет читает на каждом экране, обязан пометить ровно то
+	// пространство, которое только что ответило 402. Разъехавшись, они дают худшее
+	// из состояний — интерфейс показывает пространство рабочим, а первое действие в
+	// нём отказывает без объяснения. Тот же инвариант проверяет юнит
+	// TestFrozen_ListAgreesWithAccessCheck; здесь он проверен сквозь HTTP и SQL.
+	for _, w := range spaces.Workspaces {
+		wantFrozen := w.ID == team.ID
+		if w.Frozen != wantFrozen {
+			t.Fatalf("пространство %q: frozen = %v, ожидалось %v", w.Name, w.Frozen, wantFrozen)
+		}
+	}
+	// И у приглашённого редактора — та же пометка на том же пространстве.
+	var bobSpaces listDTO
+	decode(t, do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces"), &bobSpaces)
+	for _, w := range bobSpaces.Workspaces {
+		if w.ID == team.ID && !w.Frozen {
+			t.Fatalf("у редактора закрытое пространство не помечено: %+v", w)
 		}
 	}
 	r := do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+personalID+"/members")
