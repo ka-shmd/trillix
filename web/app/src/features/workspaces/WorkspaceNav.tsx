@@ -53,6 +53,28 @@ import {
 // СЧЁТЧИКОВ У РАЗДЕЛОВ НЕТ: `formCount` приезжает со списком бесплатно, но числа
 // расписаний и участников стоили бы запроса на пространство (N+1, §6
 // WORKSPACES.md), а один счётчик из четырёх читается как сбой остальных.
+
+// РАЗДЕЛЫ, В КОТОРЫЕ ПЕРЕКЛЮЧАТЕЛЬ ПЕРЕНОСИТ ЧЕЛОВЕКА КАК ЕСТЬ. Пространство
+// меняют, поняв, что стоишь не в том месте, — раздел при этом менять не
+// собирались, и увод на формы со списка расписаний заставлял возвращаться туда
+// руками. Эти четыре адреса есть у любого пространства, поэтому переносятся.
+//
+// Ключ — ПЕРВЫЙ сегмент после пространства, без хвоста: «/schedules/42» и
+// «/forms/opros/edit» называют предмет, которого в соседнем пространстве нет, и
+// перенос идентификатора дал бы «нет такого». Незнакомый сегмент и адрес вне
+// пространства отвечают формами.
+const SECTIONS = {
+  forms: '/w/$workspaceSlug/forms',
+  templates: '/w/$workspaceSlug/templates',
+  schedules: '/w/$workspaceSlug/schedules',
+  members: '/w/$workspaceSlug/members',
+} as const
+
+function switchTarget(section: string) {
+  const key = section.split('/')[1] ?? ''
+  return key in SECTIONS ? SECTIONS[key as keyof typeof SECTIONS] : SECTIONS.forms
+}
+
 export function WorkspaceNav({ children }: { children?: React.ReactNode }) {
   const workspaces = useQuery(workspacesQueryOptions)
   const current = useCurrentWorkspace()
@@ -83,7 +105,14 @@ export function WorkspaceNav({ children }: { children?: React.ReactNode }) {
   }
 
   const slug = current.slug
-  const section = pathname.slice(`/w/${slug}`.length)
+  const prefix = `/w/${slug}`
+  // Раздел в адресе — «/schedules/42» на «/w/team/schedules/42». Вне пространства
+  // (настройки, обзор пространств) раздела нет, и ответ — пустая строка: срез
+  // префикса без этой проверки оставил бы от «/settings/account» произвольный
+  // хвост, который может совпасть с именем раздела.
+  const section =
+    pathname === prefix || pathname.startsWith(`${prefix}/`) ? pathname.slice(prefix.length) : ''
+  const switchTo = switchTarget(section)
 
   return (
     <>
@@ -128,7 +157,7 @@ export function WorkspaceNav({ children }: { children?: React.ReactNode }) {
                 >
                   {workspaces.data?.map((ws) => (
                     <DropdownMenuItem key={ws.id} asChild>
-                      <Link to="/w/$workspaceSlug/forms" params={{ workspaceSlug: ws.slug }}>
+                      <Link to={switchTo} params={{ workspaceSlug: ws.slug }}>
                         <WorkspaceMark name={ws.name} frozen={ws.frozen} />
                         <span
                           className={`min-w-0 flex-1 truncate ${ws.frozen ? 'text-muted-foreground' : ''}`}
