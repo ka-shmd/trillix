@@ -5,7 +5,7 @@ import { formKeys } from '../../keys'
 import { setFormSchedule } from '../../api'
 import { schedulesQueryOptions } from '../../../../shared/schedules/queries'
 import { useFormFacts } from '../formFacts'
-import { SettingRow } from './settings'
+import { SETTING_SELECT, SETTING_SELECT_ITEM, SettingRow } from './settings'
 import {
   Select,
   SelectContent,
@@ -52,13 +52,15 @@ export function SlotSettings() {
     <>
       <SettingRow label="Расписание">
         <Select value={value} onValueChange={(next) => void choose(next)} disabled={empty}>
-          <SelectTrigger className="w-56">
+          <SelectTrigger size="sm" className={`w-56 ${SETTING_SELECT}`}>
             <SelectValue placeholder="Не выбрано" />
           </SelectTrigger>
           <SelectContent>
-            <SelectItem value={NONE}>Не выбрано</SelectItem>
+            <SelectItem value={NONE} className={SETTING_SELECT_ITEM}>
+              Не выбрано
+            </SelectItem>
             {schedules.data?.map((s) => (
-              <SelectItem key={s.id} value={s.id}>
+              <SelectItem key={s.id} value={s.id} className={SETTING_SELECT_ITEM}>
                 {s.name}
               </SelectItem>
             ))}

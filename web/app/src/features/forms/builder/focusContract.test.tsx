@@ -492,6 +492,11 @@ describe('Cmd+. — меню действий блока (§3.3)', () => {
     expect(text).toContain('Дублировать')
     expect(text).toContain('Сменить тип')
     expect(text).toContain('Удалить')
+    // Клавиши пунктов печатаются рядом с подписями (решение владельца 2026-09-07).
+    // Ярлыки берутся из карты шорткатов, поэтому проверяем факт печати, а не строку:
+    // разойтись с картой они не могут, а вот исчезнуть при правке разметки — да.
+    expect(text).toContain('Del')
+    expect(text).toContain('Alt')
   })
 
   // Действие из попапа — тот же контракт, что у остального полотна: каретка после него
@@ -517,6 +522,55 @@ describe('Cmd+. — меню действий блока (§3.3)', () => {
     const copy = store.getState().blocks[1]!
     expect(copy.id).not.toBe('t')
     expect(focus).toHaveBeenCalledWith(copy.id, 'end')
+  })
+
+  // Три пункта попапа получили аккорды (решение владельца 2026-09-07), и подсказка о
+  // них печатается в самих пунктах. Проверяем ЖЕСТ, а не разметку: чипы читают ту же
+  // карту, что и обработчики (labelFor), и разойтись с ней не могут — а вот аккорд,
+  // забытый в цепочке rowKeys, отличается от работающего только тишиной.
+  it('Mod+D дублирует блок прямо со строки, не открывая попап', () => {
+    const { engine, store } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
+    })
+    engine.focusBlock('t', 'end')
+
+    fireEvent.keyDown(el(), { key: 'd', code: 'KeyD', metaKey: true })
+
+    expect(store.getState().blocks).toHaveLength(2)
+    expect(document.body.textContent).not.toContain('Дублировать')
+  })
+
+  it('Alt+R открывает попап сразу на списке типов', () => {
+    const { engine } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
+    })
+    engine.focusBlock('t', 'end')
+
+    fireEvent.keyDown(el(), { key: 'r', code: 'KeyR', altKey: true })
+
+    // Признак списка типов — поле поиска; общих пунктов в этом виде нет.
+    expect(screen.getByPlaceholderText('Тип поля…')).toBeTruthy()
+    expect(document.body.textContent).not.toContain('Дублировать')
+  })
+
+  // Голый Delete на текстовой строке принадлежит ТЕКСТУ (символ справа от каретки), и
+  // блок им не сносится: иначе набор стал бы разрушительным. Работает он в открытом
+  // попапе — там каретки в тексте нет, — и ровно это обещает чип у пункта.
+  it('Delete: на строке молчит, в открытом попапе удаляет блок', () => {
+    const { engine, handlers } = setup({
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 't', groupId: 'g1', type: 'title', text: textFromString('Вопрос') }],
+    })
+    engine.focusBlock('t', 'end')
+
+    fireEvent.keyDown(el(), { key: 'Delete', code: 'Delete' })
+    expect(handlers.onDeleteBlock).not.toHaveBeenCalled()
+
+    fireEvent.keyDown(el(), { key: '.', code: 'Period', metaKey: true })
+    fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Delete', code: 'Delete' })
+    expect(handlers.onDeleteBlock).toHaveBeenCalledWith('t')
   })
 
   it('закрытие попапа без действия (Esc) возвращает каретку на строку', () => {
