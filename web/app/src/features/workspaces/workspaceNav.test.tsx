@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
-import { act, cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import {
   createMemoryHistory,
@@ -86,6 +86,16 @@ async function renderNav(initial: string, permissions?: string[], frozenTeam = f
 
 const href = (name: string) => screen.getByRole('link', { name }).getAttribute('href')
 
+// Список пространств живёт в выпадающем меню и до открытия не отрисован; строка
+// в нём — `menuitem`, а не `link`, хотя внутри ссылка (Radix ставит свою роль).
+async function switchHref(name: string) {
+  const trigger = screen.getByRole('button', { name: /Личное пространство|Команда/ })
+  await act(async () => {
+    fireEvent.pointerDown(trigger, { button: 0, ctrlKey: false })
+  })
+  return screen.getByRole('menuitem', { name }).getAttribute('href')
+}
+
 describe('навигация пространства в сайдбаре', () => {
   it('разделы ведут в пространство из адреса, а не в личное', async () => {
     await renderNav('/w/team/forms', ['billing.view'])
@@ -161,6 +171,28 @@ describe('навигация пространства в сайдбаре', () =
     await renderNav('/w/team/forms', ['billing.view'], true)
     expect(screen.getByText('Закрыто — тариф')).toBeTruthy()
     expect(screen.queryByText('Командное')).toBeNull()
+  })
+
+  // Переключатель ведёт в ТОТ ЖЕ раздел, а не всегда в формы (отчёт владельца
+  // 2026-09-07): человек нажимает его, поняв, что стоит не в том пространстве, —
+  // и раздел при этом менять не собирался.
+  it('переключение пространства оставляет человека в том же разделе', async () => {
+    await renderNav('/w/personal/schedules', ['billing.view'])
+    expect(await switchHref('Команда')).toBe('/w/team/schedules')
+  })
+
+  // Предмет раздела в соседнем пространстве не существует: перенос
+  // идентификатора дал бы «нет такого» вместо списка.
+  it('со страницы расписания переключатель ведёт в список расписаний', async () => {
+    await renderNav('/w/personal/schedules/sch-1', ['billing.view'])
+    expect(await switchHref('Команда')).toBe('/w/team/schedules')
+  })
+
+  // Настройки и обзор пространств разделом пространства не являются — отвечают
+  // формами, тем же, чем переключатель отвечал всегда.
+  it('вне пространства переключатель ведёт в формы', async () => {
+    await renderNav('/workspaces', ['billing.view'])
+    expect(await switchHref('Команда')).toBe('/w/team/forms')
   })
 
   // Переключатель обязан читаться местом, а не пятым пунктом списка: буква
