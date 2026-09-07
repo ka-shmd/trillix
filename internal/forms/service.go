@@ -77,7 +77,7 @@ type Store interface {
 	ListFormNames(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]FormName, error)
 	GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, error)
 	GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (Form, error)
-	ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error)
+	ListFormsPage(ctx context.Context, db postgres.DBTX, q ListPageQuery) ([]ListRow, error)
 	SearchForms(ctx context.Context, db postgres.DBTX, userID uuid.UUID, search string, limit int32) ([]SearchHit, error)
 	UpdateFormName(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, name *string) (Form, error)
 	UpdateFormCloseSettings(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, s domain.CloseSettings) (Form, error)
@@ -144,6 +144,27 @@ func ParseSortOrder(raw string) (SortOrder, error) {
 	}
 }
 
+// StatusFilter — фильтр списка по статусу формы (сегменты «Черновики /
+// Опубликованные / Закрытые» над списком). Пусто = все статусы; остальные значения
+// совпадают с колонкой forms.status (domain.FormStatus*): белый список, чужое
+// значение отвергается транспортом (422), в SQL произвольная строка не попадает.
+type StatusFilter string
+
+// ParseStatusFilter разбирает значение query-параметра status. Пусто → «все»; всё
+// остальное вне белого списка — ошибка, а не молчаливое «все»: клиент, приславший
+// status=drafts, должен узнать об опечатке, а не получить всю выдачу и решить, что
+// фильтр не работает.
+func ParseStatusFilter(raw string) (StatusFilter, error) {
+	switch raw {
+	case "":
+		return "", nil
+	case domain.FormStatusDraft, domain.FormStatusPublished, domain.FormStatusClosed:
+		return StatusFilter(raw), nil
+	default:
+		return "", fmt.Errorf("%w: неизвестный статус", domain.ErrValidation)
+	}
+}
+
 // Cursor — курсор списка форм: пара (ключ сортировки, id), однозначно указывающая
 // на последнюю показанную форму, плюс порядок, в котором курсор выдан. Транспорт
 // кодирует его в непрозрачную строку.
@@ -162,6 +183,11 @@ type Cursor struct {
 type ListOptions struct {
 	Search string
 	Sort   SortOrder
+	// Status — показывать только формы этого статуса; пусто = все. В курсор НЕ
+	// входит (в отличие от Sort): фильтр не меняет смысл ключа сортировки, он
+	// сужает выборку. Смена фильтра — листание с первой страницы, как и смена
+	// поиска.
+	Status StatusFilter
 	After  *Cursor
 	Limit  int
 	// WorkspaceID — в каком пространстве смотрим. nil = личное (пространство по
@@ -351,7 +377,14 @@ func (s *Service) List(ctx context.Context, userID uuid.UUID, opts ListOptions) 
 	// limit+1: «лишняя» строка означает, что есть следующая страница; сам её в
 	// ответ не отдаём, а превращаем в курсор.
 	fetch := int32(limit + 1)
-	rows, err := s.repo.ListFormsPage(ctx, s.db, wsID, string(sort), escapeLike(search), opts.After, fetch)
+	rows, err := s.repo.ListFormsPage(ctx, s.db, ListPageQuery{
+		WorkspaceID: wsID,
+		Sort:        string(sort),
+		Search:      escapeLike(search),
+		Status:      string(opts.Status),
+		After:       opts.After,
+		Limit:       fetch,
+	})
 	if err != nil {
 		return Page{}, err
 	}

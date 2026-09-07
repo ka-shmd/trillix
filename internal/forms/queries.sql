@@ -48,6 +48,10 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
     -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
+    -- Дата последнего ответа: колонка «Последний ответ» в списке форм. Фильтр
+    -- over_quota тот же, что у счётчика выше, — иначе дата называла бы ответ,
+    -- которого в таблице ответов не видно. NULL = ответов не было ни одного.
+    (SELECT max(s.created_at) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota)::timestamptz AS last_submission_at,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -92,6 +96,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
     -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
+    (SELECT max(s.created_at) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota)::timestamptz AS last_submission_at,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -141,6 +146,7 @@ SELECT * FROM (
         fv.version AS published_version,
         coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
         c.submission_count,
+        c.last_submission_at,
         -- Просмотры и конверсия (фаза 8.5 шаг 6). Конверсия считается по визитам
         -- (submitted/total), а НЕ делением submission_count на visit_count: это
         -- разные множества (ответ мог прийти без визита), и их частное — не
@@ -157,7 +163,8 @@ SELECT * FROM (
     FROM forms f
     LEFT JOIN form_versions fv ON fv.id = f.published_version_id
     LEFT JOIN LATERAL (
-        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota
+        SELECT count(*) AS submission_count, max(s.created_at)::timestamptz AS last_submission_at
+        FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota
     ) c ON true
     LEFT JOIN LATERAL (
         SELECT count(*) AS visit_count,
@@ -171,6 +178,12 @@ SELECT * FROM (
       -- угодно.
       AND (sqlc.narg(search)::text IS NULL
            OR coalesce(f.name, f.title) ILIKE '%' || sqlc.narg(search)::text || '%')
+      -- Фильтр по статусу: сегменты «Черновики / Опубликованные / Закрытые» над
+      -- списком. Фильтровать на клиенте нельзя по той же причине, что и искать:
+      -- список постраничный, и отбор из подгруженного молча терял бы формы с
+      -- неподгруженных страниц. Значение проверяет handler, сюда приходит
+      -- разобранным либо NULL («все»).
+      AND (sqlc.narg(status)::text IS NULL OR f.status = sqlc.narg(status)::text)
 ) t
 -- Keyset по паре (ключ сортировки, id): id разводит строки с равным ключом —
 -- у сортировки по числу ответов совпадения массовые (у большинства форм 0).

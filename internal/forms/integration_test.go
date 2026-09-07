@@ -1626,6 +1626,121 @@ func TestForms_ListCounters(t *testing.T) {
 	}
 }
 
+// Фильтр по статусу отбирает формы на СЕРВЕРЕ: список постраничный, и отбор из
+// подгруженного молча терял бы формы с неподгруженных страниц. Опечатка в
+// значении — 422, а не тихая выдача всех форм.
+func TestForms_ListStatusFilter(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "status-filter@example.com")
+
+	draft := createForm(t, c, srv, "Черновик")
+	published := createForm(t, c, srv, "Розданная")
+	publishForm(t, c, srv, published.ID, http.StatusOK)
+	closed := createForm(t, c, srv, "Закрытая")
+	publishForm(t, c, srv, closed.ID, http.StatusOK)
+	unpublishForm(t, c, srv, closed.ID, http.StatusOK)
+
+	for _, tt := range []struct {
+		name  string
+		query string
+		want  []string
+	}{
+		{"без фильтра — все три", "", []string{closed.ID, published.ID, draft.ID}},
+		{"только черновики", "?status=draft", []string{draft.ID}},
+		{"только опубликованные", "?status=published", []string{published.ID}},
+		{"только закрытые", "?status=closed", []string{closed.ID}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			page := listForms(t, c, srv, tt.query)
+			got := make([]string, len(page.Forms))
+			for i, f := range page.Forms {
+				got[i] = f.ID
+			}
+			if len(got) != len(tt.want) {
+				t.Fatalf("отдано %d форм (%v), ожидалось %d (%v)", len(got), got, len(tt.want), tt.want)
+			}
+			for i := range got {
+				if got[i] != tt.want[i] {
+					t.Fatalf("отдано %v, ожидалось %v", got, tt.want)
+				}
+			}
+		})
+	}
+
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms?status=drafts", "", "")
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("неизвестный статус: %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+}
+
+// Дата последнего ответа — колонка «Последний ответ» в списке. Сверхлимитный ответ
+// её не двигает: в кабинете такой строки нет ни в счётчике, ни в таблице ответов,
+// и дата, названная им, указывала бы на то, чего человек не видит.
+func TestForms_ListLastSubmissionAt(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "last-answer@example.com")
+
+	form := createForm(t, c, srv, "С ответами")
+	publishForm(t, c, srv, form.ID, http.StatusOK)
+	insertSubmissions(t, form.ID, 2)
+	quiet := createForm(t, c, srv, "Без ответов")
+
+	var want time.Time
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT max(created_at) FROM submissions WHERE form_id = $1`, form.ID).Scan(&want); err != nil {
+		t.Fatalf("max(created_at): %v", err)
+	}
+
+	byID := listByID(t, c, srv)
+	got := byID[form.ID].LastSubmissionAt
+	if got == nil {
+		t.Fatal("у формы с ответами lastSubmissionAt = null")
+	}
+	if parsed, err := time.Parse(time.RFC3339Nano, *got); err != nil {
+		t.Fatalf("lastSubmissionAt %q не парсится: %v", *got, err)
+	} else if !parsed.Equal(want) {
+		t.Fatalf("lastSubmissionAt = %s, ожидалось %s", parsed, want)
+	}
+	if byID[quiet.ID].LastSubmissionAt != nil {
+		t.Fatalf("у формы без ответов lastSubmissionAt = %q, ожидался null", *byID[quiet.ID].LastSubmissionAt)
+	}
+
+	// Сверхлимитный ответ, пришедший ПОЗЖЕ всех: дата обязана остаться прежней.
+	var versionID string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT published_version_id::text FROM forms WHERE id = $1`, form.ID).Scan(&versionID); err != nil {
+		t.Fatalf("published_version_id: %v", err)
+	}
+	if _, err := testPool.Exec(context.Background(),
+		`INSERT INTO submissions (id, form_id, form_version_id, answers, over_quota, created_at)
+		 VALUES ($1, $2, $3, '{}', true, now() + interval '1 hour')`,
+		domain.NewID(), form.ID, versionID); err != nil {
+		t.Fatalf("вставка сверхлимитного ответа: %v", err)
+	}
+
+	after := listByID(t, c, srv)[form.ID].LastSubmissionAt
+	if after == nil {
+		t.Fatalf("сверхлимитный ответ обнулил дату: было %q", *got)
+	}
+	if *after != *got {
+		t.Fatalf("сверхлимитный ответ сдвинул дату: было %q, стало %q", *got, *after)
+	}
+}
+
+// listByID — список форм пространства, разложенный по id.
+func listByID(t *testing.T, c *http.Client, srv *httptest.Server) map[string]formDTO {
+	t.Helper()
+	list := listForms(t, c, srv, "")
+	byID := make(map[string]formDTO, len(list.Forms))
+	for _, f := range list.Forms {
+		byID[f.ID] = f
+	}
+	return byID
+}
+
 // insertVisits кладёт n визитов формы, из них submitted — закончившихся ответом.
 func insertVisits(t *testing.T, formID string, n, submitted int) {
 	t.Helper()
@@ -1692,6 +1807,7 @@ type formDTO struct {
 	PublishedVersionID    *string `json:"publishedVersionId"`
 	HasUnpublishedChanges bool    `json:"hasUnpublishedChanges"`
 	SubmissionCount       int64   `json:"submissionCount"`
+	LastSubmissionAt      *string `json:"lastSubmissionAt"`
 	VisitCount            int64   `json:"visitCount"`
 	VisitSubmittedCount   int64   `json:"visitSubmittedCount"`
 }

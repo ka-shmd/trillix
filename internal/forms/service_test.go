@@ -98,6 +98,7 @@ type fakeStore struct {
 	lastListAfter  bool
 	lastListSort   string
 	lastListSearch string
+	lastListStatus string
 
 	searchHits      []SearchHit
 	searchErr       error
@@ -256,12 +257,13 @@ func (f *fakeStore) SearchForms(_ context.Context, _ postgres.DBTX, userID uuid.
 	return f.searchHits, f.searchErr
 }
 
-func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
-	f.lastListWS = workspaceID
-	f.lastListLimit = limit
-	f.lastListAfter = after != nil
-	f.lastListSort = sort
-	f.lastListSearch = search
+func (f *fakeStore) ListFormsPage(_ context.Context, _ postgres.DBTX, q ListPageQuery) ([]ListRow, error) {
+	f.lastListWS = q.WorkspaceID
+	f.lastListLimit = q.Limit
+	f.lastListAfter = q.After != nil
+	f.lastListSort = q.Sort
+	f.lastListSearch = q.Search
+	f.lastListStatus = q.Status
 	return f.listRows, f.listErr
 }
 
@@ -1281,6 +1283,66 @@ func TestList_SortDefaultsToUpdated(t *testing.T) {
 	}
 	if store.lastListSort != string(SortUpdated) {
 		t.Fatalf("сортировка %q, ожидалась %q", store.lastListSort, SortUpdated)
+	}
+}
+
+// Фильтр по статусу уезжает в репозиторий как есть; пустой — значит «все статусы»,
+// и в запрос он не попадает вовсе.
+func TestList_StatusFilter_PassedToStore(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		status StatusFilter
+		want   string
+	}{
+		{"пусто = все статусы", "", ""},
+		{"черновики", StatusFilter(domain.FormStatusDraft), "draft"},
+		{"закрытые", StatusFilter(domain.FormStatusClosed), "closed"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			store := &fakeStore{personalWS: domain.NewID()}
+			svc := newTestService(store)
+
+			if _, err := svc.List(context.Background(), domain.NewID(), ListOptions{Status: tt.status}); err != nil {
+				t.Fatalf("List: %v", err)
+			}
+			if store.lastListStatus != tt.want {
+				t.Fatalf("в репозиторий ушёл статус %q, ожидался %q", store.lastListStatus, tt.want)
+			}
+		})
+	}
+}
+
+// Опечатка в статусе — 422, а не молчаливая выдача всех форм: иначе клиент решит,
+// что фильтр работает, а он показывает всё подряд.
+func TestParseStatusFilter(t *testing.T) {
+	for _, tt := range []struct {
+		raw     string
+		want    StatusFilter
+		wantErr bool
+	}{
+		{raw: "", want: ""},
+		{raw: "draft", want: StatusFilter(domain.FormStatusDraft)},
+		{raw: "published", want: StatusFilter(domain.FormStatusPublished)},
+		{raw: "closed", want: StatusFilter(domain.FormStatusClosed)},
+		{raw: "drafts", wantErr: true},
+		{raw: "DRAFT", wantErr: true},
+		{raw: "' OR 1=1", wantErr: true},
+	} {
+		t.Run(tt.raw, func(t *testing.T) {
+			got, err := ParseStatusFilter(tt.raw)
+			if tt.wantErr {
+				if !errors.Is(err, domain.ErrValidation) {
+					t.Fatalf("ошибка = %v, ожидалась domain.ErrValidation", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ParseStatusFilter(%q): %v", tt.raw, err)
+			}
+			if got != tt.want {
+				t.Fatalf("статус %q, ожидался %q", got, tt.want)
+			}
+		})
 	}
 }
 

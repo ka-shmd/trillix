@@ -44,6 +44,12 @@ type Form struct {
 	// таблицы ответов). Считают только читающие запросы (Get/List); у результатов
 	// мутаций 0 (как и PublishedVersion) — фронт берёт актуальное из Get/списка.
 	SubmissionCount int64
+	// LastSubmissionAt — когда пришёл последний ответ (колонка «Последний ответ» в
+	// списке форм); nil = ответов не было. Считают только читающие запросы
+	// (Get/GetBySlug/List), у результатов мутаций nil — как и у счётчиков рядом.
+	// Фильтр over_quota тот же, что у SubmissionCount: дата обязана называть ответ,
+	// который виден в таблице ответов.
+	LastSubmissionAt *time.Time
 	// Просмотры формы и сколько из них закончились ответом (фаза 8.5 шаг 6). Как и
 	// SubmissionCount, заполняют только читающие запросы. Конверсия = Submitted/Visit
 	// и считается на фронте; хранить третье производное число незачем.
@@ -427,6 +433,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		PublishedVersion:      ptrInt32(row.PublishedVersion),
 		HasUnpublishedChanges: row.HasUnpublishedChanges,
 		SubmissionCount:       row.SubmissionCount,
+		LastSubmissionAt:      ptrTime(row.LastSubmissionAt),
 		VisitCount:            row.VisitCount,
 		VisitSubmittedCount:   row.VisitSubmittedCount,
 		CloseAt:               ptrTime(row.CloseAt),
@@ -473,6 +480,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		PublishedVersion:      ptrInt32(row.PublishedVersion),
 		HasUnpublishedChanges: row.HasUnpublishedChanges,
 		SubmissionCount:       row.SubmissionCount,
+		LastSubmissionAt:      ptrTime(row.LastSubmissionAt),
 		VisitCount:            row.VisitCount,
 		VisitSubmittedCount:   row.VisitSubmittedCount,
 		CloseAt:               ptrTime(row.CloseAt),
@@ -498,9 +506,25 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 	}, nil
 }
 
-// ListFormsPage — страница списка форм воркспейса: поиск, сортировка и курсор
-// одним запросом (фаза 8.5 шаг 8). Пустой search — без фильтра; nil-курсор —
-// первая страница. Экранирование спецсимволов LIKE — на вызывающем (service).
+// ListPageQuery — параметры страницы списка на уровне репозитория. Структурой, а не
+// позиционными аргументами: Sort, Search и Status — три соседние строки, и порядок
+// их в вызове ничем не проверяется.
+type ListPageQuery struct {
+	WorkspaceID uuid.UUID
+	Sort        string
+	// Search — подстрока отображаемого имени; пусто = без фильтра. Спецсимволы LIKE
+	// экранирует вызывающий (service).
+	Search string
+	// Status — статус формы; пусто = все статусы. Значение проверяет транспорт
+	// (ParseStatusFilter), в SQL произвольная строка не попадает.
+	Status string
+	// After — nil на первой странице.
+	After *Cursor
+	Limit int32
+}
+
+// ListFormsPage — страница списка форм воркспейса: поиск, фильтр по статусу,
+// сортировка и курсор одним запросом (фаза 8.5 шаг 8).
 // SearchHit — форма в результатах поиска по всем пространствам. Свой тип, а не
 // Form: у поиска нет ни счётчиков, ни схемы, ни версии — ему нужны имя, место и
 // ссылка, и лишние нулевые поля в этом ответе врали бы (как врёт SubmissionCount у
@@ -549,18 +573,21 @@ func (Repo) SearchForms(ctx context.Context, db postgres.DBTX, userID uuid.UUID,
 	return out, nil
 }
 
-func (Repo) ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, sort string, search string, after *Cursor, limit int32) ([]ListRow, error) {
+func (Repo) ListFormsPage(ctx context.Context, db postgres.DBTX, q ListPageQuery) ([]ListRow, error) {
 	params := postgres.ListFormsPageParams{
-		WorkspaceID: workspaceID,
-		Sort:        sort,
-		PageLimit:   limit,
+		WorkspaceID: q.WorkspaceID,
+		Sort:        q.Sort,
+		PageLimit:   q.Limit,
 	}
-	if search != "" {
-		params.Search = pgtype.Text{String: search, Valid: true}
+	if q.Search != "" {
+		params.Search = pgtype.Text{String: q.Search, Valid: true}
 	}
-	if after != nil {
-		params.CursorKey = pgtype.Int8{Int64: after.SortKey, Valid: true}
-		params.CursorID = pgtype.UUID{Bytes: after.ID, Valid: true}
+	if q.Status != "" {
+		params.Status = pgtype.Text{String: q.Status, Valid: true}
+	}
+	if q.After != nil {
+		params.CursorKey = pgtype.Int8{Int64: q.After.SortKey, Valid: true}
+		params.CursorID = pgtype.UUID{Bytes: q.After.ID, Valid: true}
 	}
 
 	rows, err := postgres.New(db).ListFormsPage(ctx, params)
@@ -581,6 +608,7 @@ func (Repo) ListFormsPage(ctx context.Context, db postgres.DBTX, workspaceID uui
 				PublishedVersion:      ptrInt32(r.PublishedVersion),
 				HasUnpublishedChanges: r.HasUnpublishedChanges,
 				SubmissionCount:       r.SubmissionCount,
+				LastSubmissionAt:      ptrTime(r.LastSubmissionAt),
 				VisitCount:            r.VisitCount,
 				VisitSubmittedCount:   r.VisitSubmittedCount,
 				CreatedAt:             r.CreatedAt.Time,
