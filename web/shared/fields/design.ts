@@ -17,12 +17,13 @@ import { BUTTON_WIDTH_DEFAULT, type FormDesign } from '@entities/formSchema'
 // базы, поэтому плотность — один множитель на все интервалы, а не число на каждый.
 const DENSITY_SCALE: Record<string, string> = { compact: '0.75', normal: '1', roomy: '1.25' }
 
-// Стеки шрифтов. Системный весит ноль байт; у остальных тот же системный хвост на
-// случай, если самохостный файл не догрузился, — и хвост подбирается ПО РИСУНКУ, а не
-// копируется: у антиквы он засечный, иначе форма на секунду загрузки становится
-// гротескной, то есть другой формой.
+// Стеки шрифтов. У каждого системный хвост на случай, если самохостный файл не
+// догрузился, — и хвост подбирается ПО РИСУНКУ, а не копируется: у антиквы он засечный,
+// иначе форма на секунду загрузки становится гротескной, то есть другой формой.
+//
+// Одного системного стека в списке НЕТ: он убран из каталога (DESIGN_FONTS), и
+// незнакомое семейство здесь даёт undefined — форма набирается дефолтом :root.
 const FONT_STACK: Record<string, string> = {
-  system: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
   inter: 'Inter, system-ui, -apple-system, sans-serif',
   golos: "'Golos Text', system-ui, -apple-system, sans-serif",
   manrope: 'Manrope, system-ui, -apple-system, sans-serif',

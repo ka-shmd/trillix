@@ -20,8 +20,8 @@ const CSS_TOKENS: Record<'light' | 'dark', Partial<Record<PaletteField, string>>
     placeholder: 'rgb(119, 118, 114)', // --rf-muted
     border: 'rgb(61 59 53 / 0.16)', // --rf-ring
     accent: 'rgb(0, 112, 215)', // --rf-accent
-    button: 'oklch(0.208 0.042 265.755)', // --rf-primary
-    buttonText: 'oklch(0.984 0.003 247.858)', // --rf-primary-foreground
+    button: 'oklch(0.16 0.006 70)', // --rf-primary
+    buttonText: 'oklch(0.985 0.004 80)', // --rf-primary-foreground
   },
   // .rf-theme-dark
   dark: {
