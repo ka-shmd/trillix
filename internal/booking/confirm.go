@@ -25,7 +25,7 @@ import (
 // ConfirmStore — то, что подтверждению нужно от данных.
 type ConfirmStore interface {
 	LockSlot(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time) error
-	TakenAt(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, clientID uuid.UUID) (int, error)
+	TakenAt(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, clientID uuid.UUID, now time.Time) (int, error)
 	BookingForConfirm(ctx context.Context, db postgres.DBTX, bookingID, formID, clientID uuid.UUID) (BookingRow, error)
 	ScheduleCapacity(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID) (int, error)
 	AttachBooking(ctx context.Context, db postgres.DBTX, bookingID, submissionID uuid.UUID) (int64, error)
@@ -137,7 +137,7 @@ func (c *Confirmer) Reserve(ctx context.Context, tx pgx.Tx, bookingID, formID, s
 	if err != nil {
 		return domain.SlotHold{}, err
 	}
-	taken, err := c.repo.TakenAt(ctx, tx, b.ScheduleID, b.StartsAt, submissionID)
+	taken, err := c.repo.TakenAt(ctx, tx, b.ScheduleID, b.StartsAt, submissionID, c.now())
 	if err != nil {
 		return domain.SlotHold{}, err
 	}

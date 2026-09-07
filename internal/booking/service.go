@@ -52,7 +52,7 @@ type Store interface {
 	// Перенос записи: лок, счёт, правка — как у публичного холда.
 	BookingForMove(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID) (BookingMove, error)
 	LockSlot(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time) error
-	TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, bookingID uuid.UUID) (int, error)
+	TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, bookingID uuid.UUID, now time.Time) (int, error)
 	MoveBooking(ctx context.Context, db postgres.DBTX, id, scheduleID uuid.UUID, startsAt time.Time) (int, error)
 }
 
@@ -383,7 +383,7 @@ func (s *Service) MoveBooking(
 			return err
 		}
 		// Счёт под локом и без самой переносимой брони: она уже лежит в таблице.
-		taken, err := s.repo.TakenAtExcept(ctx, tx, scheduleID, startsAt, bookingID)
+		taken, err := s.repo.TakenAtExcept(ctx, tx, scheduleID, startsAt, bookingID, s.now())
 		if err != nil {
 			return err
 		}

@@ -346,12 +346,14 @@ func scheduleFrom(row postgres.Schedule) (Schedule, error) {
 
 // TakenSeats — занятые места на отрезке: ключ — Unix-секунда старта (domain.Taken).
 // Свой холд спрашивающего не считается: он его и держит.
-func (Repo) TakenSeats(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time, clientID uuid.UUID) (domain.Taken, error) {
+func (Repo) TakenSeats(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time, clientID uuid.UUID, now time.Time) (domain.Taken, error) {
 	rows, err := postgres.New(db).TakenSeatsInRange(ctx, postgres.TakenSeatsInRangeParams{
 		ScheduleID: scheduleID,
 		StartsAt:   pgtype.Timestamptz{Time: from, Valid: true},
 		StartsAt_2: pgtype.Timestamptz{Time: to, Valid: true},
 		ClientID:   clientID,
+		// «Сейчас» — часы сервиса; довод в queries.sql у этого запроса.
+		HoldExpiresAt: pgtype.Timestamptz{Time: now, Valid: true},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("taken seats of schedule %s: %w", scheduleID, err)
@@ -374,11 +376,15 @@ func (Repo) LockSlot(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID
 }
 
 // TakenAt — занятые места в одной точке (счёт под локом).
-func (Repo) TakenAt(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, clientID uuid.UUID) (int, error) {
+func (Repo) TakenAt(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, clientID uuid.UUID, now time.Time) (int, error) {
 	n, err := postgres.New(db).TakenSeatsAt(ctx, postgres.TakenSeatsAtParams{
 		ScheduleID: scheduleID,
 		StartsAt:   pgtype.Timestamptz{Time: startsAt, Valid: true},
 		ClientID:   clientID,
+		// «Сейчас» — часы СЕРВИСА, а не базы: момент истечения холда пишет приложение,
+		// и читать его чужими часами значит отвечать двумя источниками времени
+		// (довод целиком — в queries.sql у TakenSeats).
+		HoldExpiresAt: pgtype.Timestamptz{Time: now, Valid: true},
 	})
 	if err != nil {
 		return 0, fmt.Errorf("taken seats at %s: %w", startsAt, err)
@@ -526,11 +532,12 @@ func (Repo) BookingForMove(ctx context.Context, db postgres.DBTX, id, scheduleID
 }
 
 // TakenAtExcept — занятость точки без учёта самой переносимой брони.
-func (Repo) TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, bookingID uuid.UUID) (int, error) {
+func (Repo) TakenAtExcept(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, bookingID uuid.UUID, now time.Time) (int, error) {
 	n, err := postgres.New(db).TakenSeatsAtExcept(ctx, postgres.TakenSeatsAtExceptParams{
-		ScheduleID: scheduleID,
-		StartsAt:   pgtype.Timestamptz{Time: startsAt, Valid: true},
-		ID:         bookingID,
+		ScheduleID:    scheduleID,
+		StartsAt:      pgtype.Timestamptz{Time: startsAt, Valid: true},
+		ID:            bookingID,
+		HoldExpiresAt: pgtype.Timestamptz{Time: now, Valid: true},
 	})
 	if err != nil {
 		return 0, err

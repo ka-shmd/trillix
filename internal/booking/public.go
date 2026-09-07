@@ -43,9 +43,9 @@ type PublicForms interface {
 type PublicStore interface {
 	GetSchedule(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Schedule, error)
 	BlocksInRange(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time) ([]Block, error)
-	TakenSeats(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time, clientID uuid.UUID) (domain.Taken, error)
+	TakenSeats(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, from, to time.Time, clientID uuid.UUID, now time.Time) (domain.Taken, error)
 	LockSlot(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time) error
-	TakenAt(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, clientID uuid.UUID) (int, error)
+	TakenAt(ctx context.Context, db postgres.DBTX, scheduleID uuid.UUID, startsAt time.Time, clientID uuid.UUID, now time.Time) (int, error)
 	Hold(ctx context.Context, db postgres.DBTX, h NewHold) (uuid.UUID, bool, error)
 }
 
@@ -177,7 +177,7 @@ func (s *PublicService) Hold(ctx context.Context, req HoldRequest) (uuid.UUID, t
 		}
 		// Счёт ПОД ЛОКОМ и заново: между проверкой предложения и этой строкой слот
 		// мог занять кто-то другой, и именно здесь гонка и закрывается.
-		taken, err := s.repo.TakenAt(ctx, tx, sch.ID, req.StartsAt, req.ClientID)
+		taken, err := s.repo.TakenAt(ctx, tx, sch.ID, req.StartsAt, req.ClientID, s.now())
 		if err != nil {
 			return err
 		}
@@ -225,7 +225,7 @@ func (s *PublicService) freeSlots(
 	if err != nil {
 		return nil, err
 	}
-	taken, err := s.repo.TakenSeats(ctx, s.db, sch.ID, from, to, clientID)
+	taken, err := s.repo.TakenSeats(ctx, s.db, sch.ID, from, to, clientID, s.now())
 	if err != nil {
 		return nil, err
 	}

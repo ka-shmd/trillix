@@ -152,12 +152,18 @@ RETURNING revision;
 -- Свой холд спрашивающего исключается ($4): человек, передумавший и вернувшийся к
 -- списку, обязан снова увидеть время, которое сам же и держит, — иначе при вместимости
 -- 1 только что отпущенный слот пропадал бы у него на четверть часа.
+-- ЖИВОСТЬ ХОЛДА СЧИТАЕТСЯ ПО ЧАСАМ СЕРВИСА ($5), А НЕ ПО now() БАЗЫ. Момент истечения
+-- в строку пишет приложение (s.now() + HoldTTL), и читать его чужими часами значит
+-- отвечать на один вопрос двумя источниками времени: при подменённых часах (тесты)
+-- свежий холд читается протухшим, при расхождении часов приложения и базы — наоборот.
+-- Тот же порядок, что у CountFutureBookings и PurgeExpiredHolds: «сейчас» приезжает
+-- параметром.
 SELECT starts_at, sum(seats)::bigint AS seats
 FROM bookings
 WHERE schedule_id = $1
   AND starts_at >= $2 AND starts_at < $3
   AND client_id <> $4
-  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > $5))
 GROUP BY starts_at;
 
 -- name: TakenSeatsAt :one
@@ -165,7 +171,7 @@ GROUP BY starts_at;
 SELECT coalesce(sum(seats), 0)::bigint
 FROM bookings
 WHERE schedule_id = $1 AND starts_at = $2 AND client_id <> $3
-  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()));
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > $4));
 
 -- name: LockSlot :exec
 -- Транзакционный advisory-lock по паре «расписание + начало слота» (ADR §10).
@@ -299,7 +305,7 @@ WHERE b.id = $1 AND b.schedule_id = $2 AND b.status = 'confirmed';
 SELECT coalesce(sum(seats), 0)::bigint
 FROM bookings
 WHERE schedule_id = $1 AND starts_at = $2 AND id <> $3
-  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()));
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > $4));
 
 -- name: MoveBooking :one
 -- Перенос брони на новое время. НОМЕР РЕДАКЦИИ РАСТЁТ ТЕМ ЖЕ УТВЕРЖДЕНИЕМ: разъедься
