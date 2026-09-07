@@ -34,6 +34,7 @@ type Plans interface {
 type Store interface {
 	CreateSchedule(ctx context.Context, db postgres.DBTX, s Schedule) (Schedule, error)
 	ListSchedules(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]Schedule, error)
+	ScheduleStatsOfWorkspace(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, now time.Time) (map[uuid.UUID]ScheduleStats, error)
 	GetSchedule(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Schedule, error)
 	UpdateSchedule(ctx context.Context, db postgres.DBTX, s Schedule) (Schedule, error)
 	DeleteSchedule(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int64, error)
@@ -134,12 +135,36 @@ func (in ScheduleInput) domainSchedule() domain.Schedule {
 	}
 }
 
-// List — расписания пространства.
-func (s *Service) List(ctx context.Context, userID, workspaceID uuid.UUID) ([]Schedule, error) {
+// ScheduleListItem — расписание в списке: само правило плюс числа, которые лежат в
+// чужих таблицах. Два встроенных типа, а не копия полей: разъехаться им тогда нечем.
+type ScheduleListItem struct {
+	Schedule
+	ScheduleStats
+}
+
+// List — расписания пространства вместе с живыми числами (формы, записи впереди,
+// ближайшая).
+//
+// ВТОРЫМ ЗАПРОСОМ, а не колонками первого: одно расписание, заведённое между ними,
+// придёт с нулями — и это правда о только что заведённом. Никакого другого расхождения
+// пара дать не может: числа сшиваются по id, а не по порядку.
+func (s *Service) List(ctx context.Context, userID, workspaceID uuid.UUID) ([]ScheduleListItem, error) {
 	if err := s.access.Can(ctx, workspaceID, userID, domain.ActionFormRead); err != nil {
 		return nil, err
 	}
-	return s.repo.ListSchedules(ctx, s.db, workspaceID)
+	items, err := s.repo.ListSchedules(ctx, s.db, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	stats, err := s.repo.ScheduleStatsOfWorkspace(ctx, s.db, workspaceID, s.now())
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ScheduleListItem, 0, len(items))
+	for _, sc := range items {
+		out = append(out, ScheduleListItem{Schedule: sc, ScheduleStats: stats[sc.ID]})
+	}
+	return out, nil
 }
 
 // Create заводит расписание. Квота спрашивается ДО вставки: ключ открыт на всех

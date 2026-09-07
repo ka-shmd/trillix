@@ -24,7 +24,7 @@ type Middleware = func(http.Handler) http.Handler
 
 // bookingService — то, что транспорту нужно от сервиса.
 type bookingService interface {
-	List(ctx context.Context, userID, workspaceID uuid.UUID) ([]Schedule, error)
+	List(ctx context.Context, userID, workspaceID uuid.UUID) ([]ScheduleListItem, error)
 	Create(ctx context.Context, userID, workspaceID uuid.UUID, in ScheduleInput) (Schedule, error)
 	Get(ctx context.Context, userID, scheduleID uuid.UUID) (Schedule, error)
 	Update(ctx context.Context, userID, scheduleID uuid.UUID, in ScheduleInput) (Schedule, error)
@@ -133,6 +133,28 @@ func toScheduleView(s Schedule) scheduleView {
 	}
 }
 
+// scheduleListView — расписание В СПИСКЕ: карточка целиком плюс три числа, которых
+// в самом расписании нет. Встраиванием, а не копией полей: карточка и строка списка
+// обязаны называть одни и те же настройки одинаково.
+//
+// NextBookingAt — указатель: null значит «впереди пусто», и от «полночь 1 января»
+// это отличать обязательно.
+type scheduleListView struct {
+	scheduleView
+	FormsCount    int        `json:"formsCount"`
+	UpcomingCount int        `json:"upcomingCount"`
+	NextBookingAt *time.Time `json:"nextBookingAt"`
+}
+
+func toScheduleListView(it ScheduleListItem) scheduleListView {
+	return scheduleListView{
+		scheduleView:  toScheduleView(it.Schedule),
+		FormsCount:    it.FormsCount,
+		UpcomingCount: it.UpcomingCount,
+		NextBookingAt: it.NextBookingAt,
+	}
+}
+
 type blockView struct {
 	ID       string    `json:"id"`
 	StartsAt time.Time `json:"startsAt"`
@@ -214,9 +236,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	out := make([]scheduleView, 0, len(items))
+	out := make([]scheduleListView, 0, len(items))
 	for _, s := range items {
-		out = append(out, toScheduleView(s))
+		out = append(out, toScheduleListView(s))
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{"items": out})
 }

@@ -321,3 +321,30 @@ WHERE schedule_id = $1 AND starts_at = $2 AND id <> $3
 UPDATE bookings SET starts_at = $3, revision = revision + 1
 WHERE id = $1 AND schedule_id = $2 AND status = 'confirmed'
 RETURNING revision;
+
+-- name: ScheduleStats :many
+-- Живые числа списка расписаний: к скольким формам расписание подключено, сколько
+-- впереди записей и когда ближайшая.
+--
+-- ОТДЕЛЬНЫМ ЗАПРОСОМ, а не колонками ListSchedules: расписание — это правило и
+-- параметры нарезки, а эти три числа лежат в чужих таблицах. Слив их в чтение
+-- расписания, пришлось бы протаскивать «сейчас» через Get, Create и Update, которым
+-- оно не нужно ни за чем.
+--
+-- Считаются только ПОДТВЕРЖДЁННЫЕ записи от «сейчас» — тот же отбор, что у стоп-крана
+-- удаления: холд ещё не договорённость, отменённая уже не она, прошедшая не «впереди».
+-- «Сейчас» приезжает параметром, а не берётся now() базы: у сервиса свои часы, и в
+-- тестах они подменяются (тот же порядок, что у CountFutureBookings).
+--
+-- Форм считаются ВСЕ, включая черновики: расписание, к которому подключён только
+-- черновик, записи ещё не примет, но и «ни к чему не подключено» о нём неправда.
+SELECT s.id AS schedule_id,
+       (SELECT count(*) FROM forms f WHERE f.schedule_id = s.id) AS forms_count,
+       (SELECT count(*) FROM bookings b
+         WHERE b.schedule_id = s.id AND b.status = 'confirmed'
+           AND b.starts_at >= sqlc.arg(now)) AS upcoming_count,
+       (SELECT min(b.starts_at) FROM bookings b
+         WHERE b.schedule_id = s.id AND b.status = 'confirmed'
+           AND b.starts_at >= sqlc.arg(now))::timestamptz AS next_booking_at
+FROM schedules s
+WHERE s.workspace_id = sqlc.arg(workspace_id);

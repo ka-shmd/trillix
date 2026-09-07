@@ -9,13 +9,14 @@ import {
   type Booking,
   type Schedule,
   type ScheduleCalendar,
+  type ScheduleListItem,
   type ScheduleBlock,
   type ScheduleInput,
 } from '../../entities/schedule'
 
 // Транспорт расписаний: каждый ответ парсится Zod-схемой на границе.
 
-export async function listSchedules(workspaceId: string): Promise<Schedule[]> {
+export async function listSchedules(workspaceId: string): Promise<ScheduleListItem[]> {
   const res = await apiRequest(`/workspaces/${workspaceId}/schedules`, {
     schema: schedulesResponseSchema,
   })

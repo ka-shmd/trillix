@@ -1,13 +1,13 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { useState } from 'react'
-import { SquarePlus } from 'lucide-react'
+import { Plus } from 'lucide-react'
 
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { CreateWorkspaceDialog } from '../../features/workspaces/CreateWorkspaceDialog'
 import { WorkspaceRow } from '../../features/workspaces/WorkspaceRow'
 import { formKeys } from '../../features/forms/keys'
-import { PageActions, PageCrumbs } from '../../shared/page/headerPortals'
+import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
@@ -29,18 +29,22 @@ function WorkspacesPage() {
   return (
     <PageContainer>
       <PageCrumbs items={['Пространства']} />
-      <PageActions>
-        <Button variant="ghost" size="sm" className="gap-2" onClick={() => setCreating(true)}>
-          {/* Квадрат с плюсом — «завести пространство»; голый Plus в кабинете уже
-              занят смыслом «новая форма». */}
-          <SquarePlus className="size-4" />
-          Новое пространство
-        </Button>
-      </PageActions>
 
+      {/* «Завести новое» стоит В ЗАГОЛОВКЕ, а не в баре (решение владельца
+          2026-09-07), и это правило на весь кабинет: бар держит действия НАД
+          открытой сущностью, заголовок — создание в этом разделе (DESIGN-SYSTEM §1).
+          Раньше кнопка стояла в баре и была единственной такой в кабинете: одно и то
+          же «завести новое» выглядело серой кнопкой среди крошек здесь и синей в
+          заголовке у форм и расписаний. */}
       <PageHeader
         title="Пространства"
         description="Формы, расписания и участники принадлежат пространству. Личное есть у каждого, командные заводите под общую работу."
+        actions={
+          <Button onClick={() => setCreating(true)}>
+            <Plus className="size-4" />
+            Новое пространство
+          </Button>
+        }
       />
 
       <div className="mt-8 flex flex-col gap-2">

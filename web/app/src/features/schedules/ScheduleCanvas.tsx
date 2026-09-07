@@ -14,13 +14,8 @@ import '@fullcalendar/react/skeleton.css'
 import '@fullcalendar/react/themes/classic/theme.css'
 import './canvas.css'
 
-import type {
-  Availability,
-  Booking,
-  Schedule,
-  ScheduleBlock,
-  ScheduleInput,
-} from '../../entities/schedule'
+import type { Availability, Booking, Schedule, ScheduleBlock } from '../../entities/schedule'
+import { scheduleInput } from '../../entities/schedule'
 import {
   calendarQueryOptions,
   useAddBlock,
@@ -185,7 +180,7 @@ export function ScheduleCanvas({
       return
     }
     setError(null)
-    update.mutate(toInput(schedule, next), { onError: (e) => setError(humanError(e)) })
+    update.mutate(scheduleInput(schedule, next), { onError: (e) => setError(humanError(e)) })
   }
 
   function apply(gesture: Gesture, scope: Scope) {
@@ -673,24 +668,6 @@ function endClock(to: string): string {
 
 function pointOf(e: MouseEvent | null): { x: number; y: number } {
   return { x: e?.clientX ?? 0, y: e?.clientY ?? 0 }
-}
-
-// toInput — расписание в тело PATCH. Перечислением, а не выбрасыванием служебных
-// полей: новое поле обязано попасть сюда осознанно, иначе правка полотна молча
-// сбрасывала бы его к прежнему значению.
-function toInput(s: Schedule, availability: Availability): ScheduleInput {
-  return {
-    name: s.name,
-    timezone: s.timezone,
-    availability,
-    slotMinutes: s.slotMinutes,
-    bufferMinutes: s.bufferMinutes,
-    horizonDays: s.horizonDays,
-    leadMinutes: s.leadMinutes,
-    capacity: s.capacity,
-    maxSeatsPerBooking: s.maxSeatsPerBooking,
-    showRemaining: s.showRemaining,
-  }
 }
 
 // todayIn — сегодняшняя дата В ПОЯСЕ РАСПИСАНИЯ. Полночь у автора и полночь на его
