@@ -50,6 +50,7 @@ function seedDetail(qc: QueryClient) {
     progress: true,
     autoJump: false,
     saveLocally: false,
+    allowBack: false,
     notifyEmail: null,
     linkPreview: null,
     notifyMail: { from: '', to: '', fromName: '', subject: '' },

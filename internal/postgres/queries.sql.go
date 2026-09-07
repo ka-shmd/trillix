@@ -2152,7 +2152,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally, f.allow_back,
     f.notify_respondent, f.respondent_email,
     -- password: шифротекст пароля формы (0047). Кабинету он едет ЦЕЛИКОМ, а не
     -- признаком «пароль есть»: автор видит и копирует свой пароль (решение владельца,
@@ -2201,6 +2201,7 @@ type GetFormRow struct {
 	NotifyEmail           []byte
 	AutoJump              bool
 	SaveLocally           bool
+	AllowBack             bool
 	NotifyRespondent      bool
 	RespondentEmail       []byte
 	Password              []byte
@@ -2242,6 +2243,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.NotifyEmail,
 		&i.AutoJump,
 		&i.SaveLocally,
+		&i.AllowBack,
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
 		&i.Password,
@@ -2270,7 +2272,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id) AS visit_count,
     (SELECT count(*) FROM form_visits v WHERE v.form_id = f.id AND v.submitted) AS visit_submitted_count,
     f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission, f.collect_partial,
-    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally,
+    f.link_preview, f.branding, f.progress, f.notify_email, f.auto_jump, f.save_locally, f.allow_back,
     f.notify_respondent, f.respondent_email,
     f.password,
     -- w.slug: КОРОТКИЙ КЛЮЧ ПРОСТРАНСТВА. Кабинет адресует пространство им (URL
@@ -2315,6 +2317,7 @@ type GetFormBySlugRow struct {
 	NotifyEmail           []byte
 	AutoJump              bool
 	SaveLocally           bool
+	AllowBack             bool
 	NotifyRespondent      bool
 	RespondentEmail       []byte
 	Password              []byte
@@ -2358,6 +2361,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.NotifyEmail,
 		&i.AutoJump,
 		&i.SaveLocally,
+		&i.AllowBack,
 		&i.NotifyRespondent,
 		&i.RespondentEmail,
 		&i.Password,
@@ -2650,10 +2654,12 @@ SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.publis
     -- доводам, что branding, но БЕЗ тарифа: индикатор шагов открыт всем планам, и
     -- сервис поверх этого значения ничего не спрашивает.
     f.progress,
-    -- auto_jump/save_locally: как форма ведёт себя у респондента (0044). Живые
-    -- колонки без тарифа, как progress: рендерер получает намерение автора как есть.
+    -- auto_jump/save_locally/allow_back: как форма ведёт себя у респондента (0044,
+    -- 0055). Живые колонки без тарифа, как progress: рендерер получает намерение
+    -- автора как есть.
     f.auto_jump,
     f.save_locally,
+    f.allow_back,
     -- password: шифротекст пароля формы (0047); NULL = пароля нет. Едет ЦЕЛИКОМ, а не
     -- признаком «пароль есть», потому что он подмешан в подпись токена разблокировки:
     -- проверяющий пересчитывает подпись по текущему шифротексту, и смена пароля тем
@@ -2701,6 +2707,7 @@ type GetPublicFormBySlugRow struct {
 	Progress           bool
 	AutoJump           bool
 	SaveLocally        bool
+	AllowBack          bool
 	Password           []byte
 	ScheduleID         pgtype.UUID
 	SubmissionCount    int64
@@ -2745,6 +2752,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.Progress,
 		&i.AutoJump,
 		&i.SaveLocally,
+		&i.AllowBack,
 		&i.Password,
 		&i.ScheduleID,
 		&i.SubmissionCount,
@@ -5677,7 +5685,7 @@ func (q *Queries) TakenSeatsInRange(ctx context.Context, arg TakenSeatsInRangePa
 
 const updateFormBehavior = `-- name: UpdateFormBehavior :one
 UPDATE forms
-SET auto_jump = $3, save_locally = $4, updated_at = now()
+SET auto_jump = $3, save_locally = $4, allow_back = $5, updated_at = now()
 WHERE id = $1 AND workspace_id = $2
 RETURNING id, workspace_id, name, title, slug, status, published_version_id, created_at, updated_at
 `
@@ -5687,6 +5695,7 @@ type UpdateFormBehaviorParams struct {
 	WorkspaceID uuid.UUID
 	AutoJump    bool
 	SaveLocally bool
+	AllowBack   bool
 }
 
 type UpdateFormBehaviorRow struct {
@@ -5701,15 +5710,17 @@ type UpdateFormBehaviorRow struct {
 	UpdatedAt          pgtype.Timestamptz
 }
 
-// Раздел «Поведение» (0044): автопереход и хранение ответов в браузере респондента.
-// Две колонки одним запросом — это ОДИН экранный раздел, и кабинет шлёт его набором;
-// по отдельности они не спрашиваются нигде. Тарифа у обеих нет.
+// Раздел «Поведение» (0044, третья колонка — 0055): автопереход, хранение ответов в
+// браузере респондента и ход назад по страницам. Три колонки одним запросом — это ОДИН
+// экранный раздел, и кабинет шлёт его набором; по отдельности они не спрашиваются
+// нигде. Тарифа ни у одной нет.
 func (q *Queries) UpdateFormBehavior(ctx context.Context, arg UpdateFormBehaviorParams) (UpdateFormBehaviorRow, error) {
 	row := q.db.QueryRow(ctx, updateFormBehavior,
 		arg.ID,
 		arg.WorkspaceID,
 		arg.AutoJump,
 		arg.SaveLocally,
+		arg.AllowBack,
 	)
 	var i UpdateFormBehaviorRow
 	err := row.Scan(

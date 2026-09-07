@@ -421,6 +421,36 @@ func TestPublicGet_ProgressState_ChangesETag(t *testing.T) {
 	}
 }
 
+// --- Ход назад (миграция 0055) ---
+//
+// Та же пара проверок, что у шкалы, и по той же причине: решения сервера здесь нет,
+// а тумблер живой — не входи он в ETag, автор включил бы возврат, а все, кто форму
+// уже открывал, листали бы её только вперёд до самой перепубликации.
+
+func TestPublicGet_AllowBack_CarriesIntent(t *testing.T) {
+	for _, on := range []bool{true, false} {
+		svc := brandingForm(t, false, true)
+		svc.pf.AllowBack = on
+		_, body := getPublicJSON(t, svc)
+		if body.AllowBack != on {
+			t.Fatalf("allowBack = %v, ожидалось %v", body.AllowBack, on)
+		}
+	}
+}
+
+func TestPublicGet_AllowBackState_ChangesETag(t *testing.T) {
+	svc := brandingForm(t, false, true)
+	svc.pf.AllowBack = true
+	withBack, _ := getPublicJSON(t, svc)
+
+	svc.pf.AllowBack = false
+	withoutBack, _ := getPublicJSON(t, svc)
+
+	if withBack.Header().Get("ETag") == withoutBack.Header().Get("ETag") {
+		t.Fatalf("ETag не изменился со снятием хода назад: %q", withBack.Header().Get("ETag"))
+	}
+}
+
 // Бейдж стоит и на экране «приём закрыт»: иначе он снимается разглядыванием
 // второго экрана.
 func TestPublicGet_Closed_CarriesBadgeDecision(t *testing.T) {

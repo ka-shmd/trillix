@@ -76,9 +76,10 @@ export interface SettingsDraft {
   // На странице настроек они такой же черновик, как поля, — сохраняются кнопкой.
   progress: boolean
   branding: boolean
-  // Раздел «Поведение» (0044).
+  // Раздел «Поведение» (0044, третий тумблер — 0055).
   autoJump: boolean
   saveLocally: boolean
+  allowBack: boolean
 }
 
 export function settingsFromForm(form: FormDetail): SettingsDraft {
@@ -120,6 +121,7 @@ export function settingsFromForm(form: FormDetail): SettingsDraft {
     branding: form.branding,
     autoJump: form.autoJump,
     saveLocally: form.saveLocally,
+    allowBack: form.allowBack,
   }
 }
 
@@ -340,7 +342,10 @@ export function pendingChanges(saved: SettingsDraft, draft: SettingsDraft): Pend
     password: passwordValue(draft) !== passwordValue(saved),
     progress: draft.progress !== saved.progress,
     branding: draft.branding !== saved.branding,
-    behavior: draft.autoJump !== saved.autoJump || draft.saveLocally !== saved.saveLocally,
+    behavior:
+      draft.autoJump !== saved.autoJump ||
+      draft.saveLocally !== saved.saveLocally ||
+      draft.allowBack !== saved.allowBack,
   }
 }
 

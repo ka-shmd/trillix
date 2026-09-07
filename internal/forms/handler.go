@@ -63,7 +63,7 @@ type formsService interface {
 	UpdateCollectPartial(ctx context.Context, userID, formID uuid.UUID, enabled bool) (Form, error)
 	UpdateBranding(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
 	UpdateProgress(ctx context.Context, userID, formID uuid.UUID, show bool) (Form, error)
-	UpdateBehavior(ctx context.Context, userID, formID uuid.UUID, autoJump, saveLocally bool) (Form, error)
+	UpdateBehavior(ctx context.Context, userID, formID uuid.UUID, autoJump, saveLocally, allowBack bool) (Form, error)
 	UpdateNotifyEmail(ctx context.Context, userID, formID uuid.UUID, n *domain.NotifyEmail) (Form, error)
 	UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
@@ -212,10 +212,11 @@ type formDetailResponse struct {
 	// формы, миграция 0040). Та же мина, что у Branding: только в детали формы, а
 	// false у списка и мутаций значит «шкала снята».
 	Progress bool `json:"progress"`
-	// Behavior — раздел «Поведение» (0044). Та же мина, что у Branding: только в
-	// детали формы.
+	// Behavior — раздел «Поведение» (0044, третий тумблер — 0055). Та же мина, что у
+	// Branding: только в детали формы.
 	AutoJump    bool `json:"autoJump"`
 	SaveLocally bool `json:"saveLocally"`
+	AllowBack   bool `json:"allowBack"`
 	// NotifyEmail — настройка письма о новом ответе; null = не настраивали, письмо
 	// уходит дефолтным шаблоном. Отдаётся НЕЗАВИСИМО от тарифа, как и карточка
 	// ссылки: кабинет показывает сохранённое всем, а применяет настройку отправка
@@ -285,11 +286,13 @@ type linkPreviewBody struct {
 	IconKey     string `json:"iconKey"`
 }
 
-// behaviorBody — фасет behavior в PATCH: раздел «Поведение» целиком (0044). Набором,
-// а не по тумблеру: это один экранный раздел, и кабинет сохраняет его одной кнопкой.
+// behaviorBody — фасет behavior в PATCH: раздел «Поведение» целиком (0044, третий
+// тумблер — 0055). Набором, а не по тумблеру: это один экранный раздел, и кабинет
+// сохраняет его одной кнопкой.
 type behaviorBody struct {
 	AutoJump    bool `json:"autoJump"`
 	SaveLocally bool `json:"saveLocally"`
+	AllowBack   bool `json:"allowBack"`
 }
 
 // closeSettingsBody — фасет closeSettings в PATCH: полный набор настроек закрытия
@@ -504,6 +507,7 @@ func toFormDetailResponse(f Form) formDetailResponse {
 		Progress:           f.Progress,
 		AutoJump:           f.AutoJump,
 		SaveLocally:        f.SaveLocally,
+		AllowBack:          f.AllowBack,
 		NotifyEmail:        toNotifyEmailBody(f.NotifyEmail),
 		LinkPreview:        toLinkPreviewBody(f.LinkPreview),
 		Password:           f.Password,
@@ -872,7 +876,7 @@ func (h *Handler) update(w http.ResponseWriter, r *http.Request) {
 	case req.Progress != nil:
 		form, err = h.svc.UpdateProgress(r.Context(), userID, formID, *req.Progress)
 	case req.Behavior != nil:
-		form, err = h.svc.UpdateBehavior(r.Context(), userID, formID, req.Behavior.AutoJump, req.Behavior.SaveLocally)
+		form, err = h.svc.UpdateBehavior(r.Context(), userID, formID, req.Behavior.AutoJump, req.Behavior.SaveLocally, req.Behavior.AllowBack)
 	case req.NotifyEmail != nil:
 		ne := *req.NotifyEmail
 		// Тема и текст НЕ тримятся: пробел в спанах — кусок текста, за который

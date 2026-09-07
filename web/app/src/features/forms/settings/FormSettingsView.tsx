@@ -283,7 +283,11 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
       try {
         await updateBehavior.mutateAsync({
           id: form.id,
-          behavior: { autoJump: draft.autoJump, saveLocally: draft.saveLocally },
+          behavior: {
+            autoJump: draft.autoJump,
+            saveLocally: draft.saveLocally,
+            allowBack: draft.allowBack,
+          },
         })
       } catch {
         broke = true
@@ -609,6 +613,17 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
             description="Форма сама листает на следующую страницу, когда человек выбрал вариант. Работает там, где на странице один вопрос выбором — один из списка, выпадающий список или шкала."
             checked={draft.autoJump}
             onChange={(v) => set('autoJump', v)}
+          />
+
+          {/* Про шкалу сказано условно («если включена»), потому что это отдельный
+              тумблер выше по странице: обещать клик по линиям тому, кто их не показывает,
+              значит обещать несуществующее. */}
+          <SettingRow
+            id="allow-back"
+            label="Возврат на прошлые страницы"
+            description="Респондент сможет вернуться на страницы, которые уже прошёл, — кнопкой «Назад» рядом с «Далее», а если включена шкала прогресса, то и кликом по пройденному шагу. Набранные ответы при этом сохраняются, а вперёд форма по-прежнему пускает только через «Далее» с проверкой страницы."
+            checked={draft.allowBack}
+            onChange={(v) => set('allowBack', v)}
           />
 
           {/* НЕ ПУТАТЬ С «Частичными ответами»: там черновик уезжает на сервер и его
