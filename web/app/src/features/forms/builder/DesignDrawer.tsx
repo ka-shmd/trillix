@@ -82,7 +82,14 @@ import { useFeatureAllowed } from '../../plan/useFeature'
 import { ProTag } from '../../../shared/ProTag'
 
 import { ColorPicker } from './ColorPicker'
-import { CONTROL, CONTROL_BOX, CONTROL_SELECT, CONTROL_TABS, LABEL } from './designControl'
+import {
+  CONTROL,
+  CONTROL_BOX,
+  CONTROL_FOCUS,
+  CONTROL_SELECT,
+  CONTROL_TABS,
+  LABEL,
+} from './designControl'
 import { CoverRow, LogoRow } from './DesignChrome'
 import { type FormIdSource } from './mediaUpload'
 import {
@@ -591,6 +598,7 @@ export function DesignDrawer({
                     <div className={`flex items-center justify-center ${CONTROL}`}>
                       <Checkbox
                         id="design-shadow"
+                        className={CONTROL_FOCUS}
                         checked={design?.controls?.shadow !== false}
                         onCheckedChange={(on) => set('controls', 'shadow', on ? undefined : false)}
                       />
@@ -902,6 +910,10 @@ export function DesignDrawer({
                   DESIGN-SYSTEM §6) видно, где кончился селектор и началось значение. */}
               <CodeField
                 id="design-css"
+                // Кольцо снимается тем же вариантом, каким объявлено (focus-within, а
+                // не focus-visible): поле составное, фокус берёт textarea внутри.
+                className="focus-within:ring-0"
+
                 value={cssValue}
                 lang="css"
                 onChange={setCss}
@@ -1140,7 +1152,10 @@ function ColorRow({
               type="button"
               aria-label={`Подобрать цвет: ${title}`}
               title="Подобрать цвет"
-              className="absolute top-1/2 left-1.5 z-10 size-5 -translate-y-1/2 cursor-pointer rounded-sm border outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              // Кольца нет, как и у прочих контролов шторки, но метка фокуса образцу
+            // нужна своя: у него нет вендоренной перекраски рамки, поэтому на фокусе
+            // рамка становится акцентной здесь же.
+            className="absolute top-1/2 left-1.5 z-10 size-5 -translate-y-1/2 cursor-pointer rounded-sm border outline-none focus-visible:border-ring focus-visible:ring-0"
               style={
                 shown
                   ? { background: shown }

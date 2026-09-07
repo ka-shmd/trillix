@@ -37,8 +37,19 @@ export const CONTROL = 'h-7 text-xs md:text-xs'
 export const CONTROL_SHELL =
   'border-transparent shadow-[0_1px_1px_0_rgb(0_0_0/0.10),0_0_0_1px_rgb(61_59_53/0.14),0_2px_5px_0_rgb(61_59_53/0.07)]'
 
+/**
+ * СВЕЧЕНИЕ ФОКУСА СНЯТО (решение владельца 2026-09-07) — тем же решением, что в попапе
+ * блока. Вендоренные контролы рисуют вокруг себя кольцо в 3px; в шторке контролы идут
+ * плотными рядами по два в строке, и кольцо налезает на соседа сверху и сбоку.
+ *
+ * Фокус при этом не пропадает: у тех же контролов на фокусе перекрашивается рамка
+ * (`focus-visible:border-ring`) — она и остаётся меткой. Гасим нулём, а не прозрачным
+ * кольцом: прозрачное всё равно занимает место и продолжает раздвигать соседей.
+ */
+export const CONTROL_FOCUS = 'focus-visible:ring-0'
+
 /** Оба сразу — то, что надевается на поле ввода. */
-export const CONTROL_BOX = `${CONTROL} ${CONTROL_SHELL}`
+export const CONTROL_BOX = `${CONTROL} ${CONTROL_SHELL} ${CONTROL_FOCUS}`
 
 /**
  * ДОБАВКИ ДЛЯ КОНТРОЛОВ, У КОТОРЫХ РОСТ ЗАДАН ВАРИАНТОМ, а не плоской утилитой.
@@ -48,7 +59,12 @@ export const CONTROL_BOX = `${CONTROL} ${CONTROL_SHELL}`
  * ни другую — дропдаун и вкладки молча остаются кабинетного роста среди ужатых полей.
  */
 export const CONTROL_SELECT = `${CONTROL_BOX} data-[size=sm]:h-7 data-[size=default]:h-7`
-export const CONTROL_TABS = `${CONTROL} group-data-[orientation=horizontal]/tabs:h-7`
+// У вкладок кольцо рисует ТРИГГЕР, а класс висит на списке, поэтому гасится оно
+// потомком: селектор «класс списка + атрибут триггера» specificity (0,3,0) заведомо
+// сильнее плоской утилиты (0,2,0), и порядок в собранном CSS ничего не решает.
+export const CONTROL_TABS =
+  `${CONTROL} group-data-[orientation=horizontal]/tabs:h-7 ` +
+  '[&_[data-slot=tabs-trigger]]:focus-visible:ring-0'
 
 /**
  * Подписи шторки — 12/400 приглушённым, вровень с текстом контролов (решение владельца
