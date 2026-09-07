@@ -31,7 +31,7 @@ func TestValidateDesign(t *testing.T) {
 			Font:     "inter",
 			Layout:   &DesignLayout{Width: intp(860), FontSize: intp(18), Density: "roomy", Align: "center"},
 			Controls: &DesignControls{Radius: intp(0), Outline: "border"},
-			Button:   &DesignButton{Variant: "outline", Width: "full", Align: "center", Size: "lg"},
+			Button:   &DesignButton{Variant: "outline", Width: "full", Align: "center", Weight: "bold", Size: "lg"},
 		}},
 
 		"тема вне списка":           {design: &FormDesign{Theme: "auto"}, bad: "theme"},
@@ -495,6 +495,24 @@ func TestDesignVars_Button(t *testing.T) {
 		got := DesignVars(&FormDesign{Button: &DesignButton{Size: "md"}})
 		if len(got) != 0 {
 			t.Fatalf("средний размер дал переменные: %v", got)
+		}
+	})
+
+	t.Run("толщина: дефолтная ступень молчит, остальные печатают число", func(t *testing.T) {
+		// "semibold" — дефолт fields.css (--rf-submit-weight: 600). Кейсы того же
+		// состава, что в design.test.ts на фронте: смысл настройки машине не сверить,
+		// его держат зеркальные таблицы (шапка design_parity_test.go).
+		if got := DesignVars(&FormDesign{Button: &DesignButton{Weight: "semibold"}}); len(got) != 0 {
+			t.Fatalf("дефолтная ступень дала переменные: %v", got)
+		}
+		for weight, want := range map[string]string{"normal": "400", "bold": "700"} {
+			got := DesignVars(&FormDesign{Button: &DesignButton{Weight: weight}})["--rf-submit-weight"]
+			if got != want {
+				t.Errorf("толщина %q = %q, ожидалось %q", weight, got, want)
+			}
+		}
+		if err := validateDesign(&FormDesign{Button: &DesignButton{Weight: "black"}}); err == nil {
+			t.Error("ступень вне списка обязана отвергаться")
 		}
 	})
 

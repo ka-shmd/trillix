@@ -101,6 +101,11 @@ var (
 	designButtonVariant = []string{"solid", "outline"}
 	designButtonWidth   = []string{"auto", "full", "fixed"}
 	designButtonSize    = []string{"sm", "md", "lg"}
+	// Толщина надписи кнопки. Ступени, а не свободное число: у самохостных семейств
+	// вариативная ось кончается по-разному (у Lora на 700), и число вне диапазона
+	// браузер молча округлит — настройка работала бы на одном шрифте и молчала на
+	// другом. "semibold" — дефолт полотна и в документ не пишется.
+	designButtonWeights = []string{"normal", "medium", "semibold", "bold"}
 	// У кнопки три положения: она стоит в своём ряду, где есть и правый край. У
 	// выравнивания ТЕКСТА формы правого варианта нет — он читается как брак вёрстки.
 	designButtonAligns = []string{"left", "center", "right"}
@@ -222,6 +227,9 @@ type DesignButton struct {
 	// набора, иначе одна правка высоты молча пересобирала бы кнопку целиком.
 	Height *int   `json:"height,omitempty"`
 	Align  string `json:"align,omitempty"`
+	// Weight — толщина надписи. Незаданная значит дефолт полотна (--rf-submit-weight,
+	// 600), как и всё остальное в оформлении.
+	Weight string `json:"weight,omitempty"`
 	// FontSize и Radius — свои у кнопки: пока не заданы, она берёт кегль формы и
 	// радиус контролов (--rf-submit-size / --rf-submit-radius в fields.css).
 	FontSize *int `json:"fontSize,omitempty"`
@@ -330,6 +338,9 @@ func validateDesign(d *FormDesign) error {
 		if err := oneOf("button.align", b.Align, designButtonAligns); err != nil {
 			return err
 		}
+		if err := oneOf("button.weight", b.Weight, designButtonWeights); err != nil {
+			return err
+		}
 		if b.FontSize != nil && (*b.FontSize < MinButtonFont || *b.FontSize > MaxButtonFont) {
 			return fmt.Errorf("design.button.fontSize: %d вне диапазона %d–%d", *b.FontSize, MinButtonFont, MaxButtonFont)
 		}
@@ -402,7 +413,7 @@ func DesignPaidFeatures(d *FormDesign) []string {
 		add(c.Outline != "", "вид контура")
 	}
 	if b := d.Button; b != nil {
-		add(b.Variant != "" || b.Width != "" || b.Align != "" || b.Size != "", "кнопка")
+		add(b.Variant != "" || b.Width != "" || b.Align != "" || b.Weight != "" || b.Size != "", "кнопка")
 	}
 	return out
 }

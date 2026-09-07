@@ -47,6 +47,14 @@ var designFontStack = map[string]string{
 	"lora":       "Lora, Georgia, 'Times New Roman', serif",
 }
 
+// Толщина надписи кнопки. "semibold" в таблице нет намеренно: это дефолт fields.css,
+// и печатать для него переменную значило бы писать то, что и так есть.
+var designButtonWeight = map[string]string{
+	"normal": "400",
+	"medium": "500",
+	"bold":   "700",
+}
+
 // designVarSpec описывает одну переменную: как её зовут и как достать значение.
 // Таблицей, а не цепочкой if: состав ключей — контракт с фронтом, и он должен
 // читаться списком, а не собираться из двадцати ветвей.
@@ -167,6 +175,12 @@ var designVarSpecs = []designVarSpec{
 			return ""
 		}
 		return fmt.Sprintf("%dpx", *d.Button.FontSize)
+	}},
+	{"--rf-submit-weight", func(d *FormDesign) string {
+		if d.Button == nil {
+			return ""
+		}
+		return designButtonWeight[d.Button.Weight]
 	}},
 	{"--rf-submit-radius", func(d *FormDesign) string {
 		if d.Button == nil || d.Button.Radius == nil {

@@ -183,6 +183,7 @@ func TestDesignEnumsParity(t *testing.T) {
 		"DESIGN_BUTTON_WIDTHS":   designButtonWidth,
 		"DESIGN_BUTTON_ALIGNS":   designButtonAligns,
 		"DESIGN_BUTTON_SIZES":    designButtonSize,
+		"DESIGN_BUTTON_WEIGHTS":  designButtonWeights,
 		"DESIGN_FONTS":           designFonts,
 	}
 	for name, goList := range pairs {

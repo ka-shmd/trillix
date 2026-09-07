@@ -67,6 +67,14 @@ const submitWidth = (d: FormDesign): string | undefined => {
   return `${d.button.widthPx ?? BUTTON_WIDTH_DEFAULT}px`
 }
 
+// Толщина надписи кнопки. `semibold` в таблице нет намеренно: это дефолт fields.css,
+// и печатать для него переменную значило бы писать в документ то, что и так есть.
+const BUTTON_WEIGHT: Record<string, string | undefined> = {
+  normal: '400',
+  medium: '500',
+  bold: '700',
+}
+
 // Положение кнопки в ряду. `left` в таблице нет намеренно: это дефолт fields.css.
 const SUBMIT_JUSTIFY: Record<string, string | undefined> = {
   center: 'center',
@@ -120,6 +128,7 @@ const SPECS: ReadonlyArray<readonly [string, (d: FormDesign) => string | undefin
   // Три положения: слева — дефолт (ничего не печатаем), по центру и справа — свои
   // значения justify-content ряда.
   ['--rf-submit-size', (d) => px(d.button?.fontSize)],
+  ['--rf-submit-weight', (d) => BUTTON_WEIGHT[d.button?.weight ?? '']],
   ['--rf-submit-radius', (d) => px(d.button?.radius)],
   ['--rf-submit-justify', (d) => SUBMIT_JUSTIFY[d.button?.align ?? '']],
   ['--rf-submit-width', submitWidth],
