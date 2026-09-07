@@ -803,19 +803,23 @@ export function DesignDrawer({
                   </Field>
                 </div>
               </Wide>
-              {/* ТОЛЩИНА — СВОЕЙ СТРОКОЙ, а не четвёртой в ряду с кеглем и радиусом:
-                  там стоят числа в узких полях, а здесь список со словами, и втиснутый
-                  четвёртым он ужал бы соседей до нечитаемых. Ступени, а не число, —
-                  довод в DESIGN_BUTTON_WEIGHTS. */}
-              <Field label="Толщина" id="design-btn-weight">
-                <Choice
-                  id="design-btn-weight"
-                  value={design?.button?.weight ?? 'semibold'}
-                  options={DESIGN_BUTTON_WEIGHTS}
-                  titles={BUTTON_WEIGHT_TITLES}
-                  onChange={(v) => set('button', 'weight', dflt(v, 'semibold'))}
-                />
-              </Field>
+              {/* ТОЛЩИНА — ОТДЕЛЬНОЙ СТРОКОЙ ВО ВСЮ ШИРИНУ (решение владельца
+                  2026-09-07). Не четвёртой в ряду с кеглем и радиусом: там числа в
+                  узких полях, а здесь список со словами. И обязательно в Wide: секция
+                  это сетка из двух колонок, и голое поле встало бы в пару к первому
+                  цвету кнопки — соседями по строке оказались бы настройки разных
+                  жанров. Ступени, а не число, — довод в DESIGN_BUTTON_WEIGHTS. */}
+              <Wide>
+                <Field label="Толщина" id="design-btn-weight">
+                  <Choice
+                    id="design-btn-weight"
+                    value={design?.button?.weight ?? 'semibold'}
+                    options={DESIGN_BUTTON_WEIGHTS}
+                    titles={BUTTON_WEIGHT_TITLES}
+                    onChange={(v) => set('button', 'weight', dflt(v, 'semibold'))}
+                  />
+                </Field>
+              </Wide>
 
               {/* Цвета кнопки — теми же строками, что у полей: образец слева, hex в
                   поле, цвет темы, пока автор своего не задал. Подписи короткие —
