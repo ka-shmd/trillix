@@ -205,6 +205,11 @@ type publicFormResponse struct {
 	// дольше сессии. Как и Progress — чистое намерение автора, без тарифа.
 	AutoJump    bool `json:"autoJump"`
 	SaveLocally bool `json:"saveLocally"`
+	// AllowBack — пускать ли респондента на пройденные страницы (0055): кнопка
+	// «Назад» и клик по линии пройденного шага. Тоже чистое намерение автора.
+	// Записи в истории браузера за этим флагом НЕТ ни при каком значении (решение
+	// владельца 2026-09-07) — системная «Назад» уводит со страницы формы.
+	AllowBack bool `json:"allowBack"`
 	// Booking — факты расписания записи (фаза 27): пояс, сколько мест можно взять
 	// одной записью и показывать ли остаток. null = у формы нет расписания, и вопрос
 	// о времени (если он в схеме) живого выбора не получает.
@@ -398,7 +403,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// кому угодно, а сама выдача зависит от заголовка запроса, которого нет в ключе
 	// кэша. Минута кэша разблокированной формы того не стоит.
 	if len(pf.PasswordSealed) == 0 {
-		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally) + `"`
+		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally, pf.AllowBack) + `"`
 		w.Header().Set("Cache-Control", "public, max-age=60")
 		w.Header().Set("ETag", etag)
 		if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -436,6 +441,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		Progress:       pf.Progress,
 		AutoJump:       pf.AutoJump,
 		SaveLocally:    pf.SaveLocally,
+		AllowBack:      pf.AllowBack,
 		Booking:        h.bookingFacts(r, pf.ScheduleID),
 	})
 }
@@ -502,7 +508,7 @@ func (h *PublicHandler) showBadge(r *http.Request, workspaceID uuid.UUID, intent
 //
 // МИНА: забытый здесь признак означает 304 с прежним телом до самой перепубликации —
 // автор переключил тумблер, а все, кто форму уже открывал, видят старое.
-func viewETagSuffix(showBadge, progress, autoJump, saveLocally bool) string {
+func viewETagSuffix(showBadge, progress, autoJump, saveLocally, allowBack bool) string {
 	suffix := ""
 	if showBadge {
 		suffix += "+b"
@@ -515,6 +521,9 @@ func viewETagSuffix(showBadge, progress, autoJump, saveLocally bool) string {
 	}
 	if saveLocally {
 		suffix += "+s"
+	}
+	if allowBack {
+		suffix += "+k"
 	}
 	return suffix
 }

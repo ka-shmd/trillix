@@ -71,6 +71,7 @@ export function newFormDetail(): FormDetail {
     // ответы живут до закрытия вкладки.
     autoJump: false,
     saveLocally: false,
+    allowBack: false,
     // Письмо о новом ответе не настраивали — уйдёт дефолтным шаблоном.
     notifyEmail: null,
     // Карточку ссылки не настраивали — публичная страница возьмёт дефолты.

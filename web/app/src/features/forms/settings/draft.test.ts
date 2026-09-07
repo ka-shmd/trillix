@@ -53,6 +53,7 @@ const saved: SettingsDraft = {
   branding: true,
   autoJump: false,
   saveLocally: false,
+  allowBack: false,
 }
 
 // Письмо по умолчанию, каким его отдаёт сервер: имя отправителя и тема стоят в
@@ -136,6 +137,7 @@ describe('черновик страницы настроек', () => {
     ).toBe(false)
     expect(pendingChanges(saved, { ...saved, autoJump: true }).behavior).toBe(true)
     expect(pendingChanges(saved, { ...saved, saveLocally: true }).behavior).toBe(true)
+    expect(pendingChanges(saved, { ...saved, allowBack: true }).behavior).toBe(true)
   })
 
   it('тумблер входит в «есть несохранённое» наравне с полями', () => {

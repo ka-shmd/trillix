@@ -51,14 +51,16 @@ export function PreviewOverlay({
   title,
   badge,
   progress = false,
+  allowBack = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   store: StoreApi<BuilderStore>
   title: string
   badge: boolean
-  // Как и badge — живое свойство формы, а не документ (см. PreviewPane).
+  // Как и badge — живые свойства формы, а не документ (см. PreviewPane).
   progress?: boolean
+  allowBack?: boolean
 }) {
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
@@ -87,7 +89,7 @@ export function PreviewOverlay({
             документа фрейма — сам фрейм (событие через границу документов не
             всплывает, а курсор автора почти всегда внутри формы). */}
         <PreviewFrame store={store} onEscape={() => onOpenChange(false)}>
-          <PreviewPane title={title} badge={badge} progress={progress} />
+          <PreviewPane title={title} badge={badge} progress={progress} allowBack={allowBack} />
         </PreviewFrame>
       </SheetContent>
     </Sheet>

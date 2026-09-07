@@ -75,6 +75,7 @@ type Form struct {
 	RespondentEmail    []byte
 	Password           []byte
 	ScheduleID         pgtype.UUID
+	AllowBack          bool
 }
 
 type FormIntegration struct {

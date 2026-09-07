@@ -83,11 +83,13 @@ type Form struct {
 	// колонка, новые формы — true). Заполняют только Get/GetBySlug (страница настроек);
 	// у результатов мутаций false, как и прочие read-only поля выше.
 	NotifyOnSubmission bool
-	// Behavior — раздел «Поведение» (0044): автопереход на следующую страницу и
-	// хранение ответов в браузере респондента дольше сессии. Живые колонки; та же
-	// мина, что у Branding, — заполняют только Get/GetBySlug.
+	// Behavior — раздел «Поведение» (0044, третий тумблер — 0055): автопереход на
+	// следующую страницу, хранение ответов в браузере респондента дольше сессии и
+	// ход назад по пройденным страницам. Живые колонки; та же мина, что у Branding, —
+	// заполняют только Get/GetBySlug.
 	AutoJump    bool
 	SaveLocally bool
+	AllowBack   bool
 	// NotifyEmail — настройка письма о новом ответе (nil = не настраивали → письмо
 	// уходит дефолтным шаблоном). Живая колонка (0042); заполняют только
 	// Get/GetBySlug — та же мина, что у Branding.
@@ -181,10 +183,11 @@ type PublicForm struct {
 	// БЕЗ тарифа: шкала открыта всем планам, и поверх намерения service ничего не
 	// спрашивает — рендерер получает его как есть.
 	Progress bool
-	// AutoJump/SaveLocally — поведение формы у респондента (0044). Как и Progress,
-	// чистое намерение автора: тарифа у них нет, и решать поверх нечего.
+	// AutoJump/SaveLocally/AllowBack — поведение формы у респондента (0044, 0055).
+	// Как и Progress, чистое намерение автора: тарифа у них нет, и решать поверх нечего.
 	AutoJump    bool
 	SaveLocally bool
+	AllowBack   bool
 	// PasswordSealed — шифротекст пароля формы (0047); nil = пароля нет. Наружу не
 	// отдаётся ни в одном ответе: он нужен только чтобы ПРОВЕРИТЬ токен
 	// разблокировки, в подпись которого подмешан, — оттого смена пароля и гасит
@@ -436,6 +439,7 @@ func (Repo) GetForm(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Form, 
 		Progress:              row.Progress,
 		AutoJump:              row.AutoJump,
 		SaveLocally:           row.SaveLocally,
+		AllowBack:             row.AllowBack,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		NotifyRespondent:      row.NotifyRespondent,
@@ -481,6 +485,7 @@ func (Repo) GetFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (F
 		Progress:              row.Progress,
 		AutoJump:              row.AutoJump,
 		SaveLocally:           row.SaveLocally,
+		AllowBack:             row.AllowBack,
 		LinkPreview:           linkPreviewFromJSON(row.LinkPreview),
 		NotifyEmail:           notifyEmailFromJSON(row.NotifyEmail),
 		NotifyRespondent:      row.NotifyRespondent,
@@ -804,6 +809,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		Progress:           row.Progress,
 		AutoJump:           row.AutoJump,
 		SaveLocally:        row.SaveLocally,
+		AllowBack:          row.AllowBack,
 		PasswordSealed:     row.Password,
 		ScheduleID:         ptrUUID(row.ScheduleID),
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
@@ -929,15 +935,17 @@ func (Repo) UpdateFormLinkPreview(ctx context.Context, db postgres.DBTX, id, wor
 	}, nil
 }
 
-// UpdateFormBehavior заменяет раздел «Поведение» целиком (0044): автопереход и
-// хранение ответов в браузере респондента. Набором, а не по одной колонке: это один
-// экранный раздел, по отдельности эти настройки не спрашиваются нигде.
-func (Repo) UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally bool) (Form, error) {
+// UpdateFormBehavior заменяет раздел «Поведение» целиком (0044, третья колонка —
+// 0055): автопереход, хранение ответов в браузере респондента и ход назад по
+// страницам. Набором, а не по одной колонке: это один экранный раздел, по отдельности
+// эти настройки не спрашиваются нигде.
+func (Repo) UpdateFormBehavior(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID, autoJump, saveLocally, allowBack bool) (Form, error) {
 	row, err := postgres.New(db).UpdateFormBehavior(ctx, postgres.UpdateFormBehaviorParams{
 		ID:          id,
 		WorkspaceID: workspaceID,
 		AutoJump:    autoJump,
 		SaveLocally: saveLocally,
+		AllowBack:   allowBack,
 	})
 	if err != nil {
 		return Form{}, fmt.Errorf("update form behavior: %w", err)

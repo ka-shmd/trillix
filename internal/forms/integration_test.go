@@ -670,8 +670,9 @@ func TestForms_Branding_AppliesWithoutRepublish(t *testing.T) {
 	patchBranding(t, bob, srv, form.ID, false, http.StatusNotFound)
 }
 
-// Раздел «Поведение» (0044): фасет доезжает набором, доходит до публичной выдачи без
-// перепубликации и меняет ETag. Тарифа у него нет — план в тесте не трогается.
+// Раздел «Поведение» (0044, третья настройка — 0055): фасет доезжает набором, доходит
+// до публичной выдачи без перепубликации и меняет ETag. Тарифа у него нет — план в
+// тесте не трогается.
 func TestForms_Behavior_AppliesWithoutRepublish(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
@@ -682,24 +683,24 @@ func TestForms_Behavior_AppliesWithoutRepublish(t *testing.T) {
 	form := createForm(t, alice, srv, "Анкета")
 	publishForm(t, alice, srv, form.ID, http.StatusOK)
 
-	// У новой формы обе настройки выключены: ни прыжки по страницам, ни хранение
-	// ответов дольше сессии не включаются за автора.
-	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.AutoJump || d.SaveLocally {
+	// У новой формы все три настройки выключены: ни прыжки по страницам, ни хранение
+	// ответов дольше сессии, ни ход назад не включаются за автора.
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.AutoJump || d.SaveLocally || d.AllowBack {
 		t.Fatal("у новой формы «Поведение» обязано быть выключено")
 	}
 	before, etag := getPublicOK(t, anon, srv, form.Slug)
-	if before.AutoJump || before.SaveLocally {
+	if before.AutoJump || before.SaveLocally || before.AllowBack {
 		t.Fatal("публичная форма отдана с включённым поведением до всякой настройки")
 	}
 
-	patchBehavior(t, alice, srv, form.ID, `{"autoJump":true,"saveLocally":true}`, http.StatusOK)
+	patchBehavior(t, alice, srv, form.ID, `{"autoJump":true,"saveLocally":true,"allowBack":true}`, http.StatusOK)
 	d := getFormDetail(t, alice, srv, form.ID, http.StatusOK)
-	if !d.AutoJump || !d.SaveLocally {
+	if !d.AutoJump || !d.SaveLocally || !d.AllowBack {
 		t.Fatal("настройки не сохранились")
 	}
 
 	after, etagAfter := getPublicOK(t, anon, srv, form.Slug)
-	if !after.AutoJump || !after.SaveLocally {
+	if !after.AutoJump || !after.SaveLocally || !after.AllowBack {
 		t.Fatal("поведение не доехало до публичной формы без перепубликации")
 	}
 	if after.Version != before.Version {
@@ -709,20 +710,34 @@ func TestForms_Behavior_AppliesWithoutRepublish(t *testing.T) {
 		t.Fatalf("ETag не изменился вместе с поведением: %s", etag)
 	}
 
-	// Набор заменяется целиком: половина раздела снимается тем же фасетом.
-	patchBehavior(t, alice, srv, form.ID, `{"autoJump":false,"saveLocally":true}`, http.StatusOK)
-	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.AutoJump || !d.SaveLocally {
-		t.Fatalf("набор не заменился целиком: autoJump=%v saveLocally=%v", d.AutoJump, d.SaveLocally)
+	// Набор заменяется целиком: часть раздела снимается тем же фасетом.
+	patchBehavior(t, alice, srv, form.ID, `{"autoJump":false,"saveLocally":true,"allowBack":false}`, http.StatusOK)
+	if d := getFormDetail(t, alice, srv, form.ID, http.StatusOK); d.AutoJump || !d.SaveLocally || d.AllowBack {
+		t.Fatalf("набор не заменился целиком: autoJump=%v saveLocally=%v allowBack=%v", d.AutoJump, d.SaveLocally, d.AllowBack)
+	}
+
+	// ⚠ ХОД НАЗАД ВХОДИТ В ETag САМ ПО СЕБЕ (мина viewETagSuffix): забытый там признак
+	// означает 304 с прежним телом до самой перепубликации — автор включил возврат, а
+	// все, кто форму уже открывал, листают её только вперёд. Меняем ОДИН этот флаг,
+	// остальные не трогаем, и требуем нового ETag.
+	_, etagOnlySave := getPublicOK(t, anon, srv, form.Slug)
+	patchBehavior(t, alice, srv, form.ID, `{"autoJump":false,"saveLocally":true,"allowBack":true}`, http.StatusOK)
+	backOn, etagBack := getPublicOK(t, anon, srv, form.Slug)
+	if !backOn.AllowBack {
+		t.Fatal("ход назад не доехал до публичной формы")
+	}
+	if etagBack == etagOnlySave {
+		t.Fatalf("ETag не изменился вместе с ходом назад: %s", etagBack)
 	}
 
 	// Два фасета за запрос → 422; чужая форма → 404.
 	r := do(t, alice, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID,
-		`{"behavior":{"autoJump":true,"saveLocally":true},"progress":true}`, csrf(t, alice, srv.URL))
+		`{"behavior":{"autoJump":true,"saveLocally":true,"allowBack":true},"progress":true}`, csrf(t, alice, srv.URL))
 	if r.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("два фасета: статус %d, ожидалось 422; тело=%s", r.StatusCode, body2(t, r))
 	}
 	closeBody(t, r)
-	patchBehavior(t, bob, srv, form.ID, `{"autoJump":true,"saveLocally":true}`, http.StatusNotFound)
+	patchBehavior(t, bob, srv, form.ID, `{"autoJump":true,"saveLocally":true,"allowBack":true}`, http.StatusNotFound)
 }
 
 func patchBehavior(t *testing.T, c *http.Client, srv *httptest.Server, id, behavior string, wantStatus int) {
@@ -1690,6 +1705,7 @@ type formDetailDTO struct {
 	ClosedTitle   *string         `json:"closedTitle"`
 	AutoJump      bool            `json:"autoJump"`
 	SaveLocally   bool            `json:"saveLocally"`
+	AllowBack     bool            `json:"allowBack"`
 	Branding      bool            `json:"branding"`
 	Progress      bool            `json:"progress"`
 	Password      *string         `json:"password"`
@@ -1921,6 +1937,7 @@ type publicFormDTO struct {
 	Progress    bool   `json:"progress"`
 	AutoJump    bool   `json:"autoJump"`
 	SaveLocally bool   `json:"saveLocally"`
+	AllowBack   bool   `json:"allowBack"`
 }
 
 // getFormToken — токен времени отдельной ручкой; возвращает его и Cache-Control.

@@ -19,15 +19,18 @@ const question = (id: string, caption: string): Block[] => [
   { id, groupId: '', type: 'short_text' },
 ]
 
-function renderPreview(blocks: Block[], title = 'Анкета') {
+function renderPreview(blocks: Block[], { allowBack = false, title = 'Анкета' } = {}) {
   const store = createBuilderStore()
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks })
   return render(
     <BuilderStoreContext.Provider value={store}>
       {/* progress={true} явно: шкала прогресса — тумблер формы, по умолчанию
           выключенный (миграция 0040), а тесты ниже проверяют именно её разметку и
-          место. Без этого пропа проверять было бы нечего. */}
-      <PreviewPane title={title} badge={false} progress />
+          место. Без этого пропа проверять было бы нечего.
+
+          allowBack приходит вторым тумблером (0055) и по умолчанию ВЫКЛЮЧЕН — как
+          колонка: без него превью обязано листаться только вперёд. */}
+      <PreviewPane title={title} badge={false} progress allowBack={allowBack} />
     </BuilderStoreContext.Provider>,
   )
 }
@@ -58,7 +61,7 @@ describe('превью листает страницы', () => {
     expect(screen.queryByText('Почта')).toBeNull()
     expect(screen.getByLabelText('Шаг 1 из 2')).toBeTruthy()
     expect(screen.queryByRole('button', { name: 'Отправить' })).toBeNull()
-    // Кнопки «Назад» нет нигде и никогда (2026-08-22).
+    // Ход назад выключен (дефолт 0055) — кнопки «Назад» нет ни на одной странице.
     expect(screen.queryByRole('button', { name: 'Назад' })).toBeNull()
   })
 
@@ -93,15 +96,15 @@ describe('превью листает страницы', () => {
     expect(live.className).toContain('rf-sr-only')
   })
 
-  // Линии шагов (решение владельца 2026-08-05): по одной на страницу. С 2026-08-22 они
-  // НЕ кнопки: ход назад снят целиком — ни экранной «Назад», ни клика по линии, ни
-  // записи в истории браузера. Индикатор остался счётчиком «где я и сколько всего».
+  // Линии шагов (решение владельца 2026-08-05): по одной на страницу. При выключенном
+  // `allowBack` (дефолт колонки 0055) они НЕ кнопки — индикатор остаётся счётчиком «где
+  // я и сколько всего», и ход назад не открывается ничем.
   it('линий столько же, сколько страниц', () => {
     const { container } = renderPreview(threePages())
     expect(container.querySelectorAll('.rf-step-mark')).toHaveLength(3)
   })
 
-  it('линия шага не кнопка ни на одном шаге', () => {
+  it('линия шага не кнопка ни на одном шаге, пока ход назад выключен', () => {
     const { container } = renderPreview(threePages())
     expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(0)
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
@@ -112,7 +115,7 @@ describe('превью листает страницы', () => {
     expect(screen.queryByRole('button', { name: /Вернуться к шагу/ })).toBeNull()
   })
 
-  it('кнопки «Назад» нет и на последней странице', () => {
+  it('кнопки «Назад» нет и на последней странице, пока ход назад выключен', () => {
     renderPreview(threePages())
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
     expect(screen.getByLabelText('Шаг 2 из 3')).toBeTruthy()
@@ -124,6 +127,50 @@ describe('превью листает страницы', () => {
     expect(screen.getByRole('heading', { name: 'Анкета' })).toBeTruthy()
     fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
     expect(screen.queryByRole('heading', { name: 'Анкета' })).toBeNull()
+  })
+})
+
+// Ход назад (`allowBack`, 0055) автор обязан увидеть в превью ровно таким, каким его
+// получит респондент: те же два пути и то же правило «вперёд — только через «Далее».
+// Расхождение здесь молчаливое — превью листалось бы вперёд и выглядело рабочим, а о
+// кнопке «Назад» у себя на форме автор узнал бы от людей.
+describe('превью с включённым ходом назад', () => {
+  it('«Назад» появляется со второй страницы и возвращает на первую', () => {
+    renderPreview(twoPages(), { allowBack: true })
+    // На первой странице идти назад некуда — кнопки нет.
+    expect(screen.queryByRole('button', { name: 'Назад' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    expect(screen.getByLabelText('Шаг 2 из 2')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Назад' }))
+    expect(screen.getByLabelText('Шаг 1 из 2')).toBeTruthy()
+    expect(screen.getByText('Имя')).toBeTruthy()
+  })
+
+  it('кнопками становятся ТОЛЬКО пройденные линии, и клик по ним ведёт назад', () => {
+    const { container } = renderPreview(threePages(), { allowBack: true })
+    // На первом шаге позади ничего нет: кнопок ноль при трёх линиях.
+    expect(container.querySelectorAll('.rf-step-mark')).toHaveLength(3)
+    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(0)
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    expect(screen.getByLabelText('Шаг 3 из 3')).toBeTruthy()
+    // Два шага позади — две кнопки; текущий и те, что впереди, кнопками не стали.
+    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(2)
+    fireEvent.click(screen.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }))
+    expect(screen.getByLabelText('Шаг 1 из 3')).toBeTruthy()
+  })
+
+  // ⚠ Сторож против возврата дефекта TD-57/TD-58: кнопкой становится шаг ПОЗАДИ
+  // текущего, а не «любой достигнутый». Иначе с первой страницы можно уйти на вторую
+  // кликом по линии — мимо «Далее», то есть мимо проверки текущей страницы.
+  it('вернувшись назад, вперёд по линиям уйти нельзя', () => {
+    const { container } = renderPreview(threePages(), { allowBack: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }))
+    expect(screen.getByLabelText('Шаг 1 из 3')).toBeTruthy()
+    expect(container.querySelectorAll('button.rf-step-mark')).toHaveLength(0)
+    expect(screen.queryByRole('button', { name: /Вернуться к шагу/ })).toBeNull()
   })
 })
 

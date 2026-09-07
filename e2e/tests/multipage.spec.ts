@@ -18,9 +18,12 @@ import { login, seedAccount } from './helpers/session'
 //      поля следующих — головной критерий приёмки фазы;
 //   2. хром страницы (заголовок формы) виден только на первой — решение владельца
 //      2026-08-05, у которого нет другого сторожа в рендерере;
-//   3. хода назад нет НИ ОДНОГО (решение владельца 2026-08-22): ни экранной кнопки, ни
-//      клика по линии шага, ни записи в истории — системная «Назад» уводит со страницы;
-//   4. воронка ставит ушедшего на первый вопрос ДОСТИГНУТОЙ страницы, а не на поле,
+//   3. при ВЫКЛЮЧЕННОЙ настройке «Возврат на прошлые страницы» (дефолт колонки 0055)
+//      хода назад нет ни одного: ни экранной кнопки, ни клика по линии шага, ни записи
+//      в истории — системная «Назад» уводит со страницы;
+//   4. при ВКЛЮЧЁННОЙ появляются ровно два пути — кнопка и клик по пройденной линии, —
+//      а третий, история браузера, не появляется и тогда (решение владельца 2026-09-07);
+//   5. воронка ставит ушедшего на первый вопрос ДОСТИГНУТОЙ страницы, а не на поле,
 //      которого он коснулся руками, — то самое уточнение, ради которого фаза трогала
 //      аналитику.
 const RENDERER = process.env.E2E_RENDERER_URL ?? 'https://f.localhost'
@@ -29,7 +32,7 @@ const Q1 = 'Ваше имя'
 const Q2 = 'Ваша почта'
 const Q3 = 'Комментарий'
 
-test('форма из трёх страниц: шаги, пошаговая валидация, хода назад нет, воронка', async ({
+test('форма из трёх страниц: шаги, пошаговая валидация, ход назад за настройкой, воронка', async ({
   page,
   browser,
 }) => {
@@ -133,7 +136,7 @@ test('форма из трёх страниц: шаги, пошаговая ва
   await respondent.locator('button.rf-next').click()
 
   // 3. Вторая страница: хром остался на первой (заголовка формы больше нет), вопрос
-  // сменился, а кнопки «Назад» нет — ни здесь, ни где-либо ещё.
+  // сменился, а кнопки «Назад» нет — настройка возврата у формы выключена.
   await expect(respondent.locator('.rf-steps[aria-label="Шаг 2 из 3"]')).toBeVisible()
   await expect(respondent.getByRole('heading', { name: formTitle })).toHaveCount(0)
   await expect(respondent.getByLabel(Q2)).toBeVisible()
@@ -141,14 +144,15 @@ test('форма из трёх страниц: шаги, пошаговая ва
 
   await respondent.getByLabel(Q2).fill(`ivan${uniq}@example.com`)
 
-  // 4. Линии шагов — счётчик, а не управление: пройденный шаг кнопкой НЕ становится.
+  // 4. Линии шагов при выключенной настройке — счётчик, а не управление: пройденный
+  // шаг кнопкой НЕ становится.
   await expect(respondent.locator('button.rf-step-mark')).toHaveCount(0)
   await expect(respondent.getByRole('button', { name: /Вернуться к шагу/ })).toHaveCount(0)
 
-  // 5. Истории шагов больше нет: «Далее» не пишет запись через pushState, поэтому
-  // системной «Назад» некуда вести внутри формы — она уводит со страницы. Проверяем
-  // здесь именно отсутствие записи, а сам уход — в конце сценария: уйти посреди него
-  // значило бы потерять ответы, которые он дальше и проверяет.
+  // 5. Истории шагов нет: «Далее» не пишет запись через pushState, поэтому системной
+  // «Назад» некуда вести внутри формы — она уводит со страницы. Проверяем здесь именно
+  // отсутствие записи, а сам уход — в конце сценария: уйти посреди него значило бы
+  // потерять ответы, которые он дальше и проверяет.
   expect(await respondent.evaluate(() => window.history.state)).toBeNull()
 
   // 6. Третья страница — последняя: «Далее» нет, есть отправка.
@@ -187,4 +191,55 @@ test('форма из трёх страниц: шаги, пошаговая ва
   await expect(secondStep).toContainText('1')
   const firstStep = page.getByRole('listitem').filter({ hasText: Q1 })
   await expect(firstStep).toContainText('Здесь никто не остановился.')
+
+  // 9. Настройка «Возврат на прошлые страницы» (0055) — та же форма, тот же
+  // опубликованный документ. Колонка живая: PATCH без перепубликации, и следующий
+  // респондент получает форму с ходом назад.
+  //
+  // Проверяется здесь, а не своим сценарием, по правилу набора: вход под rate-limit'ом
+  // (STATUS §«Хвосты»), и новая проверка живёт там, где сессия уже есть. Респондент при
+  // этом свежий — настройка приезжает в теле формы, и старая вкладка её не увидит.
+  const behaviorPatched = await page.request.patch(`/api/v1/forms/${form.id}`, {
+    headers,
+    data: { behavior: { autoJump: false, saveLocally: false, allowBack: true } },
+  })
+  expect(behaviorPatched.ok()).toBeTruthy()
+
+  const backCtx = await browser.newContext({
+    ...devices['Pixel 5'],
+    ignoreHTTPSErrors: true,
+    baseURL: RENDERER,
+  })
+  const backPage = await backCtx.newPage()
+  await backPage.goto(`${RENDERER}/r/${form.slug}`)
+
+  // На первой странице идти назад некуда — кнопки нет и с включённой настройкой.
+  await expect(backPage.getByRole('button', { name: 'Назад' })).toHaveCount(0)
+  await backPage.getByLabel(Q1).fill(`Ольга ${uniq}`)
+  await backPage.locator('button.rf-next').click()
+  await expect(backPage.locator('.rf-steps[aria-label="Шаг 2 из 3"]')).toBeVisible()
+
+  // Путь первый — кнопка. Возврат ничего не теряет: набранное на первой странице
+  // остаётся в поле, а не начинается заново.
+  await backPage.getByRole('button', { name: 'Назад' }).click()
+  await expect(backPage.locator('.rf-steps[aria-label="Шаг 1 из 3"]')).toBeVisible()
+  await expect(backPage.getByLabel(Q1)).toHaveValue(`Ольга ${uniq}`)
+
+  // Путь второй — линия пройденного шага. Кнопками становятся ТОЛЬКО те, что позади:
+  // на третьей странице их две, на первой — ни одной (иначе вперёд можно было бы уйти
+  // мимо «Далее», то есть мимо проверки страницы).
+  await expect(backPage.locator('button.rf-step-mark')).toHaveCount(0)
+  await backPage.locator('button.rf-next').click()
+  await backPage.locator('button.rf-next').click()
+  await expect(backPage.locator('.rf-steps[aria-label="Шаг 3 из 3"]')).toBeVisible()
+  await expect(backPage.locator('button.rf-step-mark')).toHaveCount(2)
+  await backPage.getByRole('button', { name: 'Вернуться к шагу 1 из 3' }).click()
+  await expect(backPage.locator('.rf-steps[aria-label="Шаг 1 из 3"]')).toBeVisible()
+
+  // Третьего пути нет и при включённой настройке: истории шагов форма не пишет ни при
+  // каком её значении (решение владельца 2026-09-07) — во фрейме вставки записи ушли бы
+  // в общую историю и увели бы «Назад» хост-страницы листать наши шаги.
+  expect(await backPage.evaluate(() => window.history.state)).toBeNull()
+  await backPage.goto('about:blank')
+  await backCtx.close()
 })

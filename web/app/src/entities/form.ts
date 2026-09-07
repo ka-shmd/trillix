@@ -270,6 +270,10 @@ export const formDetailSchema = formSchema.extend({
   // тарифа; только в детали формы.
   autoJump: z.boolean(),
   saveLocally: z.boolean(),
+  // Ход назад по пройденным страницам (0055) — третий тумблер того же раздела: кнопка
+  // «Назад» и клик по линии пройденного шага индикатора. Записи в историю браузера за
+  // ним нет (решение владельца 2026-09-07).
+  allowBack: z.boolean(),
   // Шкала прогресса — индикатор шагов многостраничной формы; true = показывать.
   // Живая колонка (миграция 0040), как бейдж, и по тому же доводу: тумблер обязан
   // доезжать до респондента без перепубликации. Тарифа у неё нет вовсе. Только в
@@ -299,6 +303,7 @@ export const MAX_CLOSED_TITLE_LEN = 200
 export type BehaviorInput = {
   autoJump: boolean
   saveLocally: boolean
+  allowBack: boolean
 }
 
 export type CloseSettingsInput = {
