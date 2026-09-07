@@ -101,6 +101,11 @@ var (
 	designButtonVariant = []string{"solid", "outline"}
 	designButtonWidth   = []string{"auto", "full", "fixed"}
 	designButtonSize    = []string{"sm", "md", "lg"}
+	// Толщина надписи кнопки. Ступени, а не свободное число: у самохостных семейств
+	// вариативная ось кончается по-разному (у Lora на 700), и число вне диапазона
+	// браузер молча округлит — настройка работала бы на одном шрифте и молчала на
+	// другом. "semibold" — дефолт полотна и в документ не пишется.
+	designButtonWeights = []string{"normal", "medium", "semibold", "bold"}
 	// У кнопки три положения: она стоит в своём ряду, где есть и правый край. У
 	// выравнивания ТЕКСТА формы правого варианта нет — он читается как брак вёрстки.
 	designButtonAligns = []string{"left", "center", "right"}
@@ -108,9 +113,12 @@ var (
 	// подключить физически (CSP font-src 'self' data:), и ослаблять её не будем:
 	// подключённый шрифт — это запрос браузера респондента на чужой сервер, то есть
 	// передача IP третьему лицу на публичной странице сбора персональных данных.
-	// Состав списка согласуется до слайса 4 (спека §13); здесь пока системный стек
-	// плюс те, чьи лицензия и кириллица уже проверены.
-	designFonts = []string{"system", "inter", "golos", "manrope", "onest", "montserrat", "lora"}
+	//
+	// СИСТЕМНОГО СТЕКА В СПИСКЕ НЕТ (решение владельца 2026-09-07): он давал три разные
+	// формы на трёх ОС, то есть вид, за который никто не отвечает. Значение "system"
+	// отвергается, а из накопленных документов ключ снят миграцией 0054 — иначе
+	// сохранение такого черновика падало бы на валидации, а разбор снапшота на Zod.
+	designFonts = []string{"inter", "golos", "manrope", "onest", "montserrat", "lora"}
 )
 
 // FormDesign — оформление страницы формы.
@@ -219,6 +227,9 @@ type DesignButton struct {
 	// набора, иначе одна правка высоты молча пересобирала бы кнопку целиком.
 	Height *int   `json:"height,omitempty"`
 	Align  string `json:"align,omitempty"`
+	// Weight — толщина надписи. Незаданная значит дефолт полотна (--rf-submit-weight,
+	// 600), как и всё остальное в оформлении.
+	Weight string `json:"weight,omitempty"`
 	// FontSize и Radius — свои у кнопки: пока не заданы, она берёт кегль формы и
 	// радиус контролов (--rf-submit-size / --rf-submit-radius в fields.css).
 	FontSize *int `json:"fontSize,omitempty"`
@@ -327,6 +338,9 @@ func validateDesign(d *FormDesign) error {
 		if err := oneOf("button.align", b.Align, designButtonAligns); err != nil {
 			return err
 		}
+		if err := oneOf("button.weight", b.Weight, designButtonWeights); err != nil {
+			return err
+		}
 		if b.FontSize != nil && (*b.FontSize < MinButtonFont || *b.FontSize > MaxButtonFont) {
 			return fmt.Errorf("design.button.fontSize: %d вне диапазона %d–%d", *b.FontSize, MinButtonFont, MaxButtonFont)
 		}
@@ -365,8 +379,6 @@ func validateDesign(d *FormDesign) error {
 // ЧЕГО ЗДЕСЬ НЕТ И ПОЧЕМУ:
 //   - тема: обе, светлая и тёмная, бесплатны намеренно (спека §9.1) — гейт ставится
 //     на созданную ценность, а не на настройку;
-//   - системный шрифт: это сегодняшний дефолт полотна, и брать за него деньги
-//     значило бы продавать «оставить как было»;
 //   - branding: у бейджа свой ключ и своя точка гейта — отдача, а не публикация.
 //
 // Список нужен телу 402: «своё оформление недоступно» без перечня заставляет автора
@@ -385,11 +397,10 @@ func DesignPaidFeatures(d *FormDesign) []string {
 		add(p.Canvas != "" || p.Field != "" || p.Text != "" || p.Muted != "" ||
 			p.Accent != "" || p.Button != "" || p.ButtonText != "", "цвета")
 	}
-	// ЛЮБОЙ записанный шрифт — платная настройка, включая "system": дефолт хранится
-	// отсутствием ключа, поэтому записанное значение всегда означает выбор автора.
-	// Пока дефолтом был системный стек, исключение для него значило «не выбирал»;
-	// с Inter по умолчанию (DesignFontDefault) оно раздавало бы бесплатному тарифу
-	// переключатель «Inter ↔ системный».
+	// ЛЮБОЙ записанный шрифт — платная настройка, включая сам DesignFontDefault: дефолт
+	// хранится отсутствием ключа, поэтому записанное значение всегда означает выбор
+	// автора, а исключение для одного из семейств означало бы бесплатный переключатель
+	// «дефолт ↔ дефолт».
 	add(d.Font != "", "шрифт")
 	if l := d.Layout; l != nil {
 		add(l.Width != nil, "ширина колонки")
@@ -402,7 +413,7 @@ func DesignPaidFeatures(d *FormDesign) []string {
 		add(c.Outline != "", "вид контура")
 	}
 	if b := d.Button; b != nil {
-		add(b.Variant != "" || b.Width != "" || b.Align != "" || b.Size != "", "кнопка")
+		add(b.Variant != "" || b.Width != "" || b.Align != "" || b.Weight != "" || b.Size != "", "кнопка")
 	}
 	return out
 }

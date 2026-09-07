@@ -39,8 +39,8 @@ describe('themeColor', () => {
     expect(themeColor('light', 'text')).toBe('#37352f')
     expect(themeColor('light', 'placeholder')).toBe('#777672')
     expect(themeColor('light', 'accent')).toBe('#0070d7')
-    expect(themeColor('light', 'button')).toBe('#0f172b')
-    expect(themeColor('light', 'buttonText')).toBe('#f8fafc')
+    expect(themeColor('light', 'button')).toBe('#0f0d0b')
+    expect(themeColor('light', 'buttonText')).toBe('#fbfaf7')
     // Край полупрозрачный (16% чернил) и рисуется тенью — то есть ЗА заливкой поля,
     // на холсте страницы. Поэтому сплющивается по холсту, а не по фону поля.
     expect(themeColor('light', 'border')).toBe('#e0e0df')

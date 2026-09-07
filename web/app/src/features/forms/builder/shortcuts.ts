@@ -45,6 +45,24 @@ export const chords = {
   actionMenu: (e: KeyLike) => mod(e) && e.code === 'Period',
   // Cmd/Ctrl+Shift+Backspace — явное удаление блока/группы + тост (§3.4).
   deleteBlock: (e: KeyLike) => mod(e) && e.shiftKey && e.code === 'Backspace',
+  // Delete — то же удаление голой клавишей (решение владельца 2026-09-07). Работает не
+  // везде, и это не недоделка: на текстовой поверхности Delete забирает символ справа
+  // от каретки, и отдать её блоку значило бы сделать набор текста разрушительным.
+  // Поэтому голый Delete объявлен ТОЛЬКО там, где строка текста не несёт, — объектная
+  // остановка (картинка, дата, шкала), где ту же работу делает голый ⌫, — и внутри
+  // открытого попапа действий, где каретки в тексте нет вовсе. В остальных строках
+  // блок сносит Mod+Shift+⌫, и подсказка попапа не врёт: она читается при открытом
+  // попапе, где Delete работает всегда.
+  deleteKey: (e: KeyLike) => !mod(e) && !e.altKey && !e.shiftKey && e.code === 'Delete',
+  // Mod+D — дублировать блок (на подписи — вопрос целиком), как в Notion. Ctrl/Cmd+D
+  // браузер тратит на закладку, но, в отличие от Mod+T, отдаёт странице: preventDefault
+  // её отменяет, и обещание карты остаётся правдой.
+  duplicateBlock: (e: KeyLike) => mod(e) && !e.shiftKey && !e.altKey && e.code === 'KeyD',
+  // Alt+R — сменить тип блока: открывает попап действий сразу на списке типов (R —
+  // replace, тот же смысл, что у значка пункта). Голый Alt, а не Mod+Alt, по доводу
+  // Alt+J: Mod+Alt+R в Firefox занят режимом чтения, а Alt+R не занят ничем — буква R
+  // не открывает ни одного меню браузера (в отличие от Alt+T, за которым «Инструменты»).
+  changeType: (e: KeyLike) => e.altKey && !e.shiftKey && !mod(e) && e.code === 'KeyR',
   // Cmd/Ctrl+Enter — действие над ответом/объектом (§3.2).
   answerAction: (e: KeyLike) => mod(e) && e.code === 'Enter',
   // Alt+Shift+↑/↓ — перенос группы целиком (§3.2).
@@ -208,6 +226,8 @@ export const GLOBAL: Shortcut[] = [
 // своей формулировкой.
 export const BLOCK_COMMON: Shortcut[] = [
   sc(chords.actionMenu, 'Mod+.', 'Меню действий блока'),
+  sc(chords.changeType, 'Alt+R', 'Сменить тип блока'),
+  sc(chords.duplicateBlock, 'Mod+D', 'Дублировать блок (на подписи — вопрос целиком)'),
   sc(chords.deleteBlock, 'Mod+Shift+⌫', 'Удалить блок (на подписи — вопрос целиком)'),
   sc((e) => chords.arrowUp(e) || chords.arrowDown(e), '↑↓', 'По строкам полотна'),
 ]
@@ -286,9 +306,14 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
   // символ» без отдельной строки про «/» обещал бы за него неправду.
   // Картинки в списке ниже нет пункта «Добавить заголовок»: image — контент, ответов
   // он не собирает, безымянной колонки в выгрузке у него не бывает.
+  // ДВЕ КЛАВИШИ УДАЛЕНИЯ — ДВЕ СТРОКИ, а не одна с ярлыком «⌫ / Del»: слитый пункт
+  // ловится лямбдой, а лямбду не найти по матчеру, и попап действий (он печатает клавиши
+  // своих пунктов через labelFor) остался бы без ярлыка голого Delete. Обе строки правда:
+  // на поверхности без текста клавиши равнозначны.
   image: [
     sc(chords.answerAction, 'Mod+Enter', 'Выбрать файл'),
     sc(chords.backspace, '⌫', 'Удалить картинку', 'Удалить'),
+    sc(chords.deleteKey, 'Del', 'Удалить картинку', 'Удалить'),
     sc(chords.enter, 'Enter', 'Новый блок ниже', 'Новый блок'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
     sc(chords.moveGroup, 'Alt+Shift+↑↓', 'Переместить вопрос'),
@@ -300,6 +325,7 @@ export const SHORTCUTS: Record<ShortcutContext, Shortcut[]> = {
   object: [
     sc(chords.addCaption, 'Mod+Alt+T', 'Добавить заголовок вопроса', 'Заголовок'),
     sc(chords.backspace, '⌫', 'Удалить блок', 'Удалить'),
+    sc(chords.deleteKey, 'Del', 'Удалить блок', 'Удалить'),
     sc(chords.enter, 'Enter', 'Новый блок ниже', 'Новый блок'),
     gesture('любой символ', 'Начать текст ниже', 'Текст ниже'),
     sc(chords.moveItem, 'Alt+↑↓', 'Переместить блок'),
@@ -452,7 +478,7 @@ export function formatLabel(label: string): string {
 // копия строки «Alt+J» рядом с кнопкой разошлась бы с картой в тот день, когда жест
 // переназначат, — и подсказка начала бы врать (демо-критерий 13.5).
 export function labelFor(match: (e: KeyLike) => boolean): string | undefined {
-  const all = [GLOBAL, ...Object.values(SHORTCUTS)]
+  const all = [GLOBAL, BLOCK_COMMON, ...Object.values(SHORTCUTS)]
   for (const list of all) {
     const found = list.find((s) => s.match === match)
     if (found) return found.label

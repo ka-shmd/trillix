@@ -37,6 +37,7 @@ import {
   textFromString,
 } from '@entities/formSchema'
 import { BlockField } from '@fields/BlockField'
+import { editorKind } from './kinds/index'
 import { designClasses, designToVars } from '@fields/design'
 import {
   groupBlocks,
@@ -908,11 +909,11 @@ export function SlashEditor({
     if (drag === null) return null
     if (drag.kind === 'group') {
       const g = groups.find((x) => x.id === drag.activeId)
-      return g ? <GhostGroup group={g} /> : null
+      return g ? <GhostGroup group={g} formId={formId} /> : null
     }
     const b = blocks.find((x) => x.id === drag.activeId)
-    return b ? <GhostBlock block={b} /> : null
-  }, [drag, groups, blocks])
+    return b ? <GhostBlock block={b} formId={formId} /> : null
+  }, [drag, groups, blocks, formId])
 
   // Ряд, у которого горит приглашение, — РОВНО ОДИН: ближайший к перетаскиваемому
   // элементу (правила и отказы — rowZones.ts, там же их сторож). Адресуется ряд id
@@ -1418,19 +1419,58 @@ const cellZoneBlock = (id: string | number): string | null => {
 const isRowZone = (id: string | number): boolean =>
   rowZoneTarget(id) !== null || cellZoneBlock(id) !== null
 
+// ГОСТ РИСУЕТСЯ ТЕМ ЖЕ, ЧЕМ И СТРОКА НА ПОЛОТНЕ. Для большинства типов это общий
+// BlockField: полотно WYSIWYG, и выключенный контрол респондента выглядит там же, что
+// и в покое. Но ОБЪЕКТНАЯ ОСТАНОВКА рисует на полотне не его, а свой контрол из реестра
+// (kinds/<type>.tsx), и у трёх типов расхождение видно глазом:
+//
+//   • запись на время — на полотне вся лента дат и сетка времён (SlotStub), а
+//     выключенный контрол респондента показывает плашку с выбранным временем: копия
+//     оказывалась вчетверо ниже оригинала (отчёт владельца 2026-09-07);
+//   • разрыв страницы и логика — респонденту не показываются вовсе (BlockField отдаёт
+//     null), и копия была ПУСТОЙ рамкой.
+//
+// Поэтому ветка не по типу, а по ПОВЕРХНОСТИ из реестра: новый объектный тип получает
+// верную копию, ничего здесь не трогая.
+export function GhostRow({
+  block,
+  caption,
+  required,
+  formId,
+}: {
+  block: Block
+  caption?: string
+  required?: boolean
+  formId: FormIdSource
+}) {
+  const row = editorKind(block.type).row
+  if (row?.surface === 'object') {
+    const Control = row.Control
+    return <Control block={block} formId={formId} />
+  }
+  return <BlockField block={block} captionText={caption} captionRequired={required} />
+}
+
 // Копия ВОПРОСА (жест между вопросами): все строки группы, тем же раскладчиком
 // внутренних рядов, что у превью.
-function GhostGroup({ group }: { group: { id: string; blocks: Block[] } }) {
+function GhostGroup({
+  group,
+  formId,
+}: {
+  group: { id: string; blocks: Block[] }
+  formId: FormIdSource
+}) {
   const meta = groupMeta(group.blocks).get(group.id)
   return (
     <GhostFrame>
       <div className="rf-group">
         {group.blocks.map((b) => (
-          <BlockField
+          <GhostRow
             key={b.id}
             block={b}
-            captionText={meta?.caption}
-            captionRequired={meta?.required}
+            caption={meta?.caption}
+            required={meta?.required}
+            formId={formId}
           />
         ))}
       </div>
@@ -1439,10 +1479,18 @@ function GhostGroup({ group }: { group: { id: string; blocks: Block[] } }) {
 }
 
 // Копия ОДНОГО блока (жест внутри вопроса): в ряд с подписью уезжает строка ответа.
-function GhostBlock({ block, caption }: { block: Block; caption?: string }) {
+function GhostBlock({
+  block,
+  caption,
+  formId,
+}: {
+  block: Block
+  caption?: string
+  formId: FormIdSource
+}) {
   return (
     <GhostFrame>
-      <BlockField block={block} captionText={caption} />
+      <GhostRow block={block} caption={caption} formId={formId} />
     </GhostFrame>
   )
 }

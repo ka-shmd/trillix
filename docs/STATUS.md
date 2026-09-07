@@ -65,7 +65,7 @@
   `forms`, `geo`, `httpserver`, `integrations`, `mail`, `media`, `oauth`, `periodic`,
   `pgtest`, `postgres`, `printer`, `ratelimit`, `submissions`, `token`, `visits`,
   `workspaces`).
-- **PostgreSQL 16** — 53 миграции (`0001`…`0053_ai_quota_per_account`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
+- **PostgreSQL 16** — 54 миграции (`0001`…`0054_design_font_system`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui; графики аналитики —
   recharts за ленивой загрузкой, в общий чанк не входят.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 60 КиБ gzip** (сейчас

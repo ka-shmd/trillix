@@ -183,6 +183,7 @@ func TestDesignEnumsParity(t *testing.T) {
 		"DESIGN_BUTTON_WIDTHS":   designButtonWidth,
 		"DESIGN_BUTTON_ALIGNS":   designButtonAligns,
 		"DESIGN_BUTTON_SIZES":    designButtonSize,
+		"DESIGN_BUTTON_WEIGHTS":  designButtonWeights,
 		"DESIGN_FONTS":           designFonts,
 	}
 	for name, goList := range pairs {
@@ -318,19 +319,13 @@ func TestDesignDefaultFontParity(t *testing.T) {
 	}
 }
 
-// Файлы подмножеств обязаны существовать на диске и покрывать каждое несистемное
-// семейство каталога. Опечатка в базовом имени не ломает ни сборку, ни линт: она
+// Файлы подмножеств обязаны существовать на диске и покрывать каждое семейство
+// каталога. Опечатка в базовом имени не ломает ни сборку, ни линт: она
 // даёт <link rel=preload> на несуществующий файл — то есть лишний 404 и молча
 // потерянный preload, ровно ту оптимизацию, ради которой всё и делалось.
 func TestDesignFontFilesExist(t *testing.T) {
 	for _, key := range designFonts {
 		files := designFontFiles[key]
-		if key == "system" {
-			if files != nil {
-				t.Errorf("системному стеку не нужны файлы, а они заданы: %v", files)
-			}
-			continue
-		}
 		if len(files) == 0 {
 			t.Errorf("шрифт %q есть в каталоге, но файлов подмножеств у него нет", key)
 			continue

@@ -31,7 +31,7 @@ func TestValidateDesign(t *testing.T) {
 			Font:     "inter",
 			Layout:   &DesignLayout{Width: intp(860), FontSize: intp(18), Density: "roomy", Align: "center"},
 			Controls: &DesignControls{Radius: intp(0), Outline: "border"},
-			Button:   &DesignButton{Variant: "outline", Width: "full", Align: "center", Size: "lg"},
+			Button:   &DesignButton{Variant: "outline", Width: "full", Align: "center", Weight: "bold", Size: "lg"},
 		}},
 
 		"тема вне списка":           {design: &FormDesign{Theme: "auto"}, bad: "theme"},
@@ -498,6 +498,24 @@ func TestDesignVars_Button(t *testing.T) {
 		}
 	})
 
+	t.Run("толщина: дефолтная ступень молчит, остальные печатают число", func(t *testing.T) {
+		// "semibold" — дефолт fields.css (--rf-submit-weight: 600). Кейсы того же
+		// состава, что в design.test.ts на фронте: смысл настройки машине не сверить,
+		// его держат зеркальные таблицы (шапка design_parity_test.go).
+		if got := DesignVars(&FormDesign{Button: &DesignButton{Weight: "semibold"}}); len(got) != 0 {
+			t.Fatalf("дефолтная ступень дала переменные: %v", got)
+		}
+		for weight, want := range map[string]string{"normal": "400", "bold": "700"} {
+			got := DesignVars(&FormDesign{Button: &DesignButton{Weight: weight}})["--rf-submit-weight"]
+			if got != want {
+				t.Errorf("толщина %q = %q, ожидалось %q", weight, got, want)
+			}
+		}
+		if err := validateDesign(&FormDesign{Button: &DesignButton{Weight: "black"}}); err == nil {
+			t.Error("ступень вне списка обязана отвергаться")
+		}
+	})
+
 	t.Run("крупный размер даёт три метрики", func(t *testing.T) {
 		got := DesignVars(&FormDesign{Button: &DesignButton{Size: "lg"}})
 		want := map[string]string{"--rf-submit-h": "2.75rem", "--rf-submit-px": "2rem", "--rf-submit-ratio": "1"}
@@ -546,17 +564,14 @@ func TestDesignFontFiles(t *testing.T) {
 	if got := DesignFontFiles(&FormDesign{}); !slices.Equal(got, want) {
 		t.Fatalf("шрифт не выбран → дефолтное семейство %v, получено %v", want, got)
 	}
-	if got := DesignFontFiles(&FormDesign{Font: "system"}); got != nil {
-		t.Fatalf("системный стек весит 0 байт и файлов не имеет, получено %v", got)
-	}
 	if got := DesignFontFiles(&FormDesign{Font: "inter"}); len(got) != 2 || got[0] != "inter-cyrillic" {
 		t.Fatalf("ожидались оба подмножества Inter, кириллица первой; получено %v", got)
 	}
 }
 
 // Дефолт — платная настройка ровно тогда, когда он ЗАПИСАН: пока ключа нет, автор
-// ничего не выбирал. Проверяется на шрифте, потому что там дефолт сменился (2026-08-15)
-// и старое исключение для "system" стало бы дырой в гейте.
+// ничего не выбирал. Проверяется на шрифте, потому что исключение для одного семейства
+// стало бы дырой в гейте.
 func TestDesignPaidFeatures_Font(t *testing.T) {
 	has := func(d *FormDesign) bool {
 		return slices.Contains(DesignPaidFeatures(d), "шрифт")
@@ -564,8 +579,8 @@ func TestDesignPaidFeatures_Font(t *testing.T) {
 	if has(&FormDesign{}) {
 		t.Error("шрифт не выбран — платить не за что")
 	}
-	if !has(&FormDesign{Font: "system"}) {
-		t.Error("системный выбран явно — это такой же выбор, как любой другой")
+	if !has(&FormDesign{Font: "lora"}) {
+		t.Error("семейство выбрано явно — это выбор автора")
 	}
 	if !has(&FormDesign{Font: DesignFontDefault}) {
 		t.Error("записанный дефолт — тоже выбор: панель его не пишет, но схема принимает")

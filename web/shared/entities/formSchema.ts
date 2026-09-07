@@ -468,13 +468,25 @@ export const DESIGN_BUTTON_VARIANTS = ['solid', 'outline'] as const
 // незаданная настройка означает сегодняшний вид, а не «пусто».
 export const DESIGN_BUTTON_WIDTHS = ['auto', 'full', 'fixed'] as const
 export const DESIGN_BUTTON_SIZES = ['sm', 'md', 'lg'] as const
+// Толщина надписи кнопки (решение владельца 2026-09-07). Ступени, а не свободное число:
+// у самохостных семейств диапазон вариативной оси разный (у Lora он кончается на 700),
+// и число вне диапазона браузер молча округлит к ближайшему доступному — автор получил
+// бы настройку, которая на одном шрифте работает, а на другом нет.
+//
+// `semibold` — дефолт, и в документ он не пишется (как и любой дефолт оформления):
+// пишутся только три остальные ступени.
+export const DESIGN_BUTTON_WEIGHTS = ['normal', 'medium', 'semibold', 'bold'] as const
 // Курируемый список self-hosted семейств с кириллицей. Внешний CDN не подключить
 // физически (прод-CSP `font-src 'self' data:`), и ослаблять её не будем: подключённый
 // шрифт — запрос браузера респондента на чужой сервер, то есть передача IP третьему
 // лицу на публичной странице сбора персональных данных.
 // Порядок = порядок в панели: нейтральные гротески, потом характерные, антиква последней.
+//
+// СИСТЕМНОГО СТЕКА В СПИСКЕ НЕТ (решение владельца 2026-09-07): он давал три разные
+// формы на трёх ОС, то есть вид, за который никто не отвечает. Значение `system`
+// теперь ОТВЕРГАЕТСЯ схемой с обеих сторон, а из накопленных документов ключ снят
+// миграцией 0054 — иначе форма с ним перестала бы разбираться вовсе.
 export const DESIGN_FONTS = [
-  'system',
   'inter',
   'golos',
   'manrope',
@@ -645,6 +657,7 @@ export const designSchema = z.strictObject({
       // кегль остаются от него.
       height: z.number().int().min(MIN_BUTTON_HEIGHT).max(MAX_BUTTON_HEIGHT).optional(),
       align: z.enum(DESIGN_BUTTON_ALIGNS).optional(),
+      weight: z.enum(DESIGN_BUTTON_WEIGHTS).optional(),
       fontSize: z.number().int().min(MIN_BUTTON_FONT).max(MAX_BUTTON_FONT).optional(),
       radius: z.number().int().min(MIN_BUTTON_RADIUS).max(MAX_BUTTON_RADIUS).optional(),
       marginTop: z.number().int().min(MIN_BUTTON_MARGIN_TOP).max(MAX_BUTTON_MARGIN_TOP).optional(),

@@ -78,7 +78,7 @@ import { type MentionItem } from './MentionMenu'
 import { richCaret } from './richCaret'
 import { BOLD_MARKS, cutRange } from './richText'
 import { SlashMenu } from './SlashMenu'
-import { BlockActionMenu } from './BlockActionMenu'
+import { BlockActionMenu, type MenuView } from './BlockActionMenu'
 import { Popover, PopoverAnchor, PopoverContent } from '@/components/ui/popover'
 import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import { chords } from './shortcuts'
@@ -188,6 +188,10 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
   // оболочка и отдаёт телу — сеттер `useState` стабилен по построению, и `memo` тела
   // от него не страдает.
   const [actionOpen, setActionOpen] = useState(false)
+  // С какого вида открыть попап: обычно «действия», по Alt+R — сразу список типов.
+  // Держится здесь же, а не внутри попапа: вид задаёт ТОТ, КТО ОТКРЫВАЕТ, и внутреннее
+  // состояние пришлось бы толкать пропом, который менялся бы после открытия.
+  const [actionView, setActionView] = useState<MenuView>('actions')
   // Точка нажатия на грип: по ней клик-настройки отличается от хвостового click'а
   // после перетаскивания (см. обработчик грипа ниже).
   const gripDownRef = useRef<{ x: number; y: number } | null>(null)
@@ -397,6 +401,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
                 Math.hypot(e.clientX - from.x, e.clientY - from.y) > DRAG_ACTIVATION_DISTANCE
               )
                 return
+              setActionView('actions')
               setActionOpen(true)
             }}
             className={`${ICON_BTN} cursor-grab active:cursor-grabbing`}
@@ -410,6 +415,8 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
         {...props}
         actionOpen={actionOpen}
         setActionOpen={setActionOpen}
+        actionView={actionView}
+        setActionView={setActionView}
         onAddCaption={addCaption}
       />
     </div>
@@ -478,6 +485,8 @@ const BlockRowBody = memo(function BlockRowBody({
   openMenuOnMount,
   actionOpen,
   setActionOpen,
+  actionView,
+  setActionView,
   onAddCaption,
   onAddBelow,
   onBackspaceAtStart,
@@ -489,6 +498,8 @@ const BlockRowBody = memo(function BlockRowBody({
 }: BlockRowProps & {
   actionOpen: boolean
   setActionOpen: (open: boolean) => void
+  actionView: MenuView
+  setActionView: (view: MenuView) => void
   onAddCaption: () => void
 }) {
   const engine = useFocusEngine()
@@ -504,6 +515,20 @@ const BlockRowBody = memo(function BlockRowBody({
   const makeQuestion = useBuilderStore((s) => s.makeQuestion)
   const makeField = useBuilderStore((s) => s.makeField)
   const duplicateBlock = useBuilderStore((s) => s.duplicateBlock)
+  // Три действия попапа — одной точкой на все поверхности строки: их зовут и пункты
+  // меню, и аккорды (Mod+D, Alt+R, Delete). Каретка после «дублировать» уходит на
+  // копию (§12), поэтому movedCaretRef взводится здесь же, а не у вызывающего:
+  // возврат фокуса на строку затёр бы фокус, поставленный мгновением раньше.
+  const openActions = (view: MenuView = 'actions') => {
+    setActionView(view)
+    setActionOpen(true)
+  }
+  const duplicateHere = () => {
+    const copy = duplicateBlock(block.id)
+    movedCaretRef.current = true
+    if (copy) engine.focusBlock(copy, 'end')
+  }
+
   const mentionSources = useMentionSources(block.id)
   const mentionLive = useMentionLive(block.id, block.text)
   // Текстовая поверхность строки: <textarea> либо (проба 14.0) contenteditable. Тип
@@ -644,8 +669,10 @@ const BlockRowBody = memo(function BlockRowBody({
     // только с края каретки, печатный символ и «/» идут в сам текст — поэтому
     // обработчиков printable/slash у неё нет (слеш-меню ведёт onLabelChange выше).
     handleRowKeys(e, {
-      actionMenu: () => setActionOpen(true),
+      actionMenu: () => openActions(),
       deleteBlock: () => onDeleteBlock(block.id),
+      duplicate: duplicateHere,
+      changeType: () => openActions('types'),
       // Cmd/Ctrl+Enter — к контролу ответа группы (§3.2).
       answerAction: () => onAnswerAction(block.id),
       // Alt+Shift+↑/↓ — перенос ГРУППЫ целиком (§3.2). Каретка остаётся на месте: id
@@ -668,6 +695,7 @@ const BlockRowBody = memo(function BlockRowBody({
       backspaceHandles: () => c.caretAtStart(),
     })
   }
+
 
   function pickType(item: MenuItem) {
     // «Вопросы» → бандл подпись+поле; «Отдельные поля» → голое поле; и то, и другое
@@ -782,6 +810,8 @@ const BlockRowBody = memo(function BlockRowBody({
           (makeQuestion/makeField/changeBlockType + фокус на результат). */}
       <BlockActionMenu
         open={actionOpen}
+        view={actionView}
+        onViewChange={setActionView}
         // Закрытие попапа — тоже операция полотна, и каретка после неё обязана быть
         // определена (§12). Возврат фокуса Radix'ом на якорь (нулевой span) мы гасим
         // сами, поэтому по умолчанию каретка возвращается НА СВОЮ СТРОКУ — это верно и
@@ -806,11 +836,7 @@ const BlockRowBody = memo(function BlockRowBody({
         // Каретка уходит на копию (§12): без этого после «Дублировать» активным
         // элементом остаётся body — поповер закрылся, а возврат фокуса на его якорь
         // мы гасим сами.
-        onDuplicate={() => {
-          const copy = duplicateBlock(block.id)
-          movedCaretRef.current = true
-          if (copy) engine.focusBlock(copy, 'end')
-        }}
+        onDuplicate={duplicateHere}
         onDelete={() => {
           movedCaretRef.current = true
           onDeleteBlock(block.id)
@@ -909,7 +935,8 @@ const BlockRowBody = memo(function BlockRowBody({
             onAddBelow={onAddBelow}
             onDeleteBlock={onDeleteBlock}
             onBackspaceDelete={onBackspaceDelete}
-            onOpenActions={() => setActionOpen(true)}
+            onOpenActions={openActions}
+            onDuplicate={duplicateHere}
             onRowShift={(dir) => onRowShift(block.id, dir)}
           />
         </div>
@@ -922,7 +949,8 @@ const BlockRowBody = memo(function BlockRowBody({
             onArrow={onArrow}
             onBackspaceDelete={onBackspaceDelete}
             onDeleteBlock={onDeleteBlock}
-            onOpenActions={() => setActionOpen(true)}
+            onOpenActions={openActions}
+            onDuplicate={duplicateHere}
             onMove={(dir) => captionGuard(() => moveBlock(block.id, dir))}
             onRowShift={(dir) => onRowShift(block.id, dir)}
             // Отметки голого поля — в обёртку поля, а не при строке: см. marksAtField.
@@ -941,7 +969,8 @@ const BlockRowBody = memo(function BlockRowBody({
           onBackspaceDelete={onBackspaceDelete}
           onArrow={onArrow}
           onDeleteBlock={onDeleteBlock}
-          onOpenActions={() => setActionOpen(true)}
+          onOpenActions={openActions}
+          onDuplicate={duplicateHere}
           onMove={(dir) => captionGuard(() => moveBlock(block.id, dir))}
           onMoveGroup={(dir) => moveGroup(block.id, dir)}
           onRowShift={(dir) => onRowShift(block.id, dir)}
@@ -1027,6 +1056,7 @@ function ObjectStop({
   onBackspaceDelete,
   onDeleteBlock,
   onOpenActions,
+  onDuplicate,
   onArrow,
   onMove,
   onMoveGroup,
@@ -1040,7 +1070,9 @@ function ObjectStop({
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   onBackspaceDelete: (id: string) => void
   onDeleteBlock: (id: string) => void
-  onOpenActions: () => void
+  // Вид, с которого открыть попап: Alt+R зовёт его сразу списком типов.
+  onOpenActions: (view?: MenuView) => void
+  onDuplicate: () => void
   onArrow: (id: string, dir: 'up' | 'down') => void
   onMove: (dir: 'up' | 'down') => void
   onMoveGroup: (dir: 'up' | 'down') => void
@@ -1077,6 +1109,11 @@ function ObjectStop({
     handleRowKeys(e, {
       actionMenu: onOpenActions,
       deleteBlock: () => onDeleteBlock(block.id),
+      // Голый Delete — та же работа, что у голого ⌫ ниже: своего текста у остановки
+      // нет, забирать клавише нечего. На текстовых поверхностях этого обработчика нет.
+      deleteKey: () => onDeleteBlock(block.id),
+      duplicate: onDuplicate,
+      changeType: () => onOpenActions('types'),
       // Cmd/Ctrl+Enter — «действие над объектом» (§3.2): на картинке открыть файловый
       // диалог (клик по скрытому input внутри остановки). У date/scale входного файла
       // нет — селектор ничего не найдёт, жест — no-op.
@@ -1136,6 +1173,7 @@ function AnswerField({
   onBackspaceDelete,
   onDeleteBlock,
   onOpenActions,
+  onDuplicate,
   onRowShift,
   onMove,
   marks,
@@ -1154,7 +1192,8 @@ function AnswerField({
   // поля (placeholder-типы); превью date фокусируется как объект (у него свой чорд).
   onDeleteBlock?: (id: string) => void
   // Cmd+. — меню действий блока (§3.3).
-  onOpenActions?: () => void
+  onOpenActions?: (view?: MenuView) => void
+  onDuplicate: () => void
   // Mod+Alt+→/← — ряд (§5). У ГОЛОГО поля инпут плейсхолдера — единственная
   // поверхность вопроса, поэтому жест обязан работать и здесь. Внутри объектной
   // остановки (date) поля рисуются без обработчиков — там жест ведёт ObjectStop.
@@ -1204,6 +1243,10 @@ function AnswerField({
     handleRowKeys(e, {
       actionMenu: onOpenActions,
       deleteBlock: onDeleteBlock && (() => onDeleteBlock(block.id)),
+      duplicate: onDuplicate,
+      // Попап у этой поверхности необязателен (её зовут и там, где меню нет вовсе),
+      // поэтому и аккорд объявляется только вместе с ним.
+      changeType: onOpenActions && (() => onOpenActions('types')),
       rowShift: onRowShift,
       // moveGroup поверхность НЕ объявляет — и потому цепочка глушит Alt+Shift+↑↓, а не
       // пропускает его в moveItem. Правило общее (`rowKeys.ts`), рукописных заплат на
@@ -1304,6 +1347,7 @@ function OptionsInline({
   onDeleteBlock,
   onBackspaceDelete,
   onOpenActions,
+  onDuplicate,
   onRowShift,
 }: {
   block: Block
@@ -1318,7 +1362,9 @@ function OptionsInline({
   // предыдущую остановку. Тот же обработчик, что у объектов и пустого плейсхолдера.
   onBackspaceDelete: (id: string) => void
   // Cmd+. на варианте — меню действий всего choice-блока (§3.3).
-  onOpenActions: () => void
+  // Вид, с которого открыть попап: Alt+R зовёт его сразу списком типов.
+  onOpenActions: (view?: MenuView) => void
+  onDuplicate: () => void
   // Mod+Alt+→/← у dropdown: список живёт в нативном select, рядов у его вариантов НЕТ
   // (спека §5.1), поэтому жест на этой поверхности переносит сам ВОПРОС. У голого
   // dropdown-поля список — единственная поверхность, иначе ряд ему был бы недоступен
@@ -1528,6 +1574,8 @@ function OptionsInline({
     handleRowKeys(e, {
       actionMenu: onOpenActions,
       deleteBlock: () => onDeleteBlock(block.id),
+      duplicate: onDuplicate,
+      changeType: () => onOpenActions('types'),
       // Mod+Enter на призраке делает то же, что Enter: до этапа 16.6 он попадал в
       // общую ветку `enter` (голый матчер модификаторы не исключает), и поведение
       // сохранено — объявлено явно вместо того, чтобы держаться на порядке веток.
@@ -1563,6 +1611,10 @@ function OptionsInline({
       actionMenu: onOpenActions,
       // Явное удаление всего choice-блока (не варианта) — вариант удаляет Backspace.
       deleteBlock: () => onDeleteBlock(block.id),
+      // Оба аккорда адресуют БЛОК, как и соседние Mod+. и Mod+Shift+⌫: у варианта свои
+      // жесты — Enter, ⌫ и Alt+↑↓, — а дублирование варианта живёт в его попапе.
+      duplicate: onDuplicate,
+      changeType: () => onOpenActions('types'),
       // Cmd/Ctrl+Enter — тот же жест «действие над ответом» (§3.2): новый вариант.
       // Выходом из списка он не бывает — эта ветка ниже проверяет голый Enter.
       answerAction: addAfter,

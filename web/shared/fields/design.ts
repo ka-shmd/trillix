@@ -17,12 +17,13 @@ import { BUTTON_WIDTH_DEFAULT, type FormDesign } from '@entities/formSchema'
 // базы, поэтому плотность — один множитель на все интервалы, а не число на каждый.
 const DENSITY_SCALE: Record<string, string> = { compact: '0.75', normal: '1', roomy: '1.25' }
 
-// Стеки шрифтов. Системный весит ноль байт; у остальных тот же системный хвост на
-// случай, если самохостный файл не догрузился, — и хвост подбирается ПО РИСУНКУ, а не
-// копируется: у антиквы он засечный, иначе форма на секунду загрузки становится
-// гротескной, то есть другой формой.
+// Стеки шрифтов. У каждого системный хвост на случай, если самохостный файл не
+// догрузился, — и хвост подбирается ПО РИСУНКУ, а не копируется: у антиквы он засечный,
+// иначе форма на секунду загрузки становится гротескной, то есть другой формой.
+//
+// Одного системного стека в списке НЕТ: он убран из каталога (DESIGN_FONTS), и
+// незнакомое семейство здесь даёт undefined — форма набирается дефолтом :root.
 const FONT_STACK: Record<string, string> = {
-  system: "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
   inter: 'Inter, system-ui, -apple-system, sans-serif',
   golos: "'Golos Text', system-ui, -apple-system, sans-serif",
   manrope: 'Manrope, system-ui, -apple-system, sans-serif',
@@ -64,6 +65,14 @@ const submitWidth = (d: FormDesign): string | undefined => {
   if (d.button?.width === 'full') return '100%'
   if (d.button?.width !== 'fixed') return undefined
   return `${d.button.widthPx ?? BUTTON_WIDTH_DEFAULT}px`
+}
+
+// Толщина надписи кнопки. `semibold` в таблице нет намеренно: это дефолт fields.css,
+// и печатать для него переменную значило бы писать в документ то, что и так есть.
+const BUTTON_WEIGHT: Record<string, string | undefined> = {
+  normal: '400',
+  medium: '500',
+  bold: '700',
 }
 
 // Положение кнопки в ряду. `left` в таблице нет намеренно: это дефолт fields.css.
@@ -119,6 +128,7 @@ const SPECS: ReadonlyArray<readonly [string, (d: FormDesign) => string | undefin
   // Три положения: слева — дефолт (ничего не печатаем), по центру и справа — свои
   // значения justify-content ряда.
   ['--rf-submit-size', (d) => px(d.button?.fontSize)],
+  ['--rf-submit-weight', (d) => BUTTON_WEIGHT[d.button?.weight ?? '']],
   ['--rf-submit-radius', (d) => px(d.button?.radius)],
   ['--rf-submit-justify', (d) => SUBMIT_JUSTIFY[d.button?.align ?? '']],
   ['--rf-submit-width', submitWidth],

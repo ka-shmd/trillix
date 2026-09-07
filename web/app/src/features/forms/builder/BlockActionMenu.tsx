@@ -9,6 +9,8 @@ import {
   type Block,
 } from '@entities/formSchema'
 import { BLOCK_GROUP_LABELS, BLOCK_GROUP_ORDER, MENU_ITEMS, type MenuItem } from './blockTypes'
+import { ChordChips } from './ChordChips'
+import { chords, labelFor, type KeyLike } from './shortcuts'
 import { Switch } from '@/components/ui/switch'
 import { derivedQuestionName } from './questionName'
 import { useBuilderStore } from './storeContext'
@@ -110,6 +112,34 @@ function RequiredSetting({ block }: { block: Block }) {
   )
 }
 
+// ACTION_ITEM — вид пункта действий. Зеркалит вендоренный CommandItem (те же отступы,
+// скругление, размер значка), но подсветку даёт ТОЛЬКО настоящее наведение и фокус —
+// «выбранного» пункта у обычных кнопок не бывает.
+const ACTION_ITEM =
+  'flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm outline-hidden hover:bg-accent hover:text-accent-foreground focus-visible:bg-accent focus-visible:text-accent-foreground [&_svg]:size-4 [&_svg]:shrink-0 [&_svg]:text-muted-foreground'
+
+// MenuView — какой из двух видов попапа показан. Держит его СТРОКА, а не попап:
+// открывающий решает, с чего начать (Alt+R зовёт сразу список типов), а внутреннее
+// состояние пришлось бы толкать пропом, меняющимся уже после открытия.
+export type MenuView = 'actions' | 'types'
+
+// Chord — клавиши пункта справа от подписи. Ярлык берётся из карты шорткатов по
+// матчеру (labelFor), а не пишется здесь строкой: подпись на контроле и обещание
+// шпаргалки Mod+/ обязаны совпадать, иначе первая же перевязка жеста сделает попап
+// лжецом (демо-критерий 13.5). Нет пункта в карте — нет и клавиш: рисуем пусто.
+//
+// ⌫-вариант удаления (Mod+Shift+⌫) здесь не печатается намеренно: пункт один, а
+// клавиш у него две, и вторая строка чипов в узком пункте читается как отдельное
+// действие. Печатается Delete — та, что работает ПРЯМО ЗДЕСЬ, при открытом попапе.
+function Chord({ match }: { match: (e: KeyLike) => boolean }) {
+  const label = labelFor(match)
+  return label ? (
+    <span className="ml-auto pl-2">
+      <ChordChips label={label} />
+    </span>
+  ) : null
+}
+
 export function BlockActionMenu({
   open,
   onOpenChange,
@@ -117,6 +147,8 @@ export function BlockActionMenu({
   subject,
   anchor,
   requiredFor,
+  view,
+  onViewChange,
   onDuplicate,
   onDelete,
   onPickType,
@@ -134,13 +166,14 @@ export function BlockActionMenu({
   // requiredFor — блок, чью обязательность правит пункт меню (см. BlockRow): у поля
   // это оно само, у подписи — поле её вопроса, у контента — ничего, и пункта нет.
   requiredFor?: Block
+  // Какой вид показан. Снаружи, потому что снаружи и решают, с чего открыть: клик по
+  // грипу и Mod+. зовут «действия», Alt+R — сразу типы.
+  view: MenuView
+  onViewChange: (view: MenuView) => void
   onDuplicate: () => void
   onDelete: () => void
   onPickType: (item: MenuItem) => void
 }) {
-  // Какой вид показан: действия или выбор нового типа. Сбрасывается на «действия»
-  // при закрытии, чтобы следующее открытие начиналось с корня.
-  const [view, setView] = useState<'actions' | 'types'>('actions')
   //
   // ПОДПИСКА НА blocks — ТОЛЬКО КОГДА ПОПАП ОТКРЫТ, и это не микрооптимизация. Попап
   // отрисован у КАЖДОЙ строки полотна, а массив блоков меняет идентичность на каждое
@@ -159,27 +192,72 @@ export function BlockActionMenu({
   const Settings = editorKind(subject.type).Settings
 
   const close = () => {
-    setView('actions')
+    onViewChange('actions')
     onOpenChange(false)
   }
+
+  // Три действия — одним списком: он же рисует пункты, он же отвечает на аккорды при
+  // открытом попапе. Клавиши здесь работают ВСЕГДА, на любой строке, — поэтому чипы у
+  // пунктов не врут даже там, где на самом полотне голый Delete занят текстом.
+  const actions = [
+    {
+      key: 'type' as const,
+      icon: <Replace className="size-4" />,
+      label: 'Сменить тип',
+      match: chords.changeType,
+      run: () => onViewChange('types'),
+    },
+    {
+      key: 'copy' as const,
+      icon: <Copy className="size-4" />,
+      label: 'Дублировать',
+      match: chords.duplicateBlock,
+      run: () => {
+        onDuplicate()
+        close()
+      },
+    },
+    {
+      key: 'trash' as const,
+      icon: <Trash2 className="size-4" />,
+      label: isGroup ? 'Удалить вопрос' : 'Удалить блок',
+      match: chords.deleteKey,
+      run: () => {
+        onDelete()
+        close()
+      },
+    },
+  ]
 
   return (
     <>
       <Popover
         open={open}
         onOpenChange={(o) => {
-          if (!o) setView('actions')
+          if (!o) onViewChange('actions')
           onOpenChange(o)
         }}
       >
         <PopoverAnchor asChild>{anchor}</PopoverAnchor>
         <PopoverContent
-          className="w-60 p-0"
+          // Шире прежних 240px: у пунктов появились клавиши справа, и в узкой коробке
+          // они наезжали бы на подпись «Удалить вопрос»; 22rem — второй шаг по той же
+          // причине (решение владельца 2026-09-07), теперь ещё и ради строк настроек.
+          className="w-[22rem] p-0"
           align="start"
           side="bottom"
           // Фокус после действия ставит фокус-движок/само действие; возврат Radix на
           // якорь (позиционированный span) глушим — иначе каретка падает в body.
           onCloseAutoFocus={(e) => e.preventDefault()}
+          // Аккорды пунктов при ОТКРЫТОМ попапе. Только в виде «действия»: в списке
+          // типов стоит поле поиска, и Delete там принадлежит тексту.
+          onKeyDown={(e) => {
+            if (view !== 'actions') return
+            const hit = actions.find((a) => a.match(e))
+            if (!hit) return
+            e.preventDefault()
+            hit.run()
+          }}
         >
           {view === 'actions' ? (
             <>
@@ -194,34 +272,23 @@ export function BlockActionMenu({
                   {Settings && <Settings block={subject} />}
                 </div>
               )}
-              <Command>
-                <CommandList>
-                  <CommandGroup>
-                    <CommandItem onSelect={() => setView('types')}>
-                      <Replace className="size-4" />
-                      Сменить тип
-                    </CommandItem>
-                    <CommandItem
-                      onSelect={() => {
-                        onDuplicate()
-                        close()
-                      }}
-                    >
-                      <Copy className="size-4" />
-                      Дублировать
-                    </CommandItem>
-                    <CommandItem
-                      onSelect={() => {
-                        onDelete()
-                        close()
-                      }}
-                    >
-                      <Trash2 className="size-4" />
-                      {isGroup ? 'Удалить вопрос' : 'Удалить блок'}
-                    </CommandItem>
-                  </CommandGroup>
-                </CommandList>
-              </Command>
+              {/* ОБЫЧНЫЕ КНОПКИ, А НЕ СПИСОК cmdk (решение владельца 2026-09-07).
+                  cmdk всегда держит один пункт «выбранным» и красит его как наведённый —
+                  в списке с поиском это курсор клавиатуры, а в трёх статичных действиях
+                  читается как «мышь стоит на удалении», хотя мышь в другом углу экрана.
+                  Клавиатуре от этого ничего не досталось хуже: по кнопкам ходит Tab, а
+                  сами действия висят на аккордах (чипы справа), которые работают в
+                  открытом попапе. Поиск и фильтрация нужны только списку ТИПОВ — там
+                  cmdk и остался. */}
+              <div className="p-1">
+                {actions.map((a) => (
+                  <button key={a.key} type="button" className={ACTION_ITEM} onClick={a.run}>
+                    {a.icon}
+                    {a.label}
+                    <Chord match={a.match} />
+                  </button>
+                ))}
+              </div>
             </>
           ) : (
             <Command>

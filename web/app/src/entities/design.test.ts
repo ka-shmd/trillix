@@ -37,6 +37,7 @@ describe('designSchema — валидатор', () => {
         widthPx: 260,
         height: 52,
         align: 'center',
+        weight: 'bold',
         fontSize: 18,
         radius: 8,
         marginTop: 16,
@@ -288,6 +289,18 @@ describe('designToVars — кнопка', () => {
     })
   })
 
+  it('толщина: дефолтная ступень молчит, остальные печатают число', () => {
+    // `semibold` — дефолт fields.css (--rf-submit-weight: 600), и печатать его значило
+    // бы писать в документ то, что и так есть.
+    expect(designToVars({ button: { weight: 'semibold' } })).toEqual({})
+    expect(designToVars({ button: { weight: 'normal' } })).toEqual({
+      '--rf-submit-weight': '400',
+    })
+    expect(designToVars({ button: { weight: 'bold' } })).toEqual({
+      '--rf-submit-weight': '700',
+    })
+  })
+
   it('средний размер переменных не печатает', () => {
     // md — дефолт fields.css; печатать для него переменные значило бы писать в
     // документ то, что и так есть.
@@ -340,6 +353,9 @@ describe('DESIGN_VAR_NAMES', () => {
         widthPx: 260,
         height: 52,
         align: 'center',
+        // Ступень, отличная от дефолта: `semibold` переменной не печатает, и с ним
+        // документ не дал бы КАЖДУЮ переменную, ради чего кейс и собран.
+        weight: 'bold',
         fontSize: 18,
         radius: 8,
         marginTop: 16,

@@ -34,6 +34,16 @@ export interface RowKeySpec {
   actionMenu?: () => void
   // Mod+Shift+Backspace — явное удаление блока (или группы, решает владелец строки).
   deleteBlock?: () => void
+  // Delete — то же удаление голой клавишей. Обработчик объявляют ТОЛЬКО поверхности без
+  // текста (объектная остановка): в строке с текстом Delete забирает символ справа от
+  // каретки, и отдать её блоку значит сделать набор разрушительным. Отдельный ключ, а не
+  // ветка внутри backspace: у Backspace на текстовой поверхности свой guard («каретка в
+  // начале»), и Delete под ним значил бы «склеить с предыдущей», то есть не то.
+  deleteKey?: () => void
+  // Mod+D — дублировать блок (на подписи — вопрос целиком).
+  duplicate?: () => void
+  // Alt+R — сменить тип: открыть попап действий сразу на списке типов.
+  changeType?: () => void
   // Mod+Enter — действие над ответом: у подписи это переход к контролу вопроса, у
   // картинки — файловый диалог, у варианта — новый вариант.
   answerAction?: () => void
@@ -91,6 +101,9 @@ export function handleRowKeys(e: RowKeyEvent, spec: RowKeySpec): boolean {
 
   if (chords.actionMenu(e)) return spec.actionMenu ? take(spec.actionMenu) : false
   if (chords.deleteBlock(e)) return spec.deleteBlock ? take(spec.deleteBlock) : false
+  if (chords.deleteKey(e)) return spec.deleteKey ? take(spec.deleteKey) : false
+  if (chords.duplicateBlock(e)) return spec.duplicate ? take(spec.duplicate) : false
+  if (chords.changeType(e)) return spec.changeType ? take(spec.changeType) : false
   if (chords.answerAction(e)) return spec.answerAction ? take(spec.answerAction) : false
 
   // moveGroup — единственный аккорд, который цепочка глушит и без обработчика:

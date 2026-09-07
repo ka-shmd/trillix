@@ -14,6 +14,7 @@ import {
   isHexColor,
   MAX_CUSTOM_CSS_LEN,
   DESIGN_BUTTON_ALIGNS,
+  DESIGN_BUTTON_WEIGHTS,
   DESIGN_BUTTON_WIDTHS,
   DESIGN_FONTS,
   DESIGN_FONT_DEFAULT,
@@ -81,7 +82,14 @@ import { useFeatureAllowed } from '../../plan/useFeature'
 import { ProTag } from '../../../shared/ProTag'
 
 import { ColorPicker } from './ColorPicker'
-import { CONTROL, CONTROL_BOX, CONTROL_SELECT, CONTROL_TABS, LABEL } from './designControl'
+import {
+  CONTROL,
+  CONTROL_BOX,
+  CONTROL_FOCUS,
+  CONTROL_SELECT,
+  CONTROL_TABS,
+  LABEL,
+} from './designControl'
 import { CoverRow, LogoRow } from './DesignChrome'
 import { type FormIdSource } from './mediaUpload'
 import {
@@ -566,7 +574,7 @@ export function DesignDrawer({
                       value={design?.controls?.radius}
                       // Зеркалит --rf-radius в fields.css: незаданное скругление панель
                       // показывает тем же числом, которое рисует полотно.
-                      fallback={4}
+                      fallback={6}
                       min={MIN_RADIUS}
                       max={MAX_RADIUS}
                       onChange={(n) => set('controls', 'radius', n)}
@@ -590,6 +598,7 @@ export function DesignDrawer({
                     <div className={`flex items-center justify-center ${CONTROL}`}>
                       <Checkbox
                         id="design-shadow"
+                        className={CONTROL_FOCUS}
                         checked={design?.controls?.shadow !== false}
                         onCheckedChange={(on) => set('controls', 'shadow', on ? undefined : false)}
                       />
@@ -793,14 +802,31 @@ export function DesignDrawer({
                       id="design-btn-radius"
                       value={design?.button?.radius}
                       // Зеркалит --rf-submit-radius: пока не задан, кнопка берёт радиус
-                      // контролов (--rf-radius, 4px).
-                      fallback={4}
+                      // контролов (--rf-radius, 6px).
+                      fallback={6}
                       min={MIN_BUTTON_RADIUS}
                       max={MAX_BUTTON_RADIUS}
                       onChange={(n) => set('button', 'radius', n)}
                     />
                   </Field>
                 </div>
+              </Wide>
+              {/* ТОЛЩИНА — ОТДЕЛЬНОЙ СТРОКОЙ ВО ВСЮ ШИРИНУ (решение владельца
+                  2026-09-07). Не четвёртой в ряду с кеглем и радиусом: там числа в
+                  узких полях, а здесь список со словами. И обязательно в Wide: секция
+                  это сетка из двух колонок, и голое поле встало бы в пару к первому
+                  цвету кнопки — соседями по строке оказались бы настройки разных
+                  жанров. Ступени, а не число, — довод в DESIGN_BUTTON_WEIGHTS. */}
+              <Wide>
+                <Field label="Толщина" id="design-btn-weight">
+                  <Choice
+                    id="design-btn-weight"
+                    value={design?.button?.weight ?? 'semibold'}
+                    options={DESIGN_BUTTON_WEIGHTS}
+                    titles={BUTTON_WEIGHT_TITLES}
+                    onChange={(v) => set('button', 'weight', dflt(v, 'semibold'))}
+                  />
+                </Field>
               </Wide>
 
               {/* Цвета кнопки — теми же строками, что у полей: образец слева, hex в
@@ -884,6 +910,10 @@ export function DesignDrawer({
                   DESIGN-SYSTEM §6) видно, где кончился селектор и началось значение. */}
               <CodeField
                 id="design-css"
+                // Кольцо снимается тем же вариантом, каким объявлено (focus-within, а
+                // не focus-visible): поле составное, фокус берёт textarea внутри.
+                className="focus-within:ring-0"
+
                 value={cssValue}
                 lang="css"
                 onChange={setCss}
@@ -1122,7 +1152,10 @@ function ColorRow({
               type="button"
               aria-label={`Подобрать цвет: ${title}`}
               title="Подобрать цвет"
-              className="absolute top-1/2 left-1.5 z-10 size-5 -translate-y-1/2 cursor-pointer rounded-sm border outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              // Кольца нет, как и у прочих контролов шторки, но метка фокуса образцу
+            // нужна своя: у него нет вендоренной перекраски рамки, поэтому на фокусе
+            // рамка становится акцентной здесь же.
+            className="absolute top-1/2 left-1.5 z-10 size-5 -translate-y-1/2 cursor-pointer rounded-sm border outline-none focus-visible:border-ring focus-visible:ring-0"
               style={
                 shown
                   ? { background: shown }
@@ -1201,13 +1234,20 @@ const THEME_TITLES: Record<string, string> = {
   custom: 'Пользовательская',
 }
 const FONT_TITLES: Record<string, string> = {
-  system: 'Системный',
   inter: 'Inter',
   golos: 'Golos Text',
   manrope: 'Manrope',
   onest: 'Onest',
   montserrat: 'Montserrat',
   lora: 'Lora',
+}
+// Толщина надписи кнопки. Подписи русские и привычные по текстовым редакторам:
+// «полужирный» и «жирный» — те же слова, что у марок текста на полотне.
+const BUTTON_WEIGHT_TITLES: Record<string, string> = {
+  normal: 'Обычный',
+  medium: 'Средний',
+  semibold: 'Полужирный',
+  bold: 'Жирный',
 }
 // Порядок вкладок — решение владельца 2026-08-29: полная ширина первой.
 const FIELD_WIDTH_MODES = ['full', 'fixed'] as const

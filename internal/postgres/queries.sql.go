@@ -5558,18 +5558,24 @@ const takenSeatsAt = `-- name: TakenSeatsAt :one
 SELECT coalesce(sum(seats), 0)::bigint
 FROM bookings
 WHERE schedule_id = $1 AND starts_at = $2 AND client_id <> $3
-  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > $4))
 `
 
 type TakenSeatsAtParams struct {
-	ScheduleID uuid.UUID
-	StartsAt   pgtype.Timestamptz
-	ClientID   uuid.UUID
+	ScheduleID    uuid.UUID
+	StartsAt      pgtype.Timestamptz
+	ClientID      uuid.UUID
+	HoldExpiresAt pgtype.Timestamptz
 }
 
 // То же для ОДНОЙ точки — счёт под advisory-lock перед взятием холда.
 func (q *Queries) TakenSeatsAt(ctx context.Context, arg TakenSeatsAtParams) (int64, error) {
-	row := q.db.QueryRow(ctx, takenSeatsAt, arg.ScheduleID, arg.StartsAt, arg.ClientID)
+	row := q.db.QueryRow(ctx, takenSeatsAt,
+		arg.ScheduleID,
+		arg.StartsAt,
+		arg.ClientID,
+		arg.HoldExpiresAt,
+	)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -5579,13 +5585,14 @@ const takenSeatsAtExcept = `-- name: TakenSeatsAtExcept :one
 SELECT coalesce(sum(seats), 0)::bigint
 FROM bookings
 WHERE schedule_id = $1 AND starts_at = $2 AND id <> $3
-  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > $4))
 `
 
 type TakenSeatsAtExceptParams struct {
-	ScheduleID uuid.UUID
-	StartsAt   pgtype.Timestamptz
-	ID         uuid.UUID
+	ScheduleID    uuid.UUID
+	StartsAt      pgtype.Timestamptz
+	ID            uuid.UUID
+	HoldExpiresAt pgtype.Timestamptz
 }
 
 // Сколько мест занято в точке, НЕ СЧИТАЯ саму переносимую бронь.
@@ -5593,7 +5600,12 @@ type TakenSeatsAtExceptParams struct {
 // Исключение по id, а не по client_id: переносимая строка уже лежит в таблице и не
 // должна считать себя.
 func (q *Queries) TakenSeatsAtExcept(ctx context.Context, arg TakenSeatsAtExceptParams) (int64, error) {
-	row := q.db.QueryRow(ctx, takenSeatsAtExcept, arg.ScheduleID, arg.StartsAt, arg.ID)
+	row := q.db.QueryRow(ctx, takenSeatsAtExcept,
+		arg.ScheduleID,
+		arg.StartsAt,
+		arg.ID,
+		arg.HoldExpiresAt,
+	)
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
@@ -5605,15 +5617,16 @@ FROM bookings
 WHERE schedule_id = $1
   AND starts_at >= $2 AND starts_at < $3
   AND client_id <> $4
-  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > now()))
+  AND (status = 'confirmed' OR (status = 'held' AND hold_expires_at > $5))
 GROUP BY starts_at
 `
 
 type TakenSeatsInRangeParams struct {
-	ScheduleID uuid.UUID
-	StartsAt   pgtype.Timestamptz
-	StartsAt_2 pgtype.Timestamptz
-	ClientID   uuid.UUID
+	ScheduleID    uuid.UUID
+	StartsAt      pgtype.Timestamptz
+	StartsAt_2    pgtype.Timestamptz
+	ClientID      uuid.UUID
+	HoldExpiresAt pgtype.Timestamptz
 }
 
 type TakenSeatsInRangeRow struct {
@@ -5630,12 +5643,19 @@ type TakenSeatsInRangeRow struct {
 // Свой холд спрашивающего исключается ($4): человек, передумавший и вернувшийся к
 // списку, обязан снова увидеть время, которое сам же и держит, — иначе при вместимости
 // 1 только что отпущенный слот пропадал бы у него на четверть часа.
+// ЖИВОСТЬ ХОЛДА СЧИТАЕТСЯ ПО ЧАСАМ СЕРВИСА ($5), А НЕ ПО now() БАЗЫ. Момент истечения
+// в строку пишет приложение (s.now() + HoldTTL), и читать его чужими часами значит
+// отвечать на один вопрос двумя источниками времени: при подменённых часах (тесты)
+// свежий холд читается протухшим, при расхождении часов приложения и базы — наоборот.
+// Тот же порядок, что у CountFutureBookings и PurgeExpiredHolds: «сейчас» приезжает
+// параметром.
 func (q *Queries) TakenSeatsInRange(ctx context.Context, arg TakenSeatsInRangeParams) ([]TakenSeatsInRangeRow, error) {
 	rows, err := q.db.Query(ctx, takenSeatsInRange,
 		arg.ScheduleID,
 		arg.StartsAt,
 		arg.StartsAt_2,
 		arg.ClientID,
+		arg.HoldExpiresAt,
 	)
 	if err != nil {
 		return nil, err

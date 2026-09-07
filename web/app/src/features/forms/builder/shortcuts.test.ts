@@ -52,6 +52,18 @@ describe('chords — биндинги по e.code (§3.1)', () => {
     expect(chords.deleteBlock(key({ code: 'Backspace', ctrlKey: true, shiftKey: true }))).toBe(true)
     // Без Shift — это не удаление блока, а голый Backspace.
     expect(chords.deleteBlock(key({ code: 'Backspace', metaKey: true }))).toBe(false)
+    // Три аккорда пунктов попапа (2026-09-07). У голого Delete проверяется и то, что
+    // он НЕ ловится с модификаторами: Mod+Delete в тексте — «удалить слово справа», и
+    // забрать его блоку значило бы сломать редактирование там, где Delete разрешён.
+    expect(chords.deleteKey(key({ code: 'Delete' }))).toBe(true)
+    expect(chords.deleteKey(key({ code: 'Delete', metaKey: true }))).toBe(false)
+    expect(chords.deleteKey(key({ code: 'Delete', altKey: true }))).toBe(false)
+    expect(chords.duplicateBlock(key({ code: 'KeyD', metaKey: true }))).toBe(true)
+    expect(chords.duplicateBlock(key({ code: 'KeyD', ctrlKey: true }))).toBe(true)
+    expect(chords.duplicateBlock(key({ code: 'KeyD' }))).toBe(false)
+    expect(chords.changeType(key({ code: 'KeyR', altKey: true }))).toBe(true)
+    // Mod+Alt+R в Firefox занят режимом чтения — под наш жест он не подходит.
+    expect(chords.changeType(key({ code: 'KeyR', altKey: true, metaKey: true }))).toBe(false)
     expect(chords.actionMenu(key({ code: 'Period', metaKey: true }))).toBe(true)
     expect(chords.actionMenu(key({ code: 'Period' }))).toBe(false)
     expect(chords.answerAction(key({ code: 'Enter', ctrlKey: true }))).toBe(true)

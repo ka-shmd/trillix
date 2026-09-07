@@ -34,19 +34,25 @@ var designDensityScale = map[string]string{"compact": "0.75", "normal": "1", "ro
 // пока браузер не дойдёт до @font-face, то есть мигнёт. Сторожит паритет-тест.
 const DesignFontDefault = "inter"
 
-// Стеки шрифтов. Системный весит ноль байт и файлов не имеет; остальные подключаются
-// самохостом (@font-face в fields.css), здесь только имя семейства с тем же системным
-// хвостом на случай, если файл не догрузился.
+// Стеки шрифтов. Все подключаются самохостом (@font-face в fields.css), здесь только
+// имя семейства с системным хвостом на случай, если файл не догрузился.
 // Хвост подбирается ПО РИСУНКУ, а не копируется: у антиквы он засечный, иначе форма
 // на секунду загрузки становится гротескной, то есть другой формой.
 var designFontStack = map[string]string{
-	"system":     "system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif",
 	"inter":      "Inter, system-ui, -apple-system, sans-serif",
 	"golos":      "'Golos Text', system-ui, -apple-system, sans-serif",
 	"manrope":    "Manrope, system-ui, -apple-system, sans-serif",
 	"onest":      "Onest, system-ui, -apple-system, sans-serif",
 	"montserrat": "Montserrat, system-ui, -apple-system, sans-serif",
 	"lora":       "Lora, Georgia, 'Times New Roman', serif",
+}
+
+// Толщина надписи кнопки. "semibold" в таблице нет намеренно: это дефолт fields.css,
+// и печатать для него переменную значило бы писать то, что и так есть.
+var designButtonWeight = map[string]string{
+	"normal": "400",
+	"medium": "500",
+	"bold":   "700",
 }
 
 // designVarSpec описывает одну переменную: как её зовут и как достать значение.
@@ -169,6 +175,12 @@ var designVarSpecs = []designVarSpec{
 			return ""
 		}
 		return fmt.Sprintf("%dpx", *d.Button.FontSize)
+	}},
+	{"--rf-submit-weight", func(d *FormDesign) string {
+		if d.Button == nil {
+			return ""
+		}
+		return designButtonWeight[d.Button.Weight]
 	}},
 	{"--rf-submit-radius", func(d *FormDesign) string {
 		if d.Button == nil || d.Button.Radius == nil {
@@ -297,7 +309,7 @@ func DesignThemeColor(d *FormDesign) string {
 	return ""
 }
 
-// designFontFiles — файлы подмножеств для каждого несистемного семейства (базовые
+// designFontFiles — файлы подмножеств для каждого семейства каталога (базовые
 // имена в web/shared/fonts, без хеша сборки). Порядок значим: кириллица первой —
 // на русской форме она нужна раньше латиницы.
 //
@@ -314,7 +326,7 @@ var designFontFiles = map[string][]string{
 }
 
 // DesignFontFiles — базовые имена woff2 выбранного семейства для <link rel=preload>
-// на публичной странице. Системный стек даёт пустой срез: качать нечего.
+// на публичной странице. Неизвестное семейство даёт пустой срез: качать нечего.
 //
 // НЕЗАДАННЫЙ шрифт — это не «нечего качать», а дефолт (DesignFontDefault), и качать его
 // надо тем более: таких форм большинство. Отсюда же форма без оформления вовсе (d == nil).
