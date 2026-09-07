@@ -5,7 +5,6 @@ import {
   CalendarClock,
   Check,
   ChevronsUpDown,
-  CreditCard,
   FileText,
   LayoutGrid,
   Snowflake,
@@ -15,7 +14,7 @@ import {
 
 import { CreateWorkspaceDialog } from './CreateWorkspaceDialog'
 import { useCurrentWorkspace } from './current'
-import { membersQueryOptions, workspacesQueryOptions } from './queries'
+import { workspacesQueryOptions } from './queries'
 import {
   SidebarGroup,
   SidebarGroupContent,
@@ -36,10 +35,14 @@ import {
 // Навигация кабинета — ПЕРЕКЛЮЧАТЕЛЬ ПРОСТРАНСТВА И ЕГО РАЗДЕЛЫ.
 //
 // Ярусов «по типу объекта» больше нет. Почти всё в продукте принадлежит
-// пространству — формы, расписания, участники, квоты, — а верхний ярус притворялся
+// пространству — формы, расписания, участники, — а верхний ярус притворялся
 // глобальным и потому обязан был угадывать пространство из адреса. Отсюда росли три
 // дефекта сразу: расписание команды уходило в личное, тариф команды был недостижим,
 // форма из шаблона ложилась не туда (спека `docs/design/cabinet-navigation.md`).
+//
+// ТАРИФ СЮДА НЕ ВХОДИТ (решение владельца 2026-09-06, ADR §10): он принадлежит
+// АККАУНТУ, и разделом пространства обещал бы, что у пространства свой план. Пункт
+// живёт в личном ярусе подвала, рядом с настройками (`AppSidebar`).
 //
 // ПЕРЕКЛЮЧАТЕЛЬ, А НЕ ДЕРЕВО (решение владельца 2026-09-06). Сломано было понимание
 // «где я», и переключатель делает текущее пространство постоянно видимым фактом;
@@ -54,19 +57,6 @@ export function WorkspaceNav({ children }: { children?: React.ReactNode }) {
   const current = useCurrentWorkspace()
   const pathname = useRouterState({ select: (s) => s.location.pathname })
   const [creating, setCreating] = useState(false)
-
-  // Права спрашиваются ОДИН раз — у текущего пространства, и тем же запросом, каким
-  // их читает страница участников (общий ключ кэша). Матрица прав живёт на сервере,
-  // кабинет спрашивает действие, а не роль.
-  const members = useQuery({
-    ...membersQueryOptions(current?.id ?? ''),
-    enabled: current !== undefined,
-  })
-  // ПОКА НЕ ЗНАЕМ — ПОКАЗЫВАЕМ. Тот же довод, что у гейтов тарифа
-  // (`features/plan/useFeature.ts`): пункт, мигнувший и пропавший у владельца,
-  // стоит дороже лишнего пункта у редактора, а настоящий отказ всё равно на бэке —
-  // страница тарифа скажет о нём словами. Прячем только когда ЗНАЕМ, что нельзя.
-  const showPlan = members.data ? members.data.permissions.includes('billing.view') : true
 
   if (!current) {
     return (
@@ -222,16 +212,6 @@ export function WorkspaceNav({ children }: { children?: React.ReactNode }) {
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
-            {showPlan && (
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild isActive={section.startsWith('/plan')} tooltip="Тариф">
-                  <Link to="/w/$workspaceSlug/plan" params={{ workspaceSlug: slug }}>
-                    <CreditCard className="size-4" />
-                    <span>Тариф</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
           </SidebarMenu>
         </SidebarGroupContent>
       </SidebarGroup>

@@ -14,6 +14,7 @@ import (
 // snapshotService — часть сервиса, нужная приватному транспорту.
 type snapshotService interface {
 	Snapshot(ctx context.Context, userID, workspaceID uuid.UUID) (Snapshot, error)
+	AccountSnapshot(ctx context.Context, userID uuid.UUID) (AccountSnapshot, error)
 }
 
 // Middleware — обёртка аутентификации (реализация — auth.Handler.RequireAuth),
@@ -39,6 +40,9 @@ func NewHandler(svc snapshotService, access Access, requireAuth Middleware) *Han
 
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/workspaces/{id}/entitlements", h.requireAuth(http.HandlerFunc(h.snapshot)))
+	// Тариф аккаунта: платит человек, а не пространство (ADR §10). Id в адресе нет
+	// и быть не может — субъект тут сам спрашивающий, и другого он не назовёт.
+	mux.Handle("GET /api/v1/account/entitlements", h.requireAuth(http.HandlerFunc(h.accountSnapshot)))
 }
 
 // featureResponse — одна возможность в снимке.
@@ -52,6 +56,13 @@ type featureResponse struct {
 	Allowed bool   `json:"allowed"`
 	Used    int64  `json:"used"`
 	Limit   *int64 `json:"limit"`
+}
+
+type accountSnapshotResponse struct {
+	PlanCode  string            `json:"planCode"`
+	PlanTitle string            `json:"planTitle"`
+	PeriodEnd string            `json:"periodEnd"`
+	Features  []featureResponse `json:"features"`
 }
 
 type snapshotResponse struct {
@@ -89,13 +100,47 @@ func (h *Handler) snapshot(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Порядок возможностей задаёт КАТАЛОГ, а не карта: обход map в Go
-	// рандомизирован, и список на странице тарифа прыгал бы при каждом запросе.
-	features := make([]featureResponse, 0, len(snap.Features))
+	httpserver.WriteJSON(w, r, http.StatusOK, snapshotResponse{
+		PlanCode:  snap.PlanCode,
+		PlanTitle: snap.PlanTitle,
+		PeriodEnd: snap.PeriodEnd.Format("2006-01-02"),
+		Features:  featureList(snap.Features),
+	})
+}
+
+// accountSnapshot отдаёт снимок тарифа аккаунта. Проверять права не у кого и не о
+// чём: субъект — сам спрашивающий.
+func (h *Handler) accountSnapshot(w http.ResponseWriter, r *http.Request) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+
+	snap, err := h.svc.AccountSnapshot(r.Context(), u.ID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	httpserver.WriteJSON(w, r, http.StatusOK, accountSnapshotResponse{
+		PlanCode:  snap.PlanCode,
+		PlanTitle: snap.PlanTitle,
+		PeriodEnd: snap.PeriodEnd.Format("2006-01-02"),
+		Features:  featureList(snap.Features),
+	})
+}
+
+// featureList — возможности снимка в порядке КАТАЛОГА, а не карты: обход map в Go
+// рандомизирован, и список на странице тарифа прыгал бы при каждом запросе.
+// Ключи, которых в снимке нет, пропускаются молча — каждый снимок берёт свою часть
+// каталога, и отсутствие ключа здесь не ошибка конфигурации (её ловит decide).
+func featureList(decisions map[Key]Decision) []featureResponse {
+	features := make([]featureResponse, 0, len(decisions))
 	for _, key := range CatalogOrder {
-		d, ok := snap.Features[key]
+		d, ok := decisions[key]
 		if !ok {
-			continue // аккаунт-уровневые в снимок не входят
+			continue
 		}
 		f := Catalog[key]
 		features = append(features, featureResponse{
@@ -107,13 +152,7 @@ func (h *Handler) snapshot(w http.ResponseWriter, r *http.Request) {
 			Limit:   d.Limit,
 		})
 	}
-
-	httpserver.WriteJSON(w, r, http.StatusOK, snapshotResponse{
-		PlanCode:  snap.PlanCode,
-		PlanTitle: snap.PlanTitle,
-		PeriodEnd: snap.PeriodEnd.Format("2006-01-02"),
-		Features:  features,
-	})
+	return features
 }
 
 func kindName(k Kind) string {

@@ -9,6 +9,12 @@ import (
 	"github.com/jackc/pgx/v5/pgtype"
 )
 
+type AccountUsage struct {
+	UserID        uuid.UUID
+	Period        pgtype.Date
+	AiGenerations int64
+}
+
 type Booking struct {
 	ID              uuid.UUID
 	ScheduleID      uuid.UUID
@@ -291,8 +297,7 @@ type WorkspaceMember struct {
 }
 
 type WorkspaceUsage struct {
-	WorkspaceID   uuid.UUID
-	Period        pgtype.Date
-	Submissions   int64
-	AiGenerations int64
+	WorkspaceID uuid.UUID
+	Period      pgtype.Date
+	Submissions int64
 }

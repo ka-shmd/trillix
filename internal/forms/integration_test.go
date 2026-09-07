@@ -249,7 +249,7 @@ func TestForms_Generate(t *testing.T) {
 	// Расход списан ровно один раз и в текущем периоде.
 	var used int64
 	err = testPool.QueryRow(context.Background(),
-		`SELECT ai_generations FROM workspace_usage
+		`SELECT ai_generations FROM account_usage
 		  WHERE period = date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date`).Scan(&used)
 	if err != nil {
 		t.Fatalf("чтение расхода: %v", err)
@@ -419,7 +419,7 @@ func TestForms_Chat(t *testing.T) {
 	// Сообщение списано ровно одно.
 	var used int64
 	err = testPool.QueryRow(context.Background(),
-		`SELECT ai_generations FROM workspace_usage
+		`SELECT ai_generations FROM account_usage
 		  WHERE period = date_trunc('month', now() AT TIME ZONE 'Europe/Moscow')::date`).Scan(&used)
 	if err != nil {
 		t.Fatalf("чтение расхода: %v", err)

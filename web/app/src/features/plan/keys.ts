@@ -2,4 +2,5 @@
 // (web/CLAUDE.md).
 export const planKeys = {
   snapshot: (workspaceId: string) => ['plan', 'snapshot', workspaceId] as const,
+  account: () => ['plan', 'account'] as const,
 }

@@ -40,9 +40,10 @@ type Row struct {
 	// MembersCount, считается только там, где спрашивают: приём ответа и выдача
 	// картинок за этим не ходят.
 	StorageUsed int64
-	// AIGenerationsUsed — сколько раз за период форму собирали или правили текстом.
-	// Читается из той же строки usage, что и SubmissionsUsed, поэтому отдельного
-	// запроса (как у мест и хранилища) ему не нужно: колонка соседняя.
+	// AIGenerationsUsed — сколько сообщений ассистенту АККАУНТ израсходовал за
+	// период. Аккаунт, а не пространство (0053): платит владелец, и его счётчик
+	// один на все его пространства. Отдельного запроса не требует — приезжает
+	// вторым LEFT JOIN'ом по уже посчитанному владельцу.
 	AIGenerationsUsed int64
 	// SchedulesCount — сколько расписаний записи в пространстве СЕЙЧАС. Как и
 	// MembersCount, считается только там, где спрашивают: приём ответа за этим
@@ -57,9 +58,9 @@ type Store interface {
 	// для кабинета есть пользователь, и id воркспейса из URL правом доступа не
 	// является (инвариант 1).
 	EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, period time.Time) (Row, error)
-	// AccountEntitlements — план самого аккаунта и его счётчики. Периода нет:
-	// аккаунт-уровневое считается «здесь и сейчас», а не за расчётный месяц.
-	AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (Row, error)
+	// AccountEntitlements — план самого аккаунта и оба его счётчика: число
+	// пространств («здесь и сейчас») и расход ассистента (за период).
+	AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID, period time.Time) (Row, error)
 	// EntitlementsWithStorage — то же, что Entitlements, плюс расход хранилища
 	// (гейт файлов). Отдельным запросом по тому же доводу, что и счётчик
 	// участников: сумма по submission_files нужна одной операции.
@@ -108,6 +109,21 @@ type Snapshot struct {
 	// PeriodEnd — момент обнуления расхода (первое число следующего месяца, МСК).
 	PeriodEnd time.Time
 	Features  map[Key]Decision
+}
+
+// AccountSnapshot — картина тарифа АККАУНТА: план, его возможности и расход того,
+// что оплачено человеком (число пространств, сообщения ассистенту).
+//
+// Воркспейс-квот здесь нет намеренно (решение владельца 2026-09-06): расход
+// пространства — вопрос про пространство, и сводить его на аккаунт нечем — лимит
+// у каждого свой.
+type AccountSnapshot struct {
+	PlanCode  string
+	PlanTitle string
+	// PeriodEnd — момент обнуления расхода (первое число следующего месяца, МСК).
+	PeriodEnd time.Time
+	// Features — возможности плана и АККАУНТНЫЕ квоты.
+	Features map[Key]Decision
 }
 
 // Service — единая точка проверки лимитов.
@@ -199,7 +215,8 @@ func (s *Service) CheckAccount(ctx context.Context, userID uuid.UUID, key Key) (
 		return Decision{}, fmt.Errorf("entitlements: ключ %q — воркспейс-уровневый, CheckAccount его не обслуживает", key)
 	}
 
-	row, err := s.repo.AccountEntitlements(ctx, s.db, userID)
+	period := s.PeriodStart()
+	row, err := s.repo.AccountEntitlements(ctx, s.db, userID, period)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// Аккаунта без подписки не бывает: её создаёт транзакция регистрации
@@ -208,8 +225,10 @@ func (s *Service) CheckAccount(ctx context.Context, userID uuid.UUID, key Key) (
 		}
 		return Decision{}, err
 	}
-	// Период в решении не заполняется: у аккаунт-уровневого счётчика его нет —
-	// место освобождается удалением пространства, а не первым числом месяца.
+	// Период в решении не заполняется: у единственного аккаунт-уровневого ключа
+	// (число пространств) его нет — место освобождается удалением пространства, а
+	// не первым числом месяца. В запрос он всё равно едет: тем же чтением
+	// приезжает расход ассистента, который аккаунтный и периодный (0053).
 	return decide(f, row, key)
 }
 
@@ -243,6 +262,46 @@ func (s *Service) Snapshot(ctx context.Context, userID, workspaceID uuid.UUID) (
 		d, err := decide(f, row, key)
 		if err != nil {
 			return Snapshot{}, err
+		}
+		snap.Features[key] = d
+	}
+	return snap, nil
+}
+
+// AccountSnapshot — состояние тарифа АККАУНТА для страницы «Тариф»: план, что он
+// даёт, оба аккаунтных счётчика и расход воркспейс-квот по каждому пространству,
+// которым аккаунт владеет.
+//
+// Права спрашивать не у кого и не о чем: субъект — сам спрашивающий.
+//
+// Возможности плана (Toggle) в снимок входят, воркспейс-квоты — нет, и делит их
+// СЧЁТЧИК: возможность решает план (один на все пространства человека), а расход
+// ответов, мест, файлов и расписаний копится в пространстве и на аккаунт не
+// сводится — Meter.AccountWide.
+func (s *Service) AccountSnapshot(ctx context.Context, userID uuid.UUID) (AccountSnapshot, error) {
+	period := s.PeriodStart()
+	acc, err := s.repo.AccountEntitlements(ctx, s.db, userID, period)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// Аккаунта без подписки не бывает: её создаёт транзакция регистрации.
+			return AccountSnapshot{}, fmt.Errorf("entitlements: у аккаунта %s нет подписки: %w", userID, err)
+		}
+		return AccountSnapshot{}, err
+	}
+
+	snap := AccountSnapshot{
+		PlanCode:  acc.PlanCode,
+		PlanTitle: acc.PlanTitle,
+		PeriodEnd: period.AddDate(0, 1, 0),
+		Features:  make(map[Key]Decision, len(Catalog)),
+	}
+	for key, f := range Catalog {
+		if f.Kind == Quota && !f.Meter.AccountWide() {
+			continue // воркспейс-квоты этот снимок не показывает
+		}
+		d, err := decide(f, acc, key)
+		if err != nil {
+			return AccountSnapshot{}, err
 		}
 		snap.Features[key] = d
 	}
@@ -289,7 +348,7 @@ func decide(f Feature, row Row, key Key) (Decision, error) {
 		used = row.MembersCount
 	case StorageMeter:
 		used = row.StorageUsed
-	case AIGenerationsMeter:
+	case AIGenerationsAccountMeter:
 		used = row.AIGenerationsUsed
 	case SchedulesMeter:
 		used = row.SchedulesCount

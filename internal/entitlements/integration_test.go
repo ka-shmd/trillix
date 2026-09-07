@@ -281,3 +281,144 @@ func seedUser(t *testing.T) uuid.UUID {
 	})
 	return id
 }
+
+// ГЛАВНЫЙ СТОРОЖ АККАУНТНОЙ КВОТЫ: два пространства одного человека делят один
+// счётчик сообщений ассистенту. Пока счётчик стоял на пространстве, конечный лимит
+// умножался кнопкой «Новое пространство», и на каждом пространстве страница тарифа
+// показывала свой остаток (ADR §10, 0053).
+//
+// Тест устроен так, чтобы возврат счётчика на пространство его ронял: списание идёт
+// в ОДНО пространство, а вопрос задаётся ДРУГОМУ.
+func TestConsumeAIGeneration_CountsPerAccount(t *testing.T) {
+	ctx := context.Background()
+	first, ownerID := seedWorkspace(t, "free")
+	second := seedWorkspaceFor(t, ownerID)
+
+	setLimit(t, "free", "ai_generations", "2")
+	t.Cleanup(func() { setLimit(t, "free", "ai_generations", "30") })
+
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	svc := entitlements.NewService(testPool, entitlements.Repo{}, func() time.Time { return now })
+
+	d, err := svc.CheckWorkspace(ctx, first, entitlements.AIGenerations)
+	if err != nil {
+		t.Fatalf("CheckWorkspace: %v", err)
+	}
+	if err := svc.ConsumeAIGeneration(ctx, first, d.Period); err != nil {
+		t.Fatalf("ConsumeAIGeneration: %v", err)
+	}
+
+	// Списали в первом — израсходовано и во втором: платит один человек.
+	d, err = svc.CheckWorkspace(ctx, second, entitlements.AIGenerations)
+	if err != nil {
+		t.Fatalf("CheckWorkspace второго пространства: %v", err)
+	}
+	if d.Used != 1 {
+		t.Fatalf("израсходовано во втором пространстве = %d, ждали 1: квота умножается числом пространств", d.Used)
+	}
+	if !d.Allowed {
+		t.Error("1 из 2 — а Check запретил")
+	}
+
+	// Второе списание — из другого пространства, лимит исчерпан для ОБОИХ.
+	if err := svc.ConsumeAIGeneration(ctx, second, d.Period); err != nil {
+		t.Fatalf("ConsumeAIGeneration во втором пространстве: %v", err)
+	}
+	for name, wsID := range map[string]uuid.UUID{"первое": first, "второе": second} {
+		d, err := svc.CheckWorkspace(ctx, wsID, entitlements.AIGenerations)
+		if err != nil {
+			t.Fatalf("CheckWorkspace (%s): %v", name, err)
+		}
+		if d.Used != 2 || d.Allowed {
+			t.Errorf("%s пространство: %d из 2, allowed=%v — ждали исчерпанную квоту", name, d.Used, d.Allowed)
+		}
+	}
+
+	// Расход прошлого месяца в текущий период не попадает — период у аккаунтного
+	// счётчика тот же календарный месяц, что у ответов.
+	setAIUsage(t, ownerID, "2026-07-01", 99)
+	d, err = svc.CheckWorkspace(ctx, first, entitlements.AIGenerations)
+	if err != nil {
+		t.Fatalf("CheckWorkspace после засева прошлого месяца: %v", err)
+	}
+	if d.Used != 2 {
+		t.Errorf("израсходовано = %d, ждали 2: расход июля утёк в август", d.Used)
+	}
+}
+
+// Снимок тарифа аккаунта: план, его возможности и расход того, что оплачено
+// человеком. Воркспейс-квоты в него не входят — расход пространства это вопрос про
+// пространство, и лимит у каждого свой.
+func TestAccountSnapshot_AccountLevelOnly(t *testing.T) {
+	ctx := context.Background()
+	first, ownerID := seedWorkspace(t, "free")
+	seedWorkspaceFor(t, ownerID)
+
+	setLimit(t, "free", "ai_generations", "30")
+	setLimit(t, "free", "submissions_per_month", "10")
+	t.Cleanup(func() { setLimit(t, "free", "submissions_per_month", "null") })
+
+	now := time.Date(2026, 8, 10, 12, 0, 0, 0, time.UTC)
+	setAIUsage(t, ownerID, "2026-08-01", 5)
+	setUsage(t, first, "2026-08-01", 7)
+
+	svc := entitlements.NewService(testPool, entitlements.Repo{}, func() time.Time { return now })
+	snap, err := svc.AccountSnapshot(ctx, ownerID)
+	if err != nil {
+		t.Fatalf("AccountSnapshot: %v", err)
+	}
+
+	ai := snap.Features[entitlements.AIGenerations]
+	if ai.Used != 5 || ai.Limit == nil || *ai.Limit != 30 {
+		t.Errorf("сообщения ассистенту = %d/%v, ждали 5/30", ai.Used, ai.Limit)
+	}
+	// Оба пространства считаются, хотя расход ассистента общий: это разные счётчики.
+	if ws := snap.Features[entitlements.Workspaces]; ws.Used != 2 {
+		t.Errorf("пространств у аккаунта = %d, ждали 2", ws.Used)
+	}
+	if _, ok := snap.Features[entitlements.AnalyticsFunnel]; !ok {
+		t.Error("возможности плана не показаны: их решает план, а он у аккаунта один")
+	}
+	// Воркспейс-квоты в аккаунтный снимок не попадают ни числом, ни суммой: у
+	// каждого пространства свой расход, и одно число на всех было бы неправдой.
+	if _, ok := snap.Features[entitlements.SubmissionsPerMonth]; ok {
+		t.Error("воркспейс-квота показана как аккаунтная")
+	}
+	// Конец периода — общий: аккаунтный расход обнуляется вместе с воркспейсным.
+	if got := snap.PeriodEnd.Format("2006-01-02"); got != "2026-09-01" {
+		t.Errorf("конец периода = %s, ждали 2026-09-01", got)
+	}
+}
+
+// seedWorkspaceFor заводит ЕЩЁ ОДНО пространство того же владельца: подписка у
+// аккаунта уже есть (одна строка на человека), второй раз её выписывать нельзя.
+func seedWorkspaceFor(t *testing.T, ownerID uuid.UUID) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	wsID := uuid.New()
+	if _, err := testPool.Exec(ctx, `INSERT INTO workspaces (id, slug, name) VALUES ($1, $2, 'second')`,
+		wsID, domain.NewSlug()); err != nil {
+		t.Fatalf("insert workspace: %v", err)
+	}
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO workspace_members (workspace_id, user_id, role) VALUES ($1, $2, 'owner')`,
+		wsID, ownerID); err != nil {
+		t.Fatalf("insert owner: %v", err)
+	}
+	t.Cleanup(func() {
+		if _, err := testPool.Exec(context.Background(), `DELETE FROM workspaces WHERE id = $1`, wsID); err != nil {
+			t.Fatalf("cleanup workspace: %v", err)
+		}
+	})
+	return wsID
+}
+
+func setAIUsage(t *testing.T, userID uuid.UUID, period string, n int64) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(), `
+		INSERT INTO account_usage (user_id, period, ai_generations) VALUES ($1, $2::date, $3)
+		ON CONFLICT (user_id, period) DO UPDATE SET ai_generations = EXCLUDED.ai_generations`,
+		userID, period, n); err != nil {
+		t.Fatalf("set ai usage: %v", err)
+	}
+}

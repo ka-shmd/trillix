@@ -10,7 +10,6 @@ import {
 } from '@tanstack/react-router'
 
 import { ProTag } from './ProTag'
-import { WorkspaceAddressProvider } from './workspaceContext'
 
 afterEach(cleanup)
 
@@ -23,20 +22,15 @@ async function renderTag() {
     path: '/',
     // Заголовок раздела ВОКРУГ метки — часть предмета проверки: `tracking-tight`
     // наследуется внутрь, и без своей разрядки метка сжималась бы именно здесь.
-    // Провайдер стоит ВНУТРИ роутера: он читает адрес (`useRouterState`), а метка
-    // ведёт в тариф ТЕКУЩЕГО пространства. Адрес `/` его не называет — отвечает
-    // личное, которое оболочка отдаёт провайдеру пропом.
     component: () => (
-      <WorkspaceAddressProvider personalSlug="ws-1">
-        <h2 className="text-xl font-bold tracking-tight">
-          Незавершённые ответы <ProTag />
-        </h2>
-      </WorkspaceAddressProvider>
+      <h2 className="text-xl font-bold tracking-tight">
+        Незавершённые ответы <ProTag />
+      </h2>
     ),
   })
   const plan = createRoute({
     getParentRoute: () => rootRoute,
-    path: '/w/$workspaceSlug/plan',
+    path: '/settings/plan',
     component: () => <span>тариф</span>,
   })
   const router = createRouter({
@@ -55,8 +49,9 @@ async function renderTag() {
 describe('метка платной возможности', () => {
   it('ведёт на страницу тарифа', async () => {
     // Метка сообщает об ограничении и обязана давать путь узнать цену тем же
-    // жестом, каким её заметили.
-    expect((await renderTag()).getAttribute('href')).toBe('/w/ws-1/plan')
+    // жестом, каким её заметили. Адрес аккаунтный: план один на человека, и
+    // называть в ссылке пространство было бы обещанием, что у него свой тариф.
+    expect((await renderTag()).getAttribute('href')).toBe('/settings/plan')
   })
 
   it('несёт свои вес и разрядку, а базовые классы бейджа их не перебивают', async () => {

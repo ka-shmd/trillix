@@ -55,19 +55,24 @@ func (Repo) EntitlementsForUser(ctx context.Context, db postgres.DBTX, workspace
 	}, nil
 }
 
-// AccountEntitlements — план аккаунта и его счётчики (сколько пространств уже
-// держит). pgx.ErrNoRows пробрасывается: «у аккаунта нет подписки» — нарушенный
-// инвариант регистрации, а не пустой ответ.
-func (Repo) AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (Row, error) {
-	row, err := postgres.New(db).GetAccountEntitlements(ctx, userID)
+// AccountEntitlements — план аккаунта и оба его собственных счётчика: сколько
+// пространств держит СЕЙЧАС и сколько сообщений ассистенту израсходовал ЗА ПЕРИОД.
+// pgx.ErrNoRows пробрасывается: «у аккаунта нет подписки» — нарушенный инвариант
+// регистрации, а не пустой ответ.
+func (Repo) AccountEntitlements(ctx context.Context, db postgres.DBTX, userID uuid.UUID, period time.Time) (Row, error) {
+	row, err := postgres.New(db).GetAccountEntitlements(ctx, postgres.GetAccountEntitlementsParams{
+		UserID: userID,
+		Period: pgtype.Date{Time: period, Valid: true},
+	})
 	if err != nil {
 		return Row{}, fmt.Errorf("get entitlements of account %s: %w", userID, err)
 	}
 	return Row{
-		PlanCode:        row.PlanCode,
-		PlanTitle:       row.PlanTitle,
-		Limits:          row.Limits,
-		WorkspacesOwned: row.WorkspacesOwned,
+		PlanCode:          row.PlanCode,
+		PlanTitle:         row.PlanTitle,
+		Limits:            row.Limits,
+		AIGenerationsUsed: row.AiGenerationsUsed,
+		WorkspacesOwned:   row.WorkspacesOwned,
 	}, nil
 }
 
@@ -129,8 +134,9 @@ func (Repo) EntitlementsWithSchedules(ctx context.Context, db postgres.DBTX, wor
 	}, nil
 }
 
-// BumpAIGenerations списывает одну генерацию формы в периоде (фаза 26). UPSERT:
-// строки периода может ещё не быть.
+// BumpAIGenerations списывает одно сообщение ассистенту в периоде (фаза 26).
+// Пространство называет ПЛАТЕЛЬЩИКА: расход копится у владельца (0053), резолв —
+// внутри того же утверждения. UPSERT: строки периода может ещё не быть.
 func (Repo) BumpAIGenerations(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, period time.Time) error {
 	err := postgres.New(db).BumpAIGenerations(ctx, postgres.BumpAIGenerationsParams{
 		WorkspaceID: workspaceID,

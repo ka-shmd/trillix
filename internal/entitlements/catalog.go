@@ -120,7 +120,11 @@ const (
 	// Имя ключа осталось прежним: переименование стоило бы миграции ради красоты.
 	//
 	// Безлимита у этого ключа не бывает ни на одном плане — null означал бы
-	// открытый счёт у провайдера, оплачиваемый нами.
+	// открытый счёт у провайдера, оплачиваемый нами. Отсюда же единственный в
+	// каталоге АККАУНТНЫЙ счётчик у воркспейс-ключа (0053, ADR §10): пока расход
+	// копился в workspace_usage, тот же открытый счёт открывался кнопкой «Новое
+	// пространство» — конечный лимит умножался числом пространств, а их число
+	// планами не ограничено.
 	AIGenerations Key = "ai_generations"
 
 	// BookingSchedulesMax — сколько расписаний записи можно завести в пространстве
@@ -177,16 +181,32 @@ const (
 	// (строки workspace_members с role='owner'). Периода у этого счётчика нет:
 	// удалил пространство — освободилось место, ждать первого числа не нужно.
 	WorkspacesMeter
-	// AIGenerationsMeter — расход берётся из workspace_usage.ai_generations за
-	// период. Свой счётчик, а не SubmissionsMeter: обнуляются они вместе (период
-	// один), но считают разное, и общая колонка означала бы, что ответы съедают
-	// генерации.
-	AIGenerationsMeter
+	// AIGenerationsAccountMeter — расход берётся из account_usage.ai_generations
+	// ВЛАДЕЛЬЦА пространства за период. Свой счётчик, а не SubmissionsMeter:
+	// обнуляются они вместе (период один), но считают разное, и общая колонка
+	// означала бы, что ответы съедают сообщения ассистенту.
+	//
+	// АККАУНТНЫЙ, в отличие от всех соседей по этому списку, и это единственная
+	// причина, по которой имя такое длинное: платит аккаунт, а не пространство
+	// (0053). Заводя следующую квоту, спроси не «чей план», а «чей КОШЕЛЁК»: пока
+	// счётчик стоял на пространстве, конечный лимит умножался их числом.
+	AIGenerationsAccountMeter
 	// SchedulesMeter — израсходовано = сколько расписаний в пространстве СЕЙЧАС.
 	// Периода нет, как у мест и хранилища: удалил расписание — место освободилось
 	// сразу, ждать первого числа не нужно.
 	SchedulesMeter
 )
+
+// AccountWide — лежит ли счётчик этого метра на АККАУНТЕ, а не на пространстве.
+//
+// Свойство метра, а не Scope: Scope отвечает, чей ПЛАН разрешает возможность, —
+// вопрос здесь другой, где копится РАСХОД. Разошлись эти два ответа ровно один
+// раз (ai_generations: спрашивают у пространства, считают на аккаунт), и страница
+// тарифа обязана их различать — иначе одно и то же число нарисуется в строке
+// каждого пространства.
+func (m Meter) AccountWide() bool {
+	return m == WorkspacesMeter || m == AIGenerationsAccountMeter
+}
 
 // Feature — описание возможности.
 type Feature struct {
@@ -237,6 +257,6 @@ var Catalog = map[Key]Feature{
 	FormLinkPreview:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своя карточка ссылки"},
 	FormNotifyEmail:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё письмо о новом ответе"},
 	FormRespondentEmail: {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Письмо респонденту"},
-	AIGenerations:       {Kind: Quota, Scope: WorkspaceScope, Meter: AIGenerationsMeter, Title: "Сообщений ассистенту в месяц"},
+	AIGenerations:       {Kind: Quota, Scope: WorkspaceScope, Meter: AIGenerationsAccountMeter, Title: "Сообщений ассистенту в месяц"},
 	BookingSchedulesMax: {Kind: Quota, Scope: WorkspaceScope, Meter: SchedulesMeter, Title: "Расписаний записи"},
 }

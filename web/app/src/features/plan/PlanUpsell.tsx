@@ -1,6 +1,5 @@
 import { Link } from '@tanstack/react-router'
 
-import { usePlanLink } from '../../shared/planLink'
 
 import { Button } from '@/components/ui/button'
 import {
@@ -34,7 +33,6 @@ export function PlanUpsell({
   open: boolean
   onOpenChange: (open: boolean) => void
 }) {
-  const planLink = usePlanLink()
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       {/* Порядок классов несущий: перебивки идут ПОСЛЕ базовых, конфликт разрешает
@@ -56,7 +54,7 @@ export function PlanUpsell({
               <Button variant="ghost">Не сейчас</Button>
             </DialogClose>
             <Button asChild>
-              <Link {...planLink}>Посмотреть тарифы</Link>
+              <Link to="/settings/plan">Посмотреть тарифы</Link>
             </Button>
           </div>
         </div>
