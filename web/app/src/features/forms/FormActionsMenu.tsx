@@ -43,17 +43,21 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 
-// Меню действий над формой у её названия на странице формы: редактировать,
-// переименовать, копировать ссылку, дублировать, удалить.
+// Меню действий над формой: редактировать, переименовать, копировать ссылку,
+// дублировать, закрыть приём, удалить. ОДНО на две поверхности — заголовок страницы
+// формы и строку списка: одинаковое «⋯» над одним объектом обязано открывать
+// одинаковый набор, иначе на память опереться нельзя.
 //
-// Переименование — ОКНО, а не инлайн-поле (как на карточке дашборда): здесь
-// название стоит заголовком страницы, и подмена его на инпут увела бы вместе с
-// собой крошки и табы, которые от него зависят.
+// Переименование — ОКНО, а не инлайн-поле: у заголовка страницы подмена на инпут
+// увела бы с собой крошки и табы, а в строке списка — сдвинула бы колонки соседних
+// строк.
 //
 // «Копировать ссылку» у черновика выключено: публичной страницы у него ещё нет —
 // ссылка вела бы на 404. Это единственный пункт, зависящий от статуса.
 export function FormActionsMenu({
   form,
+  align = 'start',
+  leaveAfterDelete = true,
 }: {
   form: {
     id: string
@@ -63,6 +67,13 @@ export function FormActionsMenu({
     status: Form['status']
     workspaceSlug: string
   }
+  // align — с какой стороны раскрывается меню: под заголовком страницы «start», у
+  // правого края строки списка «end» (иначе меню уезжает за край колонки).
+  align?: 'start' | 'end'
+  // leaveAfterDelete — уводить ли на список после удаления. На странице самой формы
+  // остаться негде, а в списке уход по тому же адресу СТЁР БЫ поиск и фильтр из
+  // адресной строки — человек удалил форму и лишился подборки, в которой работал.
+  leaveAfterDelete?: boolean
 }) {
   const navigate = useNavigate()
   const rename = useUpdateFormName()
@@ -98,10 +109,12 @@ export function FormActionsMenu({
     remove.mutate(form.id, {
       onSuccess: () => {
         toast.success(`Форма «${label}» удалена`)
-        void navigate({
-          to: '/w/$workspaceSlug/forms',
-          params: { workspaceSlug: form.workspaceSlug },
-        })
+        if (leaveAfterDelete) {
+          void navigate({
+            to: '/w/$workspaceSlug/forms',
+            params: { workspaceSlug: form.workspaceSlug },
+          })
+        }
       },
       onError: () => toast.error('Не удалось удалить форму'),
     })
@@ -120,7 +133,7 @@ export function FormActionsMenu({
             <MoreHorizontal className="size-4" />
           </Button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="start" className="w-56">
+        <DropdownMenuContent align={align} className="w-56">
           <DropdownMenuItem asChild>
             <Link
               to="/w/$workspaceSlug/forms/$slug/edit"

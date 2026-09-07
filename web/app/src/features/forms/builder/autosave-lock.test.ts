@@ -37,6 +37,7 @@ function seedDetail(qc: QueryClient) {
     // должен затереть это поле мусором из мутации.
     hasUnpublishedChanges: true,
     submissionCount: 3,
+    lastSubmissionAt: null,
     visitCount: 0,
     visitSubmittedCount: 0,
     draftSchema,

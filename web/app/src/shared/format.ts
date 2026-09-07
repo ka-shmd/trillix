@@ -38,6 +38,30 @@ export function formatDateTime(iso: string): string {
   return Number.isNaN(d.getTime()) ? '—' : dateTimeFmt.format(d)
 }
 
+// Относительная дата: «2 часа назад», «вчера», «5 дней назад». Нужна там, где
+// важна СВЕЖЕСТЬ, а не сам день: в списке форм колонка «Последний ответ» отвечает
+// на «жива ли форма», и «7 сент. 2026 г.» заставляет считать это в уме.
+//
+// Порог в неделю: дальше относительность перестаёт помогать («37 дней назад» хуже
+// даты), поэтому старое показывается обычным форматом.
+const relativeFmt = new Intl.RelativeTimeFormat(LOCALE, { numeric: 'auto' })
+
+export function formatRelativeDate(iso: string): string {
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return '—'
+  // Вперёд относительное время не считаем: дата из будущего — это рассинхрон часов
+  // клиента с сервером, и «через 2 минуты» у последнего ответа читается поломкой.
+  const seconds = Math.max(0, Math.round((Date.now() - d.getTime()) / 1000))
+  if (seconds < 60) return 'только что'
+  const minutes = Math.round(seconds / 60)
+  if (minutes < 60) return relativeFmt.format(-minutes, 'minute')
+  const hours = Math.round(minutes / 60)
+  if (hours < 24) return relativeFmt.format(-hours, 'hour')
+  const days = Math.round(hours / 24)
+  if (days < 7) return relativeFmt.format(-days, 'day')
+  return formatDate(iso)
+}
+
 // Склонение слова «ответ» по числу: 1 ответ, 2 ответа, 5 ответов. Общее для страниц
 // ответов и сводки — они показывают один и тот же счётчик и обязаны звучать одинаково.
 export function pluralAnswers(n: number): string {

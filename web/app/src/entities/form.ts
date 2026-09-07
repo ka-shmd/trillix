@@ -28,6 +28,11 @@ export const formSchema = z.object({
   // Число ответов формы (счётчик на карточке). Точен на GET/списке; у ответов
   // мутаций всегда 0 (карточка обновляется из списка).
   submissionCount: z.number().int(),
+  // Момент последнего ответа (колонка «Последний ответ» в списке); null = ответов
+  // не было. Точен там же, где submissionCount, и с тем же фильтром: сверхлимитный
+  // ответ дату не двигает. `default` обязателен — ответы мутаций поля не несут
+  // вовсе, а ронять на этом разбор формы незачем.
+  lastSubmissionAt: z.string().nullable().default(null),
   // Просмотры формы и сколько из них закончились ответом (фаза 8.5 шаг 6).
   // Конверсия = visitSubmittedCount / visitCount; делить submissionCount на
   // visitCount нельзя — это разные множества (ответ мог прийти без визита, ADR §10).
@@ -329,6 +334,24 @@ export const formsSortSchema = z.enum(['updated', 'created', 'responses'])
 export type FormsSort = z.infer<typeof formsSortSchema>
 
 export const DEFAULT_FORMS_SORT: FormsSort = 'updated'
+
+// Фильтр списка по статусу: сегменты над списком форм. 'all' — «все статусы»,
+// значение экрана, а не сервера: в запрос оно не уходит вовсе (параметра нет =
+// все). Остальные три совпадают со статусом формы буква в букву — отдельного
+// перевода между экраном и API у фильтра нет.
+export const formsFilterSchema = z.enum(['all', 'draft', 'published', 'closed'])
+export type FormsFilter = z.infer<typeof formsFilterSchema>
+
+export const DEFAULT_FORMS_FILTER: FormsFilter = 'all'
+
+// Подписи сегментов — рядом со схемой, как у сортировки: новый фильтр нельзя
+// завести, забыв про его название на экране.
+export const FORMS_FILTER_LABELS: Record<FormsFilter, string> = {
+  all: 'Все',
+  draft: 'Черновики',
+  published: 'Опубликованные',
+  closed: 'Закрытые',
+}
 
 // Подписи для селектора — рядом со схемой, чтобы новый порядок нельзя было
 // завести, забыв про его название на экране.

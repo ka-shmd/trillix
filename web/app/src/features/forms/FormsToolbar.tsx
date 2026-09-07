@@ -1,8 +1,14 @@
 import { useEffect, useRef, useState } from 'react'
 import { Search, X } from 'lucide-react'
-import { FORMS_SORT_LABELS, formsSortSchema, type FormsSort } from '../../entities/form'
+import {
+  FORMS_FILTER_LABELS,
+  FORMS_SORT_LABELS,
+  formsFilterSchema,
+  formsSortSchema,
+  type FormsFilter,
+  type FormsSort,
+} from '../../entities/form'
 import { Input } from '@/components/ui/input'
-import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
@@ -10,19 +16,24 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-// Панель дашборда: поиск по названию и порядок списка. Оба значения живут в
-// адресной строке (владеет ими маршрут) — сюда приходят пропсами.
+// Панель списка форм: поиск по названию, фильтр по статусу и порядок. Все три
+// значения живут в адресной строке (владеет ими маршрут) — сюда приходят пропсами.
 export function FormsToolbar({
   q,
   sort,
+  filter,
   onSearchChange,
   onSortChange,
+  onFilterChange,
 }: {
   q: string
   sort: FormsSort
+  filter: FormsFilter
   onSearchChange: (q: string) => void
   onSortChange: (sort: FormsSort) => void
+  onFilterChange: (filter: FormsFilter) => void
 }) {
   // Поле держит локальный черновик: буква попадает в адрес и в запрос не сразу,
   // иначе каждое нажатие — свой запрос и своя запись в истории браузера.
@@ -54,10 +65,10 @@ export function FormsToolbar({
   }, [draft, q])
 
   return (
-    <div className="mb-6 flex flex-wrap items-center gap-3">
+    <div className="mb-4 flex flex-wrap items-center gap-2">
       <div className="relative min-w-56 flex-1">
         <Search
-          className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground"
+          className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-muted-foreground"
           aria-hidden="true"
         />
         <Input
@@ -73,41 +84,57 @@ export function FormsToolbar({
             type="button"
             onClick={() => setDraft('')}
             aria-label="Очистить поиск"
-            className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="absolute top-1/2 right-2 -translate-y-1/2 rounded-sm p-1 text-muted-foreground hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
           >
             <X className="size-4" />
           </button>
         )}
       </div>
 
-      <div className="flex items-center gap-2">
-        <Label htmlFor="forms-sort" className="shrink-0 text-sm text-muted-foreground">
-          Сортировка
-        </Label>
-        {/* shadcn Select поверх примитива из уже установленного зонтичного пакета
-            radix-ui — новой зависимости не требует (там же живут Dialog,
-            DropdownMenu и остальные вендоренные компоненты кабинета). */}
-        <Select
-          value={sort}
-          onValueChange={(value) => {
-            // safeParse, а не parse: значения свои, но бросать исключение из
-            // обработчика — значит ронять экран там, где достаточно ничего не делать.
-            const parsed = formsSortSchema.safeParse(value)
-            if (parsed.success) onSortChange(parsed.data)
-          }}
-        >
-          <SelectTrigger id="forms-sort" className="w-52">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {formsSortSchema.options.map((value) => (
-              <SelectItem key={value} value={value}>
-                {FORMS_SORT_LABELS[value]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      </div>
+      {/* Фильтр — сегментами, а не вторым селектом: значений четыре, они взаимно
+          исключают друг друга, и главное про них — какое сейчас выбрано. Селект
+          прячет этот ответ под клик. Отбор делает СЕРВЕР (?status=) — список
+          постраничный, и просеивание подгруженного молча теряло бы формы с
+          неподгруженных страниц. */}
+      <Tabs
+        value={filter}
+        onValueChange={(value) => {
+          // safeParse, а не parse: значения свои, но бросать исключение из
+          // обработчика — значит ронять экран там, где достаточно ничего не делать.
+          const parsed = formsFilterSchema.safeParse(value)
+          if (parsed.success) onFilterChange(parsed.data)
+        }}
+      >
+        <TabsList aria-label="Фильтр по статусу">
+          {formsFilterSchema.options.map((value) => (
+            <TabsTrigger key={value} value={value}>
+              {FORMS_FILTER_LABELS[value]}
+            </TabsTrigger>
+          ))}
+        </TabsList>
+      </Tabs>
+
+      {/* Подписи «Сортировка» у селектора нет: он и так показывает выбранный
+          порядок словами («По дате изменения»), а подпись стоила 90 px в ряду, где
+          ширина нужна поиску. Скринридеру порядок называет aria-label. */}
+      <Select
+        value={sort}
+        onValueChange={(value) => {
+          const parsed = formsSortSchema.safeParse(value)
+          if (parsed.success) onSortChange(parsed.data)
+        }}
+      >
+        <SelectTrigger className="w-52" aria-label="Сортировка">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
+          {formsSortSchema.options.map((value) => (
+            <SelectItem key={value} value={value}>
+              {FORMS_SORT_LABELS[value]}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
     </div>
   )
 }

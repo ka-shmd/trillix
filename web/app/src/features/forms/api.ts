@@ -8,6 +8,7 @@ import {
   type Form,
   type FormDetail,
   type FormsPage,
+  type FormsFilter,
   type FormsSort,
   type FormSearchResponse,
   type BehaviorInput,
@@ -26,12 +27,21 @@ import {
 // limit — размер страницы; не передан = умолчание сервера.
 export function listForms(
   cursor?: string,
-  opts?: { q?: string; sort?: FormsSort; workspaceId?: string; limit?: number },
+  opts?: {
+    q?: string
+    sort?: FormsSort
+    status?: FormsFilter
+    workspaceId?: string
+    limit?: number
+  },
 ): Promise<FormsPage> {
   const params = new URLSearchParams()
   if (cursor) params.set('cursor', cursor)
   if (opts?.q) params.set('q', opts.q)
   if (opts?.sort && opts.sort !== 'updated') params.set('sort', opts.sort)
+  // 'all' — значение экрана, а не сервера: отсутствие параметра и есть «все
+  // статусы», и посылать его значило бы придумать серверу четвёртый статус.
+  if (opts?.status && opts.status !== 'all') params.set('status', opts.status)
   if (opts?.workspaceId) params.set('workspaceId', opts.workspaceId)
   // limit не передан = размер страницы сервера (forms.DefaultPageLimit); свой
   // сервер зажимает в [1, MaxPageLimit].
@@ -44,7 +54,9 @@ export function listForms(
 // режим listForms: тот живёт внутри ОДНОГО пространства и тянет счётчики ответов и
 // визитов на каждую строку, а поиску нужны имя, место и ссылка.
 export function searchForms(q: string): Promise<FormSearchResponse> {
-  return apiRequest(`/forms/search?q=${encodeURIComponent(q)}`, { schema: formSearchResponseSchema })
+  return apiRequest(`/forms/search?q=${encodeURIComponent(q)}`, {
+    schema: formSearchResponseSchema,
+  })
 }
 
 // Форма по slug: URL кабинета (редактор/ответы/шаринг) адресует форму коротким
