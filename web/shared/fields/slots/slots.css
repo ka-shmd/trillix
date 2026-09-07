@@ -124,14 +124,19 @@
    и «плоское» оформление формы гасит её целиком (--rf-field-shadow: none) — своя тень
    на hover вернула бы карточкам края там, где автор их убрал. */
 .rf-slots-date:not(:disabled):not(.rf-slots-date--on):hover,
-.rf-slots-time:not(:disabled):hover {
+.rf-slots-time:not(:disabled):not(.rf-slots-time--on):hover {
   background: color-mix(in srgb, var(--rf-primary) 7%, var(--rf-field-bg));
 }
 
+/* ВЫБРАННОЕ — светло-зелёная заливка с кольцом того же зелёного, буквы остаются
+   обычными (--rf-text, наследуется). Довод и оба токена — в fields.css, :root.
+
+   МИНА: выбранное обязано быть ИСКЛЮЧЕНО ИЗ НАВЕДЕНИЯ выше — у правила hover три
+   класса против одного, оно сильнее по специфичности и заменит зелёную заливку
+   серой, стоит подвести курсор к уже выбранному квадрату. */
 .rf-slots-date--on {
-  color: var(--rf-primary-foreground);
-  background: var(--rf-primary);
-  box-shadow: none;
+  background: var(--rf-picked);
+  box-shadow: 0 0 0 2px var(--rf-picked-ring);
 }
 
 .rf-slots-date:focus-visible {
@@ -150,13 +155,6 @@
   font-size: calc(var(--rf-font-size) * 0.75);
   line-height: 1.1;
   color: var(--rf-muted);
-}
-
-/* Внутри выбранного квадрата подпись дня недели идёт цветом заливки: приглушённый
-   --rf-muted на тёмном фоне пропадает. */
-.rf-slots-date--on .rf-slots-dow {
-  color: inherit;
-  opacity: 0.7;
 }
 
 /* ВРЕМЕНА ВЫБРАННОГО ДНЯ. Ни карусели, ни своей прокрутки: времена одного дня
@@ -204,14 +202,8 @@
    обе секции. Блок при выборе не подменяется — лента и сетка остаются на месте, и
    отменить выбор можно повторным нажатием по этой же кнопке. */
 .rf-slots-time--on {
-  color: var(--rf-primary-foreground);
-  background: var(--rf-primary);
-  box-shadow: none;
-}
-
-.rf-slots-time--on .rf-slots-left {
-  color: inherit;
-  opacity: 0.7;
+  background: var(--rf-picked);
+  box-shadow: 0 0 0 2px var(--rf-picked-ring);
 }
 
 .rf-slots-time:disabled {
