@@ -72,12 +72,49 @@ export const scheduleSchema = z.object({
 })
 export type Schedule = z.infer<typeof scheduleSchema>
 
-export const schedulesResponseSchema = z.object({ items: z.array(scheduleSchema) })
+// ScheduleListItem — расписание В СПИСКЕ: те же настройки плюс три числа, которых в
+// самом расписании нет (они считаются по формам и записям). Карточка одного
+// расписания их не отдаёт, поэтому это отдельный тип, а не поля с «?»: строка списка
+// на них опирается всегда, и необязательность пришлось бы обходить в каждой колонке.
+//
+// nextBookingAt — nullable, а не отсутствующее: «впереди пусто» и «ближайшая тогда-то»
+// разные новости, и различает их только null.
+export const scheduleListItemSchema = scheduleSchema.extend({
+  formsCount: z.number().int(),
+  upcomingCount: z.number().int(),
+  nextBookingAt: z.string().nullable(),
+})
+export type ScheduleListItem = z.infer<typeof scheduleListItemSchema>
+
+export const schedulesResponseSchema = z.object({ items: z.array(scheduleListItemSchema) })
 
 // ScheduleInput — расписание, как его задаёт автор: всё, кроме того, что назначает
 // сервер. Правится ЦЕЛИКОМ — экран сохраняет настройки одним куском, частичных
 // патчей у расписания нет.
 export type ScheduleInput = Omit<Schedule, 'id' | 'workspaceId' | 'createdAt' | 'updatedAt'>
+
+// scheduleInput — расписание в тело PATCH: правится оно ЦЕЛИКОМ, частичных патчей у
+// него нет. Правило приезжает отдельным доводом, потому что документ приходит с
+// полотна, а не из строки, которую правят.
+//
+// ⚠ ПЕРЕЧИСЛЕНИЕМ, А НЕ ВЫБРАСЫВАНИЕМ СЛУЖЕБНЫХ ПОЛЕЙ, и это мина: тело PATCH сервер
+// разбирает строго (`DisallowUnknownFields`), так что лишнее поле — не «пройдёт
+// мимо», а 400 на сохранении; новое же поле, не попавшее сюда, молча сбрасывалось бы
+// к прежнему значению при каждой правке.
+export function scheduleInput(s: Schedule, availability: Availability): ScheduleInput {
+  return {
+    name: s.name,
+    timezone: s.timezone,
+    availability,
+    slotMinutes: s.slotMinutes,
+    bufferMinutes: s.bufferMinutes,
+    horizonDays: s.horizonDays,
+    leadMinutes: s.leadMinutes,
+    capacity: s.capacity,
+    maxSeatsPerBooking: s.maxSeatsPerBooking,
+    showRemaining: s.showRemaining,
+  }
+}
 
 export const scheduleBlockSchema = z.object({
   id: z.string(),

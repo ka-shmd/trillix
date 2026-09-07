@@ -5,14 +5,15 @@ import { CalendarClock, Plus } from 'lucide-react'
 
 import { DEFAULT_SCHEDULE, MAX_SCHEDULE_NAME_LEN } from '../../entities/schedule'
 import { schedulesQueryOptions, useCreateSchedule } from '../../shared/schedules/queries'
-import { weekSummary } from '../../features/schedules/weekly'
+import { ScheduleRow, ScheduleRowsHeader } from '../../features/schedules/ScheduleRow'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { humanError } from '../../shared/api/errors'
 import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
-import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
+import { EmptyState, ErrorState } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
+import { Skeleton } from '@/components/ui/skeleton'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import {
@@ -74,8 +75,8 @@ function SchedulesPage() {
           }
         />
 
-        <div className="mt-8 flex flex-col gap-3">
-          {(workspaces.isPending || schedules.isPending) && <LoadingRows rows={2} />}
+        <div className="mt-8">
+          {(workspaces.isPending || schedules.isPending) && <SchedulesSkeleton />}
           {workspaces.isError && (
             <ErrorState
               title="Не удалось загрузить пространство."
@@ -106,20 +107,16 @@ function SchedulesPage() {
             />
           )}
 
-          {schedules.data?.map((s) => (
-            <Link
-              key={s.id}
-              to="/w/$workspaceSlug/schedules/$scheduleId"
-              params={{ workspaceSlug, scheduleId: s.id }}
-              className="flex flex-col gap-1 rounded-lg border p-4 transition-colors hover:bg-accent/50"
-            >
-              <span className="text-base font-semibold">{s.name}</span>
-              <span className="text-sm text-muted-foreground">
-                {weekSummary(s.availability)} · приём {s.slotMinutes} мин
-                {s.capacity > 1 && ` · мест ${s.capacity}`}
-              </span>
-            </Link>
-          ))}
+          {schedules.data && schedules.data.length > 0 && (
+            <>
+              <ScheduleRowsHeader />
+              <div className="divide-y divide-border">
+                {schedules.data.map((s) => (
+                  <ScheduleRow key={s.id} schedule={s} workspaceSlug={workspaceSlug} />
+                ))}
+              </div>
+            </>
+          )}
         </div>
       </PageContainer>
 
@@ -219,5 +216,18 @@ function CreateDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// Скелет на время первой загрузки — экран не мигает пустотой. Форма скелета
+// повторяет форму данных: прямоугольники размером с карточку на месте строк
+// читались бы как другой экран, который потом «схлопнулся».
+function SchedulesSkeleton() {
+  return (
+    <div className="flex flex-col gap-px" aria-hidden="true">
+      {Array.from({ length: 4 }, (_, i) => (
+        <Skeleton key={i} className="h-12 rounded-md" />
+      ))}
+    </div>
   )
 }

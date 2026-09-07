@@ -6,7 +6,7 @@ import { type Booking, type Schedule } from '../../entities/schedule'
 import { bookingsQueryOptions } from '../../shared/schedules/queries'
 import { LazyCalendar } from '../../shared/lazyCalendar'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
-import { LOCALE } from '../../shared/format'
+import { bookingTime } from './scheduleFormat'
 import { formInk, formTint } from './formColor'
 import { zonedParts } from './zone'
 import { Button } from '@/components/ui/button'
@@ -164,7 +164,9 @@ function UpcomingList({
               className="min-w-0 flex-1 rounded-md px-2 py-1.5 text-left hover:bg-accent/60"
               onClick={() => onPick(zonedParts(new Date(b.startsAt), schedule.timezone).date)}
             >
-              <span className="block text-sm font-medium">{bookingTime(b, schedule.timezone)}</span>
+              <span className="block text-sm font-medium">
+                {bookingTime(b.startsAt, schedule.timezone)}
+              </span>
               <span className="block truncate text-xs text-muted-foreground">
                 {b.formTitle}
                 {b.seats > 1 && ` · мест: ${b.seats}`}
@@ -194,16 +196,6 @@ function UpcomingList({
       </ul>
     </div>
   )
-}
-
-function bookingTime(b: Booking, timeZone: string): string {
-  return new Date(b.startsAt).toLocaleString(LOCALE, {
-    timeZone,
-    day: 'numeric',
-    month: 'short',
-    hour: '2-digit',
-    minute: '2-digit',
-  })
 }
 
 // asLocalDate / dateKeyOfLocal — мост между ключом даты (ГГГГ-ММ-ДД, как живёт
