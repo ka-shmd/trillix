@@ -1,7 +1,7 @@
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useCallback } from 'react'
-import { FileText, LayoutTemplate, Plus, SearchX } from 'lucide-react'
+import { FileText, Plus, SearchX } from 'lucide-react'
 import { z } from 'zod'
 import { NEW_FORM_SLUG } from '../../features/forms/draft'
 import { formsListQueryOptions } from '../../features/forms/queries'
@@ -147,21 +147,12 @@ function FormsDashboard() {
       <PageHeader
         title={workspace?.name ?? '…'}
         actions={
-          <>
-            {/* Шаблон — способ начать форму, а не место в навигации: пункт сайдбара
-                вёл в галерею, не зная пространства, и форма из неё всегда ложилась в
-                личное. Здесь пространство названо адресом экрана. */}
-            <Button asChild variant="outline">
-              <Link to="/w/$workspaceSlug/templates" params={{ workspaceSlug }}>
-                <LayoutTemplate className="size-4" />
-                Начать с шаблона
-              </Link>
-            </Button>
-            <Button onClick={handleCreate}>
-              <Plus className="size-4" />
-              Новая форма
-            </Button>
-          </>
+          // Вход в шаблоны — раздел сайдбара (решение владельца 2026-09-07), поэтому
+          // у экрана осталось одно действие.
+          <Button onClick={handleCreate}>
+            <Plus className="size-4" />
+            Новая форма
+          </Button>
         }
       />
 

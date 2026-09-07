@@ -7,6 +7,7 @@ import {
   ChevronsUpDown,
   FileText,
   LayoutGrid,
+  LayoutTemplate,
   Snowflake,
   SquarePlus,
   Users,
@@ -83,9 +84,6 @@ export function WorkspaceNav({ children }: { children?: React.ReactNode }) {
 
   const slug = current.slug
   const section = pathname.slice(`/w/${slug}`.length)
-  // «Формы» остаются подсвеченными и в галерее шаблонов: шаблон — способ начать
-  // форму, а не отдельное место.
-  const formsActive = section.startsWith('/forms') || section.startsWith('/templates')
 
   return (
     <>
@@ -181,10 +179,26 @@ export function WorkspaceNav({ children }: { children?: React.ReactNode }) {
                 `_app` (импорт фичи из фичи запрещён, web/CLAUDE.md). */}
             {children}
             <SidebarMenuItem>
-              <SidebarMenuButton asChild isActive={formsActive} tooltip="Формы">
+              <SidebarMenuButton asChild isActive={section.startsWith('/forms')} tooltip="Формы">
                 <Link to="/w/$workspaceSlug/forms" params={{ workspaceSlug: slug }}>
                   <FileText className="size-4" />
                   <span>Формы</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+            {/* Галерея шаблонов — раздел пространства (решение владельца
+                2026-09-07), и адрес у неё пространственный: форма из шаблона
+                ложится туда, куда указывает путь, а не всегда в личное. Стоит
+                сразу под формами: это второй способ их завести. */}
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                isActive={section.startsWith('/templates')}
+                tooltip="Шаблоны"
+              >
+                <Link to="/w/$workspaceSlug/templates" params={{ workspaceSlug: slug }}>
+                  <LayoutTemplate className="size-4" />
+                  <span>Шаблоны</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
