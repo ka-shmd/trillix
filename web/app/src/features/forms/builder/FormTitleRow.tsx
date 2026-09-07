@@ -81,7 +81,9 @@ export function FormTitleRow({ block, onEnter }: { block: Block; onEnter: () => 
           ref.current = el
         }}
         value={block.text ?? []}
-        placeholder="Название формы"
+        placeholder="Заголовок формы"
+        // Подпись для скринридера остаётся прежней («Название формы»): по ней строку
+        // находят e2e-сценарии, и она называет РОЛЬ поля, а не приглашение в него.
         label="Название формы"
         // Набор служебных классов — ровно тот же, что у строк BlockRow: RichLine
         // кладёт className прямо на contenteditable и своего сброса не делает, а без
