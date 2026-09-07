@@ -90,13 +90,14 @@ test('визит считается под прод-CSP, конверсия и �
   await respondent.goto('about:blank')
   await mobile.close()
 
-  // 4. Карточка дашборда: «1 просмотр → 1 ответ (100 %)». Ненулевой просмотр здесь и
-  // есть доказательство, что sendBeacon прошёл сквозь CSP прод-контура.
+  // 4. Строка списка форм: просмотр, ответ и конверсия. Доказательство того, что
+  // sendBeacon прошёл сквозь CSP прод-контура, здесь — сама КОНВЕРСИЯ: при нуле
+  // просмотров в колонке стоит прочерк, а не «0 %» (ноль просмотров и ноль
+  // отправивших — разные новости, ADR §10), поэтому «100 %» не появится, пока визит
+  // не доехал.
   await page.goto('/forms')
-  const card = page.locator('[data-slot="card"]').filter({ hasText: formTitle }).first()
-  await expect(card).toContainText('1 просмотр')
-  await expect(card).toContainText('1 ответ')
-  await expect(card).toContainText('100 %')
+  const row = page.locator('[data-slot="form-row"]').filter({ hasText: formTitle }).first()
+  await expect(row).toContainText('100 %')
 
   // 5. Воронка. Респондент коснулся только q1 и отправил форму, поэтому:
   //   q1 — дошёл 1, отвала НЕТ (отправивший не отвал — ядро шага 6б);

@@ -187,7 +187,8 @@ web/app/src/
   features/insights/FunnelChart.tsx            воронка горизонтальными полосами
   features/insights/DeviceChart.tsx            устройства кольцом
   features/insights/lazyCharts.tsx             ГРАНИЦА ЗАГРУЗКИ recharts — импортируй отсюда
-  features/forms/FormStats.tsx                 «N просмотров → M ответов (K %)»
+  features/forms/FormRow.tsx                   строка списка форм: просмотры, ответы,
+                                               конверсия и последний ответ колонками
   routes/_app/forms.$slug._manage.insights.tsx            оболочка раздела: вкладки,
                                                           период, карточки
   routes/_app/…insights.answers.tsx / insights.drop-offs.tsx   вкладки «Сводка» / «Отвалы»

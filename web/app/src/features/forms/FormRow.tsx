@@ -87,6 +87,10 @@ export function FormRow({ form, workspaceSlug }: { form: Form; workspaceSlug: st
 
   return (
     <div
+      // data-slot — тот же способ дать тесту опору, каким размечены вендоренные
+      // компоненты (`[data-slot="popover-content"]`): по нему строку находит
+      // сценарий e2e visits-funnel. Роли у строки нет — она не таблица.
+      data-slot="form-row"
       className={cn(
         GRID,
         'group relative rounded-md px-3 py-2.5 transition-colors',
