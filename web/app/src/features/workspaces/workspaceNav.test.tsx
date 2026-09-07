@@ -109,9 +109,18 @@ describe('навигация пространства в сайдбаре', () =
     expect(href('Формы')).toBe('/w/personal/forms')
   })
 
-  it('галерея шаблонов — часть работы с формами, и подсвечены «Формы»', async () => {
+  // Шаблоны — свой раздел пространства (решение владельца 2026-09-07), и адрес у
+  // него пространственный: форма из шаблона ложится туда, куда указывает путь.
+  // Подсвечен ровно один пункт — иначе панель говорит, что человек в двух местах.
+  it('в галерее шаблонов подсвечены «Шаблоны», а не «Формы»', async () => {
     await renderNav('/w/team/templates', ['billing.view'])
-    expect(screen.getByRole('link', { name: 'Формы' }).dataset.active).toBe('true')
+    expect(screen.getByRole('link', { name: 'Шаблоны' }).dataset.active).toBe('true')
+    expect(screen.getByRole('link', { name: 'Формы' }).dataset.active).not.toBe('true')
+  })
+
+  it('«Шаблоны» ведут в галерею ТЕКУЩЕГО пространства', async () => {
+    await renderNav('/w/team/forms', ['billing.view'])
+    expect(href('Шаблоны')).toBe('/w/team/templates')
   })
 
   // СТОРОЖ ВЕНДОРЕННОЙ ПРАВКИ. У shadcn выбранный пункт красится тем же

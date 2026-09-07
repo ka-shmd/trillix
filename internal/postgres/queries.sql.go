@@ -2144,6 +2144,10 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
     -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
+    -- Дата последнего ответа: колонка «Последний ответ» в списке форм. Фильтр
+    -- over_quota тот же, что у счётчика выше, — иначе дата называла бы ответ,
+    -- которого в таблице ответов не видно. NULL = ответов не было ни одного.
+    (SELECT max(s.created_at) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota)::timestamptz AS last_submission_at,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -2187,6 +2191,7 @@ type GetFormRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	LastSubmissionAt      pgtype.Timestamptz
 	VisitCount            int64
 	VisitSubmittedCount   int64
 	CloseAt               pgtype.Timestamptz
@@ -2229,6 +2234,7 @@ func (q *Queries) GetForm(ctx context.Context, id uuid.UUID) (GetFormRow, error)
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
 		&i.SubmissionCount,
+		&i.LastSubmissionAt,
 		&i.VisitCount,
 		&i.VisitSubmittedCount,
 		&i.CloseAt,
@@ -2264,6 +2270,7 @@ SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.draft_schema, 
     -- карточке против пяти в таблице читается как потеря данных. Счётчик жёсткого
     -- капа формы (GetPublicFormBySlug) считает ВСЕ строки — это другая семантика.
     (SELECT count(*) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota) AS submission_count,
+    (SELECT max(s.created_at) FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota)::timestamptz AS last_submission_at,
     -- Просмотры и конверсия (фаза 8.5 шаг 6). Два скалярных подзапроса — тот же
     -- идиом, что у submission_count выше; оба идут по idx_form_visits_form.
     -- Конверсия считается по визитам (submitted/total), а НЕ делением
@@ -2303,6 +2310,7 @@ type GetFormBySlugRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	LastSubmissionAt      pgtype.Timestamptz
 	VisitCount            int64
 	VisitSubmittedCount   int64
 	CloseAt               pgtype.Timestamptz
@@ -2347,6 +2355,7 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.PublishedVersion,
 		&i.HasUnpublishedChanges,
 		&i.SubmissionCount,
+		&i.LastSubmissionAt,
 		&i.VisitCount,
 		&i.VisitSubmittedCount,
 		&i.CloseAt,
@@ -3893,11 +3902,12 @@ func (q *Queries) ListFormVersions(ctx context.Context, formID uuid.UUID) ([]Lis
 }
 
 const listFormsPage = `-- name: ListFormsPage :many
-SELECT id, workspace_id, name, title, slug, status, published_version_id, published_version, has_unpublished_changes, submission_count, visit_count, visit_submitted_count, created_at, updated_at, sort_key FROM (
+SELECT id, workspace_id, name, title, slug, status, published_version_id, published_version, has_unpublished_changes, submission_count, last_submission_at, visit_count, visit_submitted_count, created_at, updated_at, sort_key FROM (
     SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
         fv.version AS published_version,
         coalesce(f.published_version_id IS NOT NULL AND f.draft_schema IS DISTINCT FROM fv.schema, false)::bool AS has_unpublished_changes,
         c.submission_count,
+        c.last_submission_at,
         -- Просмотры и конверсия (фаза 8.5 шаг 6). Конверсия считается по визитам
         -- (submitted/total), а НЕ делением submission_count на visit_count: это
         -- разные множества (ответ мог прийти без визита), и их частное — не
@@ -3914,7 +3924,8 @@ SELECT id, workspace_id, name, title, slug, status, published_version_id, publis
     FROM forms f
     LEFT JOIN form_versions fv ON fv.id = f.published_version_id
     LEFT JOIN LATERAL (
-        SELECT count(*) AS submission_count FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota
+        SELECT count(*) AS submission_count, max(s.created_at)::timestamptz AS last_submission_at
+        FROM submissions s WHERE s.form_id = f.id AND NOT s.over_quota
     ) c ON true
     LEFT JOIN LATERAL (
         SELECT count(*) AS visit_count,
@@ -3928,17 +3939,24 @@ SELECT id, workspace_id, name, title, slug, status, published_version_id, publis
       -- угодно.
       AND ($3::text IS NULL
            OR coalesce(f.name, f.title) ILIKE '%' || $3::text || '%')
+      -- Фильтр по статусу: сегменты «Черновики / Опубликованные / Закрытые» над
+      -- списком. Фильтровать на клиенте нельзя по той же причине, что и искать:
+      -- список постраничный, и отбор из подгруженного молча терял бы формы с
+      -- неподгруженных страниц. Значение проверяет handler, сюда приходит
+      -- разобранным либо NULL («все»).
+      AND ($4::text IS NULL OR f.status = $4::text)
 ) t
-WHERE $4::bigint IS NULL
-   OR (t.sort_key, t.id) < ($4::bigint, $5::uuid)
+WHERE $5::bigint IS NULL
+   OR (t.sort_key, t.id) < ($5::bigint, $6::uuid)
 ORDER BY t.sort_key DESC, t.id DESC
-LIMIT $6
+LIMIT $7
 `
 
 type ListFormsPageParams struct {
 	Sort        string
 	WorkspaceID uuid.UUID
 	Search      pgtype.Text
+	Status      pgtype.Text
 	CursorKey   pgtype.Int8
 	CursorID    pgtype.UUID
 	PageLimit   int32
@@ -3955,6 +3973,7 @@ type ListFormsPageRow struct {
 	PublishedVersion      pgtype.Int4
 	HasUnpublishedChanges bool
 	SubmissionCount       int64
+	LastSubmissionAt      pgtype.Timestamptz
 	VisitCount            int64
 	VisitSubmittedCount   int64
 	CreatedAt             pgtype.Timestamptz
@@ -3986,6 +4005,7 @@ func (q *Queries) ListFormsPage(ctx context.Context, arg ListFormsPageParams) ([
 		arg.Sort,
 		arg.WorkspaceID,
 		arg.Search,
+		arg.Status,
 		arg.CursorKey,
 		arg.CursorID,
 		arg.PageLimit,
@@ -4008,6 +4028,7 @@ func (q *Queries) ListFormsPage(ctx context.Context, arg ListFormsPageParams) ([
 			&i.PublishedVersion,
 			&i.HasUnpublishedChanges,
 			&i.SubmissionCount,
+			&i.LastSubmissionAt,
 			&i.VisitCount,
 			&i.VisitSubmittedCount,
 			&i.CreatedAt,

@@ -1,43 +1,51 @@
-import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
+import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { useCallback } from 'react'
-import { LayoutTemplate, Plus } from 'lucide-react'
+import { FileText, Plus, SearchX } from 'lucide-react'
 import { z } from 'zod'
 import { NEW_FORM_SLUG } from '../../features/forms/draft'
 import { formsListQueryOptions } from '../../features/forms/queries'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
-import { FormCard } from '../../features/forms/FormCard'
+import { FormRow, FormRowsHeader } from '../../features/forms/FormRow'
 import { FormsToolbar } from '../../features/forms/FormsToolbar'
-import { DEFAULT_FORMS_SORT, formsSortSchema, type FormsSort } from '../../entities/form'
+import {
+  DEFAULT_FORMS_FILTER,
+  DEFAULT_FORMS_SORT,
+  formsFilterSchema,
+  formsSortSchema,
+  type FormsFilter,
+  type FormsSort,
+} from '../../entities/form'
 import { humanError } from '../../shared/api/errors'
 import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
-import { ErrorState } from '../../shared/page/states'
+import { EmptyState, ErrorState } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 import { Skeleton } from '@/components/ui/skeleton'
 
-// Поиск и сортировка живут в адресной строке, а не в useState: ссылка на
-// отфильтрованный дашборд сохраняется в закладки, F5 не сбрасывает, «Назад»
+// Поиск, фильтр и сортировка живут в адресной строке, а не в useState: ссылка на
+// отфильтрованный список сохраняется в закладки, F5 не сбрасывает, «Назад»
 // работает — то же решение, что у табов формы.
 //
-// Оба параметра НЕОБЯЗАТЕЛЬНЫ, и умолчания в адрес не пишутся. Так «/forms»
-// остаётся «/forms» (а не «/forms?q=&sort=updated»), и — главное — десяток
-// существующих ссылок на дашборд по всему кабинету не обязан перечислять
-// параметры поиска: обязательные search-параметры типы роутера требуют у КАЖДОЙ
-// ссылки. Мусор из адреса (его правят руками) гасит catch: неизвестная сортировка
-// читается как умолчание, а не роняет экран.
+// Все параметры НЕОБЯЗАТЕЛЬНЫ, и умолчания в адрес не пишутся. Так «/w/{slug}/forms»
+// остаётся собой (а не «…?q=&sort=updated&status=all»), и — главное — десяток
+// существующих ссылок на список по всему кабинету не обязан перечислять параметры:
+// обязательные search-параметры типы роутера требуют у КАЖДОЙ ссылки. Мусор из
+// адреса (его правят руками) гасит catch: неизвестный статус читается как
+// умолчание, а не роняет экран.
 // w — текущее пространство SLUG'ом (пусто = личное), см. shared/currentWorkspace;
 // в id его переводит useCurrentWorkspace, потому что запрос списка ждёт id.
 const formsSearchSchema = z.object({
   q: z.string().optional().catch(undefined),
   sort: formsSortSchema.optional().catch(undefined),
+  status: formsFilterSchema.optional().catch(undefined),
   w: z.string().optional().catch(undefined),
 })
 
-// Дашборд форм (/forms): грид карточек с курсорной подгрузкой, поиск, сортировка,
-// создание формы.
+// Список форм пространства: строки с курсорной подгрузкой, поиск, фильтр по
+// статусу, сортировка, создание формы.
 export const Route = createFileRoute('/_app/w/$workspaceSlug/forms/')({
   validateSearch: formsSearchSchema,
   component: FormsDashboard,
@@ -46,7 +54,7 @@ export const Route = createFileRoute('/_app/w/$workspaceSlug/forms/')({
 function FormsDashboard() {
   const navigate = useNavigate()
   const { workspaceSlug } = Route.useParams()
-  const { q = '', sort = DEFAULT_FORMS_SORT } = Route.useSearch()
+  const { q = '', sort = DEFAULT_FORMS_SORT, status = DEFAULT_FORMS_FILTER } = Route.useSearch()
   // В адресе пространство названо SLUG'ом, а список форм спрашивается по id
   // (features/workspaces/current.ts). Пока перевод не сделан, запрос не
   // включается: с пустым workspaceId он показал бы формы ЛИЧНОГО пространства
@@ -58,7 +66,7 @@ function FormsDashboard() {
   // `workspace === undefined` выключен и остаётся `pending` навсегда).
   const workspaces = useQuery(workspacesQueryOptions)
   const query = useInfiniteQuery({
-    ...formsListQueryOptions({ q, sort, workspaceId: workspace?.id ?? '' }),
+    ...formsListQueryOptions({ q, sort, status, workspaceId: workspace?.id ?? '' }),
     enabled: workspace !== undefined,
   })
 
@@ -100,13 +108,35 @@ function FormsDashboard() {
     [navigate, workspaceSlug],
   )
 
+  const onFilterChange = useCallback(
+    (value: FormsFilter) => {
+      void navigate({
+        to: '/w/$workspaceSlug/forms',
+        params: { workspaceSlug },
+        search: (prev) => ({ ...prev, status: value === DEFAULT_FORMS_FILTER ? undefined : value }),
+        replace: true,
+      })
+    },
+    [navigate, workspaceSlug],
+  )
+
+  // Сброс сужения — одной кнопкой на оба параметра: под пустой выдачей человек не
+  // разбирается, что именно её сузило, поиск или фильтр.
+  const resetNarrowing = useCallback(() => {
+    void navigate({
+      to: '/w/$workspaceSlug/forms',
+      params: { workspaceSlug },
+      search: (prev) => ({ ...prev, q: undefined, status: undefined }),
+      replace: true,
+    })
+  }, [navigate, workspaceSlug])
+
   const forms = query.data?.pages.flatMap((p) => p.forms) ?? []
-  const isSearching = q.trim() !== ''
+  const isNarrowed = q.trim() !== '' || status !== DEFAULT_FORMS_FILTER
 
   // Колонка у всех разделов пространства ОДНА, и это то же решение, что у табов
   // формы (владелец, 2026-08-29): переключение раздела не должно двигать левый край
-  // содержимого. Сетка карточек в широкой колонке дала бы на ряд одну лишнюю, а
-  // прыжок на 128px при каждом клике по панели — цена, которой это не стоит.
+  // содержимого.
   return (
     <PageContainer>
       {/* Путь кончается на самом пространстве: этот экран и есть его корень. */}
@@ -117,21 +147,12 @@ function FormsDashboard() {
       <PageHeader
         title={workspace?.name ?? '…'}
         actions={
-          <>
-            {/* Шаблон — способ начать форму, а не место в навигации: пункт сайдбара
-                вёл в галерею, не зная пространства, и форма из неё всегда ложилась в
-                личное. Здесь пространство названо адресом экрана. */}
-            <Button asChild variant="outline">
-              <Link to="/w/$workspaceSlug/templates" params={{ workspaceSlug }}>
-                <LayoutTemplate className="size-4" />
-                Начать с шаблона
-              </Link>
-            </Button>
-            <Button onClick={handleCreate}>
-              <Plus className="size-4" />
-              Новая форма
-            </Button>
-          </>
+          // Вход в шаблоны — раздел сайдбара (решение владельца 2026-09-07), поэтому
+          // у экрана осталось одно действие.
+          <Button onClick={handleCreate}>
+            <Plus className="size-4" />
+            Новая форма
+          </Button>
         }
       />
 
@@ -139,18 +160,18 @@ function FormsDashboard() {
         <FormsToolbar
           q={q}
           sort={sort}
+          filter={status}
           onSearchChange={onSearchChange}
           onSortChange={onSortChange}
+          onFilterChange={onFilterChange}
         />
       </div>
 
       {workspaces.data && !workspace ? (
-        <div className="mx-auto mt-12 max-w-md text-center">
-          <h2 className="text-lg font-medium">Такого пространства нет</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Оно удалено или доступ к нему закрыт.
-          </p>
-        </div>
+        <EmptyState
+          title="Такого пространства нет"
+          description="Оно удалено или доступ к нему закрыт."
+        />
       ) : query.isPending ? (
         <FormsSkeleton />
       ) : query.isError ? (
@@ -163,33 +184,36 @@ function FormsDashboard() {
         // Два разных пустых состояния: «форм нет» и «под запрос ничего не нашлось»
         // — это разные новости, и предлагать создание формы в ответ на неудачный
         // поиск значит подталкивать к дублю той, что просто не нашлась.
-        isSearching ? (
-          <div className="mx-auto mt-12 max-w-md text-center">
-            <h2 className="text-lg font-medium">Ничего не найдено</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              По запросу «{q}» форм нет. Попробуйте другое слово.
-            </p>
-            <Button variant="outline" onClick={() => onSearchChange('')} className="mt-4">
-              Сбросить поиск
-            </Button>
-          </div>
+        isNarrowed ? (
+          <EmptyState
+            icon={SearchX}
+            title="Ничего не нашлось"
+            description="Под этот поиск и фильтр форм нет. Попробуйте другое слово или снимите фильтр."
+            action={
+              <Button variant="outline" onClick={resetNarrowing}>
+                Сбросить поиск и фильтр
+              </Button>
+            }
+          />
         ) : (
-          <div className="mx-auto mt-12 max-w-md text-center">
-            <h2 className="text-lg font-medium">Пока нет ни одной формы</h2>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Создайте первую — она появится здесь.
-            </p>
-            <Button onClick={handleCreate} className="mt-4 gap-2">
-              <Plus className="size-4" />
-              Новая форма
-            </Button>
-          </div>
+          <EmptyState
+            icon={FileText}
+            title="Пока нет ни одной формы"
+            description="Создайте первую — она появится здесь."
+            action={
+              <Button onClick={handleCreate}>
+                <Plus className="size-4" />
+                Новая форма
+              </Button>
+            }
+          />
         )
       ) : (
         <>
-          <div className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4">
+          <FormRowsHeader />
+          <div className="divide-y divide-border">
             {forms.map((form) => (
-              <FormCard key={form.id} form={form} workspaceSlug={workspaceSlug} />
+              <FormRow key={form.id} form={form} workspaceSlug={workspaceSlug} />
             ))}
           </div>
           {query.hasNextPage && (
@@ -209,12 +233,14 @@ function FormsDashboard() {
   )
 }
 
-// Скелетоны на время первой загрузки — экран не мигает пустотой.
+// Скелет на время первой загрузки — экран не мигает пустотой. Форма скелета
+// повторяет форму данных: прямоугольники размером с карточку на месте строк
+// читались бы как другой экран, который потом «схлопнулся».
 function FormsSkeleton() {
   return (
-    <div className="grid grid-cols-[repeat(auto-fill,minmax(15rem,1fr))] gap-4" aria-hidden="true">
-      {Array.from({ length: 6 }, (_, i) => (
-        <Skeleton key={i} className="h-36 rounded-xl" />
+    <div className="flex flex-col gap-px" aria-hidden="true">
+      {Array.from({ length: 8 }, (_, i) => (
+        <Skeleton key={i} className="h-12 rounded-md" />
       ))}
     </div>
   )

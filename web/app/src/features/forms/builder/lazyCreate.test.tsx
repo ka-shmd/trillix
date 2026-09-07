@@ -37,6 +37,7 @@ const CREATED: Form = {
   publishedVersionId: null,
   hasUnpublishedChanges: false,
   submissionCount: 0,
+  lastSubmissionAt: null,
   visitCount: 0,
   visitSubmittedCount: 0,
 }

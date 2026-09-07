@@ -178,6 +178,10 @@ type formResponse struct {
 	// submissionCount — число ответов формы (счётчик на карточке). Точен на
 	// GET/список; у ответов мутаций всегда 0.
 	SubmissionCount int64 `json:"submissionCount"`
+	// lastSubmissionAt — когда пришёл последний ответ (колонка «Последний ответ» в
+	// списке форм); null = ответов не было ни одного. Точен там же, где счётчик
+	// рядом: на GET/списке, у ответов мутаций всегда null.
+	LastSubmissionAt *time.Time `json:"lastSubmissionAt"`
 	// visitCount / visitSubmittedCount — просмотры формы и сколько из них
 	// закончились ответом (фаза 8.5 шаг 6). Конверсию считает фронт по этой паре;
 	// делить submissionCount на visitCount нельзя — это разные множества (ADR §10).
@@ -443,6 +447,7 @@ func toFormResponse(f Form) formResponse {
 		PublishedVersion:      f.PublishedVersion,
 		HasUnpublishedChanges: f.HasUnpublishedChanges,
 		SubmissionCount:       f.SubmissionCount,
+		LastSubmissionAt:      f.LastSubmissionAt,
 		VisitCount:            f.VisitCount,
 		VisitSubmittedCount:   f.VisitSubmittedCount,
 	}
@@ -559,6 +564,11 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
+	status, err := ParseStatusFilter(r.URL.Query().Get("status"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
 	limit := parseLimit(r.URL.Query().Get("limit"))
 	wsID, ok := parseWorkspaceQuery(w, r)
 	if !ok {
@@ -568,6 +578,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 	page, err := h.svc.List(r.Context(), userID, ListOptions{
 		Search:      r.URL.Query().Get("q"),
 		Sort:        sort,
+		Status:      status,
 		After:       after,
 		Limit:       limit,
 		WorkspaceID: wsID,

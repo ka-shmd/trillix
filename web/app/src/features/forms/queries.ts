@@ -32,6 +32,7 @@ import { saveDraftSchema } from './builder/api'
 import {
   type CloseSettingsInput,
   type FormDetail,
+  type FormsFilter,
   type FormsSort,
   type BehaviorInput,
   type LinkPreview,
@@ -67,6 +68,8 @@ export function formsSearchQueryOptions(q: string) {
 export function formsListQueryOptions(params: {
   q: string
   sort: FormsSort
+  // status: 'all' означает «без фильтра» (параметр не уходит на сервер).
+  status: FormsFilter
   // workspaceId: '' означает личное пространство (параметр не уходит на сервер).
   workspaceId: string
   // limit — размер страницы; не задан = умолчание сервера (50). Обзор пространств
@@ -81,12 +84,14 @@ export function formsListQueryOptions(params: {
       workspaceId: params.workspaceId,
       q,
       sort: params.sort,
+      status: params.status,
       limit: params.limit,
     }),
     queryFn: ({ pageParam }) =>
       listForms(pageParam, {
         q,
         sort: params.sort,
+        status: params.status,
         workspaceId: params.workspaceId || undefined,
         limit: params.limit,
       }),
