@@ -103,7 +103,12 @@ function SchedulesPage() {
               icon={CalendarClock}
               title="Расписаний пока нет"
               description="Расписание — это один поток занятости: один мастер, один кабинет, одна группа. Заведите его, и форма этого пространства сможет спрашивать время."
-              action={<Button onClick={() => setCreating(true)}>Новое расписание</Button>}
+              action={
+                <Button onClick={() => setCreating(true)}>
+                  <Plus className="size-4" />
+                  Новое расписание
+                </Button>
+              }
             />
           )}
 
