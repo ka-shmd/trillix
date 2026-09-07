@@ -33,7 +33,18 @@ export function PageHeader({
   className?: string
 }) {
   return (
-    <header className={cn('flex flex-wrap items-start justify-between gap-4', className)}>
+    // ⚠ НЕ `flex-wrap`, И ЭТО МИНА. Обёртка ставит действия на СЛЕДУЮЩУЮ строку
+    // flex-контейнера, а там они прижимаются к левому краю — то есть место кнопки
+    // начинает зависеть от длины заголовка и описания рядом. Так «Новое расписание»
+    // оказывалось под двухстрочным описанием слева, а «Новая форма» — справа от
+    // заголовка: одна и та же кнопка в двух разных местах кабинета, и заметить это
+    // можно только глазами (найдено владельцем 2026-09-07).
+    //
+    // Вместо обёртки — колонка на узком экране и ряд от `sm`: текст жмётся в своей
+    // колонке (`min-w-0`), а действия стоят у правого края всегда.
+    <header
+      className={cn('flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between', className)}
+    >
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-1.5">
           <h1 className="truncate text-3xl font-extrabold tracking-tight">{title}</h1>
