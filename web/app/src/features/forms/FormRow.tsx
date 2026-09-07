@@ -36,10 +36,10 @@ export function FormRowsHeader() {
       aria-hidden="true"
     >
       <span>Название</span>
-      <span className="hidden text-right md:block">Просмотры</span>
-      <span className="hidden text-right md:block">Ответы</span>
-      <span className="hidden text-right md:block">Конверсия</span>
-      <span className="hidden text-right md:block">Последний ответ</span>
+      <span className="hidden text-center md:block">Просмотры</span>
+      <span className="hidden text-center md:block">Ответы</span>
+      <span className="hidden text-center md:block">Конверсия</span>
+      <span className="hidden text-center md:block">Последний ответ</span>
       <span />
     </div>
   )
@@ -145,16 +145,16 @@ export function FormRow({ form, workspaceSlug }: { form: Form; workspaceSlug: st
 
       {/* Черновик не открывали ни разу — у него не «0», а «нечего считать»:
           нолями он читался бы как форма, которую все проигнорировали. */}
-      <span className="hidden text-right text-sm text-muted-foreground tabular-nums md:block">
+      <span className="hidden text-center text-sm text-muted-foreground tabular-nums md:block">
         {isDraft ? '—' : form.visitCount}
       </span>
-      <span className="hidden text-right text-sm tabular-nums md:block">
+      <span className="hidden text-center text-sm tabular-nums md:block">
         {isDraft ? <span className="text-muted-foreground">—</span> : form.submissionCount}
       </span>
-      <span className="hidden text-right text-sm text-muted-foreground tabular-nums md:block">
+      <span className="hidden text-center text-sm text-muted-foreground tabular-nums md:block">
         {isDraft || percent === null ? '—' : `${percent} %`}
       </span>
-      <span className="hidden text-right text-xs text-muted-foreground md:block">
+      <span className="hidden text-center text-xs text-muted-foreground md:block">
         {form.lastSubmissionAt ? formatRelativeDate(form.lastSubmissionAt) : '—'}
       </span>
 
