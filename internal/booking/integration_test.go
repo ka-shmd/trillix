@@ -102,6 +102,12 @@ type scheduleDTO struct {
 	Capacity      int    `json:"capacity"`
 	HorizonDays   int    `json:"horizonDays"`
 	ShowRemaining bool   `json:"showRemaining"`
+	// Три поля есть только в СПИСКЕ: карточка одного расписания их не отдаёт.
+	// В ответах на GET/PATCH одного расписания они приезжают нулями — и тесты
+	// карточки на них не смотрят.
+	FormsCount    int        `json:"formsCount"`
+	UpcomingCount int        `json:"upcomingCount"`
+	NextBookingAt *time.Time `json:"nextBookingAt"`
 	Availability  struct {
 		Weekly     map[string][]struct{ From, To string } `json:"weekly"`
 		Exceptions []struct {
@@ -153,6 +159,67 @@ func TestSchedules_CRUD(t *testing.T) {
 	decode(t, do(t, owner, http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/schedules"), &got)
 	if len(got.Items) != 0 {
 		t.Fatalf("после удаления осталось %d расписаний", len(got.Items))
+	}
+}
+
+// Числа строки списка: к скольким формам расписание подключено, сколько записей
+// впереди и когда ближайшая.
+//
+// Отбор записей — ТОТ ЖЕ, что у стоп-крана удаления, и сторож здесь именно на него:
+// прошлая, отменённая и холд в «впереди» не входят, иначе автор читал бы занятость,
+// которой нет. Ближайшая обязана быть самой ранней из будущих, а не первой попавшейся.
+func TestSchedules_ListStats(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+
+	busy := createSchedule(t, owner, srv, wsID, scheduleBody)
+	idle := createSchedule(t, owner, srv, wsID,
+		strings.Replace(scheduleBody, `"name": "Мария — рисование"`, `"name": "Пётр — пение"`, 1))
+
+	formID := newForm(t, wsID, "f-stats")
+	newForm(t, wsID, "f-unlinked")
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE forms SET schedule_id = $1 WHERE id = $2`, busy.ID, formID); err != nil {
+		t.Fatalf("привязка формы: %v", err)
+	}
+
+	soon := time.Now().Add(24 * time.Hour).UTC().Truncate(time.Second)
+	seedBooking(t, busy.ID, formID, time.Now().Add(48*time.Hour), "confirmed")
+	seedBooking(t, busy.ID, formID, soon, "confirmed")
+	seedBooking(t, busy.ID, formID, time.Now().Add(-24*time.Hour), "confirmed")
+	seedBooking(t, busy.ID, formID, time.Now().Add(36*time.Hour), "held")
+	seedBooking(t, busy.ID, formID, time.Now().Add(72*time.Hour), "canceled")
+
+	var got listDTO
+	decode(t, do(t, owner, http.MethodGet, srv.URL+"/api/v1/workspaces/"+wsID+"/schedules"), &got)
+	if len(got.Items) != 2 {
+		t.Fatalf("расписаний в списке %d, ожидалось 2", len(got.Items))
+	}
+	byID := map[string]scheduleDTO{}
+	for _, it := range got.Items {
+		byID[it.ID] = it
+	}
+
+	b := byID[busy.ID]
+	if b.FormsCount != 1 {
+		t.Fatalf("форм у занятого расписания %d, ожидалась 1 (вторая форма ни к чему не подключена)", b.FormsCount)
+	}
+	if b.UpcomingCount != 2 {
+		t.Fatalf("записей впереди %d, ожидалось 2 (прошлая, холд и отменённая не в счёт)", b.UpcomingCount)
+	}
+	if b.NextBookingAt == nil || !b.NextBookingAt.Equal(soon) {
+		t.Fatalf("ближайшая запись %v, ожидалась самая ранняя из будущих (%v)", b.NextBookingAt, soon)
+	}
+
+	i := byID[idle.ID]
+	if i.FormsCount != 0 || i.UpcomingCount != 0 {
+		t.Fatalf("у пустого расписания %+v, ожидались нули", i)
+	}
+	// Пусто впереди и «полночь 1 января» — разные новости, и различает их только null.
+	if i.NextBookingAt != nil {
+		t.Fatalf("ближайшая запись у пустого расписания %v, ожидалось null", i.NextBookingAt)
 	}
 }
 

@@ -1020,7 +1020,7 @@ PDF одного ответа: та же форма, которую видел �
 
 ### `GET /workspaces/{id}/schedules`
 Расписания пространства, от свежего к старому.
-- **200:** `{"items": [<расписание>, …]}`, где расписание — `{id, workspaceId, name, timezone, availability, slotMinutes, bufferMinutes, horizonDays, leadMinutes, capacity, maxSeatsPerBooking, showRemaining, createdAt, updatedAt}`. Формат `availability` — [`SCHEMA.md`](SCHEMA.md), раздел `schedules`.
+- **200:** `{"items": [<расписание>, …]}`, где расписание — `{id, workspaceId, name, timezone, availability, slotMinutes, bufferMinutes, horizonDays, leadMinutes, capacity, maxSeatsPerBooking, showRemaining, createdAt, updatedAt}` плюс три поля **только этой выдачи**: `formsCount` (сколько форм пространства на расписание ссылаются, включая черновики), `upcomingCount` (подтверждённых записей от «сейчас») и `nextBookingAt` (самая ранняя из них; `null`, если впереди пусто). Отбор записей тот же, что у стоп-крана удаления: холды и отменённые не считаются. Считаются вторым запросом (`ScheduleStats`), поэтому расписание, заведённое между двумя, приезжает с нулями. Формат `availability` — [`SCHEMA.md`](SCHEMA.md), раздел `schedules`.
 - **Ошибки:** `404 not_found` (не член пространства).
 
 ### `POST /workspaces/{id}/schedules`

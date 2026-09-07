@@ -5288,6 +5288,71 @@ func (q *Queries) ScheduleInWorkspace(ctx context.Context, arg ScheduleInWorkspa
 	return exists, err
 }
 
+const scheduleStats = `-- name: ScheduleStats :many
+SELECT s.id AS schedule_id,
+       (SELECT count(*) FROM forms f WHERE f.schedule_id = s.id) AS forms_count,
+       (SELECT count(*) FROM bookings b
+         WHERE b.schedule_id = s.id AND b.status = 'confirmed'
+           AND b.starts_at >= $1) AS upcoming_count,
+       (SELECT min(b.starts_at) FROM bookings b
+         WHERE b.schedule_id = s.id AND b.status = 'confirmed'
+           AND b.starts_at >= $1)::timestamptz AS next_booking_at
+FROM schedules s
+WHERE s.workspace_id = $2
+`
+
+type ScheduleStatsParams struct {
+	Now         pgtype.Timestamptz
+	WorkspaceID uuid.UUID
+}
+
+type ScheduleStatsRow struct {
+	ScheduleID    uuid.UUID
+	FormsCount    int64
+	UpcomingCount int64
+	NextBookingAt pgtype.Timestamptz
+}
+
+// Живые числа списка расписаний: к скольким формам расписание подключено, сколько
+// впереди записей и когда ближайшая.
+//
+// ОТДЕЛЬНЫМ ЗАПРОСОМ, а не колонками ListSchedules: расписание — это правило и
+// параметры нарезки, а эти три числа лежат в чужих таблицах. Слив их в чтение
+// расписания, пришлось бы протаскивать «сейчас» через Get, Create и Update, которым
+// оно не нужно ни за чем.
+//
+// Считаются только ПОДТВЕРЖДЁННЫЕ записи от «сейчас» — тот же отбор, что у стоп-крана
+// удаления: холд ещё не договорённость, отменённая уже не она, прошедшая не «впереди».
+// «Сейчас» приезжает параметром, а не берётся now() базы: у сервиса свои часы, и в
+// тестах они подменяются (тот же порядок, что у CountFutureBookings).
+//
+// Форм считаются ВСЕ, включая черновики: расписание, к которому подключён только
+// черновик, записи ещё не примет, но и «ни к чему не подключено» о нём неправда.
+func (q *Queries) ScheduleStats(ctx context.Context, arg ScheduleStatsParams) ([]ScheduleStatsRow, error) {
+	rows, err := q.db.Query(ctx, scheduleStats, arg.Now, arg.WorkspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ScheduleStatsRow
+	for rows.Next() {
+		var i ScheduleStatsRow
+		if err := rows.Scan(
+			&i.ScheduleID,
+			&i.FormsCount,
+			&i.UpcomingCount,
+			&i.NextBookingAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const searchFormsForUser = `-- name: SearchFormsForUser :many
 SELECT f.id, f.slug, f.name, f.title, f.status, f.updated_at,
        w.slug AS workspace_slug, w.name AS workspace_name

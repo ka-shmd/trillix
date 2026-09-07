@@ -114,6 +114,44 @@ func (Repo) ListSchedules(ctx context.Context, db postgres.DBTX, workspaceID uui
 	return out, nil
 }
 
+// ScheduleStats — живые числа одного расписания для списка: к скольким формам оно
+// подключено, сколько впереди записей и когда ближайшая. В самом расписании их нет
+// — они считаются по forms и bookings, поэтому и приезжают отдельным запросом.
+//
+// NextBookingAt пуст, если впереди пусто: «записей нет» и «ближайшая тогда-то» —
+// разные новости, и нулевое время не выражает первую.
+type ScheduleStats struct {
+	FormsCount    int
+	UpcomingCount int
+	NextBookingAt *time.Time
+}
+
+// ScheduleStatsOfWorkspace — числа сразу по всем расписаниям пространства, картой по
+// id. Списком их отдавать нечего: вызывающий сшивает их с расписаниями, а не листает.
+//
+// Расписание без единой записи в выдаче ЕСТЬ (строка с нулями): считает запрос по
+// самим schedules, а не по bookings. Отсутствие ключа поэтому означает «расписание
+// завели между двумя запросами», и нули по нему — правда.
+func (Repo) ScheduleStatsOfWorkspace(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, now time.Time) (map[uuid.UUID]ScheduleStats, error) {
+	rows, err := postgres.New(db).ScheduleStats(ctx, postgres.ScheduleStatsParams{
+		WorkspaceID: workspaceID,
+		Now:         pgtype.Timestamptz{Time: now, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("schedule stats of workspace %s: %w", workspaceID, err)
+	}
+	out := make(map[uuid.UUID]ScheduleStats, len(rows))
+	for _, r := range rows {
+		st := ScheduleStats{FormsCount: int(r.FormsCount), UpcomingCount: int(r.UpcomingCount)}
+		if r.NextBookingAt.Valid {
+			at := r.NextBookingAt.Time.UTC()
+			st.NextBookingAt = &at
+		}
+		out[r.ScheduleID] = st
+	}
+	return out, nil
+}
+
 // GetSchedule — расписание по id. pgx.ErrNoRows пробрасывается: «нет такого»
 // разбирает сервис, он же решает, чем это обернётся для клиента.
 func (Repo) GetSchedule(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Schedule, error) {
