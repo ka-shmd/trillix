@@ -149,6 +149,26 @@ ORDER BY created_at ASC;
 DELETE FROM workspace_members
 WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner';
 
+-- name: DemoteOwner :execrows
+-- Первая половина передачи владения: действующий владелец становится редактором.
+-- Идёт СТРОГО ПЕРЕД PromoteToOwner в той же транзакции — частичный уникальный
+-- индекс idx_workspace_members_owner проверяется на каждом операторе, и обратный
+-- порядок упёрся бы во второго владельца.
+--
+-- role = 'owner' в условии — сторож: понижать можно только того, кто владелец,
+-- ноль строк означает «этот человек владельцем уже не был» (гонка двух передач).
+UPDATE workspace_members
+SET role = 'editor'
+WHERE workspace_id = $1 AND user_id = $2 AND role = 'owner';
+
+-- name: PromoteToOwner :execrows
+-- Вторая половина передачи владения. role <> 'owner' — сторож того же класса:
+-- ноль строк означает «этого участника в пространстве нет», и передача
+-- откатывается вместе с понижением.
+UPDATE workspace_members
+SET role = 'owner'
+WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner';
+
 -- name: GetAccessContext :one
 -- Всё, что нужно для решения о доступе, ОДНОЙ поездкой: роль спрашивающего,
 -- личное ли пространство, кто владелец, и два ранга для заморозки.

@@ -7,8 +7,10 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 )
 
 // Member — участник пространства.
@@ -38,8 +40,11 @@ func (s *Service) TeamsBlockingAccountDeletion(ctx context.Context, userID uuid.
 }
 
 // PendingInvite — позвали, но ещё не вошёл. Показывается на той же странице,
-// что и участники: это тоже состояние пространства, и отозвать приглашение
-// человек идёт туда же, куда снимать доступ.
+// что и участники: это тоже состояние пространства.
+//
+// Отдельной ручки отзыва нет: годной ссылок на пару (пространство, адрес) ровно
+// одна, и повторное приглашение снимает прежнюю (Invite, частичный UNIQUE в
+// 0017). Кабинет поэтому предлагает «отправить снова», а не «отозвать».
 type PendingInvite struct {
 	Email     string
 	Role      Role
@@ -116,4 +121,82 @@ func (s *Service) Leave(ctx context.Context, userID, workspaceID uuid.UUID) erro
 		return fmt.Errorf("%w: владелец не может покинуть пространство", domain.ErrValidation)
 	}
 	return nil
+}
+
+// TransferOwnership отдаёт пространство другому его участнику: отдающий
+// становится редактором, получатель — владельцем и ПЛАТЕЛЬЩИКОМ.
+//
+// Порядок проверок несущий и повторяет Invite: сначала право, потом предмет,
+// потом тариф, и только потом запись. Обратный порядок означал бы, что
+// посторонний узнаёт состав чужого пространства, задав ему вопрос о передаче.
+//
+// Личное пространство не передаётся. Признак «личное» — это колонка
+// personal_user_id, а не роль (WORKSPACES.md §1), и передача владения их бы
+// развела: прежний хозяин продолжал бы видеть пространство своим (не покинуть,
+// не удалить), не владея им.
+//
+// ⚠ ТАРИФ ПОЛУЧАТЕЛЯ СПРАШИВАЕТСЯ ДО ПЕРЕДАЧИ, И ЭТО НЕ ПЕРЕСТРАХОВКА.
+// Пространство работает по плану своего владельца (ADR §10), поэтому передача
+// человеку, чей план его не покрывает, заморозила бы пространство для ВСЕХ
+// участников сразу после успешного действия — включая получателя, который об
+// этом не просил. Заморозка задумана как следствие СВОЕГО даунгрейда, а не
+// чужого подарка. Сегодня проверка ничего не запрещает (лимит `workspaces` у
+// всех планов null), но включается она одним UPDATE'ом в plans.limits.
+func (s *Service) TransferOwnership(ctx context.Context, actorID, workspaceID, newOwnerID uuid.UUID) error {
+	if err := s.Can(ctx, workspaceID, actorID, domain.ActionOwnershipTransfer); err != nil {
+		return err
+	}
+	if newOwnerID == actorID {
+		return fmt.Errorf("%w: пространство уже ваше", domain.ErrValidation)
+	}
+
+	ws, err := s.repo.GetWorkspace(ctx, s.db, workspaceID)
+	if err != nil {
+		return err
+	}
+	if ws.IsPersonal {
+		return fmt.Errorf("%w: личное пространство не передаётся", domain.ErrValidation)
+	}
+
+	// Получатель обязан быть участником: приглашение и передача — разные
+	// действия, и «отдать пространство постороннему по id» не должно
+	// существовать даже как побочный эффект.
+	if _, err := s.repo.MemberRole(ctx, s.db, workspaceID, newOwnerID); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return fmt.Errorf("%w: этот человек не состоит в пространстве", domain.ErrValidation)
+		}
+		return err
+	}
+
+	d, err := s.plans.CheckAccount(ctx, newOwnerID, entitlements.Workspaces)
+	if err != nil {
+		return err
+	}
+	if !d.Allowed {
+		return fmt.Errorf("%w: тариф этого человека не позволяет принять пространство", domain.ErrPlanRequired)
+	}
+
+	// Обе половины — одной транзакцией и строго в этом порядке: частичный
+	// уникальный индекс (0016) не даёт второго владельца, поэтому повышать до
+	// понижения нельзя. Ноль строк на любой половине откатывает обе — состояние
+	// «пространство без владельца» невыразимо индексом и недопустимо по TD-53.
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		n, e := s.repo.DemoteOwner(ctx, tx, workspaceID, actorID)
+		if e != nil {
+			return e
+		}
+		if n == 0 {
+			// Владение уехало между Can и этой строкой — параллельной передачей
+			// или снятием роли. Повторять нечего: пространство уже не его.
+			return fmt.Errorf("%w: вы больше не владелец этого пространства", domain.ErrValidation)
+		}
+		n, e = s.repo.PromoteToOwner(ctx, tx, workspaceID, newOwnerID)
+		if e != nil {
+			return e
+		}
+		if n == 0 {
+			return fmt.Errorf("%w: этот человек не состоит в пространстве", domain.ErrValidation)
+		}
+		return nil
+	})
 }

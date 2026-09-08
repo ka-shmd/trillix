@@ -37,6 +37,12 @@ type fakeStore struct {
 	deletedMembers  int64
 	deleteMemberErr error
 	ownedTeams      []string
+	demotedRows     int64
+	promotedRows    int64
+	demotedUserID   uuid.UUID
+	promotedUserID  uuid.UUID
+	wsPersonal      bool
+	memberRoleErr   error
 }
 
 func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]WorkspaceAccess, error) {
@@ -57,6 +63,9 @@ func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (int
 // MemberRole фейку списка не нужен — права проверяет отдельный набор
 // (access_test.go со своим roleStore); здесь он только чтобы удовлетворить Store.
 func (f *fakeStore) MemberRole(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (string, error) {
+	if f.memberRoleErr != nil {
+		return "", f.memberRoleErr
+	}
 	return string(RoleOwner), nil
 }
 
@@ -67,7 +76,7 @@ func (f *fakeStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.
 }
 
 func (f *fakeStore) GetWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUID) (Workspace, error) {
-	return Workspace{ID: id, Name: "Команда"}, nil
+	return Workspace{ID: id, Name: "Команда", IsPersonal: f.wsPersonal}, nil
 }
 
 func (f *fakeStore) EmailByUserID(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (string, error) {
@@ -121,6 +130,19 @@ func (f *fakeStore) ListPendingInvites(_ context.Context, _ postgres.DBTX, _ uui
 // владелец», и именно этот случай проверяют юниты выхода и снятия доступа.
 func (f *fakeStore) DeleteMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (int64, error) {
 	return f.deletedMembers, f.deleteMemberErr
+}
+
+// DemoteOwner/PromoteToOwner запоминают, КОГО понизили и КОГО повысили: порядок
+// половин передачи владения держит уникальный индекс, а вот «понизили не того»
+// база не заметит — обе строки для неё законны.
+func (f *fakeStore) DemoteOwner(_ context.Context, _ postgres.DBTX, _, userID uuid.UUID) (int64, error) {
+	f.demotedUserID = userID
+	return f.demotedRows, nil
+}
+
+func (f *fakeStore) PromoteToOwner(_ context.Context, _ postgres.DBTX, _, userID uuid.UUID) (int64, error) {
+	f.promotedUserID = userID
+	return f.promotedRows, nil
 }
 
 func (f *fakeStore) Create(_ context.Context, _ postgres.DBTX, id uuid.UUID, slug, name string) (Workspace, error) {
@@ -467,5 +489,102 @@ func TestDelete_PersonalRefused(t *testing.T) {
 
 	if err := svc.Delete(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("err = %v, ждали domain.ErrValidation", err)
+	}
+}
+
+// Передача владения: обе половины идут ОДНОЙ транзакцией, понижают отдающего и
+// повышают получателя — именно в эту сторону. Порядок операторов держит индекс
+// в БД, а вот «понизили не того» база не заметит: обе строки для неё законны.
+func TestTransferOwnership_SwapsTheRightPeople(t *testing.T) {
+	store := &fakeStore{demotedRows: 1, promotedRows: 1}
+	plans := &fakePlans{allowed: true}
+	svc, tx := newTestService(store, plans)
+
+	actor, newOwner := uuid.New(), uuid.New()
+	if err := svc.TransferOwnership(context.Background(), actor, uuid.New(), newOwner); err != nil {
+		t.Fatalf("передача владения: %v", err)
+	}
+	if !tx.opened {
+		t.Error("половины передачи прошли вне транзакции")
+	}
+	if store.demotedUserID != actor {
+		t.Errorf("понижен %s, а отдавал %s", store.demotedUserID, actor)
+	}
+	if store.promotedUserID != newOwner {
+		t.Errorf("повышен %s, а получателем был %s", store.promotedUserID, newOwner)
+	}
+	// Тариф спрашивается у ПОЛУЧАТЕЛЯ: пространство работает по плану владельца,
+	// и после передачи владелец — он.
+	if plans.gotUser != newOwner {
+		t.Errorf("тариф спрошен у %s, а получателем был %s", plans.gotUser, newOwner)
+	}
+	if plans.gotKey != entitlements.Workspaces {
+		t.Errorf("спрошен ключ %q, ожидался %q", plans.gotKey, entitlements.Workspaces)
+	}
+}
+
+func TestTransferOwnership_Refusals(t *testing.T) {
+	actor := uuid.New()
+	cases := []struct {
+		name     string
+		store    *fakeStore
+		plans    *fakePlans
+		newOwner uuid.UUID
+		want     error
+	}{
+		{
+			name:     "себе передавать нечего",
+			store:    &fakeStore{demotedRows: 1, promotedRows: 1},
+			plans:    &fakePlans{allowed: true},
+			newOwner: actor,
+			want:     domain.ErrValidation,
+		},
+		{
+			// «Личное» помечено колонкой, а не ролью: передача развела бы два
+			// факта — прежний хозяин видел бы пространство своим, не владея им.
+			name:     "личное пространство",
+			store:    &fakeStore{wsPersonal: true, demotedRows: 1, promotedRows: 1},
+			plans:    &fakePlans{allowed: true},
+			newOwner: uuid.New(),
+			want:     domain.ErrValidation,
+		},
+		{
+			name:     "получатель не участник",
+			store:    &fakeStore{memberRoleErr: pgx.ErrNoRows, demotedRows: 1, promotedRows: 1},
+			plans:    &fakePlans{allowed: true},
+			newOwner: uuid.New(),
+			want:     domain.ErrValidation,
+		},
+		{
+			// Иначе пространство замёрзло бы для ВСЕХ сразу после успешного
+			// действия, включая получателя, который об этом не просил.
+			name:     "тариф получателя не покрывает",
+			store:    &fakeStore{demotedRows: 1, promotedRows: 1},
+			plans:    &fakePlans{allowed: false},
+			newOwner: uuid.New(),
+			want:     domain.ErrPlanRequired,
+		},
+		{
+			// Владение уехало между проверкой права и записью.
+			name:     "отдающий уже не владелец",
+			store:    &fakeStore{demotedRows: 0, promotedRows: 1},
+			plans:    &fakePlans{allowed: true},
+			newOwner: uuid.New(),
+			want:     domain.ErrValidation,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			svc, _ := newTestService(tc.store, tc.plans)
+			err := svc.TransferOwnership(context.Background(), actor, uuid.New(), tc.newOwner)
+			if !errors.Is(err, tc.want) {
+				t.Fatalf("ошибка = %v, ожидалась %v", err, tc.want)
+			}
+			// Ни один отказ не повышает никого: последний из них ловится уже
+			// внутри транзакции, но ДО второй половины, и откатывает первую.
+			if tc.store.promotedUserID != uuid.Nil {
+				t.Errorf("при отказе кого-то всё же повысили: %s", tc.store.promotedUserID)
+			}
+		})
 	}
 }

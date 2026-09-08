@@ -35,26 +35,28 @@ const (
 // список участников editor ВИДИТ (знать, с кем работаешь, безобидно).
 var roleActions = map[Role]map[domain.Action]bool{
 	RoleOwner: {
-		domain.ActionFormRead:         true,
-		domain.ActionFormWrite:        true,
-		domain.ActionFormDelete:       true,
-		domain.ActionSubmissionDelete: true,
-		domain.ActionBillingView:      true,
-		domain.ActionMemberRead:       true,
-		domain.ActionMemberManage:     true,
-		domain.ActionWorkspaceManage:  true,
-		domain.ActionWorkspaceDelete:  true,
+		domain.ActionFormRead:          true,
+		domain.ActionFormWrite:         true,
+		domain.ActionFormDelete:        true,
+		domain.ActionSubmissionDelete:  true,
+		domain.ActionBillingView:       true,
+		domain.ActionMemberRead:        true,
+		domain.ActionMemberManage:      true,
+		domain.ActionWorkspaceManage:   true,
+		domain.ActionWorkspaceDelete:   true,
+		domain.ActionOwnershipTransfer: true,
 	},
 	RoleEditor: {
-		domain.ActionFormRead:         true,
-		domain.ActionFormWrite:        true,
-		domain.ActionFormDelete:       true,
-		domain.ActionSubmissionDelete: true,
-		domain.ActionBillingView:      false,
-		domain.ActionMemberRead:       true,
-		domain.ActionMemberManage:     false,
-		domain.ActionWorkspaceManage:  false,
-		domain.ActionWorkspaceDelete:  false,
+		domain.ActionFormRead:          true,
+		domain.ActionFormWrite:         true,
+		domain.ActionFormDelete:        true,
+		domain.ActionSubmissionDelete:  true,
+		domain.ActionBillingView:       false,
+		domain.ActionMemberRead:        true,
+		domain.ActionMemberManage:      false,
+		domain.ActionWorkspaceManage:   false,
+		domain.ActionWorkspaceDelete:   false,
+		domain.ActionOwnershipTransfer: false,
 	},
 }
 
@@ -72,6 +74,7 @@ var AllActions = []domain.Action{
 	domain.ActionMemberManage,
 	domain.ActionWorkspaceManage,
 	domain.ActionWorkspaceDelete,
+	domain.ActionOwnershipTransfer,
 }
 
 // allows — чистое решение по матрице, без БД: роль + действие → можно ли.

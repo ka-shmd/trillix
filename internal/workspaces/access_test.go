@@ -41,27 +41,40 @@ func canService(role string, roleErr error) *Service {
 func TestCan_Matrix(t *testing.T) {
 	want := map[Role]map[domain.Action]bool{
 		RoleOwner: {
-			domain.ActionFormRead:         true,
-			domain.ActionFormWrite:        true,
-			domain.ActionFormDelete:       true,
-			domain.ActionSubmissionDelete: true,
-			domain.ActionBillingView:      true,
-			domain.ActionMemberRead:       true,
-			domain.ActionMemberManage:     true,
-			domain.ActionWorkspaceManage:  true,
-			domain.ActionWorkspaceDelete:  true,
+			domain.ActionFormRead:          true,
+			domain.ActionFormWrite:         true,
+			domain.ActionFormDelete:        true,
+			domain.ActionSubmissionDelete:  true,
+			domain.ActionBillingView:       true,
+			domain.ActionMemberRead:        true,
+			domain.ActionMemberManage:      true,
+			domain.ActionWorkspaceManage:   true,
+			domain.ActionWorkspaceDelete:   true,
+			domain.ActionOwnershipTransfer: true,
 		},
 		RoleEditor: {
-			domain.ActionFormRead:         true,
-			domain.ActionFormWrite:        true,
-			domain.ActionFormDelete:       true,
-			domain.ActionSubmissionDelete: true,
-			domain.ActionBillingView:      false,
-			domain.ActionMemberRead:       true,
-			domain.ActionMemberManage:     false,
-			domain.ActionWorkspaceManage:  false,
-			domain.ActionWorkspaceDelete:  false,
+			domain.ActionFormRead:          true,
+			domain.ActionFormWrite:         true,
+			domain.ActionFormDelete:        true,
+			domain.ActionSubmissionDelete:  true,
+			domain.ActionBillingView:       false,
+			domain.ActionMemberRead:        true,
+			domain.ActionMemberManage:      false,
+			domain.ActionWorkspaceManage:   false,
+			domain.ActionWorkspaceDelete:   false,
+			domain.ActionOwnershipTransfer: false,
 		},
+	}
+
+	// Сторож на сам этот тест: ожидания здесь набраны отдельной рукой (в этом
+	// весь смысл — сверять с матрицей независимую копию), поэтому новое действие
+	// добавляется в roleActions и молча остаётся непроверенным здесь. Ячейка без
+	// проверки хуже отсутствующей: она выглядит покрытой.
+	for _, role := range []Role{RoleOwner, RoleEditor} {
+		if len(want[role]) != len(AllActions) {
+			t.Fatalf("у роли %q в ожиданиях %d ячеек, а действий %d — тест отстал от матрицы",
+				role, len(want[role]), len(AllActions))
+		}
 	}
 
 	for role, cells := range want {

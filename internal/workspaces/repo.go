@@ -282,6 +282,35 @@ func (Repo) DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, use
 	return n, nil
 }
 
+// DemoteOwner и PromoteToOwner — две половины передачи владения. Порознь ни одна
+// не имеет смысла: между ними пространство остаётся либо без владельца, либо с
+// двумя. Вызываются ТОЛЬКО из TransferOwnership, в одной транзакции и в этом
+// порядке — частичный уникальный индекс (0016) проверяется на каждом операторе.
+//
+// Оба возвращают число строк: ноль — не ошибка БД, а несостоявшееся условие
+// («он уже не владелец», «его нет в пространстве»), и разбирает его сервис.
+func (Repo) DemoteOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DemoteOwner(ctx, postgres.DemoteOwnerParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("demote owner of %s: %w", workspaceID, err)
+	}
+	return n, nil
+}
+
+func (Repo) PromoteToOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).PromoteToOwner(ctx, postgres.PromoteToOwnerParams{
+		WorkspaceID: workspaceID,
+		UserID:      userID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("promote %s to owner of %s: %w", userID, workspaceID, err)
+	}
+	return n, nil
+}
+
 // AccessContext — данные для решения о доступе (роль + признаки заморозки).
 type AccessContext struct {
 	WorkspaceID uuid.UUID

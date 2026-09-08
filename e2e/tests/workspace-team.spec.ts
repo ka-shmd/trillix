@@ -82,11 +82,16 @@ test('приглашение в пространство: коллега при�
   await page.getByRole('link', { name: `Участники пространства «${spaceName}»` }).click()
 
   await expect(page).toHaveURL(/\/w\/[^/]+\/members$/)
-  await page.getByPlaceholder('coworker@example.com').fill(mateEmail)
+  // Приглашение — кнопка в заголовке раздела и диалог (решение владельца
+  // 2026-09-08): поле почты в потоке страницы отменено, правило «завести новое —
+  // кнопкой» исключений больше не имеет (DESIGN-SYSTEM §1).
   await page.getByRole('button', { name: 'Пригласить' }).click()
-  await expect(page.getByText('Приглашение отправлено')).toBeVisible()
+  const inviteDialog = page.getByRole('dialog', { name: 'Пригласить в пространство' })
+  await inviteDialog.getByPlaceholder('coworker@example.com').fill(mateEmail)
+  await inviteDialog.getByRole('button', { name: 'Пригласить' }).click()
   // Позванный виден на той же странице ещё до принятия — это состояние
-  // пространства, а не невидимая очередь.
+  // пространства, а не невидимая очередь. Проверяем строку, а не тост: тост
+  // исчезает сам, а строка и есть результат действия.
   await expect(page.getByText(mateEmail)).toBeVisible()
 
   const link = await inviteLinkFor(page.request, mateEmail)
@@ -131,6 +136,10 @@ test('приглашение в пространство: коллега при�
   // Кнопок управления участниками у редактора нет — кабинет прячет их по
   // permissions с сервера, а не по роли, вычисленной на фронте.
   await expect(matePage.getByRole('button', { name: 'Пригласить' })).toHaveCount(0)
+  // Меню действий над строкой у редактора не рисуется вовсе: снимать доступ и
+  // передавать владение ему нельзя, а меню с одним недоступным пунктом обещало бы
+  // права, которых нет.
+  await expect(matePage.getByRole('button', { name: `Действия: ${ownerEmail}` })).toHaveCount(0)
   await expect(matePage.getByRole('button', { name: 'Снять доступ' })).toHaveCount(0)
   // Пункт «Тариф» в панели есть и у редактора — он про СВОЙ аккаунт, а не про
   // пространство (ADR §10): у коллеги свой план, и смотреть его он вправе.
@@ -149,7 +158,15 @@ test('приглашение в пространство: коллега при�
   // и до перечитывания состава он у владельца всё ещё «приглашён, но не вошёл».
   // Страница состава её переживает — адрес у раздела свой.
   await page.reload()
-  await page.getByRole('button', { name: `Снять доступ: ${mateEmail}` }).click()
+  // Действия над участником — меню «⋯» в строке, снятие доступа спрашивает
+  // подтверждение: оно необратимо и вернуть человека можно только приглашением
+  // (DESIGN-SYSTEM §7).
+  await page.getByRole('button', { name: `Действия: ${mateEmail}` }).click()
+  await page.getByRole('menuitem', { name: 'Снять доступ' }).click()
+  await page
+    .getByRole('alertdialog', { name: `Снять доступ: ${mateEmail}?` })
+    .getByRole('button', { name: 'Снять доступ' })
+    .click()
   await expect(page.getByText(mateEmail)).toHaveCount(0)
 
   // --- У коллеги пространство исчезло ---

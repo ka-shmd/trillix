@@ -1551,6 +1551,32 @@ func (q *Queries) DeleteWorkspace(ctx context.Context, id uuid.UUID) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const demoteOwner = `-- name: DemoteOwner :execrows
+UPDATE workspace_members
+SET role = 'editor'
+WHERE workspace_id = $1 AND user_id = $2 AND role = 'owner'
+`
+
+type DemoteOwnerParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+// Первая половина передачи владения: действующий владелец становится редактором.
+// Идёт СТРОГО ПЕРЕД PromoteToOwner в той же транзакции — частичный уникальный
+// индекс idx_workspace_members_owner проверяется на каждом операторе, и обратный
+// порядок упёрся бы во второго владельца.
+//
+// role = 'owner' в условии — сторож: понижать можно только того, кто владелец,
+// ноль строк означает «этот человек владельцем уже не был» (гонка двух передач).
+func (q *Queries) DemoteOwner(ctx context.Context, arg DemoteOwnerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, demoteOwner, arg.WorkspaceID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const emailTaken = `-- name: EmailTaken :one
 SELECT EXISTS (SELECT 1 FROM users WHERE email = $1) AS taken
 `
@@ -5242,6 +5268,28 @@ func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32,
 	var next_version int32
 	err := row.Scan(&next_version)
 	return next_version, err
+}
+
+const promoteToOwner = `-- name: PromoteToOwner :execrows
+UPDATE workspace_members
+SET role = 'owner'
+WHERE workspace_id = $1 AND user_id = $2 AND role <> 'owner'
+`
+
+type PromoteToOwnerParams struct {
+	WorkspaceID uuid.UUID
+	UserID      uuid.UUID
+}
+
+// Вторая половина передачи владения. role <> 'owner' — сторож того же класса:
+// ноль строк означает «этого участника в пространстве нет», и передача
+// откатывается вместе с понижением.
+func (q *Queries) PromoteToOwner(ctx context.Context, arg PromoteToOwnerParams) (int64, error) {
+	result, err := q.db.Exec(ctx, promoteToOwner, arg.WorkspaceID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const purgeExpiredInvitations = `-- name: PurgeExpiredInvitations :execrows

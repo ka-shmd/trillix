@@ -1,6 +1,7 @@
 import { createFileRoute, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 
+import { meQueryOptions } from '../../features/auth/queries'
 import { MembersView } from '../../features/workspaces/MembersView'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
@@ -23,6 +24,11 @@ function MembersPage() {
   // Ради одного ответа: приехал список или нет. Пространство, названное путём и не
   // найденное, — чужое или удалённое, и отличить это от «ещё грузится» иначе нечем.
   const workspaces = useQuery(workspacesQueryOptions)
+  // Свой профиль — ради одного факта: которая строка списка «я». Спрашивается
+  // здесь, а не внутри вида: профиль принадлежит фиче auth, а импорт фичи из
+  // фичи запрещён (web/CLAUDE.md). Запрос уже сделан оболочкой кабинета —
+  // ключ тот же, лишнего круга не будет.
+  const me = useQuery(meQueryOptions)
 
   return (
     <PageContainer>
@@ -42,7 +48,11 @@ function MembersPage() {
         />
       )}
       {workspace && (
-        <MembersView workspace={workspace} onLeft={() => void navigate({ to: '/workspaces' })} />
+        <MembersView
+          workspace={workspace}
+          currentUserId={me.data?.id}
+          onLeft={() => void navigate({ to: '/workspaces' })}
+        />
       )}
     </PageContainer>
   )
