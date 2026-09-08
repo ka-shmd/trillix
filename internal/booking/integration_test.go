@@ -875,11 +875,23 @@ func TestBookings_Move(t *testing.T) {
 
 	// Шаг сетки этого расписания — 70 минут (приём 60 плюс перерыв 10), поэтому
 	// годные точки кратны 70 минутам от полуночи в поясе расписания.
+	//
+	// Мина: кратность ОТ ПОЛУНОЧИ действует только вне часов приёма. Внутри окна
+	// у сетки своя точка отсчёта — начало окна (`domain.MoveAligned`), и 11:40 при
+	// окне с 10:00 мимо неё. Все точки ниже написаны от полуночи, поэтому день
+	// обязан быть без приёма: у `scheduleBody` открыты понедельник и вторник, их
+	// пропускаем. Без этого тест зависел от дня недели, на который выпадет
+	// «сегодня плюс неделя», и падал по вторникам и понедельникам — кроме
+	// 14 сентября 2026, который закрыт исключением расписания и потому вёл себя
+	// как день без приёма.
 	msk, err := time.LoadLocation("Europe/Moscow")
 	if err != nil {
 		t.Fatalf("пояс: %v", err)
 	}
 	base := time.Now().In(msk).AddDate(0, 0, 7)
+	for base.Weekday() == time.Monday || base.Weekday() == time.Tuesday {
+		base = base.AddDate(0, 0, 1)
+	}
 	midnight := time.Date(base.Year(), base.Month(), base.Day(), 0, 0, 0, 0, msk)
 	at := func(minutes int) time.Time { return midnight.Add(time.Duration(minutes) * time.Minute) }
 
