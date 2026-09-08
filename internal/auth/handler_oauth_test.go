@@ -42,6 +42,9 @@ type fakeOAuthService struct {
 
 	// Код второго фактора, доехавший до сервиса на шаге привязки паролем.
 	linkCode string
+	// Устройство, доехавшее до сервиса: транспорт обязан довезти cookie
+	// знакомого браузера, иначе фактор спрашивают на каждом входе (0056).
+	loginDevice Device
 
 	// Привязка из настроек (фаза 23, слайс E).
 	linkErr       error
@@ -49,16 +52,18 @@ type fakeOAuthService struct {
 	linkedProfile IdentityProfile
 }
 
-func (f *fakeOAuthService) LoginWithIdentity(_ context.Context, p IdentityProfile) (User, string, error) {
+func (f *fakeOAuthService) LoginWithIdentity(_ context.Context, p IdentityProfile, dev Device) (User, string, error) {
+	f.loginDevice = dev
 	f.called = true
 	f.profile = p
 	return User{}, "session-token", f.err
 }
 
-func (f *fakeOAuthService) LinkIdentityWithPassword(_ context.Context, _, _, code, _, _ string) (User, string, error) {
+func (f *fakeOAuthService) LinkIdentityWithPassword(_ context.Context, _, _, code, _, _ string, dev Device) (User, string, string, error) {
 	f.called = true
 	f.linkCode = code
-	return User{}, "session-token", f.err
+	f.loginDevice = dev
+	return User{}, "session-token", "device-token", f.err
 }
 
 func (f *fakeOAuthService) LinkIdentity(_ context.Context, userID uuid.UUID, p IdentityProfile) error {

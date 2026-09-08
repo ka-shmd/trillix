@@ -88,3 +88,16 @@ func (Repo) MarkFailed(ctx context.Context, db postgres.DBTX, id uuid.UUID, atte
 	}
 	return nil
 }
+
+// DeleteDeliveredByTemplate сносит доставленные письма одного шаблона, чей
+// sent_at старше границы. Подробности — комментарий запроса в queries.sql.
+func (Repo) DeleteDeliveredByTemplate(ctx context.Context, db postgres.DBTX, template string, sentBefore time.Time) (int64, error) {
+	n, err := postgres.New(db).DeleteDeliveredOutboxByTemplate(ctx, postgres.DeleteDeliveredOutboxByTemplateParams{
+		Template:   template,
+		SentBefore: pgtype.Timestamptz{Time: sentBefore, Valid: true},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("delete delivered outbox by template: %w", err)
+	}
+	return n, nil
+}

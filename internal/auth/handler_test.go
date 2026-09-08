@@ -67,20 +67,26 @@ type fakeAuthService struct {
 	linkedUser    uuid.UUID
 	linkedProfile IdentityProfile
 
-	// Второй фактор (фаза 23, слайс F).
-	twoFactorOn      bool
-	twoFactorErr     error
-	setupSecret      string
-	setupErr         error
-	enableCodes      []string
+	// Второй фактор — код на почту (0056).
 	enableErr        error
+	enabledPassword  string
 	disableErr       error
-	disabledCode     string
 	disabledPassword string
+	sendCodeErr      error
+	sendCodeCalls    int
+	resendCodeErr    error
+	resendCodeUser   uuid.UUID
 	completeErr      error
 	completedCode    string
 	completedUser    uuid.UUID
+	completedDevice  Device
+	loginDevice      Device
 	completeCalls    int
+	devices          []DeviceInfo
+	devicesErr       error
+	forgottenDevice  uuid.UUID
+	forgetAllCalls   int
+	forgetAllSession string
 
 	// Удаление аккаунта (фаза 23, слайс G).
 	deleteErr      error
@@ -98,38 +104,50 @@ func (f *fakeAuthService) DeleteAccount(_ context.Context, user User, currentPas
 	return f.deleteErr
 }
 
-func (f *fakeAuthService) TwoFactorEnabled(_ context.Context, _ uuid.UUID) (bool, error) {
-	return f.twoFactorOn, f.twoFactorErr
+func (f *fakeAuthService) EnableTwoFactor(_ context.Context, _ User, currentPassword string) error {
+	f.enabledPassword = currentPassword
+	return f.enableErr
 }
 
-func (f *fakeAuthService) SetupTOTP(_ context.Context, _ User) (string, string, error) {
-	if f.setupErr != nil {
-		return "", "", f.setupErr
-	}
-	return f.setupSecret, "otpauth://totp/Trillix:a@b.com?secret=" + f.setupSecret, nil
-}
-
-func (f *fakeAuthService) EnableTOTP(_ context.Context, _ User, _ string) ([]string, error) {
-	if f.enableErr != nil {
-		return nil, f.enableErr
-	}
-	return f.enableCodes, nil
-}
-
-func (f *fakeAuthService) DisableTOTP(_ context.Context, _ User, currentPassword, code string) error {
+func (f *fakeAuthService) DisableTwoFactor(_ context.Context, _ User, currentPassword string) error {
 	f.disabledPassword = currentPassword
-	f.disabledCode = code
 	return f.disableErr
 }
 
-func (f *fakeAuthService) CompleteTwoFactorLogin(_ context.Context, userID uuid.UUID, code string) (User, string, error) {
+func (f *fakeAuthService) SendActionCode(_ context.Context, _ User) error {
+	f.sendCodeCalls++
+	return f.sendCodeErr
+}
+
+func (f *fakeAuthService) ResendLoginCode(_ context.Context, userID uuid.UUID) error {
+	f.resendCodeUser = userID
+	return f.resendCodeErr
+}
+
+func (f *fakeAuthService) CompleteTwoFactorLogin(_ context.Context, userID uuid.UUID, code string, dev Device) (User, string, string, error) {
 	f.completedUser = userID
 	f.completedCode = code
+	f.completedDevice = dev
 	f.completeCalls++
 	if f.completeErr != nil {
-		return User{}, "", f.completeErr
+		return User{}, "", "", f.completeErr
 	}
-	return f.user, "session-token", nil
+	return f.user, "session-token", "device-token", nil
+}
+
+func (f *fakeAuthService) ListDevices(_ context.Context, _ uuid.UUID, _ Device) ([]DeviceInfo, error) {
+	return f.devices, f.devicesErr
+}
+
+func (f *fakeAuthService) ForgetDevice(_ context.Context, _, deviceID uuid.UUID) error {
+	f.forgottenDevice = deviceID
+	return nil
+}
+
+func (f *fakeAuthService) ForgetAllDevices(_ context.Context, _ uuid.UUID, sessionToken string) error {
+	f.forgetAllCalls++
+	f.forgetAllSession = sessionToken
+	return nil
 }
 
 func (f *fakeAuthService) Identities(_ context.Context, _ uuid.UUID) ([]Identity, error) {
@@ -205,7 +223,8 @@ func (f *fakeAuthService) Register(_ context.Context, _, _ string) (User, string
 	return f.user, "session-token", nil
 }
 
-func (f *fakeAuthService) Login(_ context.Context, _, _ string) (User, string, error) {
+func (f *fakeAuthService) Login(_ context.Context, _, _ string, dev Device) (User, string, error) {
+	f.loginDevice = dev
 	if f.loginErr != nil {
 		// Пользователь возвращается ВМЕСТЕ с ошибкой — так делает и настоящий
 		// сервис при ErrTwoFactorRequired: транспорту нужно, кого спрашивать код.

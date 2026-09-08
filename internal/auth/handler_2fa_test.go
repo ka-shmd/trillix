@@ -165,39 +165,129 @@ func TestLoginTwoFactor_SuccessOpensSessionAndBurnsChallenge(t *testing.T) {
 	}
 }
 
-func TestEnableTOTP_ReturnsRecoveryCodesOnce(t *testing.T) {
-	svc := &fakeAuthService{
-		user:        User{ID: domain.NewID(), Email: "a@b.com"},
-		enableCodes: []string{"AAAA", "BBBB"},
+func TestLoginTwoFactor_SuccessSetsDeviceCookie(t *testing.T) {
+	user := User{ID: domain.NewID(), Email: "a@b.com"}
+	svc := &fakeAuthService{user: user}
+	h, mux := newTestAuthHandler(svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login-2fa", strings.NewReader(`{"code":"123456"}`))
+	req.Header.Set("User-Agent", "Mozilla/5.0 (Windows NT 10.0) Chrome/120")
+	req.AddCookie(&http.Cookie{Name: twoFactorCookie, Value: h.signUserIntent(twoFactorIntentLabel, user.ID)})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статус = %d, ожидалось 200; тело=%s", rec.Code, rec.Body)
 	}
+	c := cookieByName(rec.Result().Cookies(), knownDeviceCookie)
+	if c == nil || c.Value == "" {
+		t.Fatalf("cookie знакомого устройства не поставлена: %+v", c)
+	}
+	// Мина: без неё следующий вход с этой же машины снова потребует код.
+	if c.MaxAge <= int(DefaultSessionTTL.Seconds()) {
+		t.Fatalf("знакомство живёт не дольше сессии: MaxAge=%d", c.MaxAge)
+	}
+	if svc.completedDevice.UserAgent == "" {
+		t.Fatal("User-Agent не доехал до сервиса — метка устройства будет пустой")
+	}
+}
+
+// Транспорт обязан довозить cookie знакомого браузера до сервиса: без неё
+// знакомое устройство станет незнакомым и код спросят снова.
+func TestLogin_CarriesDeviceCookieToService(t *testing.T) {
+	user := User{ID: domain.NewID(), Email: "a@b.com"}
+	svc := &fakeAuthService{user: user}
+	_, mux := newTestAuthHandler(svc)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/v1/auth/login",
+		strings.NewReader(`{"email":"a@b.com","password":"supersecret"}`))
+	req.AddCookie(&http.Cookie{Name: knownDeviceCookie, Value: "device-token"})
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("статус = %d, ожидалось 200; тело=%s", rec.Code, rec.Body)
+	}
+	if svc.loginDevice.Token != "device-token" {
+		t.Fatalf("токен устройства не доехал: %q", svc.loginDevice.Token)
+	}
+}
+
+func TestResendLoginCode_WithoutChallengeIs401(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	_, mux := newTestAuthHandler(svc)
+
+	rec := httptest.NewRecorder()
+	mux.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/api/v1/auth/login-2fa/resend", nil))
+
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("статус = %d, ожидалось 401", rec.Code)
+	}
+	if svc.resendCodeUser != uuid.Nil {
+		t.Fatal("код отправлен без пропуска на второй шаг")
+	}
+}
+
+func TestEnableTwoFactor_NeedsPasswordAndReturnsProfile(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 	srv := newTestAccountHandler(svc)
 
 	rec := httptest.NewRecorder()
 	req := withSession(httptest.NewRequest(http.MethodPost, "/api/v1/account/2fa/enable",
-		strings.NewReader(`{"code":"123456"}`)))
+		strings.NewReader(`{"currentPassword":"supersecret"}`)))
 	srv.ServeHTTP(rec, req)
 
 	if rec.Code != http.StatusOK {
 		t.Fatalf("статус = %d, ожидалось 200; тело=%s", rec.Code, rec.Body)
 	}
-	var got enableTOTPResponse
+	if svc.enabledPassword != "supersecret" {
+		t.Fatalf("пароль не доехал до сервиса: %q", svc.enabledPassword)
+	}
+	var got userResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
 		t.Fatalf("тело не разбирается: %v", err)
 	}
-	if len(got.RecoveryCodes) != 2 {
-		t.Fatalf("резервные коды = %v", got.RecoveryCodes)
+	// Кабинет патчит этим ответом кэш профиля целиком: соврать про фактор здесь
+	// значит показать выключённым только что включённое.
+	if !got.TwoFactorEnabled {
+		t.Fatal("ответ не отражает включённый фактор")
+	}
+}
+
+// Забывание устройств гасит и cookie знакомства: оставленная, она пережила бы
+// сама себя и на следующем включении ничего не значила.
+func TestForgetAllDevices_ExpiresDeviceCookie(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestAccountHandler(svc)
+
+	rec := httptest.NewRecorder()
+	req := withSession(httptest.NewRequest(http.MethodDelete, "/api/v1/account/devices", nil))
+	req.AddCookie(&http.Cookie{Name: knownDeviceCookie, Value: "device-token"})
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusNoContent {
+		t.Fatalf("статус = %d, ожидалось 204; тело=%s", rec.Code, rec.Body)
+	}
+	if svc.forgetAllCalls != 1 {
+		t.Fatalf("сервис вызван %d раз", svc.forgetAllCalls)
+	}
+	if svc.forgetAllSession != "live-session" {
+		t.Fatalf("текущая сессия не доехала: %q", svc.forgetAllSession)
+	}
+	if c := cookieByName(rec.Result().Cookies(), knownDeviceCookie); c == nil || c.MaxAge >= 0 {
+		t.Fatalf("cookie устройства не погашена: %+v", c)
 	}
 }
 
 func TestTwoFactorRoutes_RequireCSRF(t *testing.T) {
-	// Все три — мутации над собственным аккаунтом; сессии без CSRF-заголовка
+	// Все — мутации над собственным аккаунтом; сессии без CSRF-заголовка
 	// недостаточно (иначе чужая страница включит или выключит фактор).
-	for _, path := range []string{"/api/v1/account/2fa/setup", "/api/v1/account/2fa/enable", "/api/v1/account/2fa/disable"} {
+	for _, path := range []string{"/api/v1/account/2fa/enable", "/api/v1/account/2fa/disable", "/api/v1/account/2fa/send-code"} {
 		t.Run(path, func(t *testing.T) {
 			svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 			srv := newTestAccountHandler(svc)
 
-			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"code":"123456"}`))
+			req := httptest.NewRequest(http.MethodPost, path, strings.NewReader(`{"currentPassword":"x"}`))
 			req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "live-session"})
 			req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok"})
 			rec := httptest.NewRecorder()
@@ -207,5 +297,25 @@ func TestTwoFactorRoutes_RequireCSRF(t *testing.T) {
 				t.Fatalf("статус = %d, ожидалось 403", rec.Code)
 			}
 		})
+	}
+}
+
+// Забывание устройств — тоже мутация, и DELETE без CSRF-заголовка обязан
+// отказывать: иначе чужая страница разлогинивает хозяина.
+func TestDeviceRoutes_RequireCSRF(t *testing.T) {
+	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
+	srv := newTestAccountHandler(svc)
+
+	req := httptest.NewRequest(http.MethodDelete, "/api/v1/account/devices", nil)
+	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "live-session"})
+	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok"})
+	rec := httptest.NewRecorder()
+	srv.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("статус = %d, ожидалось 403", rec.Code)
+	}
+	if svc.forgetAllCalls != 0 {
+		t.Fatal("устройства забыты запросом без CSRF")
 	}
 }

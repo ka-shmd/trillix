@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -32,7 +31,7 @@ func (f *fakeTeams) TeamsBlockingAccountDeletion(_ context.Context, userID uuid.
 }
 
 func newDeleteService(store *fakeStore, teams *fakeTeams) *Service {
-	return newService(store).WithTOTPKey(testTOTPKey).WithTeams(teams)
+	return newService(store).WithLoginCodeKey(testCodeKey).WithTeams(teams)
 }
 
 // passwordUser — аккаунт с паролем «right-password».
@@ -86,10 +85,11 @@ func TestDeleteAccount_WrongPasswordRefused(t *testing.T) {
 // аккаунт мимо фактора, ради которого его включали.
 func TestDeleteAccount_RequiresSecondFactorWhenEnabled(t *testing.T) {
 	store := &fakeStore{}
-	enabledTOTP(t, store)
+	user := passwordUser(t)
+	enableFactorFor(store, &user)
 	svc := newDeleteService(store, &fakeTeams{})
 
-	err := svc.DeleteAccount(context.Background(), passwordUser(t), "right-password", "")
+	err := svc.DeleteAccount(context.Background(), user, "right-password", "")
 	if !errors.Is(err, domain.ErrInvalidCredentials) {
 		t.Fatalf("ошибка = %v, ожидалась ErrInvalidCredentials на пустой код", err)
 	}
@@ -100,11 +100,13 @@ func TestDeleteAccount_RequiresSecondFactorWhenEnabled(t *testing.T) {
 
 func TestDeleteAccount_SecondFactorCodeAccepted(t *testing.T) {
 	store := &fakeStore{}
-	secret := enabledTOTP(t, store)
-	svc := newDeleteService(store, &fakeTeams{})
+	mailer := &fakeEnqueuer{}
+	user := passwordUser(t)
+	enableFactorFor(store, &user)
+	svc := newServiceMail(store, mailer).WithLoginCodeKey(testCodeKey).WithTeams(&fakeTeams{})
 
-	code := totpCode(secret, time.Now().Unix()/30)
-	if err := svc.DeleteAccount(context.Background(), passwordUser(t), "right-password", code); err != nil {
+	code := issueCode(t, svc, mailer, user)
+	if err := svc.DeleteAccount(context.Background(), user, "right-password", code); err != nil {
 		t.Fatalf("DeleteAccount с верным кодом: %v", err)
 	}
 	if !store.userDeleted {
@@ -153,7 +155,7 @@ func TestDeleteAccount_OwnerOfTeamWithMembersRefused(t *testing.T) {
 // команд нет»: это ошибка сборки процесса, и молча удалять по ней нельзя.
 func TestDeleteAccount_WithoutTeamsSourceRefuses(t *testing.T) {
 	store := &fakeStore{}
-	svc := newService(store).WithTOTPKey(testTOTPKey)
+	svc := newService(store).WithLoginCodeKey(testCodeKey)
 
 	if err := svc.DeleteAccount(context.Background(), passwordUser(t), "right-password", ""); err == nil {
 		t.Fatal("удаление прошло без подключённого источника владения пространствами")

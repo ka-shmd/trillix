@@ -31,11 +31,13 @@ type failed struct {
 }
 
 type fakeStore struct {
-	pending  []Pending
-	listErr  error
-	enqueued []enqueued
-	sent     []uuid.UUID
-	failed   []failed
+	// purgedTemplate — шаблон, дошедший до уборки писем-секретов.
+	purgedTemplate string
+	pending        []Pending
+	listErr        error
+	enqueued       []enqueued
+	sent           []uuid.UUID
+	failed         []failed
 }
 
 func (f *fakeStore) Enqueue(_ context.Context, _ postgres.DBTX, _ uuid.UUID, channel string, payload []byte) error {
@@ -70,6 +72,11 @@ type fakeMailer struct {
 func (m *fakeMailer) Send(_ context.Context, msg EmailMessage) error {
 	m.sent = append(m.sent, msg)
 	return m.err
+}
+
+func (f *fakeStore) DeleteDeliveredByTemplate(_ context.Context, _ postgres.DBTX, template string, _ time.Time) (int64, error) {
+	f.purgedTemplate = template
+	return 1, nil
 }
 
 func newTestService(store Store, mailer Mailer) *Service {

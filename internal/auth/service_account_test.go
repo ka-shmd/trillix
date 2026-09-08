@@ -5,7 +5,6 @@ import (
 	"errors"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/mail"
@@ -293,9 +292,9 @@ func TestRequestEmailChange_WrongPasswordChangesNothing(t *testing.T) {
 func TestRequestEmailChange_RequiresSecondFactorWhenEnabled(t *testing.T) {
 	user, _ := emailChangeUser(t)
 	store := &fakeStore{}
-	enabledTOTP(t, store)
+	enableFactorFor(store, &user)
 	mailer := &fakeEnqueuer{}
-	svc := newServiceMail(store, mailer).WithTOTPKey(testTOTPKey)
+	svc := newCodeService(store, mailer)
 
 	err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "old-password", "")
 	if !errors.Is(err, domain.ErrInvalidCredentials) {
@@ -311,9 +310,9 @@ func TestRequestEmailChange_RequiresSecondFactorWhenEnabled(t *testing.T) {
 func TestRequestEmailChange_ProviderOnlyAccountProvesByCode(t *testing.T) {
 	user := User{ID: domain.NewID(), Email: "old@example.com"} // PasswordHash == nil
 	store := &fakeStore{}
-	secret := enabledTOTP(t, store)
+	enableFactorFor(store, &user)
 	mailer := &fakeEnqueuer{}
-	svc := newServiceMail(store, mailer).WithTOTPKey(testTOTPKey)
+	svc := newCodeService(store, mailer)
 
 	if err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "", ""); !errors.Is(err, domain.ErrInvalidCredentials) {
 		t.Fatalf("без кода: ошибка = %v, ожидалась ErrInvalidCredentials", err)
@@ -322,12 +321,13 @@ func TestRequestEmailChange_ProviderOnlyAccountProvesByCode(t *testing.T) {
 		t.Fatal("адрес уводится одной сессией — у аккаунта без пароля код и есть единственное доказательство")
 	}
 
-	code := totpCode(secret, time.Now().Unix()/30)
+	code := issueCode(t, svc, mailer, user)
+	before := len(mailer.msgs)
 	if err := svc.RequestEmailChange(context.Background(), user, "new@example.com", "", code); err != nil {
 		t.Fatalf("с верным кодом: %v", err)
 	}
-	if !store.createdEmailChangeToken || len(mailer.msgs) != 2 {
-		t.Fatalf("токен=%v, писем=%d — ожидались токен и два письма", store.createdEmailChangeToken, len(mailer.msgs))
+	if !store.createdEmailChangeToken || len(mailer.msgs)-before != 2 {
+		t.Fatalf("токен=%v, писем=%d — ожидались токен и два письма", store.createdEmailChangeToken, len(mailer.msgs)-before)
 	}
 }
 

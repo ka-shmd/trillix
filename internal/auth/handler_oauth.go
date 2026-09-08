@@ -56,8 +56,8 @@ type oauthProviders map[string]oauth.Provider
 
 // oauthService — то, что транспорту нужно от сервиса сверх authService.
 type oauthService interface {
-	LoginWithIdentity(ctx context.Context, p IdentityProfile) (User, string, error)
-	LinkIdentityWithPassword(ctx context.Context, email, password, code, provider, providerUserID string) (User, string, error)
+	LoginWithIdentity(ctx context.Context, p IdentityProfile, dev Device) (User, string, error)
+	LinkIdentityWithPassword(ctx context.Context, email, password, code, provider, providerUserID string, dev Device) (user User, sessionToken, deviceToken string, err error)
 	LinkIdentity(ctx context.Context, userID uuid.UUID, p IdentityProfile) error
 }
 
@@ -192,7 +192,7 @@ func (h *Handler) oauthCallback(w http.ResponseWriter, r *http.Request) {
 		Email:          profile.Email,
 		FirstName:      profile.FirstName,
 		LastName:       profile.LastName,
-	})
+	}, h.device(r))
 	switch {
 	case err == nil:
 		h.startSession(w, token)
@@ -259,7 +259,7 @@ func (h *Handler) oauthLink(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	user, token, err := h.oauthSvc.LinkIdentityWithPassword(r.Context(), req.Email, req.Password, req.Code, name, providerUserID)
+	user, token, deviceToken, err := h.oauthSvc.LinkIdentityWithPassword(r.Context(), req.Email, req.Password, req.Code, name, providerUserID, h.device(r))
 	if errors.Is(err, ErrTwoFactorRequired) {
 		// Пароль верен, но у аккаунта включён второй фактор: привязки ещё нет,
 		// сессии тоже. Пропуск на отдельный шаг здесь не ставится — код
@@ -274,8 +274,13 @@ func (h *Handler) oauthLink(w http.ResponseWriter, r *http.Request) {
 	}
 
 	h.expireCookie(w, oauthPendingCookie, true)
+	// deviceToken пуст, если фактор выключен или браузер и так был знаком:
+	// ставить cookie в этих случаях нечего.
+	if deviceToken != "" {
+		h.setDeviceCookie(w, deviceToken)
+	}
 	h.startSession(w, token)
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user, false))
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
 }
 
 // oauthOutcome — чем кончился поход к провайдеру. Перечень закрытый: он же

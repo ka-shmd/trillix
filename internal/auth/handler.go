@@ -31,7 +31,7 @@ const (
 // потребителя; реализация — *Service, в тестах — фейк).
 type authService interface {
 	Register(ctx context.Context, email, password string) (User, string, error)
-	Login(ctx context.Context, email, password string) (User, string, error)
+	Login(ctx context.Context, email, password string, dev Device) (User, string, error)
 	Logout(ctx context.Context, token string) error
 	UserByToken(ctx context.Context, token string) (User, error)
 	RequestPasswordReset(ctx context.Context, email string) error
@@ -46,11 +46,14 @@ type authService interface {
 	ConfirmEmailChange(ctx context.Context, token string) error
 	Identities(ctx context.Context, userID uuid.UUID) ([]Identity, error)
 	UnlinkIdentity(ctx context.Context, user User, provider string) error
-	TwoFactorEnabled(ctx context.Context, userID uuid.UUID) (bool, error)
-	SetupTOTP(ctx context.Context, user User) (secret, otpauth string, err error)
-	EnableTOTP(ctx context.Context, user User, code string) ([]string, error)
-	DisableTOTP(ctx context.Context, user User, currentPassword, code string) error
-	CompleteTwoFactorLogin(ctx context.Context, userID uuid.UUID, code string) (User, string, error)
+	EnableTwoFactor(ctx context.Context, user User, currentPassword string) error
+	DisableTwoFactor(ctx context.Context, user User, currentPassword string) error
+	SendActionCode(ctx context.Context, user User) error
+	ResendLoginCode(ctx context.Context, userID uuid.UUID) error
+	CompleteTwoFactorLogin(ctx context.Context, userID uuid.UUID, code string, dev Device) (user User, sessionToken, deviceToken string, err error)
+	ListDevices(ctx context.Context, userID uuid.UUID, dev Device) ([]DeviceInfo, error)
+	ForgetDevice(ctx context.Context, userID, deviceID uuid.UUID) error
+	ForgetAllDevices(ctx context.Context, userID uuid.UUID, sessionToken string) error
 	DeleteAccount(ctx context.Context, user User, currentPassword, code string) error
 }
 
@@ -218,6 +221,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// аккаунту, стоит внутри хендлера: ключ появляется только после разбора
 	// пропуска, а ограничивать надо именно попытки по аккаунту.
 	mux.Handle("POST /api/v1/auth/login-2fa", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.loginTwoFactor)))
+	// Переотправка кода — та же дверь и те же два ведра: письмо стоит дороже
+	// попытки ввода, и без ведра по аккаунту эта ручка засыпала бы чужой ящик.
+	mux.Handle("POST /api/v1/auth/login-2fa/resend", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.resendLoginCode)))
 	mux.Handle("POST /api/v1/auth/logout", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.logout))))
 	mux.Handle("GET /api/v1/auth/me", h.RequireAuth(http.HandlerFunc(h.me)))
 	// Сброс пароля — публичные (сессии ещё/уже нет): CSRF не нужен (как login/
@@ -253,7 +259,8 @@ type userResponse struct {
 	// текущий пароль и как назвать раздел: «Сменить пароль» или «Задать».
 	// Наружу едет ФАКТ, а не хеш.
 	HasPassword bool `json:"hasPassword"`
-	// TwoFactorEnabled — включён ли второй фактор (фаза 23, слайс F).
+	// TwoFactorEnabled — включён ли второй фактор (0056): по нему экран настроек
+	// рисует переключатель и список известных устройств.
 	TwoFactorEnabled bool `json:"twoFactorEnabled"`
 	// AvatarKey — ключ картинки аватара в хранилище, не адрес: абсолютный URL
 	// собирает кабинет из своего MEDIA_BASE_URL (то же правило, что у
@@ -261,10 +268,7 @@ type userResponse struct {
 	AvatarKey string `json:"avatarKey"`
 }
 
-// toUserResponse принимает флаг второго фактора отдельным аргументом: он живёт
-// в другой таблице, и подмешивать ради него запрос в каждый ответ auth не за
-// чем — там, где ответ выдаётся сразу после входа, значение известно и так.
-func toUserResponse(u User, twoFactorEnabled bool) userResponse {
+func toUserResponse(u User) userResponse {
 	return userResponse{
 		ID:            u.ID.String(),
 		Email:         u.Email,
@@ -274,7 +278,7 @@ func toUserResponse(u User, twoFactorEnabled bool) userResponse {
 		HasPassword:   u.PasswordHash != nil,
 		AvatarKey:     strOrEmpty(u.AvatarKey),
 
-		TwoFactorEnabled: twoFactorEnabled,
+		TwoFactorEnabled: u.TwoFactorEnabled,
 	}
 }
 
@@ -296,7 +300,7 @@ func (h *Handler) register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.startSession(w, token)
-	httpserver.WriteJSON(w, r, http.StatusCreated, toUserResponse(user, false))
+	httpserver.WriteJSON(w, r, http.StatusCreated, toUserResponse(user))
 }
 
 func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
@@ -304,7 +308,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	user, token, err := h.svc.Login(r.Context(), req.Email, req.Password)
+	user, token, err := h.svc.Login(r.Context(), req.Email, req.Password, h.device(r))
 	if errors.Is(err, ErrTwoFactorRequired) {
 		// Пароль верен, но входа ещё нет: сессия не выдаётся, ставится
 		// подписанный пропуск на второй шаг. Тело говорит фронту, куда идти.
@@ -319,7 +323,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 	h.startSession(w, token)
 	// Сюда доходит только вход БЕЗ второго фактора: с включённым мы ушли бы в
 	// ветку выше, не выдав сессии.
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user, false))
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
@@ -339,14 +343,7 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return
 	}
-	// Второй фактор живёт в своей таблице, поэтому здесь отдельный запрос: это
-	// профиль, его читают редко, и экран настроек берёт флаг именно отсюда.
-	twoFactor, err := h.svc.TwoFactorEnabled(r.Context(), user.ID)
-	if err != nil {
-		httpserver.WriteError(w, r, err)
-		return
-	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user, twoFactor))
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
 }
 
 type forgotPasswordRequest struct {

@@ -22,6 +22,7 @@ type Store interface {
 	ListPending(ctx context.Context, db postgres.DBTX, limit int32) ([]Pending, error)
 	MarkSent(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkFailed(ctx context.Context, db postgres.DBTX, id uuid.UUID, attempts int32, nextAttemptAt time.Time, lastError string) error
+	DeleteDeliveredByTemplate(ctx context.Context, db postgres.DBTX, template string, sentBefore time.Time) (int64, error)
 }
 
 var _ Store = Repo{}
@@ -278,4 +279,28 @@ func (s *Service) markFailed(ctx context.Context, p Pending, cause error) {
 		s.log.Error("outbox: mark-failed failed",
 			slog.String("id", p.ID.String()), slog.String("error", err.Error()))
 	}
+}
+
+// secretTemplates — письма, чей payload остаётся действующим секретом после
+// доставки. Их доставленные строки уборщик сносит: архив outbox не чистится
+// вовсе, а код входа лежит в базе под HMAC — открытая копия рядом сделала бы
+// эту защиту декоративной.
+//
+// Ссылки сброса пароля и подтверждения адреса сюда НЕ добавлены сознательно:
+// они той же природы, но чинить их — отдельная задача (TD-40), а не довесок к
+// второму фактору.
+var secretTemplates = []Template{TemplateLoginCode, TemplateAccountActionCode}
+
+// PurgeDeliveredSecrets убирает доставленные письма-секреты старше maxAge.
+func (s *Service) PurgeDeliveredSecrets(ctx context.Context, maxAge time.Duration) (int64, error) {
+	cutoff := time.Now().Add(-maxAge)
+	var total int64
+	for _, t := range secretTemplates {
+		n, err := s.repo.DeleteDeliveredByTemplate(ctx, s.db, string(t), cutoff)
+		if err != nil {
+			return total, fmt.Errorf("purge delivered secret mail: %w", err)
+		}
+		total += n
+	}
+	return total, nil
 }

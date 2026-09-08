@@ -2,10 +2,12 @@ package auth
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -29,6 +31,9 @@ type User struct {
 	// адрес собирается из MEDIA_BASE_URL (docs/S3.md §5). nil = аватара нет,
 	// кабинет рисует кружок с инициалами.
 	AvatarKey *string
+	// TwoFactorEnabled — включён ли второй фактор (0056). Едет в самом User, а не
+	// отдельным запросом: его спрашивает КАЖДЫЙ путь входа (sessionOrChallenge).
+	TwoFactorEnabled bool
 }
 
 // Identity — способ входа через провайдера, как его видит экран настроек.
@@ -430,14 +435,15 @@ func (Repo) DeleteExpiredEmailVerificationTokens(ctx context.Context, db postgre
 
 func userFromRow(u postgres.User) User {
 	return User{
-		ID:              u.ID,
-		Email:           u.Email,
-		PasswordHash:    ptrStr(u.PasswordHash),
-		CreatedAt:       u.CreatedAt.Time,
-		EmailVerifiedAt: ptrTime(u.EmailVerifiedAt),
-		FirstName:       ptrStr(u.FirstName),
-		LastName:        ptrStr(u.LastName),
-		AvatarKey:       ptrStr(u.AvatarKey),
+		ID:               u.ID,
+		Email:            u.Email,
+		PasswordHash:     ptrStr(u.PasswordHash),
+		CreatedAt:        u.CreatedAt.Time,
+		EmailVerifiedAt:  ptrTime(u.EmailVerifiedAt),
+		FirstName:        ptrStr(u.FirstName),
+		LastName:         ptrStr(u.LastName),
+		AvatarKey:        ptrStr(u.AvatarKey),
+		TwoFactorEnabled: u.TwoFactorEnabled,
 	}
 }
 
@@ -477,85 +483,144 @@ func pgText(s *string) pgtype.Text {
 	return pgtype.Text{String: *s, Valid: true}
 }
 
-// TOTPState — состояние второго фактора у аккаунта. Secret — шифротекст;
-// расшифровывает его сервис, репозиторий про ключ не знает.
-type TOTPState struct {
-	Secret      []byte
-	ConfirmedAt *time.Time // nil = настройка начата, но фактор НЕ включён
-	LastStep    *int64     // номер израсходованного шага (защита от повтора кода)
+// KnownDevice — браузер, который уже предъявлял код входа. TokenHash наружу не
+// отдаётся: экран настроек сравнивает его с хешем своей cookie, чтобы пометить
+// текущую строку.
+type KnownDevice struct {
+	ID         uuid.UUID
+	TokenHash  []byte
+	Label      string
+	CreatedAt  time.Time
+	LastSeenAt time.Time
 }
 
-// UpsertTOTPSecret кладёт свежий секрет, сбрасывая подтверждение: перезапуск
-// настройки обязан обнулять и отметку, и израсходованный шаг.
-func (Repo) UpsertTOTPSecret(ctx context.Context, db postgres.DBTX, userID uuid.UUID, secret []byte) error {
-	if err := postgres.New(db).UpsertTOTPSecret(ctx, postgres.UpsertTOTPSecretParams{UserID: userID, Secret: secret}); err != nil {
-		return fmt.Errorf("upsert totp secret: %w", err)
-	}
-	return nil
-}
-
-func (Repo) GetTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (TOTPState, error) {
-	row, err := postgres.New(db).GetTOTP(ctx, userID)
-	if err != nil {
-		return TOTPState{}, err
-	}
-	st := TOTPState{Secret: row.Secret, ConfirmedAt: ptrTime(row.ConfirmedAt)}
-	if row.LastStep.Valid {
-		v := row.LastStep.Int64
-		st.LastStep = &v
-	}
-	return st, nil
-}
-
-func (Repo) ConfirmTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) error {
-	if err := postgres.New(db).ConfirmTOTP(ctx, postgres.ConfirmTOTPParams{
-		UserID:   userID,
-		LastStep: pgtype.Int8{Int64: step, Valid: true},
+func (Repo) SetTwoFactorEnabled(ctx context.Context, db postgres.DBTX, userID uuid.UUID, enabled bool) error {
+	if err := postgres.New(db).SetTwoFactorEnabled(ctx, postgres.SetTwoFactorEnabledParams{
+		ID: userID, TwoFactorEnabled: enabled,
 	}); err != nil {
-		return fmt.Errorf("confirm totp: %w", err)
+		return fmt.Errorf("set two factor enabled: %w", err)
 	}
 	return nil
 }
 
-// MarkTOTPStep помечает шаг израсходованным; false — шаг не новее последнего
-// отмеченного, то есть код этого шага уже предъявляли.
-func (Repo) MarkTOTPStep(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) (bool, error) {
-	n, err := postgres.New(db).MarkTOTPStep(ctx, postgres.MarkTOTPStepParams{
-		UserID:   userID,
-		LastStep: pgtype.Int8{Int64: step, Valid: true},
+func (Repo) UpsertLoginCode(ctx context.Context, db postgres.DBTX, userID uuid.UUID, codeHash []byte, expiresAt time.Time) error {
+	if err := postgres.New(db).UpsertLoginCode(ctx, postgres.UpsertLoginCodeParams{
+		UserID:    userID,
+		CodeHash:  codeHash,
+		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("upsert login code: %w", err)
+	}
+	return nil
+}
+
+// ConsumeLoginCodeAttempt списывает попытку и отдаёт хеш для сверки.
+// pgx.ErrNoRows — кода нет, он просрочен или попытки кончились; звонящий
+// обязан отвечать на все три одинаково.
+func (Repo) ConsumeLoginCodeAttempt(ctx context.Context, db postgres.DBTX, userID uuid.UUID, maxAttempts int16) ([]byte, error) {
+	hash, err := postgres.New(db).ConsumeLoginCodeAttempt(ctx, postgres.ConsumeLoginCodeAttemptParams{
+		UserID: userID, Attempts: maxAttempts,
 	})
 	if err != nil {
-		return false, fmt.Errorf("mark totp step: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, err
+		}
+		return nil, fmt.Errorf("consume login code attempt: %w", err)
 	}
-	return n > 0, nil
+	return hash, nil
 }
 
-func (Repo) DeleteTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
-	if err := postgres.New(db).DeleteTOTP(ctx, userID); err != nil {
-		return fmt.Errorf("delete totp: %w", err)
-	}
-	return nil
-}
-
-func (Repo) CreateRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) error {
-	if err := postgres.New(db).CreateRecoveryCode(ctx, postgres.CreateRecoveryCodeParams{CodeHash: codeHash, UserID: userID}); err != nil {
-		return fmt.Errorf("create recovery code: %w", err)
+func (Repo) DeleteLoginCode(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).DeleteLoginCode(ctx, userID); err != nil {
+		return fmt.Errorf("delete login code: %w", err)
 	}
 	return nil
 }
 
-// ConsumeRecoveryCode атомарно гасит код; false — кода нет или он уже сгорел.
-func (Repo) ConsumeRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) (bool, error) {
-	n, err := postgres.New(db).ConsumeRecoveryCode(ctx, postgres.ConsumeRecoveryCodeParams{CodeHash: codeHash, UserID: userID})
+// DeleteExpiredLoginCodes — уборщик; возвращает число удалённых строк для лога.
+func (Repo) DeleteExpiredLoginCodes(ctx context.Context, db postgres.DBTX) (int64, error) {
+	n, err := postgres.New(db).DeleteExpiredLoginCodes(ctx)
 	if err != nil {
-		return false, fmt.Errorf("consume recovery code: %w", err)
+		return 0, fmt.Errorf("delete expired login codes: %w", err)
+	}
+	return n, nil
+}
+
+func (Repo) CreateKnownDevice(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID, tokenHash []byte, label string, expiresAt time.Time) error {
+	if err := postgres.New(db).CreateKnownDevice(ctx, postgres.CreateKnownDeviceParams{
+		ID:        id,
+		UserID:    userID,
+		TokenHash: tokenHash,
+		Label:     label,
+		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("create known device: %w", err)
+	}
+	return nil
+}
+
+// TouchKnownDevice отмечает вход с этого браузера; false — устройство незнакомо
+// или знакомство истекло, то есть нужен код.
+func (Repo) TouchKnownDevice(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID) (bool, error) {
+	n, err := postgres.New(db).TouchKnownDevice(ctx, postgres.TouchKnownDeviceParams{
+		TokenHash: tokenHash, UserID: userID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("touch known device: %w", err)
 	}
 	return n > 0, nil
 }
 
-func (Repo) DeleteRecoveryCodes(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
-	if err := postgres.New(db).DeleteRecoveryCodes(ctx, userID); err != nil {
-		return fmt.Errorf("delete recovery codes: %w", err)
+func (Repo) ListKnownDevices(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]KnownDevice, error) {
+	rows, err := postgres.New(db).ListKnownDevices(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("list known devices: %w", err)
+	}
+	out := make([]KnownDevice, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, KnownDevice{
+			ID:         r.ID,
+			TokenHash:  r.TokenHash,
+			Label:      r.Label,
+			CreatedAt:  r.CreatedAt.Time,
+			LastSeenAt: r.LastSeenAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// DeleteKnownDevice забывает одно устройство; false — строки не было (повторный
+// клик из двух вкладок), и это не авария.
+func (Repo) DeleteKnownDevice(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID) (bool, error) {
+	n, err := postgres.New(db).DeleteKnownDevice(ctx, postgres.DeleteKnownDeviceParams{ID: id, UserID: userID})
+	if err != nil {
+		return false, fmt.Errorf("delete known device: %w", err)
+	}
+	return n > 0, nil
+}
+
+func (Repo) DeleteKnownDevicesByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).DeleteKnownDevicesByUser(ctx, userID); err != nil {
+		return fmt.Errorf("delete known devices: %w", err)
+	}
+	return nil
+}
+
+func (Repo) DeleteExpiredKnownDevices(ctx context.Context, db postgres.DBTX) (int64, error) {
+	n, err := postgres.New(db).DeleteExpiredKnownDevices(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("delete expired known devices: %w", err)
+	}
+	return n, nil
+}
+
+// DeleteSessionsByUserExcept рвёт все сессии, кроме одной — той, из которой
+// нажали «забыть устройства».
+func (Repo) DeleteSessionsByUserExcept(ctx context.Context, db postgres.DBTX, userID uuid.UUID, tokenHash []byte) error {
+	if err := postgres.New(db).DeleteSessionsByUserExcept(ctx, postgres.DeleteSessionsByUserExceptParams{
+		UserID: userID, TokenHash: tokenHash,
+	}); err != nil {
+		return fmt.Errorf("delete sessions except current: %w", err)
 	}
 	return nil
 }
