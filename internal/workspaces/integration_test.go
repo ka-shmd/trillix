@@ -8,7 +8,6 @@ package workspaces_test
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"io"
@@ -52,7 +51,7 @@ func TestMain(m *testing.M) {
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, workspaces, workspace_members, sessions, invitations, outbox CASCADE`)
+		`TRUNCATE users, workspaces, workspace_members, sessions, workspace_join_links, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -66,11 +65,10 @@ func newStack(t *testing.T) *httptest.Server {
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
-		pgtest.MailService(testPool), "http://localhost:5173")
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans, "http://localhost:5173")
 	// Лимитер приглашений — пермиссивный (инвариант 6: лимит не ослабляется
 	// ради теста, а инжектируется).
-	wsH := workspaces.NewHandler(wsSvc, ratelimit.AllowAll{}, authH.RequireAuth, authH.RequireCSRF)
+	wsH := workspaces.NewHandler(wsSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
@@ -489,8 +487,7 @@ func TestCan_RolesAgainstDB(t *testing.T) {
 	}
 
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	svc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
-		pgtest.MailService(testPool), "http://localhost:5173")
+	svc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans, "http://localhost:5173")
 
 	// Редактор правит формы…
 	if err := svc.Can(ctx, teamID, editorID, domain.ActionFormWrite); err != nil {
@@ -526,10 +523,10 @@ func userIDByEmail(t *testing.T, email string) uuid.UUID {
 	return id
 }
 
-// Сквозной путь приглашения против настоящей БД и настоящего outbox:
-// пригласили → письмо в очереди → приняли → участник появился → повтор по той
-// же ссылке отбит.
-func TestInvitation_EndToEnd(t *testing.T) {
+// Сквозной путь ссылки против настоящей БД: выписали → чужой человек по ней
+// ВХОДИТ (в этом вся разница с прежним приглашением по адресу) → повторный вход
+// того же человека не ошибается → ротация гасит прежнюю.
+func TestJoinLink_EndToEnd(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
 	alice := registerUser(t, srv, "alice@example.com")
@@ -538,64 +535,162 @@ func TestInvitation_EndToEnd(t *testing.T) {
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
 
-	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`)
-	if r.StatusCode != http.StatusNoContent {
-		t.Fatalf("приглашение: статус %d, ожидалось 204", r.StatusCode)
-	}
-	closeBody(t, r)
+	queuedBefore := outboxCount(t)
 
-	// Письмо и токен — одной транзакцией: в outbox лежит ровно одно приглашение.
-	var queued int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM outbox WHERE payload::jsonb->>'template' = 'workspace_invite'`).Scan(&queued); err != nil {
-		t.Fatalf("outbox: %v", err)
+	var created joinLinkEnvelope
+	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link", "")
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("выписка ссылки: статус %d, ожидалось 201", r.StatusCode)
 	}
-	if queued != 1 {
-		t.Fatalf("писем приглашения в очереди = %d, ожидалось 1", queued)
+	decode(t, r, &created)
+	if created.Link == nil {
+		t.Fatal("ссылка не приехала в ответе")
+	}
+	token := tokenFromURL(t, created.Link.URL)
+
+	// Ссылка живёт СУТКИ, а не неделю: у неё нет адресата, и прочность ей даёт
+	// только срок (решение владельца 2026-09-08).
+	until, err := time.Parse(time.RFC3339, created.Link.ExpiresAt)
+	if err != nil {
+		t.Fatalf("разобрать срок: %v", err)
+	}
+	if d := time.Until(until); d > 25*time.Hour || d < 23*time.Hour {
+		t.Errorf("срок ссылки = %v, ожидались сутки", d)
 	}
 
-	token := inviteTokenFromDB(t)
-
-	// Чужой человек по ссылке не входит: звали не его — 403, а не молчаливый вход.
-	stranger := registerUser(t, srv, "stranger@example.com")
-	r = post(t, stranger, srv, "/api/v1/invitations/"+token+"/accept", "")
-	if r.StatusCode != http.StatusForbidden {
-		t.Fatalf("посторонний по ссылке: статус %d, ожидалось 403", r.StatusCode)
+	// Выписка ссылки НЕ ШЛЁТ ПИСЕМ, и это ровно то, чем она отличается от
+	// прежнего приглашения: адресата у неё нет, передаёт её человек сам.
+	// Считаем прирост очереди, а не её размер: письма подтверждения почты кладёт
+	// туда регистрация, и они к делу не относятся.
+	if got := outboxCount(t); got != queuedBefore {
+		t.Fatalf("выписка ссылки добавила в очередь %d писем, ожидалось 0", got-queuedBefore)
 	}
-	closeBody(t, r)
 
-	// Приглашённый принимает и видит пространство в своём списке.
-	r = post(t, bob, srv, "/api/v1/invitations/"+token+"/accept", "")
+	// Входит ЛЮБОЙ, кто держит ссылку: адресата у неё нет.
+	r = post(t, bob, srv, "/api/v1/join/"+token+"/accept", "")
 	if r.StatusCode != http.StatusOK {
-		t.Fatalf("принятие: статус %d, ожидалось 200", r.StatusCode)
+		t.Fatalf("вход по ссылке: статус %d, ожидалось 200", r.StatusCode)
 	}
 	closeBody(t, r)
 
 	var got listDTO
 	decode(t, do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces"), &got)
 	if len(got.Workspaces) != 2 {
-		t.Fatalf("у приглашённого пространств = %d, ожидалось 2 (личное + команда)", len(got.Workspaces))
+		t.Fatalf("у вошедшего пространств = %d, ожидалось 2 (личное + команда)", len(got.Workspaces))
 	}
 
-	// Повтор по той же ссылке — 410: одноразовость держит атомарный UPDATE.
-	r = post(t, bob, srv, "/api/v1/invitations/"+token+"/accept", "")
-	if r.StatusCode != http.StatusGone {
-		t.Fatalf("повтор по использованной ссылке: статус %d, ожидалось 410", r.StatusCode)
+	// Повтор тем же человеком — УСПЕХ, а не отказ: он уже участник, ссылка
+	// сработала, и «конфликт» здесь выглядел бы поломкой ссылки.
+	r = post(t, bob, srv, "/api/v1/join/"+token+"/accept", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("повторный вход участника: статус %d, ожидалось 200", r.StatusCode)
 	}
 	closeBody(t, r)
 
-	// Второй раз позвать того же — 409: он уже участник, и ждать письма незачем.
-	r = post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`)
-	if r.StatusCode != http.StatusConflict {
-		t.Fatalf("повторное приглашение участника: статус %d, ожидалось 409", r.StatusCode)
+	var members int
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM workspace_members WHERE workspace_id = $1`, team.ID).Scan(&members); err != nil {
+		t.Fatalf("состав: %v", err)
+	}
+	if members != 2 {
+		t.Fatalf("участников = %d, ожидалось 2 — повторный вход не должен множить членство", members)
+	}
+
+	// Ротация гасит прежнюю: годной остаётся ровно одна, это держит частичный
+	// уникальный индекс.
+	var rotated joinLinkEnvelope
+	decode(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link", ""), &rotated)
+	if rotated.Link == nil || rotated.Link.URL == created.Link.URL {
+		t.Fatalf("ротация не выписала новую ссылку: %+v", rotated.Link)
+	}
+	carol := registerUser(t, srv, "carol@example.com")
+	r = post(t, carol, srv, "/api/v1/join/"+token+"/accept", "")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("вход по погашенной ссылке: статус %d, ожидалось 404", r.StatusCode)
 	}
 	closeBody(t, r)
 }
 
-// Приглашать может только владелец: редактор получает 403, и письма не будет.
-func TestInvitation_EditorCannotInvite(t *testing.T) {
+// Отзыв без выписки новой: способ закрыть пространство, когда ссылка ушла не
+// туда. Повторный отзыв — тоже успех: «ссылки не было» и «ссылку погасили» дают
+// человеку одно состояние.
+func TestJoinLink_Revoke(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	var created joinLinkEnvelope
+	decode(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link", ""), &created)
+	token := tokenFromURL(t, created.Link.URL)
+
+	r := del(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link")
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("отзыв: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	r = post(t, bob, srv, "/api/v1/join/"+token+"/accept", "")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("вход по отозванной: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Ссылки у пространства теперь нет — и это не отказ, а пустой ответ.
+	var after joinLinkEnvelope
+	r = do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/join-link")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("чтение отсутствующей ссылки: статус %d, ожидалось 200", r.StatusCode)
+	}
+	decode(t, r, &after)
+	if after.Link != nil {
+		t.Fatalf("после отзыва отдана ссылка: %+v", after.Link)
+	}
+
+	r = del(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link")
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("повторный отзыв: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Истёкшая ссылка не пускает, но и не превращается в «её нет»: владельцу
+// кабинет обязан сказать «истекла, создайте новую».
+func TestJoinLink_Expired(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	var created joinLinkEnvelope
+	decode(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link", ""), &created)
+	token := tokenFromURL(t, created.Link.URL)
+
+	if _, err := testPool.Exec(context.Background(),
+		`UPDATE workspace_join_links SET expires_at = now() - interval '1 minute'`); err != nil {
+		t.Fatalf("состарить ссылку: %v", err)
+	}
+
+	r := post(t, bob, srv, "/api/v1/join/"+token+"/accept", "")
+	if r.StatusCode != http.StatusGone {
+		t.Fatalf("вход по истёкшей: статус %d, ожидалось 410", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	var got joinLinkEnvelope
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/join-link"), &got)
+	if got.Link == nil || !got.Link.Expired {
+		t.Fatalf("истёкшая ссылка = %+v, ждали её саму с пометкой expired", got.Link)
+	}
+}
+
+// Ссылкой распоряжается только владелец: редактор не выписывает, не читает и не
+// отзывает. Читать её нельзя намеренно — знать ссылку значит уметь ею раздавать.
+func TestJoinLink_EditorCannotManage(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
 	alice := registerUser(t, srv, "alice@example.com")
@@ -609,75 +704,145 @@ func TestInvitation_EditorCannotInvite(t *testing.T) {
 		t.Fatalf("добавить редактора: %v", err)
 	}
 
-	r := post(t, editor, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"third@example.com","role":"editor"}`)
-	if r.StatusCode != http.StatusForbidden {
-		t.Fatalf("редактор приглашает: статус %d, ожидалось 403", r.StatusCode)
+	for _, c := range []struct {
+		name   string
+		do     func() *http.Response
+		status int
+	}{
+		{"выписка", func() *http.Response {
+			return post(t, editor, srv, "/api/v1/workspaces/"+team.ID+"/join-link", "")
+		}, http.StatusForbidden},
+		{"чтение", func() *http.Response {
+			return do(t, editor, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/join-link")
+		}, http.StatusForbidden},
+		{"отзыв", func() *http.Response {
+			return del(t, editor, srv, "/api/v1/workspaces/"+team.ID+"/join-link")
+		}, http.StatusForbidden},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			r := c.do()
+			if r.StatusCode != c.status {
+				t.Fatalf("редактор, %s: статус %d, ожидалось %d", c.name, r.StatusCode, c.status)
+			}
+			closeBody(t, r)
+		})
 	}
-	closeBody(t, r)
 }
 
-// Гейт мест: на плане с лимитом в одного участника приглашение отбивается 402.
-func TestInvitation_SeatLimit(t *testing.T) {
+// ⚠ ГЕЙТ МЕСТ ЗДЕСЬ ЕДИНСТВЕННЫЙ. У приглашения по адресу проверок было две — на
+// выписке и на принятии, — потому что выписка называла человека. Ссылка не
+// называет никого и приводит скольких угодно, поэтому считать места на выписке
+// бессмысленно: к моменту входа число участников уже другое.
+func TestJoinLink_SeatLimitOnAccept(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
 	alice := registerUser(t, srv, "alice@example.com")
-	registerUser(t, srv, "bob@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
 
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	var created joinLinkEnvelope
+	decode(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link", ""), &created)
+	token := tokenFromURL(t, created.Link.URL)
+
 	setMemberLimit(t, "1")
 
-	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`)
+	r := post(t, bob, srv, "/api/v1/join/"+token+"/accept", "")
 	if r.StatusCode != http.StatusPaymentRequired {
-		t.Fatalf("статус = %d, ожидалось 402 (владелец уже занимает единственное место)", r.StatusCode)
+		t.Fatalf("вход сверх мест: статус %d, ожидалось 402 (владелец занимает единственное место)", r.StatusCode)
 	}
 	closeBody(t, r)
 }
 
-// Ссылку показывают БЕЗ входа: аккаунта у приглашённого может ещё не быть, и
-// понять, куда его зовут, он должен до регистрации.
-func TestInvitation_PreviewWithoutAuth(t *testing.T) {
+// Ссылку показывают БЕЗ входа: аккаунта у зовомого может ещё не быть, и понять,
+// куда его зовут, он должен до регистрации. Ни id пространства, ни состава при
+// этом не отдаётся — до входа он посторонний.
+func TestJoinLink_PreviewWithoutAuth(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
 	alice := registerUser(t, srv, "alice@example.com")
 
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"newbie@example.com","role":"editor"}`))
+	var created joinLinkEnvelope
+	decode(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link", ""), &created)
 
-	token := inviteTokenFromDB(t)
 	anon := newClient(t) // без сессии вовсе
-	r := do(t, anon, http.MethodGet, srv.URL+"/api/v1/invitations/"+token)
+	r := do(t, anon, http.MethodGet, srv.URL+"/api/v1/join/"+tokenFromURL(t, created.Link.URL))
 	if r.StatusCode != http.StatusOK {
 		t.Fatalf("просмотр без входа: статус %d, ожидалось 200", r.StatusCode)
 	}
-	var inv struct {
+	var preview struct {
 		WorkspaceName string `json:"workspaceName"`
-		Email         string `json:"email"`
-		State         string `json:"state"`
+		Role          string `json:"role"`
+		WorkspaceID   string `json:"workspaceId"`
 	}
-	decode(t, r, &inv)
-	if inv.WorkspaceName != "Команда" || inv.Email != "newbie@example.com" || inv.State != "usable" {
-		t.Fatalf("приглашение = %+v, ждали Команда/newbie@example.com/usable", inv)
+	decode(t, r, &preview)
+	if preview.WorkspaceName != "Команда" || preview.Role != "editor" {
+		t.Fatalf("просмотр = %+v, ждали Команда/editor", preview)
 	}
+	if preview.WorkspaceID != "" {
+		t.Error("id пространства отдан до входа — посторонний его знать не должен")
+	}
+
+	// Неизвестный токен неотличим от отозванного и истёкшего: действие у
+	// человека одно, а различение позволяло бы перебором выяснять, какие токены
+	// существовали.
+	r = do(t, anon, http.MethodGet, srv.URL+"/api/v1/join/no-such-token")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("неизвестный токен: статус %d, ожидалось 404", r.StatusCode)
+	}
+	closeBody(t, r)
 }
 
-// inviteTokenFromDB достаёт сырой токен единственного живого приглашения.
-// В БД лежит только его SHA-256, поэтому тест выдаёт себе токен сам: подменяет
-// хеш на хеш известной строки. Так проверяется настоящий путь «токен → хеш →
-// строка», а не суррогат с токеном в открытом виде.
-func inviteTokenFromDB(t *testing.T) string {
+type joinLinkDTO struct {
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expiresAt"`
+	Expired   bool   `json:"expired"`
+}
+
+type joinLinkEnvelope struct {
+	Link *joinLinkDTO `json:"link"`
+}
+
+// tokenFromURL достаёт токен из адреса, который отдаёт API. Токен здесь лежит в
+// базе СЫРЫМ (ADR §10), поэтому подменять его тесту, в отличие от прежних
+// приглашений, не нужно — он приезжает ответом как есть.
+func tokenFromURL(t *testing.T, u string) string {
 	t.Helper()
-	const raw = "test-invite-token"
-	sum := sha256.Sum256([]byte(raw))
-	if _, err := testPool.Exec(context.Background(),
-		`UPDATE invitations SET token_hash = $1 WHERE used_at IS NULL`, sum[:]); err != nil {
-		t.Fatalf("подменить хеш токена: %v", err)
+	i := strings.LastIndex(u, "/")
+	if i < 0 || i+1 >= len(u) {
+		t.Fatalf("в адресе %q нет токена", u)
 	}
-	return raw
+	return u[i+1:]
+}
+
+// joinAs вводит человека в пространство ссылкой — единственным способом, каким
+// состав растёт после заведения пространства (ADR §10).
+func joinAs(t *testing.T, srv *httptest.Server, owner, newcomer *http.Client, workspaceID string) {
+	t.Helper()
+	var created joinLinkEnvelope
+	decode(t, post(t, owner, srv, "/api/v1/workspaces/"+workspaceID+"/join-link", ""), &created)
+	if created.Link == nil {
+		t.Fatal("ссылка не выписана")
+	}
+	r := post(t, newcomer, srv, "/api/v1/join/"+tokenFromURL(t, created.Link.URL)+"/accept", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("вход по ссылке: статус %d, ожидалось 200", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// outboxCount — сколько писем сейчас в очереди. Нужен ПРИРОСТОМ, а не
+// значением: регистрация кладёт туда письма подтверждения, и абсолютное число
+// про действие, которое мы проверяем, не говорит ничего.
+func outboxCount(t *testing.T) int {
+	t.Helper()
+	var n int
+	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM outbox`).Scan(&n); err != nil {
+		t.Fatalf("outbox: %v", err)
+	}
+	return n
 }
 
 func setMemberLimit(t *testing.T, limit string) {
@@ -705,9 +870,7 @@ func TestMembers_ListRemoveAndOwnerGuard(t *testing.T) {
 
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`))
-	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+	joinAs(t, srv, alice, bob, team.ID)
 
 	// Владелец видит обоих участников и свои права.
 	var got membersDTO
@@ -811,9 +974,7 @@ func TestMembers_EditorLeaves(t *testing.T) {
 
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`))
-	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+	joinAs(t, srv, alice, bob, team.ID)
 
 	r := post(t, bob, srv, "/api/v1/workspaces/"+team.ID+"/leave", "")
 	if r.StatusCode != http.StatusNoContent {
@@ -842,16 +1003,18 @@ func TestMembers_DeletedAccountLeavesNeitherRowNorSeat(t *testing.T) {
 
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`))
-	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+	joinAs(t, srv, alice, bob, team.ID)
 
-	// Мест ровно два, и оба заняты: позвать третьего сейчас нельзя.
+	// Мест ровно два, и оба заняты: третий по ссылке не входит.
 	setMemberLimit(t, "2")
-	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"carol@example.com","role":"editor"}`)
+	var link joinLinkEnvelope
+	decode(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/join-link", ""), &link)
+	token := tokenFromURL(t, link.Link.URL)
+
+	carol := loginUser(t, srv, "carol@example.com")
+	r := post(t, carol, srv, "/api/v1/join/"+token+"/accept", "")
 	if r.StatusCode != http.StatusPaymentRequired {
-		t.Fatalf("приглашение при занятых местах: статус %d, ожидалось 402", r.StatusCode)
+		t.Fatalf("вход при занятых местах: статус %d, ожидалось 402", r.StatusCode)
 	}
 	closeBody(t, r)
 
@@ -868,42 +1031,10 @@ func TestMembers_DeletedAccountLeavesNeitherRowNorSeat(t *testing.T) {
 		t.Fatalf("состав = %+v, ждали одну владелицу — удалённый аккаунт в списке не показывается", got.Members)
 	}
 
-	// Место освободилось: замена зовётся на тот же лимит в двоих.
-	r = post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"carol@example.com","role":"editor"}`)
-	if r.StatusCode != http.StatusNoContent {
-		t.Fatalf("приглашение замены: статус %d, ожидалось 204 — место удалённого аккаунта осталось занятым", r.StatusCode)
-	}
-	closeBody(t, r)
-}
-
-// Приглашать удалённый аккаунт нельзя, и отказ приходит не как «он уже здесь»:
-// в составе его нет, и «уже в пространстве» противоречило бы тому, что видно на
-// экране. Адрес при этом занят навсегда — письмо просто уходит в никуда.
-func TestInvitation_DeletedAccountIsNotAMember(t *testing.T) {
-	resetDB(t)
-	srv := newStack(t)
-	alice := registerUser(t, srv, "alice@example.com")
-	bob := registerUser(t, srv, "bob@example.com")
-
-	var team workspaceDTO
-	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`))
-	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
-
-	if _, err := testPool.Exec(context.Background(),
-		`UPDATE users SET deleted_at = now() WHERE email = 'bob@example.com'`); err != nil {
-		t.Fatalf("пометить аккаунт удалённым: %v", err)
-	}
-
-	r := post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`)
-	if r.StatusCode == http.StatusConflict {
-		t.Fatal("отказ «он уже в пространстве» про аккаунт, которого в составе не видно")
-	}
-	if r.StatusCode != http.StatusNoContent {
-		t.Fatalf("приглашение удалённого адреса: статус %d, ожидалось 204", r.StatusCode)
+	// Место освободилось: замена входит по той же ссылке на тот же лимит в двоих.
+	r = post(t, carol, srv, "/api/v1/join/"+token+"/accept", "")
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("вход замены: статус %d, ожидалось 200 — место удалённого аккаунта осталось занятым", r.StatusCode)
 	}
 	closeBody(t, r)
 }
@@ -964,9 +1095,7 @@ func TestFreeze_OnOwnerDowngrade(t *testing.T) {
 
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`))
-	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+	joinAs(t, srv, alice, bob, team.ID)
 
 	// Пока лимит не включён — пространство работает у обоих.
 	for _, c := range []*http.Client{alice, bob} {
@@ -1051,9 +1180,7 @@ func TestFreeze_ExtraMembersInPersonalWorkspace(t *testing.T) {
 	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces"), &spaces)
 	personalID := spaces.Workspaces[0].ID
 
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+personalID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`))
-	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+	joinAs(t, srv, alice, bob, personalID)
 
 	// Пока мест хватает — работают оба.
 	for name, c := range map[string]*http.Client{"владелец": alice, "приглашённый": bob} {
@@ -1301,9 +1428,7 @@ func TestOwnership_TransferSwapsRoles(t *testing.T) {
 
 	var team workspaceDTO
 	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`))
-	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+	joinAs(t, srv, alice, bob, team.ID)
 
 	aliceID := userIDByEmail(t, "alice@example.com").String()
 	bobID := userIDByEmail(t, "bob@example.com").String()
@@ -1390,9 +1515,7 @@ func TestOwnership_PersonalWorkspaceNotTransferable(t *testing.T) {
 	}
 
 	// Бобу дают членство в личном пространстве Алисы — это законно (§1).
-	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+personalID+"/invitations",
-		`{"email":"bob@example.com","role":"editor"}`))
-	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+	joinAs(t, srv, alice, bob, personalID)
 
 	bobID := userIDByEmail(t, "bob@example.com").String()
 	r := post(t, alice, srv, "/api/v1/workspaces/"+personalID+"/ownership", `{"userId":"`+bobID+`"}`)

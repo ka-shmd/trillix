@@ -205,7 +205,6 @@ func templateByName(t *testing.T, name string) Template {
 	byName := map[string]Template{
 		"TemplatePasswordReset":      TemplatePasswordReset,
 		"TemplateEmailVerification":  TemplateEmailVerification,
-		"TemplateWorkspaceInvite":    TemplateWorkspaceInvite,
 		"TemplateSubmissionNew":      TemplateSubmissionNew,
 		"TemplateRespondentReceipt":  TemplateRespondentReceipt,
 		"TemplateBookingConfirmed":   TemplateBookingConfirmed,

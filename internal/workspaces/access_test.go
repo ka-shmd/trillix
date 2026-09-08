@@ -33,7 +33,7 @@ func (r *roleStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uuid.
 }
 
 func canService(role string, roleErr error) *Service {
-	return NewService(nil, &fakeTx{}, &roleStore{role: role, roleErr: roleErr}, &fakePlans{allowed: true}, nil, "https://app.example")
+	return NewService(nil, &fakeTx{}, &roleStore{role: role, roleErr: roleErr}, &fakePlans{allowed: true}, "https://app.example")
 }
 
 // Матрица «роль × действие» проверяется ПОЯЧЕЕЧНО (DoD фазы 18): таблица прав —
@@ -187,7 +187,7 @@ func (f *frozenStore) AccessContext(_ context.Context, _ postgres.DBTX, _, _ uui
 
 func frozenService(rank int64, limit *int64) *Service {
 	plans := &limitPlans{limit: limit}
-	return NewService(nil, &fakeTx{}, &frozenStore{rank: rank}, plans, nil, "https://app.example")
+	return NewService(nil, &fakeTx{}, &frozenStore{rank: rank}, plans, "https://app.example")
 }
 
 type limitPlans struct {
@@ -245,7 +245,7 @@ func TestCan_ExtraMembersFreeze(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			plans := &limitPlans{seats: tc.seats}
-			svc := NewService(nil, &fakeTx{}, &seatStore{rank: tc.rank}, plans, nil, "https://app.example")
+			svc := NewService(nil, &fakeTx{}, &seatStore{rank: tc.rank}, plans, "https://app.example")
 			err := svc.Can(context.Background(), uuid.New(), uuid.New(), domain.ActionFormRead)
 			if tc.frozen && !errors.Is(err, domain.ErrWorkspaceFrozen) {
 				t.Fatalf("err = %v, ждали ErrWorkspaceFrozen", err)
@@ -296,7 +296,7 @@ func TestCan_FrozenWhenOwnerPlanShrank(t *testing.T) {
 func TestCan_PersonalNeverFrozen(t *testing.T) {
 	zero := int64(0)
 	svc := NewService(nil, &fakeTx{}, &roleStore{role: string(RoleOwner)},
-		&limitPlans{limit: &zero}, nil, "https://app.example")
+		&limitPlans{limit: &zero}, "https://app.example")
 	if err := svc.Can(context.Background(), uuid.New(), uuid.New(), domain.ActionFormRead); err != nil {
 		t.Fatalf("личное пространство заморожено: %v", err)
 	}
@@ -363,7 +363,7 @@ func TestFrozen_ListAgreesWithAccessCheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &bothStore{isPersonal: tc.isPersonal, teamRank: tc.teamRank, memberRank: tc.memberRank}
 			plans := &limitPlans{limit: tc.limit, seats: tc.seats}
-			svc := NewService(nil, &fakeTx{}, store, plans, nil, "https://app.example")
+			svc := NewService(nil, &fakeTx{}, store, plans, "https://app.example")
 
 			err := svc.Can(context.Background(), uuid.New(), uuid.New(), domain.ActionFormRead)
 			blocked := errors.Is(err, domain.ErrWorkspaceFrozen)
@@ -390,7 +390,7 @@ func TestListForUser_PlanFailureLeavesListUsable(t *testing.T) {
 	two := int64(2)
 	store := &bothStore{isPersonal: false, teamRank: 5, memberRank: 1}
 	plans := &limitPlans{limit: &two, err: errors.New("тариф недоступен")}
-	svc := NewService(nil, &fakeTx{}, store, plans, nil, "https://app.example")
+	svc := NewService(nil, &fakeTx{}, store, plans, "https://app.example")
 
 	list, err := svc.ListForUser(context.Background(), uuid.New())
 	if err != nil {
@@ -421,7 +421,7 @@ func (s *manyStore) ListByUser(_ context.Context, _ postgres.DBTX, _ uuid.UUID) 
 func TestListForUser_AsksPlanOncePerOwner(t *testing.T) {
 	two := int64(2)
 	plans := &limitPlans{limit: &two}
-	svc := NewService(nil, &fakeTx{}, &manyStore{ownerID: uuid.New()}, plans, nil, "https://app.example")
+	svc := NewService(nil, &fakeTx{}, &manyStore{ownerID: uuid.New()}, plans, "https://app.example")
 
 	list, err := svc.ListForUser(context.Background(), uuid.New())
 	if err != nil {

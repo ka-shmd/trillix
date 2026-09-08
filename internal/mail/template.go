@@ -15,9 +15,6 @@ const (
 	TemplatePasswordReset Template = "password_reset"
 	// TemplateEmailVerification — письмо со ссылкой подтверждения email. Data: {"link": "<url>"}.
 	TemplateEmailVerification Template = "email_verification"
-	// TemplateWorkspaceInvite — приглашение в пространство. Data:
-	// {"link": "<url>", "workspace": "<название>", "inviter": "<email позвавшего>"}.
-	TemplateWorkspaceInvite Template = "workspace_invite"
 	// TemplateSubmissionNew — письмо владельцу о новом ответе, ОДНО НА ОДИН ответ.
 	// Data: {"form_title": "<название>", "link": "<url таблицы>"}; при неудавшейся
 	// печати вложения диспетчер добавляет {"pdf_failed": true}.
@@ -115,18 +112,6 @@ var templates = map[Template]mailTemplate{
 				"{{.link}}\n\n" +
 				"Если вы не регистрировались в Trillix — просто не переходите по " +
 				"ссылке, письмо можно удалить.\n\n" +
-				"— Trillix",
-		)),
-	},
-	TemplateWorkspaceInvite: {
-		subject: "Приглашение в пространство Trillix",
-		body: template.Must(template.New("workspace_invite").Parse(
-			"Здравствуйте!\n\n" +
-				"{{.inviter}} приглашает вас в пространство «{{.workspace}}» в Trillix. " +
-				"Чтобы принять приглашение, перейдите по ссылке (она действует 7 дней):\n\n" +
-				"{{.link}}\n\n" +
-				"Если вы не ждали приглашения — просто не переходите по ссылке, " +
-				"письмо можно удалить.\n\n" +
 				"— Trillix",
 		)),
 	},

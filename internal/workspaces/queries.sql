@@ -79,46 +79,9 @@ SELECT role
 FROM workspace_members
 WHERE workspace_id = $1 AND user_id = $2;
 
--- name: CreateInvitation :exec
--- Приглашение и письмо кладутся ОДНОЙ транзакцией (transactional outbox): либо
--- есть и ссылка, и письмо в очереди, либо ничего. Повторное приглашение тому же
--- адресу заменяет непринятое (частичный UNIQUE в 0017) — ON CONFLICT сносит
--- прежний токен, чтобы годной осталась ровно одна ссылка.
-INSERT INTO invitations (token_hash, workspace_id, email, role, invited_by, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6);
-
--- name: DeletePendingInvitation :exec
--- Снимает непринятое приглашение адресу перед выдачей нового (и обслуживает
--- отзыв приглашения владельцем).
-DELETE FROM invitations
-WHERE workspace_id = $1 AND lower(email) = lower($2) AND used_at IS NULL;
-
--- name: GetInvitation :one
--- Приглашение по токену — для экрана «вас приглашают». Отдаёт заодно название
--- пространства: показать его нужно ДО принятия, а членства ещё нет.
-SELECT i.workspace_id, i.email, i.role, i.expires_at, i.used_at, w.name AS workspace_name
-FROM invitations i
-JOIN workspaces w ON w.id = i.workspace_id
-WHERE i.token_hash = $1;
-
--- name: ConsumeInvitation :one
--- Потребление токена атомарным UPDATE: повтор получает 0 строк, поэтому одной
--- ссылкой нельзя войти дважды, и гонка двух вкладок не создаёт двух членств.
-UPDATE invitations
-SET used_at = now()
-WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
-RETURNING workspace_id, email, role;
-
 -- name: GetWorkspaceByID :one
 SELECT id, slug, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
 FROM workspaces WHERE id = $1;
-
--- name: GetUserIDByEmail :one
--- Удалённый аккаунт — «такого нет»: адрес остаётся занятым (войти по нему
--- нельзя, но и переиспользовать тоже), а приглашать его владельцу незачем.
--- Слепота обязана совпадать со слепотой списка участников: иначе владелец не
--- видел бы человека в составе, но получал бы «он уже в пространстве».
-SELECT id FROM users WHERE email = lower($1) AND deleted_at IS NULL;
 
 -- name: GetEmailByUserID :one
 SELECT email FROM users WHERE id = $1;
@@ -134,14 +97,6 @@ FROM workspace_members m
 JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
 WHERE m.workspace_id = $1
 ORDER BY (m.role = 'owner') DESC, m.created_at ASC;
-
--- name: ListPendingInvitations :many
--- Непринятые и не истёкшие приглашения — их видно на той же странице, что и
--- участников: «позвали, но ещё не вошёл» — это состояние пространства.
-SELECT email, role, expires_at
-FROM invitations
-WHERE workspace_id = $1 AND used_at IS NULL AND expires_at > now()
-ORDER BY created_at ASC;
 
 -- name: DeleteMember :execrows
 -- Удаление участника. role <> 'owner' в условии — сторож последнего владельца
@@ -198,12 +153,6 @@ JOIN workspaces w ON w.id = m.workspace_id
 JOIN workspace_members o ON o.workspace_id = w.id AND o.role = 'owner'
 WHERE m.workspace_id = $1 AND m.user_id = $2;
 
--- name: PurgeExpiredInvitations :execrows
--- Фоновая чистка: истёкшие и уже использованные приглашения не нужны никому —
--- ни ссылка, ни история (кто кого звал, видно по членству). Индекс
--- idx_invitations_expires заведён ровно под этот запрос.
-DELETE FROM invitations WHERE expires_at < now() OR used_at IS NOT NULL;
-
 -- name: ListOwnedTeamsWithMembers :many
 -- Командные пространства, где спрашивающий — владелец И есть кто-то ещё. Нужен
 -- удалению аккаунта (фаза 23, слайс G): у пространства ровно один владелец
@@ -222,3 +171,43 @@ WHERE w.personal_user_id IS NULL
                JOIN users u ON u.id = m.user_id AND u.deleted_at IS NULL
                WHERE m.workspace_id = w.id AND m.user_id <> $1)
 ORDER BY w.created_at;
+-- name: CreateJoinLink :exec
+-- Ссылка-приглашение (0058). Токен ложится СЫРЫМ, а не SHA-256, и это
+-- единственное такое место в продукте — ADR §10: ценность ссылки в повторном
+-- копировании, а из хеша её не восстановить.
+INSERT INTO workspace_join_links (token, workspace_id, role, created_by, expires_at)
+VALUES ($1, $2, $3, $4, $5);
+
+-- name: RevokeJoinLink :execrows
+-- Гасит живую ссылку пространства. Ноль строк означает «живой не было» — не
+-- ошибка: результат для человека тот же.
+UPDATE workspace_join_links
+SET revoked_at = now()
+WHERE workspace_id = $1 AND revoked_at IS NULL;
+
+-- name: GetActiveJoinLink :one
+-- Живая ссылка пространства для кабинета. Истёкшую отдаёт ТОЖЕ: срок разбирает
+-- сервис, чтобы экран мог сказать «истекла, создайте новую» вместо «ссылки нет».
+-- Двух годных не бывает — держит idx_join_links_active.
+SELECT token, workspace_id, role, expires_at
+FROM workspace_join_links
+WHERE workspace_id = $1 AND revoked_at IS NULL;
+
+-- name: GetJoinLinkByToken :one
+-- Вход по ссылке. Отозванная не находится вовсе, истёкшая находится и
+-- отбраковывается сервисом — снаружи оба случая и «такой ссылки нет» неразличимы
+-- намеренно: действие у человека одно, а различение позволяло бы перебором
+-- выяснять, какие токены существовали.
+--
+-- Имя пространства едет тем же запросом: зовомому надо понять, куда его зовут, а
+-- второй поездки за вывеской этот путь не стоит.
+SELECT l.token, l.workspace_id, l.role, l.expires_at, w.name AS workspace_name
+FROM workspace_join_links l
+JOIN workspaces w ON w.id = l.workspace_id
+WHERE l.token = $1 AND l.revoked_at IS NULL;
+
+-- name: PurgeExpiredJoinLinks :execrows
+-- Периодическая чистка: истёкшие и отозванные. Отозванные копятся по строке на
+-- каждое «создать новую» и после отзыва не нужны никому.
+DELETE FROM workspace_join_links
+WHERE expires_at < now() OR revoked_at IS NOT NULL;

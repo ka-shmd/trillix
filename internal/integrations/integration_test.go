@@ -78,8 +78,7 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false)
 
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
-		pgtest.MailService(testPool), appOrigin)
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans, appOrigin)
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, plans)
 

@@ -16,31 +16,45 @@ export const memberSchema = z.object({
   joinedAt: z.string(),
 })
 
-export const pendingInviteSchema = z.object({
-  email: z.string(),
-  role: z.string(),
-  expiresAt: z.string(),
-})
-
 // permissions — что может СПРАШИВАЮЩИЙ. Кабинет прячет по нему кнопки и не
 // повторяет матрицу прав в TypeScript: она живёт на сервере в одном месте.
+//
+// Списка «позвали, но ещё не вошёл» здесь нет и быть не может: ссылка никого не
+// называет, поэтому между её выпиской и входом человека продукт про него ничего
+// не знает (ADR §10). Состояние приглашения одно — сама ссылка, и она приезжает
+// своей ручкой.
 export const membersResponseSchema = z.object({
   members: z.array(memberSchema),
-  invites: z.array(pendingInviteSchema),
   permissions: z.array(z.string()),
 })
 
 export type Member = z.infer<typeof memberSchema>
-export type PendingInvite = z.infer<typeof pendingInviteSchema>
 export type MembersState = z.infer<typeof membersResponseSchema>
 
-// Приглашение глазами позванного (GET /invitations/{token}). id пространства и
-// состав участников сюда не входят: пока приглашение не принято, он посторонний.
-export const invitationSchema = z.object({
-  workspaceName: z.string(),
-  email: z.string(),
-  role: z.string(),
-  state: z.enum(['usable', 'used', 'expired']),
+// Ссылка-приглашение глазами ВЛАДЕЛЬЦА (GET/POST /workspaces/{id}/join-link).
+// Токен приезжает целиком внутри url — в базе он лежит сырым (ADR §10), и это
+// единственное такое место в продукте.
+export const joinLinkSchema = z.object({
+  url: z.string(),
+  expiresAt: z.string(),
+  // expired — срок вышел. Отдельным полем, а не отсутствием ссылки: «истекла,
+  // создайте новую» и «ссылки нет» — разные новости для человека.
+  expired: z.boolean(),
 })
 
-export type Invitation = z.infer<typeof invitationSchema>
+// link: null — живой ссылки у пространства нет. Это не отказ: её может не быть
+// никогда, и отличать этот случай от «пространства нет» кабинету необходимо.
+export const joinLinkResponseSchema = z.object({
+  link: joinLinkSchema.nullable(),
+})
+
+export type JoinLink = z.infer<typeof joinLinkSchema>
+
+// Ссылка глазами ЗОВОМОГО (GET /join/{token}): куда зовут и кем он станет. Ни id
+// пространства, ни состава — пока он не вошёл, он посторонний.
+export const joinPreviewSchema = z.object({
+  workspaceName: z.string(),
+  role: z.string(),
+})
+
+export type JoinPreview = z.infer<typeof joinPreviewSchema>

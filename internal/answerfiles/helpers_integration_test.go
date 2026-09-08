@@ -81,7 +81,7 @@ func newStack(t *testing.T) (*httptest.Server, *answerfiles.Service) {
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-		entSvc, pgtest.MailService(testPool), "http://localhost:5173")
+		entSvc, "http://localhost:5173")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, entSvc).
 		WithSecret(testSecret)
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)

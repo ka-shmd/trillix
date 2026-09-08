@@ -1,16 +1,18 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 import { workspaceKeys } from './keys'
 import {
-  acceptInvitation,
+  acceptJoinLink,
+  createJoinLink,
   createWorkspace,
   deleteWorkspace,
-  inviteMember,
+  getJoinLink,
   leaveWorkspace,
   listMembers,
   listWorkspaces,
-  previewInvitation,
+  previewJoinLink,
   removeMember,
   renameWorkspace,
+  revokeJoinLink,
   transferOwnership,
 } from './api'
 
@@ -68,13 +70,27 @@ export function membersQueryOptions(workspaceId: string) {
   })
 }
 
-export function invitationQueryOptions(token: string) {
+export function joinLinkQueryOptions(workspaceId: string, enabled: boolean) {
   return queryOptions({
-    queryKey: workspaceKeys.invitation(token),
-    queryFn: () => previewInvitation(token),
-    // Приглашение живёт по ссылке из письма: перечитывать его при возврате на
-    // вкладку незачем, а вот протухнуть между открытием и принятием оно может —
-    // это разбирает сама мутация принятия (410).
+    queryKey: workspaceKeys.joinLink(workspaceId),
+    queryFn: () => getJoinLink(workspaceId),
+    // Ручка стоит за member.manage: у редактора она отвечает 403, поэтому
+    // спрашивает её только тот, кому право дано. Решает вызывающий — он уже
+    // держит permissions из состава.
+    enabled,
+    // Меняется только явными действиями на этом же экране, и они сами
+    // инвалидируют ключ.
+    staleTime: 5 * 60 * 1000,
+  })
+}
+
+export function joinPreviewQueryOptions(token: string) {
+  return queryOptions({
+    queryKey: workspaceKeys.joinPreview(token),
+    queryFn: () => previewJoinLink(token),
+    // Ссылку открывают по переданному адресу: перечитывать при возврате на
+    // вкладку незачем, а вот протухнуть между открытием и входом она может —
+    // это разбирает сама мутация входа (410).
     staleTime: 60 * 1000,
     retry: false,
   })
@@ -82,11 +98,21 @@ export function invitationQueryOptions(token: string) {
 
 // Все мутации состава инвалидируют состав ЭТОГО пространства: забытая
 // инвалидация здесь означала бы «снял доступ, а человек ещё в списке».
-export function useInviteMember(workspaceId: string) {
+// Выписка и отзыв правят ТОЛЬКО ключ ссылки: состав от них не меняется — люди
+// приходят позже и своим действием.
+export function useCreateJoinLink(workspaceId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (email: string) => inviteMember(workspaceId, email),
-    onSuccess: () => qc.invalidateQueries({ queryKey: workspaceKeys.members(workspaceId) }),
+    mutationFn: () => createJoinLink(workspaceId),
+    onSuccess: (link) => qc.setQueryData(workspaceKeys.joinLink(workspaceId), link),
+  })
+}
+
+export function useRevokeJoinLink(workspaceId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => revokeJoinLink(workspaceId),
+    onSuccess: () => qc.setQueryData(workspaceKeys.joinLink(workspaceId), null),
   })
 }
 
@@ -123,10 +149,10 @@ export function useTransferOwnership(workspaceId: string) {
   })
 }
 
-export function useAcceptInvitation() {
+export function useAcceptJoinLink() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (token: string) => acceptInvitation(token),
+    mutationFn: (token: string) => acceptJoinLink(token),
     onSuccess: () => qc.invalidateQueries({ queryKey: workspaceKeys.list() }),
   })
 }

@@ -122,17 +122,6 @@ type IntegrationAccount struct {
 	ConnectedAt       pgtype.Timestamptz
 }
 
-type Invitation struct {
-	TokenHash   []byte
-	WorkspaceID uuid.UUID
-	Email       string
-	Role        string
-	InvitedBy   uuid.UUID
-	ExpiresAt   pgtype.Timestamptz
-	UsedAt      pgtype.Timestamptz
-	CreatedAt   pgtype.Timestamptz
-}
-
 type KnownDevice struct {
 	ID         uuid.UUID
 	UserID     uuid.UUID
@@ -283,6 +272,16 @@ type Workspace struct {
 	CreatedAt      pgtype.Timestamptz
 	PersonalUserID pgtype.UUID
 	Slug           string
+}
+
+type WorkspaceJoinLink struct {
+	Token       string
+	WorkspaceID uuid.UUID
+	Role        string
+	CreatedBy   uuid.UUID
+	ExpiresAt   pgtype.Timestamptz
+	RevokedAt   pgtype.Timestamptz
+	CreatedAt   pgtype.Timestamptz
 }
 
 type WorkspaceMember struct {

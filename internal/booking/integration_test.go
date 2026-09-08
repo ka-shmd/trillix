@@ -64,8 +64,7 @@ func newStack(t *testing.T) *httptest.Server {
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false)
 
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
-		pgtest.MailService(testPool), appOrigin)
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans, appOrigin)
 
 	svc := booking.NewService(testPool, postgres.TxRunner{Pool: testPool}, booking.Repo{}, wsSvc, plans)
 	h := booking.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF)
