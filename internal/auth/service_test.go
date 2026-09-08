@@ -25,6 +25,8 @@ func (fakeTx) WithTx(ctx context.Context, fn func(pgx.Tx) error) error { return 
 type fakeStore struct {
 	user       User
 	userExists bool
+	// isAdmin — ответ на вопрос о правах администратора сервиса (0059).
+	isAdmin bool
 
 	createUserErr error
 
@@ -194,6 +196,12 @@ func (f *fakeStore) GetUserByID(_ context.Context, _ postgres.DBTX, id uuid.UUID
 	u := f.user
 	u.ID = id
 	return u, nil
+}
+
+// isAdmin — что фейк отвечает на вопрос о правах администратора (0059). По
+// умолчанию false: администратор в юнит-тестах auth не участвует.
+func (f *fakeStore) IsAdmin(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (bool, error) {
+	return f.isAdmin, nil
 }
 
 func (f *fakeStore) GetUserByIdentity(_ context.Context, _ postgres.DBTX, _, _ string) (User, error) {

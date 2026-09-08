@@ -87,6 +87,18 @@ type FormIntegration struct {
 	CreatedAt       pgtype.Timestamptz
 }
 
+type FormTemplate struct {
+	ID          uuid.UUID
+	WorkspaceID pgtype.UUID
+	AuthorID    pgtype.UUID
+	Title       string
+	Description string
+	Schema      []byte
+	Visibility  string
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+}
+
 type FormVersion struct {
 	ID        uuid.UUID
 	FormID    uuid.UUID
@@ -256,6 +268,7 @@ type User struct {
 	DeletedAt        pgtype.Timestamptz
 	AvatarKey        pgtype.Text
 	TwoFactorEnabled bool
+	IsAdmin          bool
 }
 
 type UserIdentity struct {

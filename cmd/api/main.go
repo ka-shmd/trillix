@@ -43,6 +43,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/printer"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 	"github.com/ka-shmd/trillix/internal/submissions"
+	"github.com/ka-shmd/trillix/internal/templates"
 	"github.com/ka-shmd/trillix/internal/visits"
 	"github.com/ka-shmd/trillix/internal/workspaces"
 )
@@ -473,6 +474,13 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		WithRespondentMail(senderAddress(cfg.MailFrom), senderName(cfg.MailFrom),
 			mail.DefaultSubject(mail.TemplateRespondentReceipt))
 
+	// Шаблоны форм (0059). Формы модулю нужны с двух сторон: прочитать черновик,
+	// который сохраняют как шаблон, и завести форму из шаблона — оба права
+	// проверяет сам formsSvc. Флаг администратора спрашивается у auth: колонка
+	// живёт у users, и читать чужую таблицу модуль не вправе.
+	templatesSvc := templates.NewService(pool, templates.Repo{}, workspacesSvc, formsSvc, authSvc)
+	templatesHandler := templates.NewHandler(templatesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+
 	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
 	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис
 	// считал бы себя настроенным. Отсюда объявление переменной интерфейсного
@@ -659,6 +667,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
 		integrationsHandler.Routes, bookingHandler.Routes, bookingPublic.Routes,
+		templatesHandler.Routes,
 	}
 
 	// Печатная страница ответа (ADR §10). Путь задаётся явно на каждом контуре
