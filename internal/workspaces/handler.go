@@ -3,6 +3,7 @@ package workspaces
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -16,13 +17,6 @@ import (
 	"github.com/ka-shmd/trillix/internal/httpserver"
 )
 
-// RateLimiter — лимитер приглашений. Реализация — ratelimit.TokenBucket;
-// в тестах инжектируется пермиссивный (инвариант 6: лимит не ослабляется ради
-// прохождения теста).
-type RateLimiter interface {
-	Allow(key string) bool
-}
-
 // Middleware — HTTP-обёртка (RequireAuth из auth), инжектируется в composition
 // root: workspaces не завязан на конкретный тип auth.Handler.
 type Middleware = func(http.Handler) http.Handler
@@ -33,10 +27,13 @@ type workspaceService interface {
 	Create(ctx context.Context, userID uuid.UUID, name string) (Workspace, error)
 	Rename(ctx context.Context, userID, workspaceID uuid.UUID, name string) (Workspace, error)
 	Delete(ctx context.Context, userID, workspaceID uuid.UUID) error
-	Invite(ctx context.Context, inviterID, workspaceID uuid.UUID, email string, role Role) error
-	PreviewInvitation(ctx context.Context, rawToken string) (Invitation, error)
-	AcceptInvitation(ctx context.Context, userID uuid.UUID, userEmail, rawToken string) (Workspace, error)
-	Members(ctx context.Context, userID, workspaceID uuid.UUID) ([]Member, []PendingInvite, error)
+	JoinLink(ctx context.Context, userID, workspaceID uuid.UUID) (JoinLink, error)
+	CreateJoinLink(ctx context.Context, userID, workspaceID uuid.UUID) (JoinLink, error)
+	RevokeJoinLink(ctx context.Context, userID, workspaceID uuid.UUID) error
+	PreviewJoinLink(ctx context.Context, token string) (JoinLink, error)
+	JoinByLink(ctx context.Context, userID uuid.UUID, token string) (Workspace, error)
+	JoinURL(token string) string
+	Members(ctx context.Context, userID, workspaceID uuid.UUID) ([]Member, error)
 	RemoveMember(ctx context.Context, actorID, workspaceID, memberID uuid.UUID) error
 	Leave(ctx context.Context, userID, workspaceID uuid.UUID) error
 	TransferOwnership(ctx context.Context, actorID, workspaceID, newOwnerID uuid.UUID) error
@@ -53,17 +50,14 @@ type Handler struct {
 	svc         workspaceService
 	requireAuth Middleware
 	requireCSRF Middleware
-	// inviteLimiter — ведро по ПОЛЬЗОВАТЕЛЮ: приглашение — единственная ручка,
-	// отправляющая письмо на произвольный адрес, причём с подконтрольным
-	// отправителю текстом (имя пространства попадает в тело). Без лимитера один
-	// аккаунт превращается в рассылку с нашего домена, и в спам-лист уезжают
-	// заодно письма подтверждения живых пользователей. Ключ — id пользователя,
-	// а не IP: он есть после RequireAuth и не размывается за NAT.
-	inviteLimiter RateLimiter
 }
 
-func NewHandler(svc workspaceService, inviteLimiter RateLimiter, requireAuth, requireCSRF Middleware) *Handler {
-	return &Handler{svc: svc, inviteLimiter: inviteLimiter, requireAuth: requireAuth, requireCSRF: requireCSRF}
+// Лимитера здесь больше нет, и это следствие, а не упущение: он стоял на
+// приглашении ровно потому, что то отправляло письмо на ПРОИЗВОЛЬНЫЙ адрес с
+// подконтрольным отправителю текстом. Ссылка писем не шлёт — выписка её пишет
+// одну строку в своём же пространстве, по одной на пространство.
+func NewHandler(svc workspaceService, requireAuth, requireCSRF Middleware) *Handler {
+	return &Handler{svc: svc, requireAuth: requireAuth, requireCSRF: requireCSRF}
 }
 
 func (h *Handler) Routes(mux *http.ServeMux) {
@@ -71,12 +65,14 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/workspaces", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.create))))
 	mux.Handle("PATCH /api/v1/workspaces/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.rename))))
 	mux.Handle("DELETE /api/v1/workspaces/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.remove))))
-	mux.Handle("POST /api/v1/workspaces/{id}/invitations", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.invite))))
-	// Просмотр приглашения — БЕЗ RequireAuth намеренно: аккаунта у приглашённого
-	// может ещё не быть, а понять, куда его зовут, он должен до регистрации.
-	// Право здесь — сам токен: знание ссылки и есть доказательство.
-	mux.Handle("GET /api/v1/invitations/{token}", http.HandlerFunc(h.previewInvite))
-	mux.Handle("POST /api/v1/invitations/{token}/accept", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.acceptInvite))))
+	mux.Handle("GET /api/v1/workspaces/{id}/join-link", h.requireAuth(http.HandlerFunc(h.joinLink)))
+	mux.Handle("POST /api/v1/workspaces/{id}/join-link", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.createJoinLink))))
+	mux.Handle("DELETE /api/v1/workspaces/{id}/join-link", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.revokeJoinLink))))
+	// Просмотр ссылки — БЕЗ RequireAuth намеренно: аккаунта у зовомого может ещё
+	// не быть, а понять, куда его зовут, он должен до регистрации. Право здесь —
+	// сам токен: знание ссылки и есть доказательство.
+	mux.Handle("GET /api/v1/join/{token}", http.HandlerFunc(h.previewJoinLink))
+	mux.Handle("POST /api/v1/join/{token}/accept", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.acceptJoinLink))))
 	mux.Handle("GET /api/v1/workspaces/{id}/members", h.requireAuth(http.HandlerFunc(h.members)))
 	mux.Handle("DELETE /api/v1/workspaces/{id}/members/{userId}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.removeMember))))
 	mux.Handle("POST /api/v1/workspaces/{id}/leave", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.leave))))
@@ -100,15 +96,8 @@ type memberResponse struct {
 	JoinedAt  string `json:"joinedAt"`
 }
 
-type pendingInviteResponse struct {
-	Email     string `json:"email"`
-	Role      string `json:"role"`
-	ExpiresAt string `json:"expiresAt"`
-}
-
 type membersResponse struct {
-	Members []memberResponse        `json:"members"`
-	Invites []pendingInviteResponse `json:"invites"`
+	Members []memberResponse `json:"members"`
 	// permissions — что МОЖЕТ спрашивающий в этом пространстве. Кабинет прячет
 	// по нему кнопки и не дублирует матрицу прав в TypeScript.
 	Permissions []string `json:"permissions"`
@@ -119,7 +108,7 @@ func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	members, invites, err := h.svc.Members(r.Context(), u.ID, workspaceID)
+	members, err := h.svc.Members(r.Context(), u.ID, workspaceID)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -132,7 +121,6 @@ func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
 
 	resp := membersResponse{
 		Members:     make([]memberResponse, len(members)),
-		Invites:     make([]pendingInviteResponse, len(invites)),
 		Permissions: make([]string, len(actions)),
 	}
 	for i, m := range members {
@@ -141,12 +129,6 @@ func (h *Handler) members(w http.ResponseWriter, r *http.Request) {
 			FirstName: m.FirstName, LastName: m.LastName, AvatarKey: m.AvatarKey,
 			Role:     string(m.Role),
 			JoinedAt: m.JoinedAt.UTC().Format(time.RFC3339),
-		}
-	}
-	for i, inv := range invites {
-		resp.Invites[i] = pendingInviteResponse{
-			Email: inv.Email, Role: string(inv.Role),
-			ExpiresAt: inv.ExpiresAt.UTC().Format(time.RFC3339),
 		}
 	}
 	for i, a := range actions {
@@ -231,82 +213,6 @@ func userAndWorkspace(w http.ResponseWriter, r *http.Request) (auth.User, uuid.U
 	return u, id, true
 }
 
-type inviteRequest struct {
-	Email string `json:"email"`
-	Role  string `json:"role"`
-}
-
-// invitationResponse — что видит приглашённый ДО принятия. Ни id пространства,
-// ни кто ещё в нём состоит: до принятия он посторонний.
-type invitationResponse struct {
-	WorkspaceName string `json:"workspaceName"`
-	Email         string `json:"email"`
-	Role          string `json:"role"`
-	// state — usable | used | expired: экран говорит человеку, что делать.
-	State string `json:"state"`
-}
-
-func (h *Handler) invite(w http.ResponseWriter, r *http.Request) {
-	u, ok := auth.UserFromContext(r.Context())
-	if !ok {
-		httpserver.WriteError(w, r, domain.ErrUnauthorized)
-		return
-	}
-	workspaceID, err := uuid.Parse(r.PathValue("id"))
-	if err != nil {
-		httpserver.WriteError(w, r, domain.ErrNotFound)
-		return
-	}
-	if !h.inviteLimiter.Allow(u.ID.String()) {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много приглашений", domain.ErrRateLimited))
-		return
-	}
-	var req inviteRequest
-	if !decodeBody(w, r, &req) {
-		return
-	}
-	if err := h.svc.Invite(r.Context(), u.ID, workspaceID, req.Email, Role(req.Role)); err != nil {
-		httpserver.WriteError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-func (h *Handler) previewInvite(w http.ResponseWriter, r *http.Request) {
-	inv, err := h.svc.PreviewInvitation(r.Context(), r.PathValue("token"))
-	if err != nil {
-		httpserver.WriteError(w, r, err)
-		return
-	}
-	state := "usable"
-	switch {
-	case inv.Used():
-		state = "used"
-	case inv.Expired(time.Now()):
-		state = "expired"
-	}
-	httpserver.WriteJSON(w, r, http.StatusOK, invitationResponse{
-		WorkspaceName: inv.WorkspaceName,
-		Email:         inv.Email,
-		Role:          string(inv.Role),
-		State:         state,
-	})
-}
-
-func (h *Handler) acceptInvite(w http.ResponseWriter, r *http.Request) {
-	u, ok := auth.UserFromContext(r.Context())
-	if !ok {
-		httpserver.WriteError(w, r, domain.ErrUnauthorized)
-		return
-	}
-	ws, err := h.svc.AcceptInvitation(r.Context(), u.ID, u.Email, r.PathValue("token"))
-	if err != nil {
-		httpserver.WriteError(w, r, err)
-		return
-	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toResponse(ws))
-}
-
 // decodeBody — общий разбор тела с потолком и запретом неизвестных полей
 // (инвариант 3: MaxBytesReader на каждом эндпоинте с телом).
 func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
@@ -323,6 +229,103 @@ func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 		return false
 	}
 	return true
+}
+
+// joinLinkResponse — ссылка глазами ВЛАДЕЛЬЦА: сам адрес и срок. Токен здесь
+// отдаётся целиком, и это возможно только потому, что в базе он лежит сырым
+// (ADR §10) — из SHA-256 ссылку было бы не восстановить.
+type joinLinkResponse struct {
+	URL       string `json:"url"`
+	ExpiresAt string `json:"expiresAt"`
+	// expired — срок вышел. Отдельным полем, а не отсутствием ссылки: «истекла,
+	// создайте новую» и «ссылки нет» — разные новости для человека.
+	Expired bool `json:"expired"`
+}
+
+// joinPreviewResponse — ссылка глазами ЗОВОМОГО: куда его зовут и кем он станет.
+// Ни id пространства, ни состава: пока он не вошёл, он посторонний.
+type joinPreviewResponse struct {
+	WorkspaceName string `json:"workspaceName"`
+	Role          string `json:"role"`
+}
+
+func (h *Handler) joinLink(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	link, err := h.svc.JoinLink(r.Context(), u.ID, workspaceID)
+	if err != nil {
+		// Живой ссылки нет — это НЕ отказ: у пространства её может не быть
+		// никогда, и 404 на этом месте кабинет был бы вынужден отличать от
+		// «пространства нет». Пустой ответ говорит то же самое и однозначно.
+		if errors.Is(err, domain.ErrNotFound) {
+			httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{"link": nil})
+			return
+		}
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{"link": h.toJoinLinkResponse(link)})
+}
+
+func (h *Handler) createJoinLink(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	link, err := h.svc.CreateJoinLink(r.Context(), u.ID, workspaceID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusCreated, map[string]any{"link": h.toJoinLinkResponse(link)})
+}
+
+func (h *Handler) revokeJoinLink(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.RevokeJoinLink(r.Context(), u.ID, workspaceID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) previewJoinLink(w http.ResponseWriter, r *http.Request) {
+	link, err := h.svc.PreviewJoinLink(r.Context(), r.PathValue("token"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, joinPreviewResponse{
+		WorkspaceName: link.WorkspaceName,
+		Role:          string(link.Role),
+	})
+}
+
+func (h *Handler) acceptJoinLink(w http.ResponseWriter, r *http.Request) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	ws, err := h.svc.JoinByLink(r.Context(), u.ID, r.PathValue("token"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toResponse(ws))
+}
+
+func (h *Handler) toJoinLinkResponse(link JoinLink) joinLinkResponse {
+	return joinLinkResponse{
+		URL:       h.svc.JoinURL(link.Token),
+		ExpiresAt: link.ExpiresAt.UTC().Format(time.RFC3339),
+		Expired:   link.Expired(time.Now()),
+	}
 }
 
 type workspaceResponse struct {

@@ -82,7 +82,7 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 	authSvc := seedAuthService(pool)
 	plansSvc := entitlements.NewService(pool, entitlements.Repo{}, time.Now)
 	formsSvc := forms.NewService(pool, postgres.TxRunner{Pool: pool}, forms.Repo{},
-		workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, plansSvc, nil, ""),
+		workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, plansSvc, ""),
 		plansSvc)
 
 	// Создать демо-пользователя или найти уже существующего.

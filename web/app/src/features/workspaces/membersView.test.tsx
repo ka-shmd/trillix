@@ -11,7 +11,7 @@ import {
   RouterProvider,
 } from '@tanstack/react-router'
 
-import type { Member, PendingInvite } from '../../entities/member'
+import type { Member } from '../../entities/member'
 import type { Workspace } from '../../entities/workspace'
 import { WorkspaceAddressProvider } from '../../shared/workspaceContext'
 import { planKeys } from '../plan/keys'
@@ -45,6 +45,9 @@ function member(over: Partial<Member> & { userId: string; email: string }): Memb
 const OWNER = member({ userId: 'u-owner', email: 'owner@example.com', role: 'owner' })
 const MATE = member({ userId: 'u-mate', email: 'mate@example.com', firstName: 'Пётр' })
 
+const FUTURE = '2027-01-01T10:00:00Z'
+const PAST = '2020-01-01T10:00:00Z'
+
 const OWNER_PERMISSIONS = ['member.read', 'member.manage', 'billing.view', 'ownership.transfer']
 
 let calls: string[] = []
@@ -70,11 +73,11 @@ afterEach(() => {
 // живёт внутри роутера и провайдера адреса — как и в кабинете.
 async function renderMembers(opts: {
   members?: Member[]
-  invites?: PendingInvite[]
   permissions?: string[]
   // seats — снимок тарифа. Не передан = его в кэше нет вовсе (право не дано либо
   // снимок ещё едет); limit: null = безлимит.
   seats?: { used: number; limit: number | null }
+  joinLink?: { url: string; expiresAt: string; expired: boolean } | null
   currentUserId?: string
 }) {
   const qc = new QueryClient({
@@ -83,9 +86,11 @@ async function renderMembers(opts: {
   qc.setQueryData(workspaceKeys.list(), [TEAM])
   qc.setQueryData(workspaceKeys.members(TEAM.id), {
     members: opts.members ?? [OWNER],
-    invites: opts.invites ?? [],
     permissions: opts.permissions ?? OWNER_PERMISSIONS,
   })
+  // Ссылка-приглашение: не передана — раздел покажет «ссылки нет». Кладём в кэш,
+  // чтобы её запрос не уходил в сеть у тестов, которые про неё не спрашивают.
+  qc.setQueryData(workspaceKeys.joinLink(TEAM.id), opts.joinLink ?? null)
   if (opts.seats) {
     qc.setQueryData(planKeys.snapshot(TEAM.id), {
       planCode: 'free',
@@ -200,20 +205,48 @@ it('передача владения называет смену платель
   await waitFor(() => expect(writes()).toEqual(['POST /api/v1/workspaces/ws-team/ownership']))
 })
 
-it('приглашают кнопкой и диалогом, поля почты в потоке страницы нет', async () => {
+it('ссылки нет — раздел предлагает её создать, и до нажатия запроса не уходит', async () => {
   await renderMembers({ members: [OWNER] })
 
-  // Решение владельца 2026-09-08: исключение из правила «завести новое — кнопкой в
-  // заголовке» снято, и поле в потоке страницы не должно вернуться.
+  // Поля почты на экране нет и быть не должно: приглашение по адресу вырезано из
+  // продукта целиком (ADR §10), а не спрятано за диалог.
   expect(screen.queryByLabelText('Адрес почты')).toBeNull()
+  expect(screen.getByText('Ссылки нет')).toBeTruthy()
+  expect(writes()).toEqual([])
 
-  fireEvent.click(screen.getByRole('button', { name: 'Пригласить' }))
-  await screen.findByRole('dialog', { name: 'Пригласить в пространство' })
+  fireEvent.click(screen.getByRole('button', { name: 'Создать ссылку' }))
+  await waitFor(() => expect(writes()).toEqual(['POST /api/v1/workspaces/ws-team/join-link']))
+})
 
-  fireEvent.change(screen.getByLabelText('Адрес почты'), { target: { value: 'new@example.com' } })
-  // Диалог прячет фон от скринридера, поэтому кнопка с этим именем остаётся одна.
-  fireEvent.click(screen.getByRole('button', { name: 'Пригласить' }))
-  await waitFor(() => expect(writes()).toEqual(['POST /api/v1/workspaces/ws-team/invitations']))
+it('истёкшая ссылка — не «ссылки нет»: текст другой', async () => {
+  await renderMembers({
+    members: [OWNER],
+    joinLink: { url: 'https://app.example/join/tok', expiresAt: PAST, expired: true },
+  })
+
+  // Человек уже кому-то её отправил, и ему важно знать, что она умерла, а не что
+  // её не было.
+  expect(screen.getByText('Срок ссылки истёк')).toBeTruthy()
+  expect(screen.queryByText('Ссылки нет')).toBeNull()
+})
+
+it('живая ссылка показана целиком и отключается с подтверждением', async () => {
+  await renderMembers({
+    members: [OWNER],
+    joinLink: { url: 'https://app.example/join/tok', expiresAt: FUTURE, expired: false },
+  })
+
+  // Ссылка отдаётся целиком, потому что токен лежит в базе сырым (ADR §10): из
+  // SHA-256 её было бы не восстановить, и показать её второй раз мы бы не смогли.
+  const field = screen.getByLabelText('Ссылка-приглашение') as HTMLInputElement
+  expect(field.value).toBe('https://app.example/join/tok')
+
+  fireEvent.click(screen.getByRole('button', { name: 'Отключить ссылку' }))
+  await screen.findByRole('heading', { name: 'Отключить ссылку?' })
+  expect(writes()).toEqual([])
+
+  fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))
+  await waitFor(() => expect(writes()).toEqual(['DELETE /api/v1/workspaces/ws-team/join-link']))
 })
 
 it('редактор не видит ни приглашения, ни действий над строками', async () => {
@@ -225,27 +258,14 @@ it('редактор не видит ни приглашения, ни дейс�
 
   // Кабинет прячет кнопки по permissions с сервера, а не по роли, вычисленной на
   // фронте: матрица прав живёт в одном месте, и это не TypeScript.
-  expect(screen.queryByRole('button', { name: 'Пригласить' })).toBeNull()
   expect(screen.queryByRole('button', { name: 'Действия: Пётр' })).toBeNull()
-  expect(screen.queryByRole('heading', { name: 'Приглашены, но ещё не вошли' })).toBeNull()
+  // Раздела ссылки у редактора нет вовсе: знать ссылку значит уметь ею раздавать
+  // доступ, а ручка стоит за member.manage и ответила бы 403.
+  expect(screen.queryByRole('heading', { name: 'Ссылка-приглашение' })).toBeNull()
+  expect(calls.filter((c) => c.includes('join-link'))).toEqual([])
   // Снимок тарифа у редактора не спрашивается ВОВСЕ: ручка стоит за billing.view и
   // ответила бы 403 — то есть красной строкой в консоли на каждом открытии.
   expect(calls.filter((c) => c.includes('entitlements'))).toEqual([])
-})
-
-it('приглашение показывает срок и шлёт новое письмо той же ручкой', async () => {
-  await renderMembers({
-    members: [OWNER],
-    invites: [{ email: 'wait@example.com', role: 'editor', expiresAt: '2026-09-15T10:00:00Z' }],
-  })
-
-  // Срок приезжает составом и раньше не показывался вовсе.
-  expect(screen.getByText(/Ссылка действует до/)).toBeTruthy()
-
-  fireEvent.click(screen.getByRole('button', { name: 'Отправить снова' }))
-  // Отдельной ручки отзыва нет: повторное приглашение гасит прежнее (частичный
-  // UNIQUE в 0017), поэтому «отправить снова» и есть отзыв старого письма.
-  await waitFor(() => expect(writes()).toEqual(['POST /api/v1/workspaces/ws-team/invitations']))
 })
 
 it('счётчик мест рисуется только там, где у мест есть потолок', async () => {
@@ -264,14 +284,11 @@ it('счётчик мест рисуется только там, где у ме
   expect(screen.getByText('2 из 5 мест')).toBeTruthy()
 })
 
-it('исчерпанные места закрывают приглашение до набора адреса', async () => {
+it('исчерпанные места видны счётчиком в заголовке', async () => {
   await renderMembers({ members: [OWNER, MATE], seats: { used: 5, limit: 5 } })
 
-  fireEvent.click(screen.getByRole('button', { name: 'Пригласить' }))
-  await screen.findByRole('dialog', { name: 'Пригласить в пространство' })
-
-  // Исчерпанный лимит не зависит от того, чью почту наберут, поэтому поля нет, а
-  // вместо него — ответ «что делать».
-  expect(screen.queryByLabelText('Адрес почты')).toBeNull()
-  expect(screen.getByRole('link', { name: 'Посмотреть тарифы' })).toBeTruthy()
+  // Гейт мест теперь стоит на ВХОДЕ по ссылке, а не на выписке: ссылка никого не
+  // называет и приводит скольких угодно. Владельцу поэтому важно видеть счётчик —
+  // отказ получит зовомый, а не он.
+  expect(screen.getByText('5 из 5 мест')).toBeTruthy()
 })

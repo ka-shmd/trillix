@@ -33,7 +33,15 @@ type fakeStore struct {
 	ownerUserID     uuid.UUID
 	createdSlugs    []string
 	createdWSIDs    []uuid.UUID
-	inviteErr       error
+	createLinkErr   error
+	createdToken    string
+	createdExpiry   time.Time
+	revoked         int
+	revokedRows     int64
+	linkByToken     JoinLink
+	linkByTokenErr  error
+	addedMember     uuid.UUID
+	addedRole       string
 	deletedMembers  int64
 	deleteMemberErr error
 	ownedTeams      []string
@@ -79,39 +87,37 @@ func (f *fakeStore) GetWorkspace(_ context.Context, _ postgres.DBTX, id uuid.UUI
 	return Workspace{ID: id, Name: "Команда", IsPersonal: f.wsPersonal}, nil
 }
 
-func (f *fakeStore) EmailByUserID(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (string, error) {
-	return "owner@example.com", nil
+// --- JoinLinkStore: ссылки проверяются интеграционно (нужны настоящие частичный
+// UNIQUE и транзакция «отозвать + выписать»), здесь фейк удовлетворяет Store и
+// помнит выписанное — тем, кому нужно большее, отдают joinStore ниже.
+
+func (f *fakeStore) CreateJoinLink(_ context.Context, _ postgres.DBTX, token string, _ uuid.UUID, _ string, _ uuid.UUID, expiresAt time.Time) error {
+	f.createdToken = token
+	f.createdExpiry = expiresAt
+	return f.createLinkErr
 }
 
-// --- InviteStore: приглашения проверяются интеграционно (нужны настоящие
-// атомарный UPDATE и частичный UNIQUE), здесь фейк только удовлетворяет Store.
-
-func (f *fakeStore) CreateInvitation(_ context.Context, _ postgres.DBTX, _ []byte, _ uuid.UUID, _, _ string, _ uuid.UUID, _ time.Time) error {
-	return f.inviteErr
+func (f *fakeStore) RevokeJoinLink(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (int64, error) {
+	f.revoked++
+	return f.revokedRows, nil
 }
 
-func (f *fakeStore) DeletePendingInvitation(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ string) error {
+func (f *fakeStore) ActiveJoinLink(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (JoinLink, error) {
+	return JoinLink{}, pgx.ErrNoRows
+}
+
+func (f *fakeStore) JoinLinkByToken(_ context.Context, _ postgres.DBTX, _ string) (JoinLink, error) {
+	return f.linkByToken, f.linkByTokenErr
+}
+
+func (f *fakeStore) AddMember(_ context.Context, _ postgres.DBTX, _, userID uuid.UUID, role string) error {
+	f.addedMember = userID
+	f.addedRole = role
 	return nil
 }
 
-func (f *fakeStore) GetInvitation(_ context.Context, _ postgres.DBTX, _ []byte) (Invitation, error) {
-	return Invitation{}, pgx.ErrNoRows
-}
-
-func (f *fakeStore) ConsumeInvitation(_ context.Context, _ postgres.DBTX, _ []byte) (Invitation, error) {
-	return Invitation{}, pgx.ErrNoRows
-}
-
-func (f *fakeStore) AddMember(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, _ string) error {
-	return nil
-}
-
-func (f *fakeStore) PurgeExpiredInvitations(_ context.Context, _ postgres.DBTX) (int64, error) {
+func (f *fakeStore) PurgeExpiredJoinLinks(_ context.Context, _ postgres.DBTX) (int64, error) {
 	return 0, nil
-}
-
-func (f *fakeStore) UserIDByEmail(_ context.Context, _ postgres.DBTX, _ string) (uuid.UUID, error) {
-	return uuid.Nil, pgx.ErrNoRows
 }
 
 func (f *fakeStore) ListMembers(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Member, error) {
@@ -120,10 +126,6 @@ func (f *fakeStore) ListMembers(_ context.Context, _ postgres.DBTX, _ uuid.UUID)
 
 func (f *fakeStore) ListOwnedTeamsWithMembers(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]string, error) {
 	return f.ownedTeams, nil
-}
-
-func (f *fakeStore) ListPendingInvites(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]PendingInvite, error) {
-	return nil, nil
 }
 
 // DeleteMember отдаёт заданное число снятых строк: 0 — «нет такого или это
@@ -194,7 +196,7 @@ func (p *fakePlans) CheckWorkspace(_ context.Context, _ uuid.UUID, key entitleme
 
 func newTestService(store *fakeStore, plans *fakePlans) (*Service, *fakeTx) {
 	tx := &fakeTx{}
-	return NewService(nil, tx, store, plans, nil, "https://app.example"), tx
+	return NewService(nil, tx, store, plans, "https://app.example"), tx
 }
 
 // ListForUser пробрасывает userID в репозиторий и возвращает его результат.
@@ -363,7 +365,7 @@ func TestCreate_OwnerFailureAborts(t *testing.T) {
 // доехать до репозитория вовсе.
 func TestRename_ForbiddenRoleDoesNotWrite(t *testing.T) {
 	store := &roleStore{role: string(RoleEditor)}
-	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, "https://app.example")
 
 	_, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), "Новое имя")
 	if !errors.Is(err, domain.ErrForbidden) {
@@ -389,7 +391,7 @@ func TestRename_NameValidation(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			store := &roleStore{role: string(RoleOwner)}
-			svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+			svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, "https://app.example")
 			_, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), tc.in)
 			if !errors.Is(err, domain.ErrValidation) {
 				t.Fatalf("err = %v, ждали domain.ErrValidation", err)
@@ -404,7 +406,7 @@ func TestRename_NameValidation(t *testing.T) {
 // Пробелы по краям срезаются, как и при создании.
 func TestRename_TrimsName(t *testing.T) {
 	store := &roleStore{role: string(RoleOwner)}
-	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example")
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, "https://app.example")
 
 	ws, err := svc.Rename(context.Background(), uuid.New(), uuid.New(), "  Отдел маркетинга  ")
 	if err != nil {
@@ -432,7 +434,7 @@ func TestDelete_RemovesFilesBeforeRows(t *testing.T) {
 	store := &roleStore{role: string(RoleOwner)}
 	store.deleteWSRows = 1
 	files := &fakeFiles{}
-	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example").
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, "https://app.example").
 		WithFiles(files)
 
 	if err := svc.Delete(context.Background(), uuid.New(), uuid.New()); err != nil {
@@ -452,7 +454,7 @@ func TestDelete_FileFailureAbortsRowDelete(t *testing.T) {
 	wantErr := errors.New("bucket down")
 	store := &roleStore{role: string(RoleOwner)}
 	store.deleteWSRows = 1
-	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example").
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, "https://app.example").
 		WithFiles(&fakeFiles{err: wantErr})
 
 	if err := svc.Delete(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, wantErr) {
@@ -467,7 +469,7 @@ func TestDelete_FileFailureAbortsRowDelete(t *testing.T) {
 func TestDelete_ForbiddenRoleTouchesNothing(t *testing.T) {
 	store := &roleStore{role: string(RoleEditor)}
 	files := &fakeFiles{}
-	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example").
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, "https://app.example").
 		WithFiles(files)
 
 	err := svc.Delete(context.Background(), uuid.New(), uuid.New())
@@ -484,7 +486,7 @@ func TestDelete_ForbiddenRoleTouchesNothing(t *testing.T) {
 func TestDelete_PersonalRefused(t *testing.T) {
 	store := &roleStore{role: string(RoleOwner)}
 	store.deleteWSRows = 0
-	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, nil, "https://app.example").
+	svc := NewService(nil, &fakeTx{}, store, &fakePlans{allowed: true}, "https://app.example").
 		WithFiles(&fakeFiles{})
 
 	if err := svc.Delete(context.Background(), uuid.New(), uuid.New()); !errors.Is(err, domain.ErrValidation) {

@@ -5,5 +5,8 @@ export const workspaceKeys = {
   // Состав пространства ключуется его id: у каждого свой кэш, иначе переход
   // между пространствами показал бы чужих участников.
   members: (workspaceId: string) => ['workspaces', 'members', workspaceId] as const,
-  invitation: (token: string) => ['workspaces', 'invitation', token] as const,
+  // Ссылка-приглашение пространства: свой ключ, потому что живёт своей ручкой и
+  // своим правом (member.manage), а состав читает и редактор.
+  joinLink: (workspaceId: string) => ['workspaces', 'join-link', workspaceId] as const,
+  joinPreview: (token: string) => ['workspaces', 'join-preview', token] as const,
 }

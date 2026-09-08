@@ -343,28 +343,6 @@ func (q *Queries) ConsumeEmailVerificationToken(ctx context.Context, tokenHash [
 	return user_id, err
 }
 
-const consumeInvitation = `-- name: ConsumeInvitation :one
-UPDATE invitations
-SET used_at = now()
-WHERE token_hash = $1 AND used_at IS NULL AND expires_at > now()
-RETURNING workspace_id, email, role
-`
-
-type ConsumeInvitationRow struct {
-	WorkspaceID uuid.UUID
-	Email       string
-	Role        string
-}
-
-// Потребление токена атомарным UPDATE: повтор получает 0 строк, поэтому одной
-// ссылкой нельзя войти дважды, и гонка двух вкладок не создаёт двух членств.
-func (q *Queries) ConsumeInvitation(ctx context.Context, tokenHash []byte) (ConsumeInvitationRow, error) {
-	row := q.db.QueryRow(ctx, consumeInvitation, tokenHash)
-	var i ConsumeInvitationRow
-	err := row.Scan(&i.WorkspaceID, &i.Email, &i.Role)
-	return i, err
-}
-
 const consumeLoginCodeAttempt = `-- name: ConsumeLoginCodeAttempt :one
 UPDATE login_codes SET attempts = attempts + 1
 WHERE user_id = $1 AND attempts < $2 AND expires_at > now()
@@ -759,31 +737,28 @@ func (q *Queries) CreateIdentity(ctx context.Context, arg CreateIdentityParams) 
 	return err
 }
 
-const createInvitation = `-- name: CreateInvitation :exec
-INSERT INTO invitations (token_hash, workspace_id, email, role, invited_by, expires_at)
-VALUES ($1, $2, $3, $4, $5, $6)
+const createJoinLink = `-- name: CreateJoinLink :exec
+INSERT INTO workspace_join_links (token, workspace_id, role, created_by, expires_at)
+VALUES ($1, $2, $3, $4, $5)
 `
 
-type CreateInvitationParams struct {
-	TokenHash   []byte
+type CreateJoinLinkParams struct {
+	Token       string
 	WorkspaceID uuid.UUID
-	Email       string
 	Role        string
-	InvitedBy   uuid.UUID
+	CreatedBy   uuid.UUID
 	ExpiresAt   pgtype.Timestamptz
 }
 
-// Приглашение и письмо кладутся ОДНОЙ транзакцией (transactional outbox): либо
-// есть и ссылка, и письмо в очереди, либо ничего. Повторное приглашение тому же
-// адресу заменяет непринятое (частичный UNIQUE в 0017) — ON CONFLICT сносит
-// прежний токен, чтобы годной осталась ровно одна ссылка.
-func (q *Queries) CreateInvitation(ctx context.Context, arg CreateInvitationParams) error {
-	_, err := q.db.Exec(ctx, createInvitation,
-		arg.TokenHash,
+// Ссылка-приглашение (0058). Токен ложится СЫРЫМ, а не SHA-256, и это
+// единственное такое место в продукте — ADR §10: ценность ссылки в повторном
+// копировании, а из хеша её не восстановить.
+func (q *Queries) CreateJoinLink(ctx context.Context, arg CreateJoinLinkParams) error {
+	_, err := q.db.Exec(ctx, createJoinLink,
+		arg.Token,
 		arg.WorkspaceID,
-		arg.Email,
 		arg.Role,
-		arg.InvitedBy,
+		arg.CreatedBy,
 		arg.ExpiresAt,
 	)
 	return err
@@ -1407,23 +1382,6 @@ func (q *Queries) DeletePartialSubmission(ctx context.Context, arg DeletePartial
 	return result.RowsAffected(), nil
 }
 
-const deletePendingInvitation = `-- name: DeletePendingInvitation :exec
-DELETE FROM invitations
-WHERE workspace_id = $1 AND lower(email) = lower($2) AND used_at IS NULL
-`
-
-type DeletePendingInvitationParams struct {
-	WorkspaceID uuid.UUID
-	Lower       string
-}
-
-// Снимает непринятое приглашение адресу перед выдачей нового (и обслуживает
-// отзыв приглашения владельцем).
-func (q *Queries) DeletePendingInvitation(ctx context.Context, arg DeletePendingInvitationParams) error {
-	_, err := q.db.Exec(ctx, deletePendingInvitation, arg.WorkspaceID, arg.Lower)
-	return err
-}
-
 const deleteSchedule = `-- name: DeleteSchedule :execrows
 DELETE FROM schedules WHERE id = $1
 `
@@ -1800,6 +1758,34 @@ func (q *Queries) GetAccountEntitlements(ctx context.Context, arg GetAccountEnti
 		&i.Limits,
 		&i.AiGenerationsUsed,
 		&i.WorkspacesOwned,
+	)
+	return i, err
+}
+
+const getActiveJoinLink = `-- name: GetActiveJoinLink :one
+SELECT token, workspace_id, role, expires_at
+FROM workspace_join_links
+WHERE workspace_id = $1 AND revoked_at IS NULL
+`
+
+type GetActiveJoinLinkRow struct {
+	Token       string
+	WorkspaceID uuid.UUID
+	Role        string
+	ExpiresAt   pgtype.Timestamptz
+}
+
+// Живая ссылка пространства для кабинета. Истёкшую отдаёт ТОЖЕ: срок разбирает
+// сервис, чтобы экран мог сказать «истекла, создайте новую» вместо «ссылки нет».
+// Двух годных не бывает — держит idx_join_links_active.
+func (q *Queries) GetActiveJoinLink(ctx context.Context, workspaceID uuid.UUID) (GetActiveJoinLinkRow, error) {
+	row := q.db.QueryRow(ctx, getActiveJoinLink, workspaceID)
+	var i GetActiveJoinLinkRow
+	err := row.Scan(
+		&i.Token,
+		&i.WorkspaceID,
+		&i.Role,
+		&i.ExpiresAt,
 	)
 	return i, err
 }
@@ -2583,33 +2569,36 @@ func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (
 	return i, err
 }
 
-const getInvitation = `-- name: GetInvitation :one
-SELECT i.workspace_id, i.email, i.role, i.expires_at, i.used_at, w.name AS workspace_name
-FROM invitations i
-JOIN workspaces w ON w.id = i.workspace_id
-WHERE i.token_hash = $1
+const getJoinLinkByToken = `-- name: GetJoinLinkByToken :one
+SELECT l.token, l.workspace_id, l.role, l.expires_at, w.name AS workspace_name
+FROM workspace_join_links l
+JOIN workspaces w ON w.id = l.workspace_id
+WHERE l.token = $1 AND l.revoked_at IS NULL
 `
 
-type GetInvitationRow struct {
+type GetJoinLinkByTokenRow struct {
+	Token         string
 	WorkspaceID   uuid.UUID
-	Email         string
 	Role          string
 	ExpiresAt     pgtype.Timestamptz
-	UsedAt        pgtype.Timestamptz
 	WorkspaceName string
 }
 
-// Приглашение по токену — для экрана «вас приглашают». Отдаёт заодно название
-// пространства: показать его нужно ДО принятия, а членства ещё нет.
-func (q *Queries) GetInvitation(ctx context.Context, tokenHash []byte) (GetInvitationRow, error) {
-	row := q.db.QueryRow(ctx, getInvitation, tokenHash)
-	var i GetInvitationRow
+// Вход по ссылке. Отозванная не находится вовсе, истёкшая находится и
+// отбраковывается сервисом — снаружи оба случая и «такой ссылки нет» неразличимы
+// намеренно: действие у человека одно, а различение позволяло бы перебором
+// выяснять, какие токены существовали.
+//
+// Имя пространства едет тем же запросом: зовомому надо понять, куда его зовут, а
+// второй поездки за вывеской этот путь не стоит.
+func (q *Queries) GetJoinLinkByToken(ctx context.Context, token string) (GetJoinLinkByTokenRow, error) {
+	row := q.db.QueryRow(ctx, getJoinLinkByToken, token)
+	var i GetJoinLinkByTokenRow
 	err := row.Scan(
+		&i.Token,
 		&i.WorkspaceID,
-		&i.Email,
 		&i.Role,
 		&i.ExpiresAt,
-		&i.UsedAt,
 		&i.WorkspaceName,
 	)
 	return i, err
@@ -3243,21 +3232,6 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.TwoFactorEnabled,
 	)
 	return i, err
-}
-
-const getUserIDByEmail = `-- name: GetUserIDByEmail :one
-SELECT id FROM users WHERE email = lower($1) AND deleted_at IS NULL
-`
-
-// Удалённый аккаунт — «такого нет»: адрес остаётся занятым (войти по нему
-// нельзя, но и переиспользовать тоже), а приглашать его владельцу незачем.
-// Слепота обязана совпадать со слепотой списка участников: иначе владелец не
-// видел бы человека в составе, но получал бы «он уже в пространстве».
-func (q *Queries) GetUserIDByEmail(ctx context.Context, lower string) (uuid.UUID, error) {
-	row := q.db.QueryRow(ctx, getUserIDByEmail, lower)
-	var id uuid.UUID
-	err := row.Scan(&id)
-	return id, err
 }
 
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
@@ -4429,41 +4403,6 @@ func (q *Queries) ListPartialsFirstPage(ctx context.Context, arg ListPartialsFir
 	return items, nil
 }
 
-const listPendingInvitations = `-- name: ListPendingInvitations :many
-SELECT email, role, expires_at
-FROM invitations
-WHERE workspace_id = $1 AND used_at IS NULL AND expires_at > now()
-ORDER BY created_at ASC
-`
-
-type ListPendingInvitationsRow struct {
-	Email     string
-	Role      string
-	ExpiresAt pgtype.Timestamptz
-}
-
-// Непринятые и не истёкшие приглашения — их видно на той же странице, что и
-// участников: «позвали, но ещё не вошёл» — это состояние пространства.
-func (q *Queries) ListPendingInvitations(ctx context.Context, workspaceID uuid.UUID) ([]ListPendingInvitationsRow, error) {
-	rows, err := q.db.Query(ctx, listPendingInvitations, workspaceID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []ListPendingInvitationsRow
-	for rows.Next() {
-		var i ListPendingInvitationsRow
-		if err := rows.Scan(&i.Email, &i.Role, &i.ExpiresAt); err != nil {
-			return nil, err
-		}
-		items = append(items, i)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
-}
-
 const listPendingOutbox = `-- name: ListPendingOutbox :many
 SELECT id, channel, payload, attempts
 FROM outbox
@@ -5292,15 +5231,15 @@ func (q *Queries) PromoteToOwner(ctx context.Context, arg PromoteToOwnerParams) 
 	return result.RowsAffected(), nil
 }
 
-const purgeExpiredInvitations = `-- name: PurgeExpiredInvitations :execrows
-DELETE FROM invitations WHERE expires_at < now() OR used_at IS NOT NULL
+const purgeExpiredJoinLinks = `-- name: PurgeExpiredJoinLinks :execrows
+DELETE FROM workspace_join_links
+WHERE expires_at < now() OR revoked_at IS NOT NULL
 `
 
-// Фоновая чистка: истёкшие и уже использованные приглашения не нужны никому —
-// ни ссылка, ни история (кто кого звал, видно по членству). Индекс
-// idx_invitations_expires заведён ровно под этот запрос.
-func (q *Queries) PurgeExpiredInvitations(ctx context.Context) (int64, error) {
-	result, err := q.db.Exec(ctx, purgeExpiredInvitations)
+// Периодическая чистка: истёкшие и отозванные. Отозванные копятся по строке на
+// каждое «создать новую» и после отзыва не нужны никому.
+func (q *Queries) PurgeExpiredJoinLinks(ctx context.Context) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeExpiredJoinLinks)
 	if err != nil {
 		return 0, err
 	}
@@ -5353,6 +5292,22 @@ WHERE f.id = s.form_id AND f.workspace_id = $1 AND s.over_quota
 // обещание «сохранены и откроются после апгрейда» было бы враньём.
 func (q *Queries) RevealHiddenSubmissions(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
 	result, err := q.db.Exec(ctx, revealHiddenSubmissions, workspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const revokeJoinLink = `-- name: RevokeJoinLink :execrows
+UPDATE workspace_join_links
+SET revoked_at = now()
+WHERE workspace_id = $1 AND revoked_at IS NULL
+`
+
+// Гасит живую ссылку пространства. Ноль строк означает «живой не было» — не
+// ошибка: результат для человека тот же.
+func (q *Queries) RevokeJoinLink(ctx context.Context, workspaceID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, revokeJoinLink, workspaceID)
 	if err != nil {
 		return 0, err
 	}

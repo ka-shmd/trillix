@@ -46,7 +46,7 @@ func newMailSvc() *mail.Service {
 func newAuthService() *auth.Service {
 	mailSvc := newMailSvc()
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), mailSvc, testAppOrigin)
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), testAppOrigin)
 	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, mailSvc, time.Hour, testAppOrigin).
 		WithLoginCodeKey([]byte("integration-test-login-code-key")).
 		WithTeams(wsSvc).

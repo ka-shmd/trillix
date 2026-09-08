@@ -138,7 +138,7 @@ func deleteStack(t *testing.T, slug string) (*submissions.Service, uuid.UUID) {
 	t.Helper()
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-		plans, pgtest.MailService(testPool), "http://localhost:5173")
+		plans, "http://localhost:5173")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, plans).
 		WithSecret(testSecret)
 	visitsSvc := visits.NewService(testPool, formsSvc, plans, visits.Repo{}, nil, nil)
