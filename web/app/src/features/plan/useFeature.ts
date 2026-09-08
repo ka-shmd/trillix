@@ -37,7 +37,15 @@ export function useFeatureAllowed(key: string): boolean {
 // refresh обязателен рядом со значением: расход меняется действиями самого автора на
 // том же экране (каждая реплика ассистенту — минус одна), и без обновления индикатор
 // показывал бы число, верное на момент открытия.
-export function usePlanQuota(key: string):
+//
+// `enabled: false` гасит запрос совсем — он нужен там, где снимок тарифа спросить
+// НЕЛЬЗЯ: ручка стоит за правом `billing.view`, то есть у редактора отвечает 403.
+// Хук при этом зовётся безусловно (условный вызов — сломанный порядок хуков), а
+// решает вызывающий, знает ли он уже про право.
+export function usePlanQuota(
+  key: string,
+  options?: { enabled?: boolean },
+):
   | {
       used: number
       limit: number | null
@@ -49,7 +57,7 @@ export function usePlanQuota(key: string):
   const workspaceId = workspace?.id ?? ''
   const plan = useQuery({
     ...planSnapshotQueryOptions(workspaceId),
-    enabled: workspace !== undefined,
+    enabled: workspace !== undefined && (options?.enabled ?? true),
   })
   const refresh = useCallback(() => {
     void qc.invalidateQueries({ queryKey: planKeys.snapshot(workspaceId) })

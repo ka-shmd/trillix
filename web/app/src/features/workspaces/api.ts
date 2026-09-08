@@ -57,6 +57,17 @@ export function removeMember(workspaceId: string, userId: string): Promise<void>
   return apiRequest(`/workspaces/${workspaceId}/members/${userId}`, { method: 'DELETE' })
 }
 
+// transferOwnership отдаёт пространство другому его участнику: отдающий
+// становится редактором, получатель — владельцем и плательщиком. Своя ручка, а не
+// PATCH участника с новой ролью: ролей две, и «смена роли» сегодня означает ровно
+// одно — смену плательщика.
+export function transferOwnership(workspaceId: string, userId: string): Promise<void> {
+  return apiRequest(`/workspaces/${workspaceId}/ownership`, {
+    method: 'POST',
+    body: { userId },
+  })
+}
+
 export function leaveWorkspace(workspaceId: string): Promise<void> {
   return apiRequest(`/workspaces/${workspaceId}/leave`, { method: 'POST' })
 }

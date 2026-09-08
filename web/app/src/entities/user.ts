@@ -46,7 +46,11 @@ export function initials(person: { firstName: string; lastName: string; email: s
 // displayName — как человека зовут в интерфейсе: имя, если оно есть, иначе
 // email. Одна точка на весь кабинет: сайдбар, шапка и список участников обязаны
 // звать человека одинаково.
-export function displayName(user: User): string {
-  const full = [user.firstName, user.lastName].filter((p) => p !== '').join(' ')
-  return full === '' ? user.email : full
+//
+// Принимает поля, а не User, по той же причине, что initials выше: участник
+// пространства — не User (у него нет ни пароля, ни второго фактора), а зовут их
+// в интерфейсе одинаково.
+export function displayName(person: { firstName: string; lastName: string; email: string }): string {
+  const full = [person.firstName, person.lastName].filter((p) => p !== '').join(' ')
+  return full === '' ? person.email : full
 }

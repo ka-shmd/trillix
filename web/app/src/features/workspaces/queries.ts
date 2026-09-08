@@ -11,6 +11,7 @@ import {
   previewInvitation,
   removeMember,
   renameWorkspace,
+  transferOwnership,
 } from './api'
 
 // Пространства пользователя — серверный стейт, живёт только в Query. Меняются
@@ -104,6 +105,21 @@ export function useLeaveWorkspace(workspaceId: string) {
   return useMutation({
     mutationFn: () => leaveWorkspace(workspaceId),
     onSuccess: () => qc.invalidateQueries({ queryKey: workspaceKeys.list() }),
+  })
+}
+
+// Передача владения меняет ДВЕ вещи сразу, и обе надо перечитать: состав (роли
+// поменялись местами) и список пространств — у отдающего пропадают действия
+// владельца во всей оболочке, а у получателя появляются. Патчить кэш ответом
+// нечем: ручка отвечает 204.
+export function useTransferOwnership(workspaceId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (userId: string) => transferOwnership(workspaceId, userId),
+    onSuccess: async () => {
+      await qc.invalidateQueries({ queryKey: workspaceKeys.members(workspaceId) })
+      await qc.invalidateQueries({ queryKey: workspaceKeys.list() })
+    },
   })
 }
 
