@@ -125,23 +125,50 @@ export function identityLinkUrl(provider: string, popup = false): string {
 }
 
 // Второй фактор в настройках (фаза 23, слайс F).
-export function setupTwoFactor(): Promise<{ secret: string; otpauthUrl: string }> {
-  return apiRequest('/account/2fa/setup', {
-    method: 'POST',
-    schema: z.object({ secret: z.string(), otpauthUrl: z.string() }),
-  })
+// Второй фактор — код на почту (0056). Включение и выключение доказываются
+// паролем; у аккаунта без пароля поле пустое, и сервер этого не спрашивает.
+export function enableTwoFactor(body: { currentPassword: string }): Promise<User> {
+  return apiRequest('/account/2fa/enable', { method: 'POST', body, schema: userSchema })
 }
 
-export function enableTwoFactor(body: { code: string }): Promise<string[]> {
-  return apiRequest('/account/2fa/enable', {
-    method: 'POST',
-    body,
-    schema: z.object({ recoveryCodes: z.array(z.string()) }),
-  }).then((r) => r.recoveryCodes)
+export function disableTwoFactor(body: { currentPassword: string }): Promise<User> {
+  return apiRequest('/account/2fa/disable', { method: 'POST', body, schema: userSchema })
 }
 
-export function disableTwoFactor(body: { currentPassword: string; code: string }): Promise<void> {
-  return apiRequest('/account/2fa/disable', { method: 'POST', body })
+// Код подтверждения действия в настройках: у аккаунта с включённым фактором
+// смена адреса и удаление просят код, а взять его больше негде.
+export function sendActionCode(): Promise<void> {
+  return apiRequest('/account/2fa/send-code', { method: 'POST' })
+}
+
+// Переотправка кода входа. Как и второй шаг, ходит по HttpOnly-пропуску, а не
+// по сессии: сессии на этом экране ещё нет.
+export function resendLoginCode(): Promise<void> {
+  return apiRequest('/auth/login-2fa/resend', { method: 'POST' })
+}
+
+export const deviceSchema = z.object({
+  id: z.string(),
+  label: z.string(),
+  lastSeenAt: z.string(),
+  createdAt: z.string(),
+  current: z.boolean(),
+})
+
+export type KnownDevice = z.infer<typeof deviceSchema>
+
+export function getDevices(): Promise<KnownDevice[]> {
+  return apiRequest('/account/devices', {
+    schema: z.object({ devices: z.array(deviceSchema) }),
+  }).then((r) => r.devices)
+}
+
+export function forgetDevice(id: string): Promise<void> {
+  return apiRequest(`/account/devices/${id}`, { method: 'DELETE' })
+}
+
+export function forgetAllDevices(): Promise<void> {
+  return apiRequest('/account/devices', { method: 'DELETE' })
 }
 
 // Удаление аккаунта (фаза 23, слайс G). POST, а не DELETE: у запроса есть тело

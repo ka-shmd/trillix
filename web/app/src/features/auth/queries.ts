@@ -13,9 +13,13 @@ import {
   deleteAccount,
   disableTwoFactor,
   enableTwoFactor,
+  forgetAllDevices,
+  forgetDevice,
+  getDevices,
   isTwoFactorRequired,
   loginTwoFactor,
-  setupTwoFactor,
+  resendLoginCode,
+  sendActionCode,
   getIdentities,
   unlinkIdentity,
   requestEmailChange,
@@ -242,17 +246,19 @@ export function useUnlinkIdentity() {
   })
 }
 
-// Второй фактор в настройках. setup только показывает секрет (фактор ещё
-// выключен), поэтому кэш профиля не трогает; enable и disable его меняют.
-export function useSetupTwoFactor() {
-  return useMutation({ mutationFn: setupTwoFactor })
-}
-
+// Второй фактор — код на почту (0056). Обе ручки отвечают профилем целиком,
+// поэтому кэш патчится ответом, а не инвалидируется: лишний круг за /auth/me
+// показал бы переключатель в старом положении на время запроса.
 export function useEnableTwoFactor() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: enableTwoFactor,
-    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+    onSuccess: (user: User) => {
+      qc.setQueryData(authKeys.me(), user)
+      // Включение и выключение забывают все устройства на бэке — список в
+      // кэше после этого врёт.
+      void qc.invalidateQueries({ queryKey: authKeys.devices() })
+    },
   })
 }
 
@@ -260,7 +266,46 @@ export function useDisableTwoFactor() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: disableTwoFactor,
-    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
+    onSuccess: (user: User) => {
+      qc.setQueryData(authKeys.me(), user)
+      void qc.invalidateQueries({ queryKey: authKeys.devices() })
+    },
+  })
+}
+
+// Код подтверждения действия: серверного стейта не меняет, кэш не трогает.
+export function useSendActionCode() {
+  return useMutation({ mutationFn: sendActionCode })
+}
+
+// Переотправка кода входа — на экране второго шага, где сессии ещё нет.
+export function useResendLoginCode() {
+  return useMutation({ mutationFn: resendLoginCode })
+}
+
+// Известные устройства — серверный стейт: список меняется входом с нового
+// браузера и забыванием.
+export const devicesQueryOptions = queryOptions({
+  queryKey: authKeys.devices(),
+  queryFn: getDevices,
+  retry: false,
+})
+
+export function useForgetDevice() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: forgetDevice,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.devices() }),
+  })
+}
+
+// Забывание всех устройств рвёт и прочие сессии, поэтому обновляется не только
+// список: текущая сессия жива, но всё, что кабинет знал о других, устарело.
+export function useForgetAllDevices() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: forgetAllDevices,
+    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.devices() }),
   })
 }
 

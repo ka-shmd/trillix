@@ -287,7 +287,7 @@ func (s *Service) markFailed(ctx context.Context, p Pending, cause error) {
 // эту защиту декоративной.
 //
 // Ссылки сброса пароля и подтверждения адреса сюда НЕ добавлены сознательно:
-// они той же природы, но чинить их — отдельная задача (TD-40), а не довесок к
+// они той же природы, но чинить их — отдельная задача (TD-71), а не довесок к
 // второму фактору.
 var secretTemplates = []Template{TemplateLoginCode, TemplateAccountActionCode}
 

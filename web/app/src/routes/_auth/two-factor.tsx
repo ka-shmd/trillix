@@ -2,7 +2,7 @@ import type { FormEvent } from 'react'
 import { useState } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 
-import { useLoginTwoFactor } from '../../features/auth/queries'
+import { useLoginTwoFactor, useResendLoginCode } from '../../features/auth/queries'
 import { ApiError } from '../../shared/api/errors'
 import {
   Card,
@@ -33,13 +33,14 @@ function describeError(error: unknown): string {
     case 'rate_limited':
       return 'Слишком много попыток. Подождите и попробуйте снова.'
     default:
-      return 'Код не подошёл. Проверьте приложение или используйте резервный код.'
+      return 'Код не подошёл. Проверьте письмо или запросите новый код.'
   }
 }
 
 function TwoFactorPage() {
   const navigate = useNavigate()
   const login = useLoginTwoFactor()
+  const resend = useResendLoginCode()
   const [code, setCode] = useState('')
 
   function handleSubmit(e: FormEvent) {
@@ -53,8 +54,8 @@ function TwoFactorPage() {
       <CardHeader>
         <CardTitle className="text-xl">Код подтверждения</CardTitle>
         <CardDescription>
-          Откройте приложение-аутентификатор и введите код. Потеряли телефон — введите резервный
-          код.
+          Мы отправили код на почту вашего аккаунта — вход выполняется с устройства, которое мы
+          ещё не видели. Письмо приходит в течение минуты.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -65,8 +66,8 @@ function TwoFactorPage() {
             </Label>
             <Input
               id="totp-code"
-              // inputMode числовой, но не type=number: резервный код буквенный,
-              // и одно поле принимает оба.
+              // inputMode числовой, но не type=number: последний ломает
+              // ведущий ноль и рисует бесполезные стрелки счётчика.
               inputMode="numeric"
               autoComplete="one-time-code"
               autoFocus
@@ -83,6 +84,24 @@ function TwoFactorPage() {
           <Button type="submit" disabled={code.trim() === '' || login.isPending}>
             {login.isPending ? 'Проверяем…' : 'Войти'}
           </Button>
+          {/* Письмо теряется в спаме чаще, чем кажется, а другого способа
+              получить код у человека нет. */}
+          <Button
+            type="button"
+            variant="ghost"
+            onClick={() => resend.mutate()}
+            disabled={resend.isPending}
+          >
+            {resend.isPending ? 'Отправляем…' : 'Отправить код ещё раз'}
+          </Button>
+          {resend.isSuccess && !resend.isPending && (
+            <p className="text-sm text-muted-foreground">Новый код отправлен.</p>
+          )}
+          {resend.isError && (
+            <p role="alert" className="text-sm text-destructive">
+              {describeError(resend.error)}
+            </p>
+          )}
         </form>
       </CardContent>
       <CardFooter>
