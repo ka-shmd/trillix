@@ -38,6 +38,27 @@ func readLoginCodeFromOutbox(t *testing.T, template string) string {
 	return msg.Data.Code
 }
 
+// loginOutcome разбирает ответ первого шага входа. Тел у него два — либо
+// {"twoFactorRequired": true} без сессии, либо профиль вместе с ней, — и общая
+// структура читает оба: у профиля поля twoFactorRequired нет, то есть false.
+//
+// Мина: map[string]bool здесь не годится. Профиль несёт строки, и разбор падает
+// «cannot unmarshal string into Go value of type bool» ровно на успешном входе —
+// то есть тест ломается там, где проверяет главное: знакомому браузеру код не
+// нужен.
+func loginOutcome(t *testing.T, r *http.Response) bool {
+	t.Helper()
+	defer func() { _ = r.Body.Close() }()
+	var body struct {
+		TwoFactorRequired bool   `json:"twoFactorRequired"`
+		Email             string `json:"email"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		t.Fatalf("разбор ответа входа: %v", err)
+	}
+	return body.TwoFactorRequired
+}
+
 func TestTwoFactor_FullLoginRoundTrip(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
@@ -73,13 +94,8 @@ func TestTwoFactor_FullLoginRoundTrip(t *testing.T) {
 	if login.StatusCode != http.StatusOK {
 		t.Fatalf("login: статус %d", login.StatusCode)
 	}
-	var loginBody map[string]bool
-	if err := json.NewDecoder(login.Body).Decode(&loginBody); err != nil {
-		t.Fatalf("разбор login: %v", err)
-	}
-	_ = login.Body.Close()
-	if !loginBody["twoFactorRequired"] {
-		t.Fatalf("тело входа = %v, ожидалось требование кода", loginBody)
+	if !loginOutcome(t, login) {
+		t.Fatal("вход с незнакомого браузера прошёл без кода")
 	}
 	if me := get(t, fresh, srv.URL+"/api/v1/auth/me"); me.StatusCode != http.StatusUnauthorized {
 		t.Fatalf("me после первого шага: статус %d, ожидалось 401 — пароль сам по себе не должен пускать", me.StatusCode)
@@ -112,12 +128,7 @@ func TestTwoFactor_FullLoginRoundTrip(t *testing.T) {
 	if again.StatusCode != http.StatusOK {
 		t.Fatalf("повторный вход со знакомого браузера: статус %d", again.StatusCode)
 	}
-	var againBody map[string]bool
-	if err := json.NewDecoder(again.Body).Decode(&againBody); err != nil {
-		t.Fatalf("разбор повторного входа: %v", err)
-	}
-	_ = again.Body.Close()
-	if againBody["twoFactorRequired"] {
+	if loginOutcome(t, again) {
 		t.Fatal("знакомый браузер снова спрашивает код")
 	}
 	if me := get(t, fresh, srv.URL+"/api/v1/auth/me"); me.StatusCode != http.StatusOK {
@@ -149,12 +160,7 @@ func TestTwoFactor_FullLoginRoundTrip(t *testing.T) {
 		t.Fatalf("forget devices: статус %d; тело=%s", r.StatusCode, body(t, r))
 	}
 	forgot := post(t, fresh, srv.URL+"/api/v1/auth/login", `{"email":"`+email+`","password":"`+password+`"}`, "")
-	var forgotBody map[string]bool
-	if err := json.NewDecoder(forgot.Body).Decode(&forgotBody); err != nil {
-		t.Fatalf("разбор входа после забывания: %v", err)
-	}
-	_ = forgot.Body.Close()
-	if !forgotBody["twoFactorRequired"] {
+	if !loginOutcome(t, forgot) {
 		t.Fatal("после «забыть все устройства» вход прошёл без кода")
 	}
 }
