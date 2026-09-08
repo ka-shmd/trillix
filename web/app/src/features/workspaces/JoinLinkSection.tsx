@@ -28,7 +28,15 @@ import { Skeleton } from '@/components/ui/skeleton'
 //
 // Раздел рисуется только при `member.manage`: ручка стоит за этим правом, и
 // знать ссылку значит уметь ею раздавать доступ.
-export function JoinLinkSection({ workspaceId }: { workspaceId: string }) {
+export function JoinLinkSection({
+  workspaceId,
+  workspaceName,
+}: {
+  workspaceId: string
+  // workspaceName — в подпись к ссылке. Человек копирует её, чтобы отправить, и
+  // название пространства здесь отвечает на «куда именно я его зову».
+  workspaceName: string
+}) {
   const link = useQuery(joinLinkQueryOptions(workspaceId, true))
   const create = useCreateJoinLink(workspaceId)
   const revoke = useRevokeJoinLink(workspaceId)
@@ -40,7 +48,6 @@ export function JoinLinkSection({ workspaceId }: { workspaceId: string }) {
   return (
     <Section
       title="Ссылка-приглашение"
-      description="Кто откроет ссылку и войдёт по ней, станет редактором пространства: формы, ответы и расписания — без тарифа и состава. Ссылка живёт сутки; адресата у неё нет, поэтому передавайте её тому, кого зовёте, и никому больше."
       action={
         usable && (
           <Button
@@ -99,34 +106,40 @@ export function JoinLinkSection({ workspaceId }: { workspaceId: string }) {
       )}
 
       {link.isSuccess && usable && (
-        <div className="flex flex-col gap-3">
-          <div className="flex gap-2">
+        <div className="flex flex-col gap-2">
+          {/* Подпись живёт РЯДОМ СО ССЫЛКОЙ, а не пояснением раздела: раздел
+              стоит на экране и когда ссылки нет, и «отправьте эту ссылку» там
+              было бы неправдой. */}
+          <p className="text-sm text-muted-foreground">
+            Отправьте её тому, кого зовёте в «{workspaceName}» — он станет редактором.
+          </p>
+          <div className="flex flex-wrap gap-2">
             {/* readOnly-инпут, а не <pre>: ссылку выделяют и копируют руками не
                 реже, чем кнопкой, и поле даёт для этого привычный контрол. */}
             <Input
               readOnly
               value={current.url}
               aria-label="Ссылка-приглашение"
+              className="min-w-48 flex-1"
               onFocus={(e) => e.currentTarget.select()}
             />
             <Button variant="utility" onClick={() => void copyLink(current.url)}>
               <Copy className="size-4" />
               Копировать
             </Button>
-          </div>
-          <div className="flex flex-wrap items-center justify-between gap-3">
-            <p className="text-sm text-muted-foreground">
-              Действует до {formatDateTime(current.expiresAt)}
-            </p>
+            {/* Деструктивное — последним местом и приглушением (DESIGN-SYSTEM §7):
+                отделять его в ряду больше нечем, разделителей у кнопок нет. */}
             <Button
               variant="ghost"
-              size="sm"
               className="text-destructive hover:bg-destructive/8 hover:text-destructive"
               onClick={() => setRevoking(true)}
             >
-              Отключить ссылку
+              Отключить
             </Button>
           </div>
+          <p className="text-sm text-muted-foreground">
+            Действует до {formatDateTime(current.expiresAt)}
+          </p>
         </div>
       )}
 

@@ -124,7 +124,7 @@ export function MembersView({
         </ul>
       </Section>
 
-      {canManage && <JoinLinkSection workspaceId={workspace.id} />}
+      {canManage && <JoinLinkSection workspaceId={workspace.id} workspaceName={workspace.name} />}
 
       {/* Личное пространство не покидают: оно и есть пространство самого человека.
           Владелец тоже не может — сначала передать владение или удалить
