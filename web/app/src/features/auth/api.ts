@@ -88,23 +88,11 @@ export function deleteAvatar(): Promise<User> {
 
 // Смена пароля. Ответ 204 без тела: бэк рвёт все сессии и ставит cookie новой —
 // клиенту ловить нечего, кроме успеха.
-export function changePassword(body: { currentPassword: string; newPassword: string }): Promise<void> {
-  return apiRequest('/account/password', { method: 'POST', body })
-}
-
-// Смена адреса — два шага. Первый (за сессией) только ставит письма в очередь:
-// адрес аккаунта не меняется, пока не перейдут по ссылке. Второй — публичный,
-// аутентифицирует сам токен из письма.
-export function requestEmailChange(body: {
-  newEmail: string
+export function changePassword(body: {
   currentPassword: string
-  code: string
+  newPassword: string
 }): Promise<void> {
-  return apiRequest('/account/email', { method: 'POST', body })
-}
-
-export function confirmEmailChange(body: { token: string }): Promise<void> {
-  return apiRequest('/auth/confirm-email-change', { method: 'POST', body })
+  return apiRequest('/account/password', { method: 'POST', body })
 }
 
 // Способы входа аккаунта (фаза 23, слайс E).

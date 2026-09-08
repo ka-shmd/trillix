@@ -48,15 +48,6 @@ type fakeAuthService struct {
 	passwordNew     string
 	passwordUser    uuid.UUID
 
-	// Смена адреса (фаза 23, слайс D).
-	emailChangeErr     error
-	emailChangeNew     string
-	emailChangeCode    string
-	emailChangeUser    uuid.UUID
-	confirmEmailErr    error
-	confirmEmailToken  string
-	confirmEmailCalled bool
-
 	// Способы входа (фаза 23, слайс E).
 	identities    []Identity
 	identitiesErr error
@@ -158,19 +149,6 @@ func (f *fakeAuthService) UnlinkIdentity(_ context.Context, user User, provider 
 	f.unlinkedUser = user.ID
 	f.unlinkedName = provider
 	return f.unlinkErr
-}
-
-func (f *fakeAuthService) RequestEmailChange(_ context.Context, user User, newEmail, _, code string) error {
-	f.emailChangeUser = user.ID
-	f.emailChangeNew = newEmail
-	f.emailChangeCode = code
-	return f.emailChangeErr
-}
-
-func (f *fakeAuthService) ConfirmEmailChange(_ context.Context, token string) error {
-	f.confirmEmailCalled = true
-	f.confirmEmailToken = token
-	return f.confirmEmailErr
 }
 
 func (f *fakeAuthService) ChangePassword(_ context.Context, user User, currentPassword, newPassword string) (string, error) {

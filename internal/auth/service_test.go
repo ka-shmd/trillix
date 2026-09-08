@@ -96,18 +96,6 @@ type fakeStore struct {
 	identityEmailRefreshed bool
 	deletedIdentity        string
 
-	// Смена адреса (фаза 23, слайс D).
-	createdEmailChangeToken bool
-	emailChangeTokenUser    uuid.UUID
-	emailChangeTokenEmail   string
-	changeConsumeExists     bool // false → ErrNoRows (нет/использован/истёк)
-	changeConsumeUserID     uuid.UUID
-	changeConsumeEmail      string
-	changeConsumeCalled     bool
-	emailUpdated            bool
-	updatedEmail            string
-	changeTokensPurged      int64
-
 	// Второй фактор — код на почту (0056).
 	twoFactorSet      bool
 	twoFactorEnabled  bool
@@ -206,34 +194,6 @@ func (f *fakeStore) GetUserByID(_ context.Context, _ postgres.DBTX, id uuid.UUID
 	u := f.user
 	u.ID = id
 	return u, nil
-}
-
-func (f *fakeStore) CreateEmailChangeToken(_ context.Context, _ postgres.DBTX, _ []byte, userID uuid.UUID, newEmail string, _ time.Time) error {
-	f.createdEmailChangeToken = true
-	f.emailChangeTokenUser = userID
-	f.emailChangeTokenEmail = newEmail
-	return nil
-}
-
-func (f *fakeStore) ConsumeEmailChangeToken(_ context.Context, _ postgres.DBTX, _ []byte) (uuid.UUID, string, error) {
-	f.changeConsumeCalled = true
-	if !f.changeConsumeExists {
-		return uuid.Nil, "", pgx.ErrNoRows
-	}
-	return f.changeConsumeUserID, f.changeConsumeEmail, nil
-}
-
-func (f *fakeStore) UpdateUserEmail(_ context.Context, _ postgres.DBTX, userID uuid.UUID, email string) (User, error) {
-	f.emailUpdated = true
-	f.updatedEmail = email
-	u := f.user
-	u.ID = userID
-	u.Email = email
-	return u, nil
-}
-
-func (f *fakeStore) DeleteExpiredEmailChangeTokens(_ context.Context, _ postgres.DBTX) (int64, error) {
-	return f.changeTokensPurged, nil
 }
 
 func (f *fakeStore) GetUserByIdentity(_ context.Context, _ postgres.DBTX, _, _ string) (User, error) {

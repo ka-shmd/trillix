@@ -51,7 +51,7 @@ func NewYandex(clientID, clientSecret, redirectURI string) *Yandex {
 
 func (y *Yandex) Name() string { return "yandex" }
 
-func (y *Yandex) AuthURL(state, verifier string) string {
+func (y *Yandex) AuthURL(state, verifier string, chooser Chooser) string {
 	q := url.Values{
 		"response_type":         {"code"},
 		"client_id":             {y.clientID},
@@ -59,6 +59,13 @@ func (y *Yandex) AuthURL(state, verifier string) string {
 		"state":                 {state},
 		"code_challenge":        {Challenge(verifier)},
 		"code_challenge_method": {"S256"},
+	}
+	// force_confirm=yes — параметр Яндекс ID: показать экран подтверждения даже
+	// тому, кто доступ уже выдал. Именно он возвращает человеку возможность
+	// выбрать другой аккаунт; без него повторная привязка молча приходит с тем
+	// же и отказывает снова (смысл — у Chooser).
+	if chooser == ForceChooser {
+		q.Set("force_confirm", "yes")
 	}
 	return y.authURL + "?" + q.Encode()
 }

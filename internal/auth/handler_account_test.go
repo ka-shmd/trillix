@@ -16,7 +16,7 @@ import (
 // знает.
 func newTestAccountHandler(svc authService) http.Handler {
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
+		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 	return mux
@@ -205,7 +205,7 @@ func TestChangePassword_RequiresAuthAndCSRF(t *testing.T) {
 func TestChangePassword_RateLimitedPerUser(t *testing.T) {
 	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: denyLimiter{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
+		WithAccount(AccountLimits{PasswordChange: denyLimiter{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 
@@ -238,27 +238,20 @@ func postDelete(srv http.Handler, body string, authed bool, csrf bool) *httptest
 // Удаление гасит cookie: сессий у аккаунта не осталось ни одной, и оставленная
 // cookie означала бы кабинет, открывающийся ровно до первого запроса.
 // Код второго фактора доезжает до сервиса. Обрезать его здесь значит вернуть
-// сценарий, где адрес аккаунта (а с ним и канал восстановления) уводится одной
-// угнанной сессией — у аккаунта через провайдера пароля для проверки нет.
-func TestRequestEmailChange_PassesCodeToService(t *testing.T) {
+// сценарий, где аккаунт удаляется одной угнанной сессией: у аккаунта через
+// провайдера пароля для проверки нет, и код — единственное доказательство,
+// какое вообще есть.
+func TestDeleteAccount_PassesCodeToService(t *testing.T) {
 	user := User{ID: domain.NewID(), Email: "a@b.com"}
 	svc := &fakeAuthService{user: user}
 	srv := newTestAccountHandler(svc)
 
-	rec := httptest.NewRecorder()
-	req := httptest.NewRequest(http.MethodPost, "/api/v1/account/email",
-		strings.NewReader(`{"newEmail":"new@example.com","currentPassword":"right-password","code":"123456"}`))
-	req.Header.Set("Content-Type", "application/json")
-	req.AddCookie(&http.Cookie{Name: sessionCookieName, Value: "live-session"})
-	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok"})
-	req.Header.Set(csrfHeaderName, "tok")
-	srv.ServeHTTP(rec, req)
-
+	rec := postDelete(srv, `{"currentPassword":"right-password","code":"123456"}`, true, true)
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("статус = %d, ожидалось 204; тело=%s", rec.Code, rec.Body)
 	}
-	if svc.emailChangeCode != "123456" {
-		t.Errorf("в сервис уехал код %q, ожидался 123456", svc.emailChangeCode)
+	if svc.deletedCode != "123456" {
+		t.Errorf("в сервис уехал код %q, ожидался 123456", svc.deletedCode)
 	}
 }
 
@@ -300,7 +293,7 @@ func TestDeleteAccount_RequiresAuthAndCSRF(t *testing.T) {
 func TestDeleteAccount_RateLimitedPerUser(t *testing.T) {
 	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: denyLimiter{}, Avatar: ratelimit.AllowAll{}})
+		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: denyLimiter{}, Avatar: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 

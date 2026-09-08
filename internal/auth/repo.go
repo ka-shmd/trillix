@@ -284,47 +284,6 @@ func (Repo) FillEmptyProfile(ctx context.Context, db postgres.DBTX, userID uuid.
 	return userFromRow(row), nil
 }
 
-// CreateEmailChangeToken кладёт одноразовый токен смены адреса.
-func (Repo) CreateEmailChangeToken(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID, newEmail string, expiresAt time.Time) error {
-	if err := postgres.New(db).CreateEmailChangeToken(ctx, postgres.CreateEmailChangeTokenParams{
-		TokenHash: tokenHash,
-		UserID:    userID,
-		NewEmail:  newEmail,
-		ExpiresAt: pgtype.Timestamptz{Time: expiresAt, Valid: true},
-	}); err != nil {
-		return fmt.Errorf("create email change token: %w", err)
-	}
-	return nil
-}
-
-// ConsumeEmailChangeToken атомарно потребляет токен и отдаёт, чей он и на какой
-// адрес. ErrNoRows — нет/использован/истёк (снаружи это один ответ).
-func (Repo) ConsumeEmailChangeToken(ctx context.Context, db postgres.DBTX, tokenHash []byte) (uuid.UUID, string, error) {
-	row, err := postgres.New(db).ConsumeEmailChangeToken(ctx, tokenHash)
-	if err != nil {
-		return uuid.Nil, "", err
-	}
-	return row.UserID, row.NewEmail, nil
-}
-
-// UpdateUserEmail переносит адрес аккаунта и помечает его подтверждённым.
-func (Repo) UpdateUserEmail(ctx context.Context, db postgres.DBTX, userID uuid.UUID, email string) (User, error) {
-	row, err := postgres.New(db).UpdateUserEmail(ctx, postgres.UpdateUserEmailParams{ID: userID, Email: email})
-	if err != nil {
-		return User{}, fmt.Errorf("update user email: %w", err)
-	}
-	return userFromRow(row), nil
-}
-
-// DeleteExpiredEmailChangeTokens — фоновая чистка (periodic).
-func (Repo) DeleteExpiredEmailChangeTokens(ctx context.Context, db postgres.DBTX) (int64, error) {
-	n, err := postgres.New(db).DeleteExpiredEmailChangeTokens(ctx)
-	if err != nil {
-		return 0, fmt.Errorf("delete expired email change tokens: %w", err)
-	}
-	return n, nil
-}
-
 // SetUserPassword ставит новый хеш пароля (сброс). hash непустой — nil-семантики
 // «убрать пароль» тут нет.
 func (Repo) SetUserPassword(ctx context.Context, db postgres.DBTX, userID uuid.UUID, hash string) error {

@@ -31,15 +31,6 @@ type Booking struct {
 	Revision        int32
 }
 
-type EmailChangeToken struct {
-	TokenHash []byte
-	UserID    uuid.UUID
-	NewEmail  string
-	ExpiresAt pgtype.Timestamptz
-	UsedAt    pgtype.Timestamptz
-	CreatedAt pgtype.Timestamptz
-}
-
 type EmailVerificationToken struct {
 	TokenHash []byte
 	UserID    uuid.UUID

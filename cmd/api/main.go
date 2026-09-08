@@ -196,14 +196,6 @@ const (
 	passwordChangeRatePerSec = 1.0 / 60.0
 	passwordChangeBurst      = 3
 
-	// Смена адреса (фаза 23, слайс D). Запрос — по ПОЛЬЗОВАТЕЛЮ и строгий:
-	// письмо уходит на произвольный адрес из формы, то же соображение, что у
-	// приглашений. Подтверждение — по IP, ведро уровня verify (перебор токенов).
-	emailChangeRatePerSec  = 1.0 / 300.0
-	emailChangeBurst       = 3
-	confirmEmailRatePerSec = 1.0 / 12.0
-	confirmEmailBurst      = 5
-
 	// Второй фактор (фаза 23, слайс F): включение и выключение — по
 	// ПОЛЬЗОВАТЕЛЮ. За выключением стоит argon2id и шестизначный код, за
 	// включением — генерация секрета; ни то ни другое не делают в цикле.
@@ -425,15 +417,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// Именованными переменными, а не выражениями в литерале: иначе до вёдер не
 	// добраться из задачи ratelimit-gc — их карты растут без чистки.
 	passwordChangeLimiter := ratelimit.NewTokenBucket(passwordChangeRatePerSec, passwordChangeBurst)
-	emailChangeLimiter := ratelimit.NewTokenBucket(emailChangeRatePerSec, emailChangeBurst)
-	confirmEmailLimiter := ratelimit.NewTokenBucket(confirmEmailRatePerSec, confirmEmailBurst)
 	twoFactorLimiter := ratelimit.NewTokenBucket(twoFactorRatePerSec, twoFactorBurst)
 	deleteAccountLimiter := ratelimit.NewTokenBucket(deleteAccountRatePerSec, deleteAccountBurst)
 	avatarLimiter := ratelimit.NewTokenBucket(avatarRatePerSec, avatarBurst)
 	authHandler = authHandler.WithAccount(auth.AccountLimits{
 		PasswordChange: passwordChangeLimiter,
-		EmailChange:    emailChangeLimiter,
-		ConfirmEmail:   confirmEmailLimiter,
 		TwoFactor:      twoFactorLimiter,
 		DeleteAccount:  deleteAccountLimiter,
 		Avatar:         avatarLimiter,
@@ -859,22 +847,6 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		},
 	})
 	tasks.Start(ctx, periodic.Task{
-		Name:     "email-change-token-cleanup",
-		Interval: sessionCleanupInterval,
-		Run: func(ctx context.Context) error {
-			ctx, cancel := context.WithTimeout(ctx, verificationTokenCleanupTimeout)
-			defer cancel()
-			n, err := authSvc.PurgeExpiredEmailChangeTokens(ctx)
-			if err != nil {
-				return err
-			}
-			if n > 0 {
-				log.Info("expired email change tokens purged", slog.Int64("count", n))
-			}
-			return nil
-		},
-	})
-	tasks.Start(ctx, periodic.Task{
 		Name:     "verification-token-cleanup",
 		Interval: sessionCleanupInterval,
 		Run: func(ctx context.Context) error {
@@ -916,8 +888,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 				visitLimiter.GC() + inviteLimiter.GC() + formTokenLimiter.GC() +
 				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
-				passwordChangeLimiter.GC() + emailChangeLimiter.GC() + confirmEmailLimiter.GC() +
-				twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +
+				passwordChangeLimiter.GC() + twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +
 				respondentMailLimiter.GC() + unlockLimiter.GC() + unlockIPLimiter.GC() +
 				uploadLimiter.GC()
 			if removed > 0 {

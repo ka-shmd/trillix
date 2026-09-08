@@ -27,12 +27,6 @@ const (
 	// перехода. Переименуй — и такая строка станет «неизвестным шаблоном», то есть
 	// вечным ретраем: dead-letter у outbox нет.
 	TemplateSubmissionNew Template = "submission_digest"
-	// TemplateEmailChangeConfirm — письмо со ссылкой подтверждения НОВОГО адреса
-	// (фаза 23, слайс D). Уходит на новый адрес. Data: {"link": "<url>"}.
-	TemplateEmailChangeConfirm Template = "email_change_confirm"
-	// TemplateEmailChangeNotice — уведомление на СТАРЫЙ адрес о запросе смены.
-	// Ссылки-токена не несёт. Data: {"new_email": "<адрес>"}.
-	TemplateEmailChangeNotice Template = "email_change_notice"
 	// TemplateRespondentReceipt — письмо РЕСПОНДЕНТУ о том, что его ответ принят
 	// (docs/design/respondent-email.md). Data: {"form_title": "<название>",
 	// "form_link": "<публичный адрес формы>"}.
@@ -149,30 +143,6 @@ var templates = map[Template]mailTemplate{
 				"Открыть таблицу ответов:\n\n" +
 				"{{.link}}\n\n" +
 				"Уведомления можно отключить в настройках формы.\n\n" +
-				"— Trillix",
-		)),
-	},
-	TemplateEmailChangeConfirm: {
-		subject: "Подтверждение нового адреса в Trillix",
-		body: template.Must(template.New("email_change_confirm").Parse(
-			"Здравствуйте!\n\n" +
-				"Этот адрес указан как новый для аккаунта в Trillix. Чтобы перенести " +
-				"аккаунт на него, перейдите по ссылке (она действует 24 часа):\n\n" +
-				"{{.link}}\n\n" +
-				"Пока вы не перешли по ссылке, вход остаётся по прежнему адресу.\n\n" +
-				"Если вы ничего не меняли — просто не переходите по ссылке, " +
-				"письмо можно удалить.\n\n" +
-				"— Trillix",
-		)),
-	},
-	TemplateEmailChangeNotice: {
-		subject: "Запрошена смена адреса в Trillix",
-		body: template.Must(template.New("email_change_notice").Parse(
-			"Здравствуйте!\n\n" +
-				"Для вашего аккаунта в Trillix запрошена смена адреса на {{.new_email}}. " +
-				"Пока новый адрес не подтверждён, вход остаётся по этому.\n\n" +
-				"Если это сделали не вы — смените пароль: пока адрес прежний, " +
-				"восстановление аккаунта ходит на него.\n\n" +
 				"— Trillix",
 		)),
 	},
