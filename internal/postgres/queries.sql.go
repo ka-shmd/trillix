@@ -660,6 +660,49 @@ func (q *Queries) CreateForm(ctx context.Context, arg CreateFormParams) (CreateF
 	return i, err
 }
 
+const createFormTemplate = `-- name: CreateFormTemplate :one
+INSERT INTO form_templates (id, workspace_id, author_id, title, description, schema, visibility)
+VALUES ($1, $2, $3, $4, $5, $6, $7)
+RETURNING id, workspace_id, author_id, title, description, schema, visibility, created_at, updated_at
+`
+
+type CreateFormTemplateParams struct {
+	ID          uuid.UUID
+	WorkspaceID pgtype.UUID
+	AuthorID    pgtype.UUID
+	Title       string
+	Description string
+	Schema      []byte
+	Visibility  string
+}
+
+// Заведение шаблона — и своего, и публичного: пару «видимость × пространство»
+// стережёт CHECK таблицы, поэтому отдельного запроса на каждый вид не нужно.
+func (q *Queries) CreateFormTemplate(ctx context.Context, arg CreateFormTemplateParams) (FormTemplate, error) {
+	row := q.db.QueryRow(ctx, createFormTemplate,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.AuthorID,
+		arg.Title,
+		arg.Description,
+		arg.Schema,
+		arg.Visibility,
+	)
+	var i FormTemplate
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AuthorID,
+		&i.Title,
+		&i.Description,
+		&i.Schema,
+		&i.Visibility,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const createFormWithSchema = `-- name: CreateFormWithSchema :one
 INSERT INTO forms (id, workspace_id, title, slug, name, draft_schema)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -986,7 +1029,7 @@ const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
 `
 
 type CreateUserParams struct {
@@ -1010,6 +1053,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.DeletedAt,
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
+		&i.IsAdmin,
 	)
 	return i, err
 }
@@ -1509,6 +1553,26 @@ func (q *Queries) DeleteWorkspace(ctx context.Context, id uuid.UUID) (int64, err
 	return result.RowsAffected(), nil
 }
 
+const deleteWorkspaceTemplate = `-- name: DeleteWorkspaceTemplate :execrows
+DELETE FROM form_templates WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteWorkspaceTemplateParams struct {
+	ID          uuid.UUID
+	WorkspaceID pgtype.UUID
+}
+
+// Удаление СВОЕГО шаблона: пространство в условии, а не только id, — тот же
+// приём, что у форм. Публичный этим запросом не удаляется никогда (у него
+// workspace_id равен NULL, и сравнение не сойдётся ни с чем).
+func (q *Queries) DeleteWorkspaceTemplate(ctx context.Context, arg DeleteWorkspaceTemplateParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteWorkspaceTemplate, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const demoteOwner = `-- name: DemoteOwner :execrows
 UPDATE workspace_members
 SET role = 'editor'
@@ -1611,7 +1675,7 @@ UPDATE users
    SET first_name = COALESCE(first_name, $2),
        last_name  = COALESCE(last_name,  $3)
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
 `
 
 type FillEmptyProfileParams struct {
@@ -1638,6 +1702,7 @@ func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfilePara
 		&i.DeletedAt,
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
+		&i.IsAdmin,
 	)
 	return i, err
 }
@@ -2534,6 +2599,31 @@ func (q *Queries) GetFormScheduleZone(ctx context.Context, id uuid.UUID) (string
 	return timezone, err
 }
 
+const getFormTemplate = `-- name: GetFormTemplate :one
+SELECT id, workspace_id, author_id, title, description, schema, visibility, created_at, updated_at
+FROM form_templates
+WHERE id = $1
+`
+
+// Один шаблон вместе с тем, по чему решается доступ (visibility и workspace_id).
+// Права спрашивает сервис.
+func (q *Queries) GetFormTemplate(ctx context.Context, id uuid.UUID) (FormTemplate, error) {
+	row := q.db.QueryRow(ctx, getFormTemplate, id)
+	var i FormTemplate
+	err := row.Scan(
+		&i.ID,
+		&i.WorkspaceID,
+		&i.AuthorID,
+		&i.Title,
+		&i.Description,
+		&i.Schema,
+		&i.Visibility,
+		&i.CreatedAt,
+		&i.UpdatedAt,
+	)
+	return i, err
+}
+
 const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one
 SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
 FROM integration_accounts
@@ -2867,7 +2957,7 @@ func (q *Queries) GetScheduleCapacity(ctx context.Context, id uuid.UUID) (int32,
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL
@@ -2888,6 +2978,7 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.DeletedAt,
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
+		&i.IsAdmin,
 	)
 	return i, err
 }
@@ -3134,7 +3225,7 @@ func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubm
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
 FROM users
 WHERE email = $1 AND deleted_at IS NULL
 `
@@ -3153,13 +3244,14 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.DeletedAt,
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
+		&i.IsAdmin,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
 
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
 FROM users
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -3181,6 +3273,10 @@ WHERE id = $1 AND deleted_at IS NULL
 // обязан повторять ФИЗИЧЕСКИЙ порядок колонок таблицы — поэтому avatar_key
 // (0028) стоит после deleted_at, хотя по смыслу он рядом с именем: переставишь
 // — и общий тип развалится обратно на семь, а userFromRow перестанет собираться.
+//
+// Отсюда мина для КАЖДОЙ новой колонки users: не дописать её в эти списки —
+// значит уронить сборку восемью ошибками разом. Так и приехал `is_admin`
+// (0059), доменному User не нужный вовсе.
 // Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
 // кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
 func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
@@ -3197,12 +3293,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.DeletedAt,
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
+		&i.IsAdmin,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL
@@ -3230,6 +3327,7 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.DeletedAt,
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
+		&i.IsAdmin,
 	)
 	return i, err
 }
@@ -3472,6 +3570,22 @@ func (q *Queries) InsertSubmissionFile(ctx context.Context, arg InsertSubmission
 		arg.ContentType,
 	)
 	return err
+}
+
+const isUserAdmin = `-- name: IsUserAdmin :one
+SELECT is_admin
+FROM users
+WHERE id = $1 AND deleted_at IS NULL
+`
+
+// Администратор ли пользователь (0059). Отдельным запросом, а не полем в User:
+// спрашивает его одна ручка — заведение публичного шаблона, — и таскать флаг
+// через каждый путь входа ради неё незачем.
+func (q *Queries) IsUserAdmin(ctx context.Context, id uuid.UUID) (bool, error) {
+	row := q.db.QueryRow(ctx, isUserAdmin, id)
+	var is_admin bool
+	err := row.Scan(&is_admin)
+	return is_admin, err
 }
 
 const listEnabledFormIntegrations = `-- name: ListEnabledFormIntegrations :many
@@ -4448,6 +4562,46 @@ func (q *Queries) ListPendingOutbox(ctx context.Context, limit int32) ([]ListPen
 	return items, nil
 }
 
+const listPublicTemplates = `-- name: ListPublicTemplates :many
+SELECT id, workspace_id, author_id, title, description, schema, visibility, created_at, updated_at
+FROM form_templates
+WHERE visibility = 'public'
+ORDER BY created_at ASC, id ASC
+`
+
+// Витрина: одна выборка на всех пользователей. Порядок — по возрастанию времени
+// создания: пока сортировки по популярности нет, витрину выстраивает тот, кто
+// заливал шаблоны, а не случай.
+func (q *Queries) ListPublicTemplates(ctx context.Context) ([]FormTemplate, error) {
+	rows, err := q.db.Query(ctx, listPublicTemplates)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FormTemplate
+	for rows.Next() {
+		var i FormTemplate
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.AuthorID,
+			&i.Title,
+			&i.Description,
+			&i.Schema,
+			&i.Visibility,
+			&i.CreatedAt,
+			&i.UpdatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listSchedules = `-- name: ListSchedules :many
 SELECT id, workspace_id, name, timezone, availability,
        slot_minutes, buffer_minutes, horizon_days, lead_minutes,
@@ -4880,6 +5034,49 @@ func (q *Queries) ListWorkspaceMembers(ctx context.Context, workspaceID uuid.UUI
 			&i.AvatarKey,
 			&i.Role,
 			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listWorkspaceTemplates = `-- name: ListWorkspaceTemplates :many
+
+SELECT id, workspace_id, author_id, title, description, schema, visibility, created_at, updated_at
+FROM form_templates
+WHERE workspace_id = $1 AND visibility = 'private'
+ORDER BY created_at DESC, id DESC
+`
+
+// Запросы модуля templates. Схема — migrations/0059 (таблица form_templates).
+// Генерация: `make sqlc`.
+// Шаблоны пространства («Мои» в галерее). Членство проверяет сервис — id из URL
+// правом не является; запрос никого не охраняет и адресует пространство одним id.
+// Свежие сверху, id — tie-break: тот же порядок, что у списка форм.
+func (q *Queries) ListWorkspaceTemplates(ctx context.Context, workspaceID pgtype.UUID) ([]FormTemplate, error) {
+	rows, err := q.db.Query(ctx, listWorkspaceTemplates, workspaceID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []FormTemplate
+	for rows.Next() {
+		var i FormTemplate
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.AuthorID,
+			&i.Title,
+			&i.Description,
+			&i.Schema,
+			&i.Visibility,
+			&i.CreatedAt,
+			&i.UpdatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5645,7 +5842,7 @@ func (q *Queries) SetTwoFactorEnabled(ctx context.Context, arg SetTwoFactorEnabl
 const setUserAvatarKey = `-- name: SetUserAvatarKey :one
 UPDATE users SET avatar_key = $2
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
 `
 
 type SetUserAvatarKeyParams struct {
@@ -5671,6 +5868,7 @@ func (q *Queries) SetUserAvatarKey(ctx context.Context, arg SetUserAvatarKeyPara
 		&i.DeletedAt,
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
+		&i.IsAdmin,
 	)
 	return i, err
 }
@@ -6711,7 +6909,7 @@ func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) 
 const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
 `
 
 type UpdateUserProfileParams struct {
@@ -6737,6 +6935,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.DeletedAt,
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
+		&i.IsAdmin,
 	)
 	return i, err
 }

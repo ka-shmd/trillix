@@ -8,9 +8,11 @@ import {
 } from '@/components/ui/dialog'
 import { Button } from '@/components/ui/button'
 
+import { isAnswerableType } from '@entities/formSchema'
+
+import { type FormTemplate } from '../../../entities/template'
 import { pluralQuestions } from '../../../shared/format'
 import { TemplateSheet } from './TemplateSheet'
-import { type FormTemplate, questionCaptions } from './templates'
 
 // Крупный просмотр шаблона: форма целиком, из которой заводят свою.
 //
@@ -21,6 +23,9 @@ import { type FormTemplate, questionCaptions } from './templates'
 //
 // Лист внутри — тот же компонент, что в плитке, только без масштаба: обещание
 // «увидишь то же самое» держится одним кодом, а не сверкой двух вёрсток.
+//
+// Вопросы считаются по документу (отвечаемые блоки), а не по описанию шаблона:
+// описание пишет автор словами, и расходиться ему с содержимым нельзя.
 export function TemplateDialog({
   template,
   onOpenChange,
@@ -55,7 +60,7 @@ export function TemplateDialog({
               (`min-h-0` в колонке flex). Границы сверху и снизу отделяют белый холст
               формы от кабинета: без них лист сливается с окном в светлой теме. */}
           <div className="aspect-video min-h-0 overflow-y-auto border-y">
-            <TemplateSheet template={template} />
+            <TemplateSheet schema={template.schema} />
           </div>
           <DialogFooter className="items-center px-6 py-4 sm:justify-between">
             {/* Слева — что именно получит автор, справа действие. Отказ занимает
@@ -66,8 +71,7 @@ export function TemplateDialog({
               </p>
             ) : (
               <p className="text-sm text-muted-foreground">
-                {questionCaptions(template).length}{' '}
-                {pluralQuestions(questionCaptions(template).length)}
+                {questionCount(template)} {pluralQuestions(questionCount(template))}
               </p>
             )}
             <Button onClick={() => onUse(template)} disabled={pending}>
@@ -78,4 +82,11 @@ export function TemplateDialog({
       )}
     </Dialog>
   )
+}
+
+// questionCount — сколько вопросов в шаблоне: отвечаемых блоков документа. Тем же
+// предикатом, каким их считает всё остальное (@entities/blocks/contract), а не
+// перечислением типов на месте.
+function questionCount(template: FormTemplate): number {
+  return template.schema.blocks.filter((b) => isAnswerableType(b.type)).length
 }

@@ -1,0 +1,133 @@
+{
+  "title": "Анкета кандидата",
+  "description": "Отклики на вакансию в одной таблице: контакты, опыт, ссылка на резюме.",
+  "schema": {
+    "schemaVersion": 1,
+    "blocks": [
+      {
+        "id": "blk_candidate_1",
+        "groupId": "g_blk_candidate_1",
+        "type": "form_title",
+        "text": [
+          {
+            "t": "Анкета кандидата"
+          }
+        ]
+      },
+      {
+        "id": "blk_candidate_2",
+        "groupId": "g_blk_candidate_3",
+        "type": "title",
+        "text": [
+          {
+            "t": "Имя и фамилия"
+          }
+        ]
+      },
+      {
+        "id": "blk_candidate_3",
+        "groupId": "g_blk_candidate_3",
+        "type": "short_text",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_candidate_4",
+        "groupId": "g_blk_candidate_5",
+        "type": "title",
+        "text": [
+          {
+            "t": "Email"
+          }
+        ]
+      },
+      {
+        "id": "blk_candidate_5",
+        "groupId": "g_blk_candidate_5",
+        "type": "email",
+        "required": true,
+        "settings": {
+          "placeholder": "you@example.com"
+        }
+      },
+      {
+        "id": "blk_candidate_6",
+        "groupId": "g_blk_candidate_7",
+        "type": "title",
+        "text": [
+          {
+            "t": "Телефон"
+          }
+        ]
+      },
+      {
+        "id": "blk_candidate_7",
+        "groupId": "g_blk_candidate_7",
+        "type": "phone",
+        "settings": {}
+      },
+      {
+        "id": "blk_candidate_8",
+        "groupId": "g_blk_candidate_9",
+        "type": "title",
+        "text": [
+          {
+            "t": "Ссылка на резюме или профиль"
+          }
+        ]
+      },
+      {
+        "id": "blk_candidate_9",
+        "groupId": "g_blk_candidate_9",
+        "type": "short_text",
+        "settings": {
+          "placeholder": "https://"
+        }
+      },
+      {
+        "id": "blk_candidate_10",
+        "groupId": "g_blk_candidate_11",
+        "type": "title",
+        "text": [
+          {
+            "t": "Сколько лет опыта в профессии?"
+          }
+        ]
+      },
+      {
+        "id": "blk_candidate_11",
+        "groupId": "g_blk_candidate_11",
+        "type": "number",
+        "settings": {}
+      },
+      {
+        "id": "blk_candidate_12",
+        "groupId": "g_blk_candidate_13",
+        "type": "title",
+        "text": [
+          {
+            "t": "Почему вам интересна эта вакансия?"
+          }
+        ]
+      },
+      {
+        "id": "blk_candidate_13",
+        "groupId": "g_blk_candidate_13",
+        "type": "long_text",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_candidate_14",
+        "groupId": "g_blk_candidate_14",
+        "type": "consent",
+        "text": [
+          {
+            "t": "Согласен на обработку персональных данных"
+          }
+        ],
+        "required": true
+      }
+    ]
+  }
+}

@@ -299,6 +299,37 @@ func (s *Service) Create(ctx context.Context, userID uuid.UUID, title string, wo
 	return form, nil
 }
 
+// CreateFromSchema создаёт форму сразу с документом — путь создания из шаблона
+// (internal/templates). Одним запросом, а не «создать пустую и дописать
+// схему»: сорвись второй запрос прежней пары, автор получал бы на дашборде
+// пустую форму вместо заготовки.
+//
+// title — запасное имя: колонка forms.title зеркалит блок form_title документа
+// (спека §3.3), и звать переданное имя приходится только тогда, когда документ
+// о заголовке не высказался вовсе.
+func (s *Service) CreateFromSchema(ctx context.Context, userID uuid.UUID, workspaceID *uuid.UUID, title string, rawSchema json.RawMessage) (Form, error) {
+	parsed, err := domain.ValidateSchema(rawSchema)
+	if err != nil {
+		return Form{}, err
+	}
+	canonical, err := json.Marshal(parsed)
+	if err != nil {
+		return Form{}, fmt.Errorf("marshal schema: %w", err)
+	}
+	if docTitle, spoke := domain.FormTitle(parsed); spoke {
+		title = docTitle
+	}
+	title = normalizeCreateTitle(title)
+	if err := validateTitleLen(title); err != nil {
+		return Form{}, err
+	}
+	wsID, err := s.resolveWorkspace(ctx, userID, workspaceID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	return s.repo.CreateFormWithSchema(ctx, s.db, domain.NewID(), wsID, title, domain.NewSlug(), nil, canonical)
+}
+
 // Duplicate создаёт копию формы в том же воркспейсе: копирует черновик схемы и
 // ПУБЛИЧНЫЙ заголовок (title) как есть, а внутреннему имени (name) даёт «{база}
 // (копия N)» — N подбирается без коллизий по соседям воркспейса (см. nextCopyName).

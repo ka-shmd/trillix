@@ -80,6 +80,17 @@ func (Repo) GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Us
 	return userFromRow(row), nil
 }
 
+// IsAdmin — администратор ли пользователь (0059). Отдельный запрос вместо поля
+// в User: флаг спрашивает одна ручка — заведение публичного шаблона, — и
+// таскать его через каждый путь входа ради неё незачем.
+func (Repo) IsAdmin(ctx context.Context, db postgres.DBTX, id uuid.UUID) (bool, error) {
+	admin, err := postgres.New(db).IsUserAdmin(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("is user admin: %w", err)
+	}
+	return admin, nil
+}
+
 func (Repo) GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error) {
 	row, err := postgres.New(db).GetUserByEmail(ctx, email)
 	if err != nil {

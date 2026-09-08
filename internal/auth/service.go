@@ -64,6 +64,7 @@ type Store interface {
 	DeleteIdentity(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) (int64, error)
 	GetUserByEmail(ctx context.Context, db postgres.DBTX, email string) (User, error)
 	GetUserByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (User, error)
+	IsAdmin(ctx context.Context, db postgres.DBTX, id uuid.UUID) (bool, error)
 	EmailTaken(ctx context.Context, db postgres.DBTX, email string) (bool, error)
 	MarkUserDeleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (bool, error)
 	CreateWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID, slug, name string, personalUserID uuid.UUID) (Workspace, error)

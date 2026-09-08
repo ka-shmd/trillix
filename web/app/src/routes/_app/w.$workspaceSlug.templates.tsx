@@ -1,11 +1,14 @@
 import { createFileRoute } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 
 import { TemplatesView } from '../../features/forms/templates/TemplatesView'
 import { useCurrentWorkspace } from '../../features/workspaces/current'
+import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
 import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
+import { EmptyState, LoadingRows } from '../../shared/page/states'
 
 // Шаблоны форм (/w/{slug}/templates): встроенные заготовки, с которых начинают вместо
 // пустого полотна.
@@ -18,10 +21,21 @@ export const Route = createFileRoute('/_app/w/$workspaceSlug/templates')({
 })
 
 // Пространство резолвит маршрут и отдаёт галерее пропом: путь называет его slug'ом,
-// а `POST /forms` ждёт id.
+// а ручка шаблонов ждёт id.
+//
+// МИНА. Галерея НЕ рисуется, пока перевод не сделан, и `workspaceId` приезжает к ней
+// строкой, а не `string | undefined`. `useCurrentWorkspace()` отдаёт `undefined` в
+// значении «ПОКА НЕ ЗНАЮ» (features/workspaces/current.ts), а отсутствие пространства
+// в теле `POST /templates/{id}/use` сервер трактует как ЛИЧНОЕ — то есть форма из
+// шаблона молча легла бы не туда, а кабинет увёл бы в редактор по адресу командного
+// пространства. Тот же гейт и по той же причине стоит у списка форм.
 function TemplatesPage() {
   const { workspaceSlug } = Route.useParams()
   const workspace = useCurrentWorkspace()
+  // Список пространств спрашивается ради ОДНОГО ответа: приехал он или нет. Названное
+  // путём и не найденное в нём — чужое или удалённое, и отличить это от «ещё грузится»
+  // иначе нечем.
+  const workspaces = useQuery(workspacesQueryOptions)
   const workspaceCrumb = useWorkspaceCrumb()
   return (
     // ДВА КОНТЕЙНЕРА ПОДРЯД, и ширины у них разные — тот же приём, что у оболочки
@@ -39,7 +53,16 @@ function TemplatesPage() {
         />
       </PageContainer>
       <PageContainer width="full" className="pt-0">
-        <TemplatesView workspaceId={workspace?.id} workspaceSlug={workspaceSlug} />
+        {workspace ? (
+          <TemplatesView workspaceId={workspace.id} workspaceSlug={workspaceSlug} />
+        ) : workspaces.data ? (
+          <EmptyState
+            title="Такого пространства нет"
+            description="Оно удалено или доступ к нему закрыт."
+          />
+        ) : (
+          <LoadingRows className="mt-8" rows={2} />
+        )}
       </PageContainer>
     </>
   )

@@ -3,7 +3,7 @@
 -- name: CreateUser :one
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin;
 
 -- Четыре запроса ниже (GetUserByID, GetUserByEmail, GetSessionUser,
 -- GetUserByIdentity) — ВСЕ пути, которыми код узнаёт пользователя, и у каждого
@@ -22,16 +22,28 @@ RETURNING id, email, password_hash, created_at, email_verified_at, first_name, l
 -- обязан повторять ФИЗИЧЕСКИЙ порядок колонок таблицы — поэтому avatar_key
 -- (0028) стоит после deleted_at, хотя по смыслу он рядом с именем: переставишь
 -- — и общий тип развалится обратно на семь, а userFromRow перестанет собираться.
+--
+-- Отсюда мина для КАЖДОЙ новой колонки users: не дописать её в эти списки —
+-- значит уронить сборку восемью ошибками разом. Так и приехал `is_admin`
+-- (0059), доменному User не нужный вовсе.
 
 -- name: GetUserByID :one
 -- Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
 -- кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+FROM users
+WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: IsUserAdmin :one
+-- Администратор ли пользователь (0059). Отдельным запросом, а не полем в User:
+-- спрашивает его одна ручка — заведение публичного шаблона, — и таскать флаг
+-- через каждый путь входа ради неё незачем.
+SELECT is_admin
 FROM users
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
 FROM users
 WHERE email = $1 AND deleted_at IS NULL;
 
@@ -66,7 +78,7 @@ VALUES ($1, $2, $3);
 
 -- name: GetSessionUser :one
 -- Пользователь по живой (не истёкшей) сессии — для RequireAuth и /auth/me.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL;
@@ -81,7 +93,7 @@ DELETE FROM sessions WHERE expires_at <= now();
 -- Пользователь по привязке к провайдеру (миграция 0009). Ключ — пара
 -- (провайдер, идентификатор у провайдера), а не email: адрес у провайдера
 -- сменить можно, идентификатор — нет.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL;
@@ -130,7 +142,7 @@ DELETE FROM user_identities WHERE user_id = $1 AND provider = $2;
 -- нельзя. Пустое приезжает как NULL — приведение делает repo (pgText).
 UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin;
 
 -- name: SetUserAvatarKey :one
 -- Ключ аватара целиком: значение — поставить, NULL — снять. Отдельным запросом,
@@ -139,7 +151,7 @@ RETURNING id, email, password_hash, created_at, email_verified_at, first_name, l
 -- слать чужое поле, чтобы его не затереть.
 UPDATE users SET avatar_key = $2
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin;
 
 -- name: FillEmptyProfile :one
 -- Дозаполнение профиля данными провайдера (фаза 23, слайс B). COALESCE, а не
@@ -150,7 +162,7 @@ UPDATE users
    SET first_name = COALESCE(first_name, $2),
        last_name  = COALESCE(last_name,  $3)
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin;
 
 -- name: SetUserPassword :exec
 -- Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит

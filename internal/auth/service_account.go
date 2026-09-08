@@ -23,6 +23,16 @@ import (
 // кодовые единицы UTF-16 — расхождение общее для всех лимитов проекта, TD-48).
 const MaxPersonNameLen = 100
 
+// IsAdmin — администратор ли сервиса (0059). Единственный потребитель —
+// шаблоны: заводить публичный шаблон вправе только он. Ролей пространства флаг
+// не касается вовсе.
+//
+// Живёт в auth, потому что колонка живёт у users: чужой модуль спрашивает
+// сервис, а не читает чужую таблицу.
+func (s *Service) IsAdmin(ctx context.Context, userID uuid.UUID) (bool, error) {
+	return s.repo.IsAdmin(ctx, s.db, userID)
+}
+
 // UpdateProfile ставит имя и фамилию текущего пользователя. Пустая строка —
 // законное значение и означает «стереть»: в БД уезжает NULL.
 func (s *Service) UpdateProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string) (User, error) {

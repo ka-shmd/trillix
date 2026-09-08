@@ -1,0 +1,155 @@
+{
+  "title": "Регистрация на событие",
+  "description": "Список участников с форматом участия и интересными им темами.",
+  "schema": {
+    "schemaVersion": 1,
+    "blocks": [
+      {
+        "id": "blk_event_1",
+        "groupId": "g_blk_event_1",
+        "type": "form_title",
+        "text": [
+          {
+            "t": "Регистрация на событие"
+          }
+        ]
+      },
+      {
+        "id": "blk_event_2",
+        "groupId": "g_blk_event_2",
+        "type": "text",
+        "text": [
+          {
+            "t": "Заполните форму — за день до встречи пришлём напоминание и ссылку."
+          }
+        ]
+      },
+      {
+        "id": "blk_event_3",
+        "groupId": "g_blk_event_4",
+        "type": "title",
+        "text": [
+          {
+            "t": "Имя и фамилия"
+          }
+        ]
+      },
+      {
+        "id": "blk_event_4",
+        "groupId": "g_blk_event_4",
+        "type": "short_text",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_event_5",
+        "groupId": "g_blk_event_6",
+        "type": "title",
+        "text": [
+          {
+            "t": "Email"
+          }
+        ]
+      },
+      {
+        "id": "blk_event_6",
+        "groupId": "g_blk_event_6",
+        "type": "email",
+        "required": true,
+        "settings": {
+          "placeholder": "you@example.com"
+        }
+      },
+      {
+        "id": "blk_event_7",
+        "groupId": "g_blk_event_8",
+        "type": "title",
+        "text": [
+          {
+            "t": "Как будете участвовать?"
+          }
+        ]
+      },
+      {
+        "id": "blk_event_8",
+        "groupId": "g_blk_event_8",
+        "type": "single_choice",
+        "required": true,
+        "settings": {
+          "options": [
+            {
+              "id": "opt_event_1",
+              "label": "Приду лично"
+            },
+            {
+              "id": "opt_event_2",
+              "label": "Подключусь онлайн"
+            }
+          ]
+        }
+      },
+      {
+        "id": "blk_event_9",
+        "groupId": "g_blk_event_10",
+        "type": "title",
+        "text": [
+          {
+            "t": "Какие темы вам интересны?"
+          }
+        ]
+      },
+      {
+        "id": "blk_event_10",
+        "groupId": "g_blk_event_10",
+        "type": "multi_choice",
+        "settings": {
+          "options": [
+            {
+              "id": "opt_event_3",
+              "label": "Практика и разборы"
+            },
+            {
+              "id": "opt_event_4",
+              "label": "Инструменты"
+            },
+            {
+              "id": "opt_event_5",
+              "label": "Ответы на вопросы"
+            },
+            {
+              "id": "opt_event_6",
+              "label": "Общение с коллегами"
+            }
+          ]
+        }
+      },
+      {
+        "id": "blk_event_11",
+        "groupId": "g_blk_event_12",
+        "type": "title",
+        "text": [
+          {
+            "t": "Вопрос спикеру"
+          }
+        ]
+      },
+      {
+        "id": "blk_event_12",
+        "groupId": "g_blk_event_12",
+        "type": "long_text",
+        "settings": {}
+      },
+      {
+        "id": "blk_event_13",
+        "groupId": "g_blk_event_13",
+        "type": "consent",
+        "text": [
+          {
+            "t": "Согласен на обработку персональных данных"
+          }
+        ],
+        "required": true
+      }
+    ]
+  }
+}
