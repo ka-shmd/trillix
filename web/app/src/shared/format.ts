@@ -81,6 +81,16 @@ export function pluralViews(n: number): string {
   return 'просмотров'
 }
 
+// Склонение слова «вопрос» по числу: 1 вопрос, 2 вопроса, 5 вопросов. Нужно окну
+// шаблона: оно называет, сколько вопросов получит автор, нажав «Использовать».
+export function pluralQuestions(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'вопрос'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'вопроса'
+  return 'вопросов'
+}
+
 // Склонение слова «человек» по числу: 1 человек, 2 человека, 5 человек. Нужно
 // плашке закрытой тарифом воронки: она называет НАСТОЯЩЕЕ число не дошедших.
 export function pluralPeople(n: number): string {
