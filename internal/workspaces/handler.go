@@ -39,6 +39,7 @@ type workspaceService interface {
 	Members(ctx context.Context, userID, workspaceID uuid.UUID) ([]Member, []PendingInvite, error)
 	RemoveMember(ctx context.Context, actorID, workspaceID, memberID uuid.UUID) error
 	Leave(ctx context.Context, userID, workspaceID uuid.UUID) error
+	TransferOwnership(ctx context.Context, actorID, workspaceID, newOwnerID uuid.UUID) error
 	AllowedActions(ctx context.Context, workspaceID, userID uuid.UUID) ([]domain.Action, error)
 }
 
@@ -79,6 +80,11 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/workspaces/{id}/members", h.requireAuth(http.HandlerFunc(h.members)))
 	mux.Handle("DELETE /api/v1/workspaces/{id}/members/{userId}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.removeMember))))
 	mux.Handle("POST /api/v1/workspaces/{id}/leave", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.leave))))
+	// Передача владения — POST на свой адрес, а не PATCH участника с новой ролью:
+	// ролей две, и «смена роли» сегодня означает ровно одно — смену плательщика.
+	// Общая ручка обещала бы переходы, которых в продукте нет, и прятала бы
+	// необратимость за нейтральным словом «роль».
+	mux.Handle("POST /api/v1/workspaces/{id}/ownership", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.transferOwnership))))
 }
 
 type memberResponse struct {
@@ -172,6 +178,37 @@ func (h *Handler) leave(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := h.svc.Leave(r.Context(), u.ID, workspaceID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+type transferOwnershipRequest struct {
+	UserID string `json:"userId"`
+}
+
+// transferOwnership отдаёт пространство другому участнику. Ответ — 204: новую
+// картину состава кабинет всё равно перечитывает списком, а роль спрашивающего
+// изменилась и в теле ответа выглядела бы вторым источником истины.
+func (h *Handler) transferOwnership(w http.ResponseWriter, r *http.Request) {
+	u, workspaceID, ok := userAndWorkspace(w, r)
+	if !ok {
+		return
+	}
+	var req transferOwnershipRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	newOwnerID, err := uuid.Parse(req.UserID)
+	if err != nil {
+		// 422, а не 404: адрес разобран, кривое здесь — тело. Тем же ответом
+		// отвечает и «участника нет» ниже, поэтому существование чужого
+		// пространства этим не выясняется.
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверный id участника", domain.ErrValidation))
+		return
+	}
+	if err := h.svc.TransferOwnership(r.Context(), u.ID, workspaceID, newOwnerID); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}

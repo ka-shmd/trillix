@@ -37,6 +37,10 @@ type Store interface {
 	Rename(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
 	Delete(ctx context.Context, db postgres.DBTX, id uuid.UUID) (int64, error)
 	AddOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) error
+	// DemoteOwner/PromoteToOwner — две половины передачи владения; порознь не
+	// вызываются никогда (см. TransferOwnership).
+	DemoteOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error)
+	PromoteToOwner(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error)
 }
 
 var _ Store = Repo{}

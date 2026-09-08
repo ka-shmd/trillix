@@ -1286,3 +1286,137 @@ func TestDeleteWorkspace_RequiresCSRF(t *testing.T) {
 	}
 	closeBody(t, r)
 }
+
+// Передача владения: роли меняются местами ОДНОЙ транзакцией, отдающий теряет
+// права владельца, получатель их приобретает — и уникальный индекс при этом ни
+// разу не видит двух владельцев.
+//
+// Проверяется против настоящей БД, потому что порядок двух UPDATE'ов держит
+// именно индекс: юнит с фейком пропустил бы перестановку половин.
+func TestOwnership_TransferSwapsRoles(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`))
+	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+
+	aliceID := userIDByEmail(t, "alice@example.com").String()
+	bobID := userIDByEmail(t, "bob@example.com").String()
+
+	// Редактор передать владение не может: 403 — пространство он и так видит.
+	r := post(t, bob, srv, "/api/v1/workspaces/"+team.ID+"/ownership", `{"userId":"`+aliceID+`"}`)
+	if r.StatusCode != http.StatusForbidden {
+		t.Fatalf("редактор передаёт владение: статус %d, ожидалось 403", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Постороннему по id пространство не отдаётся: получатель обязан быть участником.
+	registerUser(t, srv, "carol@example.com")
+	carolID := userIDByEmail(t, "carol@example.com").String()
+	r = post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/ownership", `{"userId":"`+carolID+`"}`)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("владение отдано постороннему: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Владелец отдаёт пространство участнику.
+	r = post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/ownership", `{"userId":"`+bobID+`"}`)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("передача владения: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+
+	// Роли поменялись местами — и владелец в пространстве по-прежнему ровно один.
+	var roles []string
+	rows, err := testPool.Query(context.Background(),
+		`SELECT u.email || ':' || m.role FROM workspace_members m
+		   JOIN users u ON u.id = m.user_id
+		  WHERE m.workspace_id = $1 ORDER BY u.email`, team.ID)
+	if err != nil {
+		t.Fatalf("прочитать состав: %v", err)
+	}
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatalf("scan: %v", err)
+		}
+		roles = append(roles, s)
+	}
+	rows.Close()
+	want := []string{"alice@example.com:editor", "bob@example.com:owner"}
+	if !slices.Equal(roles, want) {
+		t.Fatalf("состав после передачи = %v, ждали %v", roles, want)
+	}
+
+	// Права поехали за ролью: бывший владелец больше не управляет участниками.
+	var asAlice membersDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members"), &asAlice)
+	if slices.Contains(asAlice.Permissions, "ownership.transfer") {
+		t.Errorf("отдавший сохранил право передачи: %v", asAlice.Permissions)
+	}
+	var asBob membersDTO
+	decode(t, do(t, bob, http.MethodGet, srv.URL+"/api/v1/workspaces/"+team.ID+"/members"), &asBob)
+	if !slices.Contains(asBob.Permissions, "ownership.transfer") {
+		t.Errorf("новому владельцу не отдано право передачи: %v", asBob.Permissions)
+	}
+
+	// Отдавший теперь обычный редактор — он может выйти, а прежде не мог.
+	r = post(t, alice, srv, "/api/v1/workspaces/"+team.ID+"/leave", "")
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("бывший владелец выходит: статус %d, ожидалось 204", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Личное пространство не передаётся: «личное» помечено колонкой personal_user_id,
+// а не ролью, и передача владения развела бы эти два факта — прежний хозяин
+// продолжал бы видеть пространство своим, не владея им.
+func TestOwnership_PersonalWorkspaceNotTransferable(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+	bob := registerUser(t, srv, "bob@example.com")
+
+	var spaces listDTO
+	decode(t, do(t, alice, http.MethodGet, srv.URL+"/api/v1/workspaces"), &spaces)
+	personalID := spaces.Workspaces[0].ID
+	if !spaces.Workspaces[0].IsPersonal {
+		t.Fatalf("первое пространство не личное: %+v", spaces.Workspaces[0])
+	}
+
+	// Бобу дают членство в личном пространстве Алисы — это законно (§1).
+	closeBody(t, post(t, alice, srv, "/api/v1/workspaces/"+personalID+"/invitations",
+		`{"email":"bob@example.com","role":"editor"}`))
+	closeBody(t, post(t, bob, srv, "/api/v1/invitations/"+inviteTokenFromDB(t)+"/accept", ""))
+
+	bobID := userIDByEmail(t, "bob@example.com").String()
+	r := post(t, alice, srv, "/api/v1/workspaces/"+personalID+"/ownership", `{"userId":"`+bobID+`"}`)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("личное пространство передано: статус %d, ожидалось 422", r.StatusCode)
+	}
+	closeBody(t, r)
+}
+
+// Передача требует CSRF: она меняет плательщика, и как всякая мутация стоит за
+// RequireCSRF, а не только за сессией.
+func TestOwnership_RequiresCSRF(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice@example.com")
+
+	var team workspaceDTO
+	decode(t, post(t, alice, srv, "/api/v1/workspaces", `{"name":"Команда"}`), &team)
+
+	r := doBody(t, alice, http.MethodPost,
+		srv.URL+"/api/v1/workspaces/"+team.ID+"/ownership",
+		`{"userId":"`+uuid.New().String()+`"}`)
+	if r.StatusCode == http.StatusNoContent {
+		t.Fatal("владение передано без CSRF-токена")
+	}
+	closeBody(t, r)
+}
