@@ -24,8 +24,7 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	// Забытый WithAccount иначе обнаруживается первым же запросом человека —
 	// паникой на nil-лимитере внутри хендлера. Конфигурация проверяется на
 	// старте процесса, а не на первом запросе (internal/CLAUDE.md).
-	if h.passwordChangeLimiter == nil || h.emailChangeLimiter == nil ||
-		h.confirmEmailLimiter == nil || h.twoFactorLimiter == nil ||
+	if h.passwordChangeLimiter == nil || h.twoFactorLimiter == nil ||
 		h.deleteAccountLimiter == nil || h.avatarLimiter == nil {
 		panic("auth: AccountRoutes вызван без WithAccount — вёдра лимита не заданы")
 	}
@@ -37,7 +36,6 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/account/avatar", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.uploadAvatar))))
 	mux.Handle("DELETE /api/v1/account/avatar", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.deleteAvatar))))
 	mux.Handle("POST /api/v1/account/password", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.changePassword))))
-	mux.Handle("POST /api/v1/account/email", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.requestEmailChange))))
 	mux.Handle("GET /api/v1/account/identities", h.RequireAuth(http.HandlerFunc(h.listIdentities)))
 	mux.Handle("DELETE /api/v1/account/identities/{provider}",
 		h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.unlinkIdentity))))
@@ -51,8 +49,8 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	// ВХОДА живёт в Routes, потому что сессии на нём ещё нет.
 	mux.Handle("POST /api/v1/account/2fa/enable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.enableTwoFactor))))
 	mux.Handle("POST /api/v1/account/2fa/disable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.disableTwoFactor))))
-	// Код подтверждения действия: его просят формы смены адреса и удаления
-	// аккаунта — у аккаунта с включённым фактором взять код больше негде.
+	// Код подтверждения действия: его просит форма удаления аккаунта — у
+	// аккаунта с включённым фактором взять код больше негде.
 	mux.Handle("POST /api/v1/account/2fa/send-code", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.sendActionCode))))
 	// Известные устройства (0056). Список — под сессией; забывание меняет
 	// состояние, поэтому под CSRF.
@@ -62,12 +60,6 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	// Удаление аккаунта (слайс G) — POST, а не DELETE: у запроса есть тело
 	// (подтверждение паролем и кодом), а DELETE с телом читают не все прокси.
 	mux.Handle("POST /api/v1/account/delete", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.deleteAccount))))
-	// Второй шаг смены адреса — ПУБЛИЧНЫЙ (по ссылке ходят из почтового клиента,
-	// где сессии кабинета может не быть): аутентифицирует сам одноразовый токен,
-	// CSRF не нужен, щит — лимит по IP. Живёт здесь, а не в Routes, потому что
-	// это половина одного сценария, и ведро ему выдаёт тот же WithAccount.
-	mux.Handle("POST /api/v1/auth/confirm-email-change",
-		h.rateLimit(h.confirmEmailLimiter, "слишком много попыток смены адреса")(http.HandlerFunc(h.confirmEmailChange)))
 }
 
 type updateProfileRequest struct {
@@ -224,69 +216,6 @@ func (h *Handler) changePassword(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-type requestEmailChangeRequest struct {
-	NewEmail string `json:"newEmail"`
-	// CurrentPassword — как и у смены пароля, необязателен только у аккаунта без
-	// пароля (заведён через провайдера).
-	CurrentPassword string `json:"currentPassword"`
-	// Code — код второго фактора; обязателен, если фактор включён. Тот же состав
-	// подтверждения, что у удаления аккаунта.
-	Code string `json:"code"`
-}
-
-// requestEmailChange начинает смену адреса. Адрес в users НЕ меняется: ответ 204
-// означает «письмо со ссылкой поставлено в очередь», а не «адрес сменился».
-func (h *Handler) requestEmailChange(w http.ResponseWriter, r *http.Request) {
-	user, ok := UserFromContext(r.Context())
-	if !ok {
-		httpserver.WriteError(w, r, domain.ErrUnauthorized)
-		return
-	}
-	// Ведро по пользователю: письмо уходит на произвольный адрес, введённый в
-	// форме, — то же соображение, что у приглашений в пространство.
-	if !h.emailChangeLimiter.Allow(user.ID.String()) {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: слишком много запросов смены адреса", domain.ErrRateLimited))
-		return
-	}
-
-	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	var req requestEmailChangeRequest
-	if err := dec.Decode(&req); err != nil {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
-		return
-	}
-
-	if err := h.svc.RequestEmailChange(r.Context(), user, req.NewEmail, req.CurrentPassword, req.Code); err != nil {
-		httpserver.WriteError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
-type confirmEmailChangeRequest struct {
-	Token string `json:"token"`
-}
-
-// confirmEmailChange переносит адрес по токену из письма. Сессию не выдаёт и не
-// рвёт: по ссылке ходят из почтового клиента, а пароль не менялся.
-func (h *Handler) confirmEmailChange(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
-	dec := json.NewDecoder(r.Body)
-	dec.DisallowUnknownFields()
-	var req confirmEmailChangeRequest
-	if err := dec.Decode(&req); err != nil {
-		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
-		return
-	}
-	if err := h.svc.ConfirmEmailChange(r.Context(), req.Token); err != nil {
-		httpserver.WriteError(w, r, err)
-		return
-	}
-	w.WriteHeader(http.StatusNoContent)
-}
-
 type deleteAccountRequest struct {
 	// CurrentPassword — необязателен только у аккаунта без пароля; Code — только
 	// при выключенном втором факторе. Проверяет это сервис: транспорт не знает,
@@ -399,5 +328,8 @@ func (h *Handler) startIdentityLink(w http.ResponseWriter, r *http.Request) {
 	h.setFlowCookie(w, oauthStateCookie, state+":"+verifier)
 	h.setFlowCookie(w, oauthLinkCookie, h.signLinkIntent(user.ID))
 	h.setPopupMode(w, r)
-	http.Redirect(w, r, provider.AuthURL(state, verifier), http.StatusFound)
+	// ПРИВЯЗКА ВСЕГДА СПРАШИВАЕТ АККАУНТ ЗАНОВО. Иначе человек, у которого в
+	// браузере залогинен не тот аккаунт провайдера, получает один и тот же отказ
+	// на каждой попытке: выбрать другой ему негде (найдено владельцем 2026-09-08).
+	http.Redirect(w, r, provider.AuthURL(state, verifier, oauth.ForceChooser), http.StatusFound)
 }

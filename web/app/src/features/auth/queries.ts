@@ -9,7 +9,6 @@ import {
   logout,
   register,
   changePassword,
-  confirmEmailChange,
   deleteAccount,
   disableTwoFactor,
   enableTwoFactor,
@@ -22,7 +21,6 @@ import {
   sendActionCode,
   getIdentities,
   unlinkIdentity,
-  requestEmailChange,
   resendVerification,
   resetPassword,
   updateProfile,
@@ -194,22 +192,6 @@ export function useChangePassword() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: changePassword,
-    onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
-  })
-}
-
-// Запрос смены адреса. Кэш не трогаем: адрес аккаунта не изменился — письмо
-// только поставлено в очередь, и до перехода по ссылке в профиле всё прежнее.
-export function useRequestEmailChange() {
-  return useMutation({ mutationFn: requestEmailChange })
-}
-
-// Подтверждение нового адреса по ссылке из письма. Инвалидируем me: страницу
-// могли открыть в той же вкладке, где открыт кабинет, и адрес в нём протух.
-export function useConfirmEmailChange() {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: confirmEmailChange,
     onSuccess: () => qc.invalidateQueries({ queryKey: authKeys.me() }),
   })
 }

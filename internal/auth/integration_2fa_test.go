@@ -165,9 +165,10 @@ func TestTwoFactor_FullLoginRoundTrip(t *testing.T) {
 	}
 }
 
-// Смена адреса у аккаунта с включённым фактором: код берётся ручкой send-code,
-// потому что взять его больше негде.
-func TestTwoFactor_EmailChangeUsesActionCode(t *testing.T) {
+// Удаление аккаунта у аккаунта с включённым фактором: код берётся ручкой
+// send-code, потому что взять его больше негде — письмо со входа приходит
+// только при входе.
+func TestTwoFactor_AccountDeleteUsesActionCode(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t)
 	c := newClient(t)
@@ -183,19 +184,19 @@ func TestTwoFactor_EmailChangeUsesActionCode(t *testing.T) {
 		t.Fatalf("enable: статус %d", r.StatusCode)
 	}
 
-	// Без кода смена адреса не проходит: адрес уводит канал восстановления.
-	if r := post(t, c, srv.URL+"/api/v1/account/email",
-		`{"newEmail":"new@example.com","currentPassword":"`+password+`","code":""}`, csrf); r.StatusCode != http.StatusUnauthorized {
-		t.Fatalf("смена адреса без кода: статус %d, ожидалось 401", r.StatusCode)
+	// Без кода удаление не проходит: одной угнанной сессии для него мало.
+	if r := post(t, c, srv.URL+"/api/v1/account/delete",
+		`{"currentPassword":"`+password+`","code":""}`, csrf); r.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("удаление без кода: статус %d, ожидалось 401", r.StatusCode)
 	}
 
 	if r := post(t, c, srv.URL+"/api/v1/account/2fa/send-code", "", csrf); r.StatusCode != http.StatusNoContent {
 		t.Fatalf("send-code: статус %d; тело=%s", r.StatusCode, body(t, r))
 	}
 	code := readLoginCodeFromOutbox(t, "account_action_code")
-	if r := post(t, c, srv.URL+"/api/v1/account/email",
-		`{"newEmail":"new@example.com","currentPassword":"`+password+`","code":"`+code+`"}`, csrf); r.StatusCode != http.StatusNoContent {
-		t.Fatalf("смена адреса с кодом: статус %d; тело=%s", r.StatusCode, body(t, r))
+	if r := post(t, c, srv.URL+"/api/v1/account/delete",
+		`{"currentPassword":"`+password+`","code":"`+code+`"}`, csrf); r.StatusCode != http.StatusNoContent {
+		t.Fatalf("удаление с кодом: статус %d; тело=%s", r.StatusCode, body(t, r))
 	}
 }
 

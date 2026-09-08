@@ -101,7 +101,10 @@ func (h *Handler) oauthStart(w http.ResponseWriter, r *http.Request) {
 
 	h.setFlowCookie(w, oauthStateCookie, state+":"+verifier)
 	h.setPopupMode(w, r)
-	http.Redirect(w, r, provider.AuthURL(state, verifier), http.StatusFound)
+	// Вход берёт активный сеанс провайдера молча: человек нажал «Войти через
+	// Яндекс», и лишний экран подтверждения ему только мешает. Привязка в
+	// настройках ходит иначе — см. Chooser.
+	http.Redirect(w, r, provider.AuthURL(state, verifier, oauth.ReuseSession), http.StatusFound)
 }
 
 // setPopupMode запоминает, что поход начат из отдельного окна (?mode=popup).

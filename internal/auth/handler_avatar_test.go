@@ -149,7 +149,7 @@ func TestUploadAvatar_ОтвергаетБольшоеТело(t *testing.T) {
 func TestUploadAvatar_RateLimitedPerUser(t *testing.T) {
 	svc := &fakeAuthService{user: User{ID: domain.NewID(), Email: "a@b.com"}}
 	h := NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
-		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: denyLimiter{}})
+		WithAccount(AccountLimits{PasswordChange: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: denyLimiter{}})
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 

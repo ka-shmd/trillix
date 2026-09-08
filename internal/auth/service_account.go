@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	netmail "net/mail"
-	"net/url"
 	"strings"
-	"time"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -134,126 +131,6 @@ func normalizePersonName(v, field string) (*string, error) {
 		return nil, fmt.Errorf("%w: %s длиннее %d символов", domain.ErrValidation, field, MaxPersonNameLen)
 	}
 	return &v, nil
-}
-
-// emailChangeTTL — окно жизни ссылки подтверждения нового адреса. Как у
-// подтверждения почты (0012): письмо могут открыть не сразу.
-const emailChangeTTL = 24 * time.Hour
-
-// RequestEmailChange начинает смену адреса: проверяет пароль, кладёт одноразовый
-// токен и ставит в очередь ДВА письма — ссылку на новый адрес и уведомление на
-// старый. `users.email` при этом не меняется: пока по ссылке не перешли, вход
-// остаётся по прежнему адресу.
-//
-// Двухшаговость — не осторожность, а единственный способ не потерять аккаунт на
-// опечатке: email и есть ключ восстановления, сброс пароля ходит туда же.
-//
-// Подтверждение — пароль, если он есть, И код второго фактора, если тот включён:
-// тот же состав, что у удаления аккаунта, и по той же причине. Смена адреса
-// уводит канал восстановления (сброс пароля пойдёт на новый ящик), то есть по
-// последствиям она ближе к удалению, чем к правке профиля.
-func (s *Service) RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword, code string) error {
-	newEmail = normalizeEmail(newEmail)
-	if _, err := netmail.ParseAddress(newEmail); err != nil {
-		return fmt.Errorf("%w: некорректный email", domain.ErrValidation)
-	}
-	if newEmail == user.Email {
-		return fmt.Errorf("%w: это уже адрес вашего аккаунта", domain.ErrValidation)
-	}
-
-	// Пароль отличает «человек меняет свой адрес» от «угнали сессию и уводят
-	// аккаунт»: после смены адреса восстановление пароля пойдёт на новый ящик.
-	if user.PasswordHash != nil {
-		ok, err := VerifyPassword(*user.PasswordHash, currentPassword)
-		if err != nil {
-			return err
-		}
-		if !ok {
-			return domain.ErrInvalidCredentials
-		}
-	}
-	// Мина: у аккаунта, заведённого через провайдера, пароля нет, и без этой
-	// проверки увести адрес можно было бы одной угнанной сессией — доказывать
-	// было бы нечем вообще. Второй фактор здесь и есть то, чем доказывают.
-	if user.TwoFactorEnabled {
-		if err := s.consumeLoginCode(ctx, user.ID, code); err != nil {
-			return err
-		}
-	}
-
-	// Первая из двух проверок занятости. Вторая — при подтверждении: между ними
-	// сутки, за которые адрес могут занять регистрацией.
-	if err := s.emailFree(ctx, newEmail); err != nil {
-		return err
-	}
-
-	rawToken, err := newToken()
-	if err != nil {
-		return err
-	}
-	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
-		if e := s.repo.CreateEmailChangeToken(ctx, tx, hashToken(rawToken), user.ID, newEmail, time.Now().Add(emailChangeTTL)); e != nil {
-			return e
-		}
-		if e := s.mail.EnqueueEmail(ctx, tx, mail.EmailMessage{
-			To:       newEmail,
-			Template: mail.TemplateEmailChangeConfirm,
-			Data:     map[string]any{"link": s.appBaseURL + "/confirm-email-change?token=" + url.QueryEscape(rawToken)},
-		}); e != nil {
-			return e
-		}
-		// Уведомление на СТАРЫЙ адрес — единственный сигнал хозяину, если сессию
-		// увели. Ссылки-токена оно не несёт: письмо сообщает, а не даёт прав.
-		return s.mail.EnqueueEmail(ctx, tx, mail.EmailMessage{
-			To:       user.Email,
-			Template: mail.TemplateEmailChangeNotice,
-			Data:     map[string]any{"new_email": newEmail},
-		})
-	})
-}
-
-// ConfirmEmailChange переносит адрес по одноразовому токену из письма. Сессию не
-// трогает: пароль не менялся, а по ссылке ходят из почтового клиента, где
-// сессии кабинета может не быть вовсе.
-func (s *Service) ConfirmEmailChange(ctx context.Context, rawToken string) error {
-	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
-		userID, newEmail, e := s.repo.ConsumeEmailChangeToken(ctx, tx, hashToken(rawToken))
-		if e != nil {
-			if errors.Is(e, pgx.ErrNoRows) {
-				return fmt.Errorf("%w: ссылка недействительна или устарела", domain.ErrValidation)
-			}
-			return e
-		}
-		// Вторая проверка занятости — за сутки адрес могли занять регистрацией.
-		// Явным запросом, а не ловлей UNIQUE-нарушения: 409 с внятным текстом
-		// человеку полезнее, чем 500 из глубины драйвера.
-		if e := s.emailFree(ctx, newEmail); e != nil {
-			return e
-		}
-		_, e = s.repo.UpdateUserEmail(ctx, tx, userID, newEmail)
-		return e
-	})
-}
-
-// emailFree — свободен ли адрес. ErrEmailTaken, если занят.
-//
-// Спрашивает EmailTaken, а не «есть ли такой пользователь»: удалённый аккаунт
-// из вторых чтений не виден, но свой email держит (слайс G), и слепой здесь
-// код упёрся бы в UNIQUE пятисоткой вместо 409.
-func (s *Service) emailFree(ctx context.Context, email string) error {
-	taken, err := s.repo.EmailTaken(ctx, s.db, email)
-	if err != nil {
-		return err
-	}
-	if taken {
-		return domain.ErrEmailTaken
-	}
-	return nil
-}
-
-// PurgeExpiredEmailChangeTokens — фоновая чистка истёкших токенов смены адреса.
-func (s *Service) PurgeExpiredEmailChangeTokens(ctx context.Context) (int64, error) {
-	return s.repo.DeleteExpiredEmailChangeTokens(ctx, s.db)
 }
 
 // teamOwnership — узкая зависимость от модуля пространств: мешают ли удалению

@@ -26,8 +26,12 @@ import (
 // вертикаль поверх настоящего Postgres.
 type stubProvider struct{ profile oauth.Profile }
 
-func (stubProvider) Name() string               { return "yandex" }
-func (stubProvider) AuthURL(_, _ string) string { return "https://provider.example/auth" }
+func (stubProvider) Name() string { return "yandex" }
+
+func (stubProvider) AuthURL(_, _ string, _ oauth.Chooser) string {
+	return "https://provider.example/auth"
+}
+
 func (p stubProvider) Exchange(context.Context, string, string) (oauth.Profile, error) {
 	return p.profile, nil
 }
@@ -40,7 +44,7 @@ func newOAuthStack(t *testing.T, profile oauth.Profile) *httptest.Server {
 	svc := newAuthService()
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false).
 		WithOAuth(svc, map[string]oauth.Provider{"yandex": stubProvider{profile}}, ratelimit.AllowAll{}, []byte("integration-test-secret")).
-		WithAccount(auth.AccountLimits{PasswordChange: ratelimit.AllowAll{}, EmailChange: ratelimit.AllowAll{}, ConfirmEmail: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
+		WithAccount(auth.AccountLimits{PasswordChange: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
 	mux := http.NewServeMux()
 	h.Routes(mux)
 	h.OAuthRoutes(mux)

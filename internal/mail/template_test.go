@@ -207,8 +207,6 @@ func templateByName(t *testing.T, name string) Template {
 		"TemplateEmailVerification":  TemplateEmailVerification,
 		"TemplateWorkspaceInvite":    TemplateWorkspaceInvite,
 		"TemplateSubmissionNew":      TemplateSubmissionNew,
-		"TemplateEmailChangeConfirm": TemplateEmailChangeConfirm,
-		"TemplateEmailChangeNotice":  TemplateEmailChangeNotice,
 		"TemplateRespondentReceipt":  TemplateRespondentReceipt,
 		"TemplateBookingConfirmed":   TemplateBookingConfirmed,
 		"TemplateBookingCanceled":    TemplateBookingCanceled,

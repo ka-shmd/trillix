@@ -130,26 +130,6 @@ func TestAccountDelete_EmailStaysTaken(t *testing.T) {
 	}
 }
 
-// Смена адреса на занятый УДАЛЁННЫМ аккаунтом отвечает 409, а не падает на
-// UNIQUE: занятость спрашивается отдельным запросом, слепым к пометке.
-func TestAccountDelete_EmailChangeToDeletedAddressRejected(t *testing.T) {
-	resetDB(t)
-	srv := newStack(t)
-	const gone = "vanished@example.com"
-	goneClient := registerUser(t, srv.URL, gone, "supersecret1")
-	if del := post(t, goneClient, srv.URL+"/api/v1/account/delete",
-		`{"currentPassword":"supersecret1"}`, csrfHeader(t, goneClient, srv.URL)); del.StatusCode != http.StatusNoContent {
-		t.Fatalf("delete: статус %d, ожидалось 204", del.StatusCode)
-	}
-
-	c := registerUser(t, srv.URL, "living@example.com", "supersecret1")
-	resp := post(t, c, srv.URL+"/api/v1/account/email",
-		`{"newEmail":"`+gone+`","currentPassword":"supersecret1"}`, csrfHeader(t, c, srv.URL))
-	if resp.StatusCode != http.StatusConflict {
-		t.Fatalf("смена адреса на занятый удалённым: статус %d, ожидалось 409; тело=%s", resp.StatusCode, body(t, resp))
-	}
-}
-
 // Первый исход гейта: владелец команды С УЧАСТНИКАМИ не удаляется (TD-53).
 func TestAccountDelete_OwnerOfTeamWithMembersRefused(t *testing.T) {
 	resetDB(t)

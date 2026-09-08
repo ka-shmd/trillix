@@ -62,7 +62,7 @@ func newFake(t *testing.T, f *fakeYandex) *Yandex {
 func TestYandex_AuthURL_CarriesPKCEAndState(t *testing.T) {
 	y := NewYandex("client-id", "secret", "https://app.trillix.ru/cb")
 
-	raw := y.AuthURL("state-value", "verifier-value")
+	raw := y.AuthURL("state-value", "verifier-value", ReuseSession)
 	u, err := url.Parse(raw)
 	if err != nil {
 		t.Fatalf("ссылка не разбирается: %v", err)
@@ -222,5 +222,29 @@ func TestYandex_Exchange_NameOptional(t *testing.T) {
 	}
 	if profile.ID == "" || profile.Email == "" {
 		t.Fatal("идентификатор и адрес обязаны приехать и без имени")
+	}
+}
+
+// Привязка обязана спрашивать аккаунт заново, вход — нет. Без force_confirm
+// Яндекс возвращается молча тем же аккаунтом, и человек, у которого залогинен
+// не тот, получает один и тот же отказ на каждой попытке — второй попытки у
+// него нет вовсе (найдено владельцем 2026-09-08).
+func TestYandex_AuthURL_ForceConfirmOnlyWhenLinking(t *testing.T) {
+	y := NewYandex("client-id", "secret", "https://app.trillix.ru/cb")
+
+	linking, err := url.Parse(y.AuthURL("s", "v", ForceChooser))
+	if err != nil {
+		t.Fatalf("ссылка привязки не разбирается: %v", err)
+	}
+	if got := linking.Query().Get("force_confirm"); got != "yes" {
+		t.Fatalf("force_confirm = %q, ожидался yes — без него второй попытки привязки нет", got)
+	}
+
+	login, err := url.Parse(y.AuthURL("s", "v", ReuseSession))
+	if err != nil {
+		t.Fatalf("ссылка входа не разбирается: %v", err)
+	}
+	if login.Query().Has("force_confirm") {
+		t.Fatal("вход просит подтверждение заново — лишний экран тому, кто просто входит")
 	}
 }

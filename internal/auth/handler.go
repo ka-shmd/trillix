@@ -42,8 +42,6 @@ type authService interface {
 	SetAvatar(ctx context.Context, userID uuid.UUID, data []byte) (User, error)
 	ClearAvatar(ctx context.Context, userID uuid.UUID) (User, error)
 	ChangePassword(ctx context.Context, user User, currentPassword, newPassword string) (string, error)
-	RequestEmailChange(ctx context.Context, user User, newEmail, currentPassword, code string) error
-	ConfirmEmailChange(ctx context.Context, token string) error
 	Identities(ctx context.Context, userID uuid.UUID) ([]Identity, error)
 	UnlinkIdentity(ctx context.Context, user User, provider string) error
 	EnableTwoFactor(ctx context.Context, user User, currentPassword string) error
@@ -101,11 +99,9 @@ type Handler struct {
 	// passwordChangeLimiter — по пользователю на POST /account/password (фаза 23).
 	// Не от подбора (сессия уже своя), а от argon2id: 64 МиБ на вызов.
 	passwordChangeLimiter RateLimiter
-	// emailChangeLimiter — по пользователю на POST /account/email: письмо уходит
-	// на ПРОИЗВОЛЬНЫЙ адрес, поэтому ведро строгое (нельзя завалить чужой ящик).
-	// confirmEmailLimiter — по IP на публичный шаг подтверждения (перебор токенов).
-	emailChangeLimiter  RateLimiter
-	confirmEmailLimiter RateLimiter
+	// СМЕНЫ АДРЕСА В ПРОДУКТЕ НЕТ (решение владельца 2026-09-08), поэтому нет и
+	// её вёдер: почта и есть аккаунт, связь железная. Механизма смены не
+	// существует ни на одном слое — ни ручки, ни таблицы токенов.
 	// twoFactorLimiter — по пользователю на включение/выключение второго
 	// фактора: за выключением стоит argon2id и шестизначный код.
 	twoFactorLimiter RateLimiter
@@ -181,8 +177,6 @@ func (h *Handler) WithEmailVerification(verify, resend RateLimiter) *Handler {
 // компиляции, ни падения теста — просто защита окажется не на той двери.
 type AccountLimits struct {
 	PasswordChange RateLimiter
-	EmailChange    RateLimiter
-	ConfirmEmail   RateLimiter
 	TwoFactor      RateLimiter
 	DeleteAccount  RateLimiter
 	Avatar         RateLimiter
@@ -193,8 +187,6 @@ type AccountLimits struct {
 // будут nil.
 func (h *Handler) WithAccount(l AccountLimits) *Handler {
 	h.passwordChangeLimiter = l.PasswordChange
-	h.emailChangeLimiter = l.EmailChange
-	h.confirmEmailLimiter = l.ConfirmEmail
 	h.twoFactorLimiter = l.TwoFactor
 	h.deleteAccountLimiter = l.DeleteAccount
 	h.avatarLimiter = l.Avatar

@@ -24,7 +24,7 @@ type fakeProvider struct {
 
 func (f *fakeProvider) Name() string { return "fake" }
 
-func (f *fakeProvider) AuthURL(state, verifier string) string {
+func (f *fakeProvider) AuthURL(state, _ string, _ oauth.Chooser) string {
 	return "https://provider.example/auth?state=" + url.QueryEscape(state)
 }
 
