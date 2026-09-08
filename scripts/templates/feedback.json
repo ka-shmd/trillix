@@ -1,0 +1,99 @@
+{
+  "title": "Обратная связь",
+  "description": "Оценка работы и два вопроса по существу — форма, которую заполняют за минуту.",
+  "schema": {
+    "schemaVersion": 1,
+    "blocks": [
+      {
+        "id": "blk_feedback_1",
+        "groupId": "grp_feedback_1",
+        "type": "form_title",
+        "text": [
+          {
+            "t": "Обратная связь"
+          }
+        ]
+      },
+      {
+        "id": "blk_feedback_2",
+        "groupId": "grp_feedback_2",
+        "type": "text",
+        "text": [
+          {
+            "t": "Нам важно ваше мнение: ответы читает вся команда."
+          }
+        ]
+      },
+      {
+        "id": "blk_feedback_3",
+        "groupId": "grp_feedback_3",
+        "type": "title",
+        "text": [
+          {
+            "t": "Как вы оцениваете нашу работу?"
+          }
+        ]
+      },
+      {
+        "id": "blk_feedback_4",
+        "groupId": "grp_feedback_3",
+        "type": "scale",
+        "required": true,
+        "settings": {
+          "scaleMin": 1,
+          "scaleMax": 5
+        }
+      },
+      {
+        "id": "blk_feedback_5",
+        "groupId": "grp_feedback_4",
+        "type": "title",
+        "text": [
+          {
+            "t": "Что понравилось больше всего?"
+          }
+        ]
+      },
+      {
+        "id": "blk_feedback_6",
+        "groupId": "grp_feedback_4",
+        "type": "long_text",
+        "settings": {}
+      },
+      {
+        "id": "blk_feedback_7",
+        "groupId": "grp_feedback_5",
+        "type": "title",
+        "text": [
+          {
+            "t": "Что стоит улучшить?"
+          }
+        ]
+      },
+      {
+        "id": "blk_feedback_8",
+        "groupId": "grp_feedback_5",
+        "type": "long_text",
+        "settings": {}
+      },
+      {
+        "id": "blk_feedback_9",
+        "groupId": "grp_feedback_6",
+        "type": "title",
+        "text": [
+          {
+            "t": "Email, если ждёте ответа"
+          }
+        ]
+      },
+      {
+        "id": "blk_feedback_10",
+        "groupId": "grp_feedback_6",
+        "type": "email",
+        "settings": {
+          "placeholder": "you@example.com"
+        }
+      }
+    ]
+  }
+}

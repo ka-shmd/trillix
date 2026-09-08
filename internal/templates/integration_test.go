@@ -16,6 +16,7 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -192,7 +193,7 @@ func TestTemplates_UseGivesFreshIDs(t *testing.T) {
 	if err := json.Unmarshal([]byte(firstDoc), &doc); err != nil {
 		t.Fatalf("разбор документа: %v", err)
 	}
-	var question, note = "", ""
+	question, note := "", ""
 	for _, b := range doc.Blocks {
 		switch b.Type {
 		case "short_text":
@@ -280,6 +281,52 @@ func TestTemplates_PublishRequiresAdmin(t *testing.T) {
 		t.Fatalf("удаление публичного: статус %d, ожидалось 403", r.StatusCode)
 	}
 	closeBody(t, r)
+}
+
+// Шесть заготовок продукта лежат в репозитории файлами и попадают на витрину
+// ЕДИНСТВЕННЫМ путём — этой ручкой (её зовёт scripts/seed-templates.sh вашими
+// данными: ручка сидит за сессией). Здесь проверяется всё, кроме входа: файлы
+// разбираются, документы проходят валидацию, витрина наполняется и каждой
+// заготовкой можно воспользоваться.
+//
+// Без этого теста негодный файл узнаётся как 422 посреди ручного прогона заливки —
+// на чужой машине и, как правило, на проде.
+func TestTemplates_SeedFilesPublish(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	admin := registerUser(t, srv, "admin@example.com")
+	makeAdmin(t, "admin@example.com")
+
+	files, err := filepath.Glob(filepath.Join("..", "..", "scripts", "templates", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("заготовок витрины нет вовсе — скрипту заливки нечего слать")
+	}
+	for _, path := range files {
+		body, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := post(t, admin, srv, "/api/v1/admin/templates", string(body))
+		if r.StatusCode != http.StatusCreated {
+			msg, _ := io.ReadAll(r.Body)
+			t.Fatalf("заливка %s: статус %d, ожидалось 201 (%s)", filepath.Base(path), r.StatusCode, msg)
+		}
+		closeBody(t, r)
+	}
+
+	ws := personalWorkspace(t, admin, srv)
+	got := listTemplates(t, admin, srv, ws)
+	if len(got.Items) != len(files) {
+		t.Fatalf("на витрине %d шаблонов, залито %d", len(got.Items), len(files))
+	}
+	for _, item := range got.Items {
+		if made := useTemplate(t, admin, srv, item.ID, ws); made.Slug == "" {
+			t.Errorf("форма из заготовки %q не создалась", item.Title)
+		}
+	}
 }
 
 // --- Хелперы ---

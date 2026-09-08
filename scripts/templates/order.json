@@ -1,0 +1,133 @@
+{
+  "title": "Заявка на услугу",
+  "description": "Что нужно клиенту, к какому сроку и как с ним связаться.",
+  "schema": {
+    "schemaVersion": 1,
+    "blocks": [
+      {
+        "id": "blk_order_1",
+        "groupId": "grp_order_1",
+        "type": "form_title",
+        "text": [
+          {
+            "t": "Заявка на услугу"
+          }
+        ]
+      },
+      {
+        "id": "blk_order_2",
+        "groupId": "grp_order_2",
+        "type": "title",
+        "text": [
+          {
+            "t": "Как к вам обращаться?"
+          }
+        ]
+      },
+      {
+        "id": "blk_order_3",
+        "groupId": "grp_order_2",
+        "type": "short_text",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_order_4",
+        "groupId": "grp_order_3",
+        "type": "title",
+        "text": [
+          {
+            "t": "Телефон"
+          }
+        ]
+      },
+      {
+        "id": "blk_order_5",
+        "groupId": "grp_order_3",
+        "type": "phone",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_order_6",
+        "groupId": "grp_order_4",
+        "type": "title",
+        "text": [
+          {
+            "t": "Какая услуга нужна?"
+          }
+        ]
+      },
+      {
+        "id": "blk_order_7",
+        "groupId": "grp_order_4",
+        "type": "dropdown",
+        "required": true,
+        "settings": {
+          "options": [
+            {
+              "id": "opt_order_1",
+              "label": "Консультация"
+            },
+            {
+              "id": "opt_order_2",
+              "label": "Разовая работа"
+            },
+            {
+              "id": "opt_order_3",
+              "label": "Долгосрочное сотрудничество"
+            },
+            {
+              "id": "opt_order_4",
+              "label": "Пока не знаю"
+            }
+          ]
+        }
+      },
+      {
+        "id": "blk_order_8",
+        "groupId": "grp_order_5",
+        "type": "title",
+        "text": [
+          {
+            "t": "Опишите задачу"
+          }
+        ]
+      },
+      {
+        "id": "blk_order_9",
+        "groupId": "grp_order_5",
+        "type": "long_text",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_order_10",
+        "groupId": "grp_order_6",
+        "type": "title",
+        "text": [
+          {
+            "t": "Когда нужен результат?"
+          }
+        ]
+      },
+      {
+        "id": "blk_order_11",
+        "groupId": "grp_order_6",
+        "type": "date",
+        "settings": {}
+      },
+      {
+        "id": "blk_order_12",
+        "groupId": "grp_order_7",
+        "type": "consent",
+        "text": [
+          {
+            "t": "Согласен на обработку персональных данных"
+          }
+        ],
+        "required": true
+      }
+    ]
+  }
+}

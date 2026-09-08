@@ -1,0 +1,144 @@
+{
+  "title": "Запись на консультацию",
+  "description": "Контакты, удобные дата и время, тема разговора — всё, чтобы перезвонить по делу.",
+  "schema": {
+    "schemaVersion": 1,
+    "blocks": [
+      {
+        "id": "blk_consultation_1",
+        "groupId": "grp_consultation_1",
+        "type": "form_title",
+        "text": [
+          {
+            "t": "Запись на консультацию"
+          }
+        ]
+      },
+      {
+        "id": "blk_consultation_2",
+        "groupId": "grp_consultation_2",
+        "type": "title",
+        "text": [
+          {
+            "t": "Как вас зовут?"
+          }
+        ]
+      },
+      {
+        "id": "blk_consultation_3",
+        "groupId": "grp_consultation_2",
+        "type": "short_text",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_consultation_4",
+        "groupId": "grp_consultation_3",
+        "type": "title",
+        "text": [
+          {
+            "t": "Телефон"
+          }
+        ]
+      },
+      {
+        "id": "blk_consultation_5",
+        "groupId": "grp_consultation_3",
+        "type": "phone",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_consultation_6",
+        "groupId": "grp_consultation_4",
+        "type": "title",
+        "text": [
+          {
+            "t": "Email"
+          }
+        ]
+      },
+      {
+        "id": "blk_consultation_7",
+        "groupId": "grp_consultation_4",
+        "type": "email",
+        "settings": {}
+      },
+      {
+        "id": "blk_consultation_8",
+        "groupId": "grp_consultation_5",
+        "type": "title",
+        "text": [
+          {
+            "t": "Удобная дата"
+          }
+        ]
+      },
+      {
+        "id": "blk_consultation_9",
+        "groupId": "grp_consultation_5",
+        "type": "date",
+        "required": true,
+        "settings": {}
+      },
+      {
+        "id": "blk_consultation_10",
+        "groupId": "grp_consultation_6",
+        "type": "title",
+        "text": [
+          {
+            "t": "Удобное время"
+          }
+        ]
+      },
+      {
+        "id": "blk_consultation_11",
+        "groupId": "grp_consultation_6",
+        "type": "single_choice",
+        "settings": {
+          "options": [
+            {
+              "id": "opt_consultation_1",
+              "label": "Утро, 9:00–12:00"
+            },
+            {
+              "id": "opt_consultation_2",
+              "label": "День, 12:00–17:00"
+            },
+            {
+              "id": "opt_consultation_3",
+              "label": "Вечер, 17:00–20:00"
+            }
+          ]
+        }
+      },
+      {
+        "id": "blk_consultation_12",
+        "groupId": "grp_consultation_7",
+        "type": "title",
+        "text": [
+          {
+            "t": "О чём хотите поговорить?"
+          }
+        ]
+      },
+      {
+        "id": "blk_consultation_13",
+        "groupId": "grp_consultation_7",
+        "type": "long_text",
+        "settings": {}
+      },
+      {
+        "id": "blk_consultation_14",
+        "groupId": "grp_consultation_8",
+        "type": "consent",
+        "text": [
+          {
+            "t": "Согласен на обработку персональных данных"
+          }
+        ],
+        "required": true
+      }
+    ]
+  }
+}

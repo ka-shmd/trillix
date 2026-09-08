@@ -1,0 +1,71 @@
+{
+  "title": "Оценка мероприятия",
+  "description": "Одна шкала от 0 до 10 и вопрос «почему» — замер, который считают каждый раз одинаково.",
+  "schema": {
+    "schemaVersion": 1,
+    "blocks": [
+      {
+        "id": "blk_nps_1",
+        "groupId": "grp_nps_1",
+        "type": "form_title",
+        "text": [
+          {
+            "t": "Оценка мероприятия"
+          }
+        ]
+      },
+      {
+        "id": "blk_nps_2",
+        "groupId": "grp_nps_2",
+        "type": "title",
+        "text": [
+          {
+            "t": "Насколько вы готовы порекомендовать нас коллегам?"
+          }
+        ]
+      },
+      {
+        "id": "blk_nps_3",
+        "groupId": "grp_nps_2",
+        "type": "scale",
+        "required": true,
+        "settings": {
+          "scaleMin": 0,
+          "scaleMax": 10
+        }
+      },
+      {
+        "id": "blk_nps_4",
+        "groupId": "grp_nps_3",
+        "type": "title",
+        "text": [
+          {
+            "t": "Что повлияло на вашу оценку?"
+          }
+        ]
+      },
+      {
+        "id": "blk_nps_5",
+        "groupId": "grp_nps_3",
+        "type": "long_text",
+        "settings": {}
+      },
+      {
+        "id": "blk_nps_6",
+        "groupId": "grp_nps_4",
+        "type": "title",
+        "text": [
+          {
+            "t": "Email, если хотите продолжить разговор"
+          }
+        ]
+      },
+      {
+        "id": "blk_nps_7",
+        "groupId": "grp_nps_4",
+        "type": "email",
+        "settings": {}
+      }
+    ]
+  }
+}
