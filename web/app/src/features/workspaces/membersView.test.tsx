@@ -241,7 +241,7 @@ it('живая ссылка показана целиком и отключае�
   const field = screen.getByLabelText('Ссылка-приглашение') as HTMLInputElement
   expect(field.value).toBe('https://app.example/join/tok')
 
-  fireEvent.click(screen.getByRole('button', { name: 'Отключить ссылку' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))
   await screen.findByRole('heading', { name: 'Отключить ссылку?' })
   expect(writes()).toEqual([])
 
