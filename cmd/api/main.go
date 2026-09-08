@@ -169,12 +169,6 @@ const (
 	// слать письма пачками на свой же ящик).
 	verifyRatePerSec = 1.0 / 12.0
 	verifyBurst      = 5
-	// inviteRatePerSec/inviteBurst — приглашения: письмо уходит на ПРОИЗВОЛЬНЫЙ
-	// адрес, поэтому ведро строже, чем у ручек, пишущих только своему владельцу.
-	// Пять подряд (собрать команду за раз), дальше по одному в две минуты.
-	inviteRatePerSec = 1.0 / 120.0
-	inviteBurst      = 5
-
 	// aiRatePerSec/aiBurst — обращения к модели (сборка формы и чат, одно ведро на
 	// обе ручки: кошелёк у них общий). Ключ ведра — АККАУНТ: вызов стоит денег
 	// снаружи, и ограничивать надо того, кто платит, а не адрес, с которого пришли.
@@ -448,15 +442,14 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// Права в пространстве (фаза 18): их спрашивает forms — поэтому workspaces
 	// собирается раньше него. Обратной зависимости нет: workspaces знает про
 	// тариф, но не про формы.
-	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc, mailSvc, cfg.AppOrigin)
-	// Приглашение — единственная ручка, шлющая письмо на произвольный адрес:
-	// ведро по пользователю, темп как у повторного подтверждения почты.
+	// Писем модуль не шлёт: приглашение по адресу почты вырезано, зовут ссылкой,
+	// и передаёт её человек сам (ADR §10). Вместе с письмом ушло и ведро отправки.
+	workspacesSvc := workspaces.NewService(pool, postgres.TxRunner{Pool: pool}, workspaces.Repo{}, entitlementsSvc, cfg.AppOrigin)
 	// Удаление аккаунта спрашивает у пространств, не осиротеет ли команда
 	// (слайс G). Связь односторонняя и подключается здесь, потому что импортом
 	// её не выразить: workspaces уже стоит на RequireAuth из auth.
 	authSvc.WithTeams(workspacesSvc)
-	inviteLimiter := ratelimit.NewTokenBucket(inviteRatePerSec, inviteBurst)
-	workspacesHandler := workspaces.NewHandler(workspacesSvc, inviteLimiter, authHandler.RequireAuth, authHandler.RequireCSRF)
+	workspacesHandler := workspaces.NewHandler(workspacesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
 	// Секрет токена формы: из него выводятся ключ шифрования пароля формы и подпись
 	// токенов разблокировки (0047). Без него пароль поставить нельзя, а уже
@@ -773,17 +766,17 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		},
 	})
 	tasks.Start(ctx, periodic.Task{
-		Name:     "invitation-cleanup",
+		Name:     "join-link-cleanup",
 		Interval: sessionCleanupInterval,
 		Run: func(ctx context.Context) error {
 			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
 			defer cancel()
-			n, err := workspacesSvc.PurgeExpiredInvitations(ctx)
+			n, err := workspacesSvc.PurgeExpiredJoinLinks(ctx)
 			if err != nil {
 				return err
 			}
 			if n > 0 {
-				log.Info("spent invitations purged", slog.Int64("count", n))
+				log.Info("spent join links purged", slog.Int64("count", n))
 			}
 			return nil
 		},
@@ -885,7 +878,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			// Сумма обязана перечислять ВСЕ созданные вёдра: забытое здесь ведро
 			// не ломает лимит, а растит карту до конца жизни процесса.
 			removed := loginLimiter.GC() + registerLimiter.GC() + submitLimiter.GC() + oauthLimiter.GC() +
-				visitLimiter.GC() + inviteLimiter.GC() + formTokenLimiter.GC() +
+				visitLimiter.GC() + formTokenLimiter.GC() +
 				forgotIPLimiter.GC() + forgotEmailLimiter.GC() + resetLimiter.GC() +
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +

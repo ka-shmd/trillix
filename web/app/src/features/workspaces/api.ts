@@ -1,9 +1,11 @@
 import { apiRequest } from '../../shared/api/client'
 import { workspaceSchema, workspacesResponseSchema, type Workspace } from '../../entities/workspace'
 import {
-  invitationSchema,
+  joinLinkResponseSchema,
+  joinPreviewSchema,
   membersResponseSchema,
-  type Invitation,
+  type JoinLink,
+  type JoinPreview,
   type MembersState,
 } from '../../entities/member'
 
@@ -44,13 +46,31 @@ export function listMembers(workspaceId: string): Promise<MembersState> {
   return apiRequest(`/workspaces/${workspaceId}/members`, { schema: membersResponseSchema })
 }
 
-export function inviteMember(workspaceId: string, email: string): Promise<void> {
-  // Роль пока одна: владельцем не приглашают (он ровно один), а третьей роли
-  // в продукте нет. Появится — станет параметром.
-  return apiRequest(`/workspaces/${workspaceId}/invitations`, {
-    method: 'POST',
-    body: { email, role: 'editor' },
+// Ссылка-приглашение — единственный способ позвать человека (ADR §10).
+//
+// Чтение отдаёт `null`, когда живой ссылки нет: это состояние пространства, а не
+// отказ, и отличать его от «пространства нет» кабинету необходимо.
+export async function getJoinLink(workspaceId: string): Promise<JoinLink | null> {
+  const res = await apiRequest(`/workspaces/${workspaceId}/join-link`, {
+    schema: joinLinkResponseSchema,
   })
+  return res.link
+}
+
+// createJoinLink ВСЕГДА выписывает новую, гася прежнюю: команда человека здесь —
+// «дай ссылку, которую я разошлю», и отдавать вчерашнюю значило бы продлевать
+// срок мимо решения о сутках.
+export async function createJoinLink(workspaceId: string): Promise<JoinLink> {
+  const res = await apiRequest(`/workspaces/${workspaceId}/join-link`, {
+    method: 'POST',
+    schema: joinLinkResponseSchema,
+  })
+  if (res.link === null) throw new Error('сервер не вернул ссылку')
+  return res.link
+}
+
+export function revokeJoinLink(workspaceId: string): Promise<void> {
+  return apiRequest(`/workspaces/${workspaceId}/join-link`, { method: 'DELETE' })
 }
 
 export function removeMember(workspaceId: string, userId: string): Promise<void> {
@@ -72,13 +92,13 @@ export function leaveWorkspace(workspaceId: string): Promise<void> {
   return apiRequest(`/workspaces/${workspaceId}/leave`, { method: 'POST' })
 }
 
-// Просмотр приглашения не требует сессии: аккаунта у позванного может ещё не быть.
-export function previewInvitation(token: string): Promise<Invitation> {
-  return apiRequest(`/invitations/${encodeURIComponent(token)}`, { schema: invitationSchema })
+// Просмотр ссылки не требует сессии: аккаунта у зовомого может ещё не быть.
+export function previewJoinLink(token: string): Promise<JoinPreview> {
+  return apiRequest(`/join/${encodeURIComponent(token)}`, { schema: joinPreviewSchema })
 }
 
-export function acceptInvitation(token: string): Promise<Workspace> {
-  return apiRequest(`/invitations/${encodeURIComponent(token)}/accept`, {
+export function acceptJoinLink(token: string): Promise<Workspace> {
+  return apiRequest(`/join/${encodeURIComponent(token)}/accept`, {
     method: 'POST',
     schema: workspaceSchema,
   })

@@ -23,7 +23,6 @@ import (
 	"github.com/ka-shmd/trillix/internal/booking"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
-	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 	"github.com/ka-shmd/trillix/internal/workspaces"
@@ -37,8 +36,7 @@ var testNow = time.Date(2026, 9, 7, 5, 0, 0, 0, time.UTC)
 func newPublicStack(t *testing.T, list, hold booking.RateLimiter) *httptest.Server {
 	t.Helper()
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
-		pgtest.MailService(testPool), appOrigin)
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans, appOrigin)
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, plans)
 
 	svc := booking.NewPublicService(testPool, postgres.TxRunner{Pool: testPool}, booking.Repo{}, formsSvc).
@@ -467,8 +465,7 @@ func newCancelStack(t *testing.T) (*httptest.Server, []byte) {
 	t.Helper()
 	secret := booking.DeriveCancelSecret([]byte("dev-only-form-token-secret-not-a-real-key"))
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
-	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans,
-		pgtest.MailService(testPool), appOrigin)
+	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, plans, appOrigin)
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{}, wsSvc, plans)
 
 	svc := booking.NewPublicService(testPool, postgres.TxRunner{Pool: testPool}, booking.Repo{}, formsSvc).

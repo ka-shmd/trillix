@@ -12,49 +12,21 @@ import { login, seedAccount } from './helpers/session'
 // visits-funnel.
 //
 // ЧТО ЗДЕСЬ ПРОВЕРЯЕТСЯ ВПЕРВЫЕ (юниты и интеграционные не видят этой границы):
-//   1. Ссылка приглашения из ПИСЬМА действительно работает в прод-сборке: токен
-//      живёт в query, экран /invite лежит ВНЕ гарда сессии, и проверить, что он
-//      открывается неавторизованным, можно только настоящим браузером.
+//   1. Ссылка-приглашение работает в прод-сборке ЦЕЛИКОМ: адрес, который кабинет
+//      показал владельцу, открывается в другом браузере без сессии — экран
+//      /join/{token} лежит ВНЕ гарда сессии, и проверить это можно только
+//      настоящим браузером.
 //   2. Прод-CSP и same-origin: мутации кабинета несут Origin и CSRF-куку — под
 //      Caddy это работает иначе, чем в dev, где CSP нет вовсе.
-//   3. Разграничение прав ГЛАЗАМИ: у редактора нет кнопок управления
-//      участниками, потому что кабинет прячет их по permissions с сервера, а
+//   3. Разграничение прав ГЛАЗАМИ: у редактора нет ни раздела ссылки, ни действий
+//      над строками, потому что кабинет прячет их по permissions с сервера, а
 //      тариф чужого пространства ему не отдаёт сам сервер.
 //
-// ПИСЬМО ЧИТАЕТСЯ ИЗ MAILPIT — того же, куда prod-local шлёт всю почту. Так
-// проверяется весь путь «токен → outbox → SMTP → ссылка», а не суррогат с
-// токеном, вынутым из базы.
-const MAILPIT = process.env.E2E_MAILPIT_URL ?? 'http://localhost:8025'
+// ПОЧТЫ В ЭТОМ СЦЕНАРИИ БОЛЬШЕ НЕТ. Приглашение по адресу вырезано из продукта
+// (ADR §10), ссылку передаёт человек сам — значит, ни outbox, ни SMTP, ни Mailpit
+// в пути приглашения не участвуют, и читать их здесь нечего.
 
-// inviteLinkFor вытаскивает ссылку приглашения из последнего письма адресату.
-// Диспетчер outbox работает фоном, поэтому ждём появления письма, а не берём
-// «что есть сейчас».
-async function inviteLinkFor(request: import('@playwright/test').APIRequestContext, email: string) {
-  let link = ''
-  await expect
-    .poll(
-      async () => {
-        const res = await request.get(
-          `${MAILPIT}/api/v1/search?query=${encodeURIComponent(`to:${email}`)}`,
-        )
-        if (!res.ok()) return ''
-        const found = (await res.json()) as { messages?: Array<{ ID: string }> }
-        const id = found.messages?.[0]?.ID
-        if (!id) return ''
-        const body = await request.get(`${MAILPIT}/api/v1/message/${id}`)
-        if (!body.ok()) return ''
-        const msg = (await body.json()) as { Text?: string }
-        const match = /https?:\/\/\S*\/invite\?token=\S+/.exec(msg.Text ?? '')
-        link = match?.[0] ?? ''
-        return link
-      },
-      { timeout: 30_000, message: 'письмо приглашения не пришло в Mailpit' },
-    )
-    .not.toBe('')
-  return link
-}
-
-test('приглашение в пространство: коллега принял, правит формы, тариф ему закрыт, отзыв убирает доступ', async ({
+test('ссылка-приглашение: коллега вошёл, правит формы, тариф ему закрыт, отзыв убирает доступ', async ({
   page,
   browser,
 }) => {
@@ -82,33 +54,28 @@ test('приглашение в пространство: коллега при�
   await page.getByRole('link', { name: `Участники пространства «${spaceName}»` }).click()
 
   await expect(page).toHaveURL(/\/w\/[^/]+\/members$/)
-  // Приглашение — кнопка в заголовке раздела и диалог (решение владельца
-  // 2026-09-08): поле почты в потоке страницы отменено, правило «завести новое —
-  // кнопкой» исключений больше не имеет (DESIGN-SYSTEM §1).
-  await page.getByRole('button', { name: 'Пригласить' }).click()
-  const inviteDialog = page.getByRole('dialog', { name: 'Пригласить в пространство' })
-  await inviteDialog.getByPlaceholder('coworker@example.com').fill(mateEmail)
-  await inviteDialog.getByRole('button', { name: 'Пригласить' }).click()
-  // Позванный виден на той же странице ещё до принятия — это состояние
-  // пространства, а не невидимая очередь. Проверяем строку, а не тост: тост
-  // исчезает сам, а строка и есть результат действия.
-  await expect(page.getByText(mateEmail)).toBeVisible()
-
-  const link = await inviteLinkFor(page.request, mateEmail)
+  // Звать теперь можно ТОЛЬКО ссылкой: приглашение по адресу почты вырезано из
+  // продукта целиком (ADR §10). Письма нет — ссылку передаёт человек сам,
+  // поэтому и Mailpit в этом сценарии больше не участвует.
+  await page.getByRole('button', { name: 'Создать ссылку' }).click()
+  const linkField = page.getByLabel('Ссылка-приглашение')
+  await expect(linkField).toBeVisible()
+  const link = await linkField.inputValue()
+  expect(link).toContain('/join/')
 
   // --- Коллега: открывает ссылку БЕЗ сессии, потом входит и принимает ---
   const mateContext = await browser.newContext()
   const matePage = await mateContext.newPage()
 
   await matePage.goto(link)
-  // Экран приглашения лежит вне гарда сессии: неавторизованный видит, куда его
-  // зовут, и получает предложение войти — а не редирект на /login.
+  // Экран ссылки лежит вне гарда сессии: неавторизованный видит, куда его зовут,
+  // и получает предложение войти — а не редирект на /login.
   await expect(matePage.getByRole('heading', { name: new RegExp(spaceName) })).toBeVisible()
   await expect(matePage.getByRole('link', { name: 'Войти' })).toBeVisible()
 
   await login(matePage, mateEmail)
   await matePage.goto(link)
-  await matePage.getByRole('button', { name: 'Принять приглашение' }).click()
+  await matePage.getByRole('button', { name: 'Войти в пространство' }).click()
 
   // После принятия он оказывается в списке форм ЭТОГО пространства. Пространство
   // стоит В ПУТИ: параметра `?w=` в кабинете больше нет вовсе — потерянный
@@ -135,7 +102,10 @@ test('приглашение в пространство: коллега при�
   await expect(matePage.getByText(ownerEmail)).toBeVisible()
   // Кнопок управления участниками у редактора нет — кабинет прячет их по
   // permissions с сервера, а не по роли, вычисленной на фронте.
-  await expect(matePage.getByRole('button', { name: 'Пригласить' })).toHaveCount(0)
+  // Раздела ссылки у редактора нет вовсе: знать ссылку значит уметь ею раздавать
+  // доступ, и ручка стоит за member.manage.
+  await expect(matePage.getByRole('heading', { name: 'Ссылка-приглашение' })).toHaveCount(0)
+  await expect(matePage.getByLabel('Ссылка-приглашение')).toHaveCount(0)
   // Меню действий над строкой у редактора не рисуется вовсе: снимать доступ и
   // передавать владение ему нельзя, а меню с одним недоступным пунктом обещало бы
   // права, которых нет.
@@ -154,9 +124,9 @@ test('приглашение в пространство: коллега при�
   await expect(matePage.getByRole('heading', { name: 'Возможности' })).toBeVisible()
 
   // --- Владелец отзывает доступ ---
-  // Перезагрузка нужна за данными: коллега принял приглашение в другом контексте,
-  // и до перечитывания состава он у владельца всё ещё «приглашён, но не вошёл».
-  // Страница состава её переживает — адрес у раздела свой.
+  // Перезагрузка нужна за данными: коллега вошёл в другом контексте, и до
+  // перечитывания состава его у владельца в списке нет. Страница состава её
+  // переживает — адрес у раздела свой.
   await page.reload()
   // Действия над участником — меню «⋯» в строке, снятие доступа спрашивает
   // подтверждение: оно необратимо и вернуть человека можно только приглашением

@@ -98,8 +98,7 @@ func newStackWithAI(t *testing.T, gen forms.Generator) *httptest.Server {
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"),
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
 		WithSecret(testTokenSecret)
 	if gen != nil {

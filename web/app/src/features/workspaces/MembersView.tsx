@@ -1,20 +1,16 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { toast } from 'sonner'
-import { LogOut, Mail, MailCheck, Plus } from 'lucide-react'
+import { LogOut } from 'lucide-react'
 
-import type { PendingInvite } from '../../entities/member'
 import type { Workspace } from '../../entities/workspace'
 import { humanError } from '../../shared/api/errors'
-import { formatDate } from '../../shared/format'
 import { PageHeader } from '../../shared/page/PageHeader'
 import { Section } from '../../shared/page/Section'
-import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
+import { ErrorState, LoadingRows } from '../../shared/page/states'
 import { usePlanQuota } from '../plan/useFeature'
-import { InviteMemberDialog } from './InviteMemberDialog'
-import { inviteErrorText } from './inviteError'
+import { JoinLinkSection } from './JoinLinkSection'
 import { MemberRow } from './MemberRow'
-import { membersQueryOptions, useInviteMember, useLeaveWorkspace } from './queries'
+import { membersQueryOptions, useLeaveWorkspace } from './queries'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -50,8 +46,6 @@ export function MembersView({
   onLeft: () => void
 }) {
   const state = useQuery(membersQueryOptions(workspace.id))
-  const [inviting, setInviting] = useState(false)
-
   const can = (action: string) => state.data?.permissions.includes(action) ?? false
   const canManage = can('member.manage')
 
@@ -84,14 +78,6 @@ export function MembersView({
               </Badge>
             )}
           </>
-        )
-      }
-      actions={
-        canManage && (
-          <Button onClick={() => setInviting(true)}>
-            <Plus className="size-4" />
-            Пригласить
-          </Button>
         )
       }
     />
@@ -138,31 +124,7 @@ export function MembersView({
         </ul>
       </Section>
 
-      {/* Приглашённые отдаются только тому, кто может ими управлять: адреса
-          позванных — не то, что нужно знать редактору (у него массив пуст).
-          Раздел рисуется и при нуле — пустое состояние здесь жанр, а не
-          отсутствие блока: отправленное приглашение видно только тут, и без
-          раздела владелец не знает, сработала ли кнопка. */}
-      {canManage && (
-        <Section
-          title="Приглашены, но ещё не вошли"
-          description="Ссылка действует неделю. Отправив приглашение заново, вы гасите прежнее письмо и выписываете новое."
-        >
-          {state.data.invites.length === 0 ? (
-            <EmptyState
-              icon={Mail}
-              title="Непринятых приглашений нет"
-              description="Позванный человек стоит здесь до тех пор, пока не войдёт по ссылке из письма."
-            />
-          ) : (
-            <ul className="divide-y border-t">
-              {state.data.invites.map((inv) => (
-                <InviteRow key={inv.email} workspaceId={workspace.id} invite={inv} />
-              ))}
-            </ul>
-          )}
-        </Section>
-      )}
+      {canManage && <JoinLinkSection workspaceId={workspace.id} />}
 
       {/* Личное пространство не покидают: оно и есть пространство самого человека.
           Владелец тоже не может — сначала передать владение или удалить
@@ -176,51 +138,7 @@ export function MembersView({
         </Section>
       )}
 
-      {canManage && (
-        <InviteMemberDialog
-          workspaceId={workspace.id}
-          seats={seats}
-          open={inviting}
-          onOpenChange={setInviting}
-        />
-      )}
     </div>
-  )
-}
-
-// Строка непринятого приглашения. Отзыва как отдельного действия у нас нет и не
-// заводилось: годная ссылка на пару (пространство, адрес) ровно одна, и повторная
-// отправка снимает прежнюю — то есть «отправить снова» и есть отзыв старого
-// письма, только с полезным исходом (`internal/workspaces/invitations.go`).
-function InviteRow({ workspaceId, invite }: { workspaceId: string; invite: PendingInvite }) {
-  const resend = useInviteMember(workspaceId)
-
-  return (
-    <li className="flex flex-wrap items-center justify-between gap-3 py-4">
-      <div className="flex min-w-0 flex-1 items-center gap-3">
-        <Mail className="size-5 shrink-0 text-muted-foreground" aria-hidden />
-        <div className="min-w-0">
-          <p className="truncate text-base font-semibold">{invite.email}</p>
-          <p className="truncate text-sm text-muted-foreground">
-            Ссылка действует до {formatDate(invite.expiresAt)}
-          </p>
-        </div>
-      </div>
-      <Button
-        variant="outline"
-        size="sm"
-        disabled={resend.isPending}
-        onClick={() =>
-          resend.mutate(invite.email, {
-            onSuccess: () => toast.success(`Новое приглашение отправлено на ${invite.email}.`),
-            onError: (error) => toast.error(inviteErrorText(error)),
-          })
-        }
-      >
-        <MailCheck className="size-4" />
-        {resend.isPending ? 'Отправляем…' : 'Отправить снова'}
-      </Button>
-    </li>
   )
 }
 

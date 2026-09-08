@@ -10,11 +10,11 @@
 
 import { Route as rootRouteImport } from './routes/__root'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
-import { Route as InviteRouteImport } from './routes/invite'
 import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as AppRouteImport } from './routes/_app'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as OauthDoneRouteImport } from './routes/oauth.done'
+import { Route as JoinTokenRouteImport } from './routes/join.$token'
 import { Route as AuthTwoFactorRouteImport } from './routes/_auth/two-factor'
 import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-password'
 import { Route as AuthRegisterRouteImport } from './routes/_auth/register'
@@ -59,11 +59,6 @@ const VerifyEmailRoute = VerifyEmailRouteImport.update({
   path: '/verify-email',
   getParentRoute: () => rootRouteImport,
 } as any)
-const InviteRoute = InviteRouteImport.update({
-  id: '/invite',
-  path: '/invite',
-  getParentRoute: () => rootRouteImport,
-} as any)
 const AuthRoute = AuthRouteImport.update({
   id: '/_auth',
   getParentRoute: () => rootRouteImport,
@@ -80,6 +75,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const OauthDoneRoute = OauthDoneRouteImport.update({
   id: '/oauth/done',
   path: '/oauth/done',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const JoinTokenRoute = JoinTokenRouteImport.update({
+  id: '/join/$token',
+  path: '/join/$token',
   getParentRoute: () => rootRouteImport,
 } as any)
 const AuthTwoFactorRoute = AuthTwoFactorRouteImport.update({
@@ -297,7 +297,6 @@ const AppFormsSlugManageInsightsAnswersRoute =
 
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
-  '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/templates': typeof AppTemplatesRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
@@ -306,6 +305,7 @@ export interface FileRoutesByFullPath {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/two-factor': typeof AuthTwoFactorRoute
+  '/join/$token': typeof JoinTokenRoute
   '/oauth/done': typeof OauthDoneRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
@@ -341,7 +341,6 @@ export interface FileRoutesByFullPath {
 }
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
-  '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/templates': typeof AppTemplatesRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
@@ -350,6 +349,7 @@ export interface FileRoutesByTo {
   '/register': typeof AuthRegisterRoute
   '/reset-password': typeof AuthResetPasswordRoute
   '/two-factor': typeof AuthTwoFactorRoute
+  '/join/$token': typeof JoinTokenRoute
   '/oauth/done': typeof OauthDoneRoute
   '/settings/account': typeof AppSettingsAccountRoute
   '/settings/plan': typeof AppSettingsPlanRoute
@@ -385,7 +385,6 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/_app': typeof AppRouteWithChildren
   '/_auth': typeof AuthRouteWithChildren
-  '/invite': typeof InviteRoute
   '/verify-email': typeof VerifyEmailRoute
   '/_app/templates': typeof AppTemplatesRoute
   '/_auth/forgot-password': typeof AuthForgotPasswordRoute
@@ -394,6 +393,7 @@ export interface FileRoutesById {
   '/_auth/register': typeof AuthRegisterRoute
   '/_auth/reset-password': typeof AuthResetPasswordRoute
   '/_auth/two-factor': typeof AuthTwoFactorRoute
+  '/join/$token': typeof JoinTokenRoute
   '/oauth/done': typeof OauthDoneRoute
   '/_app/': typeof AppIndexRoute
   '/_app/settings/account': typeof AppSettingsAccountRoute
@@ -432,7 +432,6 @@ export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
   fullPaths:
     | '/'
-    | '/invite'
     | '/verify-email'
     | '/templates'
     | '/forgot-password'
@@ -441,6 +440,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/two-factor'
+    | '/join/$token'
     | '/oauth/done'
     | '/settings/account'
     | '/settings/plan'
@@ -476,7 +476,6 @@ export interface FileRouteTypes {
   fileRoutesByTo: FileRoutesByTo
   to:
     | '/'
-    | '/invite'
     | '/verify-email'
     | '/templates'
     | '/forgot-password'
@@ -485,6 +484,7 @@ export interface FileRouteTypes {
     | '/register'
     | '/reset-password'
     | '/two-factor'
+    | '/join/$token'
     | '/oauth/done'
     | '/settings/account'
     | '/settings/plan'
@@ -519,7 +519,6 @@ export interface FileRouteTypes {
     | '__root__'
     | '/_app'
     | '/_auth'
-    | '/invite'
     | '/verify-email'
     | '/_app/templates'
     | '/_auth/forgot-password'
@@ -528,6 +527,7 @@ export interface FileRouteTypes {
     | '/_auth/register'
     | '/_auth/reset-password'
     | '/_auth/two-factor'
+    | '/join/$token'
     | '/oauth/done'
     | '/_app/'
     | '/_app/settings/account'
@@ -566,8 +566,8 @@ export interface FileRouteTypes {
 export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   AuthRoute: typeof AuthRouteWithChildren
-  InviteRoute: typeof InviteRoute
   VerifyEmailRoute: typeof VerifyEmailRoute
+  JoinTokenRoute: typeof JoinTokenRoute
   OauthDoneRoute: typeof OauthDoneRoute
 }
 
@@ -578,13 +578,6 @@ declare module '@tanstack/react-router' {
       path: '/verify-email'
       fullPath: '/verify-email'
       preLoaderRoute: typeof VerifyEmailRouteImport
-      parentRoute: typeof rootRouteImport
-    }
-    '/invite': {
-      id: '/invite'
-      path: '/invite'
-      fullPath: '/invite'
-      preLoaderRoute: typeof InviteRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth': {
@@ -613,6 +606,13 @@ declare module '@tanstack/react-router' {
       path: '/oauth/done'
       fullPath: '/oauth/done'
       preLoaderRoute: typeof OauthDoneRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/join/$token': {
+      id: '/join/$token'
+      path: '/join/$token'
+      fullPath: '/join/$token'
+      preLoaderRoute: typeof JoinTokenRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/_auth/two-factor': {
@@ -1023,8 +1023,8 @@ const AuthRouteWithChildren = AuthRoute._addFileChildren(AuthRouteChildren)
 const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   AuthRoute: AuthRouteWithChildren,
-  InviteRoute: InviteRoute,
   VerifyEmailRoute: VerifyEmailRoute,
+  JoinTokenRoute: JoinTokenRoute,
   OauthDoneRoute: OauthDoneRoute,
 }
 export const routeTree = rootRouteImport

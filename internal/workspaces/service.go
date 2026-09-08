@@ -27,11 +27,9 @@ type Store interface {
 	GetWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Workspace, error)
 	// AccessContext — роль плюс всё, что нужно для решения о заморозке.
 	AccessContext(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (AccessContext, error)
-	EmailByUserID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (string, error)
-	InviteStore
+	JoinLinkStore
 	ListMembers(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]Member, error)
 	ListOwnedTeamsWithMembers(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]string, error)
-	ListPendingInvites(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]PendingInvite, error)
 	DeleteMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID) (int64, error)
 	Create(ctx context.Context, db postgres.DBTX, id uuid.UUID, slug, name string) (Workspace, error)
 	Rename(ctx context.Context, db postgres.DBTX, id uuid.UUID, name string) (Workspace, error)
@@ -77,7 +75,6 @@ type Service struct {
 	tx    Transactor    // пространство + владелец одной транзакцией
 	repo  Store
 	plans Plans
-	mail  MailEnqueuer
 	// files — снос объектов ответов при удалении пространства. nil допустим:
 	// хранилище настраивается опционально (как и у forms), и без него удаление
 	// сносит только строки — файлов в такой сборке нет и быть не может.
@@ -86,8 +83,12 @@ type Service struct {
 	appBaseURL string
 }
 
-func NewService(db postgres.DBTX, tx Transactor, repo Store, plans Plans, mailer MailEnqueuer, appBaseURL string) *Service {
-	return &Service{db: db, tx: tx, repo: repo, plans: plans, mail: mailer, appBaseURL: appBaseURL}
+// Писем модуль больше не шлёт: приглашение по адресу почты вырезано, а ссылку
+// человек передаёт сам (ADR §10). Поэтому ни MailEnqueuer, ни лимитера отправки
+// здесь нет — лимитер существовал ровно потому, что письмо уходило на
+// ПРОИЗВОЛЬНЫЙ адрес с подконтрольным отправителю текстом.
+func NewService(db postgres.DBTX, tx Transactor, repo Store, plans Plans, appBaseURL string) *Service {
+	return &Service{db: db, tx: tx, repo: repo, plans: plans, appBaseURL: appBaseURL}
 }
 
 // WithFiles подключает модуль файлов ответов (тот же приём, что WithFiles у

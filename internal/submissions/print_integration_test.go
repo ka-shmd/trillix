@@ -66,8 +66,7 @@ func printStackOpts(t *testing.T, printerURL string) (*httptest.Server, *printed
 
 	ent := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
-		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, ent,
-			pgtest.MailService(testPool), "http://localhost:5173"), ent)
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, ent, "http://localhost:5173"), ent)
 	visitsSvc := visits.NewService(testPool, formsSvc, ent, visits.Repo{}, nil, nil)
 	subSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, visitsSvc,
 		pgtest.MailService(testPool), ent, submissions.Repo{}, "http://app.test")
@@ -317,8 +316,7 @@ func republish(t *testing.T, userID uuid.UUID, formID, schema string) {
 	ctx := context.Background()
 	ent := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
-		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, ent,
-			pgtest.MailService(testPool), "http://localhost:5173"), ent)
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{}, ent, "http://localhost:5173"), ent)
 	id := uuid.MustParse(formID)
 	form, err := formsSvc.Get(ctx, userID, id)
 	if err != nil {

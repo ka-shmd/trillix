@@ -39,46 +39,17 @@ func (s *Service) TeamsBlockingAccountDeletion(ctx context.Context, userID uuid.
 	return s.repo.ListOwnedTeamsWithMembers(ctx, s.db, userID)
 }
 
-// PendingInvite — позвали, но ещё не вошёл. Показывается на той же странице,
-// что и участники: это тоже состояние пространства.
+// Members — состав пространства.
 //
-// Отдельной ручки отзыва нет: годной ссылок на пару (пространство, адрес) ровно
-// одна, и повторное приглашение снимает прежнюю (Invite, частичный UNIQUE в
-// 0017). Кабинет поэтому предлагает «отправить снова», а не «отозвать».
-type PendingInvite struct {
-	Email     string
-	Role      Role
-	ExpiresAt time.Time
-}
-
-// Members — состав пространства: участники и непринятые приглашения.
-func (s *Service) Members(ctx context.Context, userID, workspaceID uuid.UUID) ([]Member, []PendingInvite, error) {
+// Списка «позвали, но ещё не вошёл» здесь больше нет и быть не может: ссылка
+// никого не называет, поэтому между её выпиской и входом человека продукт про
+// него ничего не знает (ADR §10). Состояние приглашения теперь одно — сама
+// ссылка, и живёт она в своей ручке.
+func (s *Service) Members(ctx context.Context, userID, workspaceID uuid.UUID) ([]Member, error) {
 	if err := s.Can(ctx, workspaceID, userID, domain.ActionMemberRead); err != nil {
-		return nil, nil, err
+		return nil, err
 	}
-	members, err := s.repo.ListMembers(ctx, s.db, workspaceID)
-	if err != nil {
-		return nil, nil, err
-	}
-	// Непринятые приглашения видит только тот, кто может ими управлять: адреса
-	// позванных — не то, что нужно знать редактору.
-	//
-	// Различать «нельзя» и «спросить не удалось» здесь обязательно: проглоти мы
-	// вторую — владелец увидел бы пустой список приглашённых, выписал бы
-	// повторное, и первая ссылка молча аннулировалась бы у человека на руках.
-	var invites []PendingInvite
-	switch err := s.Can(ctx, workspaceID, userID, domain.ActionMemberManage); {
-	case err == nil:
-		invites, err = s.repo.ListPendingInvites(ctx, s.db, workspaceID)
-		if err != nil {
-			return nil, nil, err
-		}
-	case errors.Is(err, domain.ErrForbidden):
-		// Роль не даёт — законный случай: редактор видит состав без приглашений.
-	default:
-		return nil, nil, err
-	}
-	return members, invites, nil
+	return s.repo.ListMembers(ctx, s.db, workspaceID)
 }
 
 // RemoveMember снимает доступ участнику.

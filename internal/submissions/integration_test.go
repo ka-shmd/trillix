@@ -64,8 +64,7 @@ func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"),
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
 		WithSecret(testSecret)
 	visitsSvc := visits.NewService(testPool, formsSvc, entitlements.NewService(testPool, entitlements.Repo{}, time.Now), visits.Repo{}, nil, nil)
@@ -100,8 +99,7 @@ func publishedForm(t *testing.T, schema string) (slug string, versionID uuid.UUI
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"),
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
 		WithSecret(testSecret)
 
@@ -135,8 +133,7 @@ func publishedFormWithSchedule(t *testing.T, capacity int) (slug string, version
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"),
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
 		WithSecret(testSecret)
 
@@ -1051,8 +1048,7 @@ func lockForm(t *testing.T, slug, password string) string {
 	ctx := context.Background()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
-			entitlements.NewService(testPool, entitlements.Repo{}, time.Now),
-			pgtest.MailService(testPool), "http://localhost:5173"),
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173"),
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
 		WithSecret(testSecret)
 

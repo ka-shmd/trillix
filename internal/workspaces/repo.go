@@ -148,78 +148,8 @@ func (Repo) GetWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (W
 	return Workspace{ID: row.ID, Slug: row.Slug, Name: row.Name, IsPersonal: row.IsPersonal, CreatedAt: row.CreatedAt.Time}, nil
 }
 
-func (Repo) EmailByUserID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (string, error) {
-	email, err := postgres.New(db).GetEmailByUserID(ctx, id)
-	if err != nil {
-		return "", fmt.Errorf("get email of user %s: %w", id, err)
-	}
-	return email, nil
-}
-
 // UserIDByEmail — pgx.ErrNoRows означает «такого аккаунта ещё нет», и это
-// законный случай: приглашают и тех, кто не зарегистрирован.
-func (Repo) UserIDByEmail(ctx context.Context, db postgres.DBTX, email string) (uuid.UUID, error) {
-	id, err := postgres.New(db).GetUserIDByEmail(ctx, email)
-	if err != nil {
-		return uuid.Nil, fmt.Errorf("get user by email: %w", err)
-	}
-	return id, nil
-}
-
-func (Repo) CreateInvitation(ctx context.Context, db postgres.DBTX, tokenHash []byte, workspaceID uuid.UUID, email, role string, invitedBy uuid.UUID, expiresAt time.Time) error {
-	if err := postgres.New(db).CreateInvitation(ctx, postgres.CreateInvitationParams{
-		TokenHash:   tokenHash,
-		WorkspaceID: workspaceID,
-		Email:       email,
-		Role:        role,
-		InvitedBy:   invitedBy,
-		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
-	}); err != nil {
-		return fmt.Errorf("create invitation: %w", err)
-	}
-	return nil
-}
-
-func (Repo) DeletePendingInvitation(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, email string) error {
-	if err := postgres.New(db).DeletePendingInvitation(ctx, postgres.DeletePendingInvitationParams{
-		WorkspaceID: workspaceID,
-		Lower:       email,
-	}); err != nil {
-		return fmt.Errorf("delete pending invitation: %w", err)
-	}
-	return nil
-}
-
-func (Repo) GetInvitation(ctx context.Context, db postgres.DBTX, tokenHash []byte) (Invitation, error) {
-	row, err := postgres.New(db).GetInvitation(ctx, tokenHash)
-	if err != nil {
-		return Invitation{}, fmt.Errorf("get invitation: %w", err)
-	}
-	inv := Invitation{
-		WorkspaceID:   row.WorkspaceID,
-		WorkspaceName: row.WorkspaceName,
-		Email:         row.Email,
-		Role:          Role(row.Role),
-		ExpiresAt:     row.ExpiresAt.Time,
-	}
-	if row.UsedAt.Valid {
-		t := row.UsedAt.Time
-		inv.UsedAt = &t
-	}
-	return inv, nil
-}
-
-// ConsumeInvitation — атомарное потребление токена: 0 строк означает «уже
-// использовано или протухло», и различать эти случаи в ответе незачем.
-func (Repo) ConsumeInvitation(ctx context.Context, db postgres.DBTX, tokenHash []byte) (Invitation, error) {
-	row, err := postgres.New(db).ConsumeInvitation(ctx, tokenHash)
-	if err != nil {
-		return Invitation{}, fmt.Errorf("consume invitation: %w", err)
-	}
-	return Invitation{WorkspaceID: row.WorkspaceID, Email: row.Email, Role: Role(row.Role)}, nil
-}
-
-// AddMember добавляет участника с указанной ролью (приглашение принято).
+// AddMember добавляет участника с указанной ролью (вход по ссылке).
 func (Repo) AddMember(ctx context.Context, db postgres.DBTX, workspaceID, userID uuid.UUID, role string) error {
 	if err := postgres.New(db).CreateWorkspaceMember(ctx, postgres.CreateWorkspaceMemberParams{
 		WorkspaceID: workspaceID,
@@ -255,18 +185,6 @@ func (Repo) ListOwnedTeamsWithMembers(ctx context.Context, db postgres.DBTX, use
 		return nil, fmt.Errorf("list owned teams with members of %s: %w", userID, err)
 	}
 	return names, nil
-}
-
-func (Repo) ListPendingInvites(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) ([]PendingInvite, error) {
-	rows, err := postgres.New(db).ListPendingInvitations(ctx, workspaceID)
-	if err != nil {
-		return nil, fmt.Errorf("list pending invitations of %s: %w", workspaceID, err)
-	}
-	out := make([]PendingInvite, len(rows))
-	for i, r := range rows {
-		out[i] = PendingInvite{Email: r.Email, Role: Role(r.Role), ExpiresAt: r.ExpiresAt.Time}
-	}
-	return out, nil
 }
 
 // DeleteMember возвращает число снятых строк: 0 означает «нет такого участника
@@ -342,10 +260,62 @@ func (Repo) AccessContext(ctx context.Context, db postgres.DBTX, workspaceID, us
 	}, nil
 }
 
-func (Repo) PurgeExpiredInvitations(ctx context.Context, db postgres.DBTX) (int64, error) {
-	n, err := postgres.New(db).PurgeExpiredInvitations(ctx)
+// --- Ссылки-приглашения (0058) ---
+//
+// Токен здесь СЫРОЙ, а не хеш: единственное такое место в продукте, довод — в
+// ADR §10 и в шапке миграции.
+
+func (Repo) CreateJoinLink(ctx context.Context, db postgres.DBTX, token string, workspaceID uuid.UUID, role string, createdBy uuid.UUID, expiresAt time.Time) error {
+	if err := postgres.New(db).CreateJoinLink(ctx, postgres.CreateJoinLinkParams{
+		Token:       token,
+		WorkspaceID: workspaceID,
+		Role:        role,
+		CreatedBy:   createdBy,
+		ExpiresAt:   pgtype.Timestamptz{Time: expiresAt, Valid: true},
+	}); err != nil {
+		return fmt.Errorf("create join link: %w", err)
+	}
+	return nil
+}
+
+// RevokeJoinLink возвращает число погашенных строк: 0 означает «живой ссылки не
+// было», и это законный исход, а не ошибка.
+func (Repo) RevokeJoinLink(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).RevokeJoinLink(ctx, workspaceID)
 	if err != nil {
-		return 0, fmt.Errorf("purge expired invitations: %w", err)
+		return 0, fmt.Errorf("revoke join link of %s: %w", workspaceID, err)
+	}
+	return n, nil
+}
+
+// ActiveJoinLink отдаёт живую ссылку пространства, ВКЛЮЧАЯ истёкшую: срок
+// разбирает сервис — кабинету надо сказать «истекла», а не «её нет».
+func (Repo) ActiveJoinLink(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID) (JoinLink, error) {
+	row, err := postgres.New(db).GetActiveJoinLink(ctx, workspaceID)
+	if err != nil {
+		return JoinLink{}, fmt.Errorf("get active join link of %s: %w", workspaceID, err)
+	}
+	return JoinLink{
+		Token: row.Token, WorkspaceID: row.WorkspaceID,
+		Role: Role(row.Role), ExpiresAt: row.ExpiresAt.Time,
+	}, nil
+}
+
+func (Repo) JoinLinkByToken(ctx context.Context, db postgres.DBTX, token string) (JoinLink, error) {
+	row, err := postgres.New(db).GetJoinLinkByToken(ctx, token)
+	if err != nil {
+		return JoinLink{}, fmt.Errorf("get join link by token: %w", err)
+	}
+	return JoinLink{
+		Token: row.Token, WorkspaceID: row.WorkspaceID, WorkspaceName: row.WorkspaceName,
+		Role: Role(row.Role), ExpiresAt: row.ExpiresAt.Time,
+	}, nil
+}
+
+func (Repo) PurgeExpiredJoinLinks(ctx context.Context, db postgres.DBTX) (int64, error) {
+	n, err := postgres.New(db).PurgeExpiredJoinLinks(ctx)
+	if err != nil {
+		return 0, fmt.Errorf("purge expired join links: %w", err)
 	}
 	return n, nil
 }
