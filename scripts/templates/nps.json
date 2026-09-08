@@ -6,7 +6,7 @@
     "blocks": [
       {
         "id": "blk_nps_1",
-        "groupId": "grp_nps_1",
+        "groupId": "g_blk_nps_1",
         "type": "form_title",
         "text": [
           {
@@ -16,7 +16,7 @@
       },
       {
         "id": "blk_nps_2",
-        "groupId": "grp_nps_2",
+        "groupId": "g_blk_nps_3",
         "type": "title",
         "text": [
           {
@@ -26,7 +26,7 @@
       },
       {
         "id": "blk_nps_3",
-        "groupId": "grp_nps_2",
+        "groupId": "g_blk_nps_3",
         "type": "scale",
         "required": true,
         "settings": {
@@ -36,7 +36,7 @@
       },
       {
         "id": "blk_nps_4",
-        "groupId": "grp_nps_3",
+        "groupId": "g_blk_nps_5",
         "type": "title",
         "text": [
           {
@@ -46,13 +46,13 @@
       },
       {
         "id": "blk_nps_5",
-        "groupId": "grp_nps_3",
+        "groupId": "g_blk_nps_5",
         "type": "long_text",
         "settings": {}
       },
       {
         "id": "blk_nps_6",
-        "groupId": "grp_nps_4",
+        "groupId": "g_blk_nps_7",
         "type": "title",
         "text": [
           {
@@ -62,7 +62,7 @@
       },
       {
         "id": "blk_nps_7",
-        "groupId": "grp_nps_4",
+        "groupId": "g_blk_nps_7",
         "type": "email",
         "settings": {}
       }

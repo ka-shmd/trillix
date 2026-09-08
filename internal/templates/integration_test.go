@@ -309,6 +309,7 @@ func TestTemplates_SeedFilesPublish(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		assertGroupsAnchored(t, filepath.Base(path), body)
 		r := post(t, admin, srv, "/api/v1/admin/templates", string(body))
 		if r.StatusCode != http.StatusCreated {
 			msg, _ := io.ReadAll(r.Body)
@@ -325,6 +326,40 @@ func TestTemplates_SeedFilesPublish(t *testing.T) {
 	for _, item := range got.Items {
 		if made := useTemplate(t, admin, srv, item.ID, ws); made.Slug == "" {
 			t.Errorf("форма из заготовки %q не создалась", item.Title)
+		}
+	}
+}
+
+// assertGroupsAnchored — groupId заготовки обязан быть выведен ИЗ ЯКОРЯ: `g_<id
+// блока этого документа>`. Ровно это условие включает якорную ветку
+// domain.NewSchemaIDs; своё имя вида `grp_1` уводит её в фолбэк, и каждая форма из
+// заготовки получала бы группы, не связанные ни с одним блоком, — а первое открытие
+// в редакторе (regroup, web/app/src/features/forms/builder/store.ts) переписывало бы
+// их все.
+//
+// Проверяется связь, а не выбор якоря: КАКОЙ блок группы якорь, знает regroup, и его
+// правило живёт в TS.
+func assertGroupsAnchored(t *testing.T, name string, body []byte) {
+	t.Helper()
+	var doc struct {
+		Schema struct {
+			Blocks []struct {
+				ID      string `json:"id"`
+				GroupID string `json:"groupId"`
+			} `json:"blocks"`
+		} `json:"schema"`
+	}
+	if err := json.Unmarshal(body, &doc); err != nil {
+		t.Fatalf("%s: разбор документа: %v", name, err)
+	}
+	ids := make(map[string]bool, len(doc.Schema.Blocks))
+	for _, b := range doc.Schema.Blocks {
+		ids[b.ID] = true
+	}
+	for _, b := range doc.Schema.Blocks {
+		anchor, ok := strings.CutPrefix(b.GroupID, "g_")
+		if !ok || !ids[anchor] {
+			t.Errorf("%s: блок %s в группе %q — она не выведена из якоря документа", name, b.ID, b.GroupID)
 		}
 	}
 }

@@ -13,12 +13,12 @@ import {
 // довод, что у списка форм.
 export const templateKeys = {
   all: () => ['templates'] as const,
-  list: (workspaceId?: string) => ['templates', 'list', workspaceId ?? null] as const,
+  list: (workspaceId: string) => ['templates', 'list', workspaceId] as const,
 }
 
-// Галерея пространства. `enabled` нет: пространство ещё не разрезолвилось —
-// спрашиваем витрину без него, она одинакова для всех.
-export function useTemplates(workspaceId?: string) {
+// Галерея пространства. `enabled` не нужен: экран не рисуется вовсе, пока
+// пространство не разрезолвилось (маршрут `w/$workspaceSlug/templates`).
+export function useTemplates(workspaceId: string) {
   return useQuery({
     queryKey: templateKeys.list(workspaceId),
     queryFn: () => listTemplates(workspaceId),
@@ -30,7 +30,7 @@ export function useTemplates(workspaceId?: string) {
 export function useCreateFormFromTemplate() {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (vars: { templateId: string; workspaceId?: string }) =>
+    mutationFn: (vars: { templateId: string; workspaceId: string }) =>
       createFormFromTemplate(vars.templateId, vars.workspaceId),
     onSuccess: () => qc.invalidateQueries({ queryKey: formKeys.list() }),
   })

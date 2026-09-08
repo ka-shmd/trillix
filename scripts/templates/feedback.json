@@ -6,7 +6,7 @@
     "blocks": [
       {
         "id": "blk_feedback_1",
-        "groupId": "grp_feedback_1",
+        "groupId": "g_blk_feedback_1",
         "type": "form_title",
         "text": [
           {
@@ -16,7 +16,7 @@
       },
       {
         "id": "blk_feedback_2",
-        "groupId": "grp_feedback_2",
+        "groupId": "g_blk_feedback_2",
         "type": "text",
         "text": [
           {
@@ -26,7 +26,7 @@
       },
       {
         "id": "blk_feedback_3",
-        "groupId": "grp_feedback_3",
+        "groupId": "g_blk_feedback_4",
         "type": "title",
         "text": [
           {
@@ -36,7 +36,7 @@
       },
       {
         "id": "blk_feedback_4",
-        "groupId": "grp_feedback_3",
+        "groupId": "g_blk_feedback_4",
         "type": "scale",
         "required": true,
         "settings": {
@@ -46,7 +46,7 @@
       },
       {
         "id": "blk_feedback_5",
-        "groupId": "grp_feedback_4",
+        "groupId": "g_blk_feedback_6",
         "type": "title",
         "text": [
           {
@@ -56,13 +56,13 @@
       },
       {
         "id": "blk_feedback_6",
-        "groupId": "grp_feedback_4",
+        "groupId": "g_blk_feedback_6",
         "type": "long_text",
         "settings": {}
       },
       {
         "id": "blk_feedback_7",
-        "groupId": "grp_feedback_5",
+        "groupId": "g_blk_feedback_8",
         "type": "title",
         "text": [
           {
@@ -72,13 +72,13 @@
       },
       {
         "id": "blk_feedback_8",
-        "groupId": "grp_feedback_5",
+        "groupId": "g_blk_feedback_8",
         "type": "long_text",
         "settings": {}
       },
       {
         "id": "blk_feedback_9",
-        "groupId": "grp_feedback_6",
+        "groupId": "g_blk_feedback_10",
         "type": "title",
         "text": [
           {
@@ -88,7 +88,7 @@
       },
       {
         "id": "blk_feedback_10",
-        "groupId": "grp_feedback_6",
+        "groupId": "g_blk_feedback_10",
         "type": "email",
         "settings": {
           "placeholder": "you@example.com"

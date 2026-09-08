@@ -6,7 +6,7 @@
     "blocks": [
       {
         "id": "blk_consultation_1",
-        "groupId": "grp_consultation_1",
+        "groupId": "g_blk_consultation_1",
         "type": "form_title",
         "text": [
           {
@@ -16,7 +16,7 @@
       },
       {
         "id": "blk_consultation_2",
-        "groupId": "grp_consultation_2",
+        "groupId": "g_blk_consultation_3",
         "type": "title",
         "text": [
           {
@@ -26,14 +26,14 @@
       },
       {
         "id": "blk_consultation_3",
-        "groupId": "grp_consultation_2",
+        "groupId": "g_blk_consultation_3",
         "type": "short_text",
         "required": true,
         "settings": {}
       },
       {
         "id": "blk_consultation_4",
-        "groupId": "grp_consultation_3",
+        "groupId": "g_blk_consultation_5",
         "type": "title",
         "text": [
           {
@@ -43,14 +43,14 @@
       },
       {
         "id": "blk_consultation_5",
-        "groupId": "grp_consultation_3",
+        "groupId": "g_blk_consultation_5",
         "type": "phone",
         "required": true,
         "settings": {}
       },
       {
         "id": "blk_consultation_6",
-        "groupId": "grp_consultation_4",
+        "groupId": "g_blk_consultation_7",
         "type": "title",
         "text": [
           {
@@ -60,13 +60,13 @@
       },
       {
         "id": "blk_consultation_7",
-        "groupId": "grp_consultation_4",
+        "groupId": "g_blk_consultation_7",
         "type": "email",
         "settings": {}
       },
       {
         "id": "blk_consultation_8",
-        "groupId": "grp_consultation_5",
+        "groupId": "g_blk_consultation_9",
         "type": "title",
         "text": [
           {
@@ -76,14 +76,14 @@
       },
       {
         "id": "blk_consultation_9",
-        "groupId": "grp_consultation_5",
+        "groupId": "g_blk_consultation_9",
         "type": "date",
         "required": true,
         "settings": {}
       },
       {
         "id": "blk_consultation_10",
-        "groupId": "grp_consultation_6",
+        "groupId": "g_blk_consultation_11",
         "type": "title",
         "text": [
           {
@@ -93,7 +93,7 @@
       },
       {
         "id": "blk_consultation_11",
-        "groupId": "grp_consultation_6",
+        "groupId": "g_blk_consultation_11",
         "type": "single_choice",
         "settings": {
           "options": [
@@ -114,7 +114,7 @@
       },
       {
         "id": "blk_consultation_12",
-        "groupId": "grp_consultation_7",
+        "groupId": "g_blk_consultation_13",
         "type": "title",
         "text": [
           {
@@ -124,13 +124,13 @@
       },
       {
         "id": "blk_consultation_13",
-        "groupId": "grp_consultation_7",
+        "groupId": "g_blk_consultation_13",
         "type": "long_text",
         "settings": {}
       },
       {
         "id": "blk_consultation_14",
-        "groupId": "grp_consultation_8",
+        "groupId": "g_blk_consultation_14",
         "type": "consent",
         "text": [
           {

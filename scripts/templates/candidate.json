@@ -6,7 +6,7 @@
     "blocks": [
       {
         "id": "blk_candidate_1",
-        "groupId": "grp_candidate_1",
+        "groupId": "g_blk_candidate_1",
         "type": "form_title",
         "text": [
           {
@@ -16,7 +16,7 @@
       },
       {
         "id": "blk_candidate_2",
-        "groupId": "grp_candidate_2",
+        "groupId": "g_blk_candidate_3",
         "type": "title",
         "text": [
           {
@@ -26,14 +26,14 @@
       },
       {
         "id": "blk_candidate_3",
-        "groupId": "grp_candidate_2",
+        "groupId": "g_blk_candidate_3",
         "type": "short_text",
         "required": true,
         "settings": {}
       },
       {
         "id": "blk_candidate_4",
-        "groupId": "grp_candidate_3",
+        "groupId": "g_blk_candidate_5",
         "type": "title",
         "text": [
           {
@@ -43,7 +43,7 @@
       },
       {
         "id": "blk_candidate_5",
-        "groupId": "grp_candidate_3",
+        "groupId": "g_blk_candidate_5",
         "type": "email",
         "required": true,
         "settings": {
@@ -52,7 +52,7 @@
       },
       {
         "id": "blk_candidate_6",
-        "groupId": "grp_candidate_4",
+        "groupId": "g_blk_candidate_7",
         "type": "title",
         "text": [
           {
@@ -62,13 +62,13 @@
       },
       {
         "id": "blk_candidate_7",
-        "groupId": "grp_candidate_4",
+        "groupId": "g_blk_candidate_7",
         "type": "phone",
         "settings": {}
       },
       {
         "id": "blk_candidate_8",
-        "groupId": "grp_candidate_5",
+        "groupId": "g_blk_candidate_9",
         "type": "title",
         "text": [
           {
@@ -78,7 +78,7 @@
       },
       {
         "id": "blk_candidate_9",
-        "groupId": "grp_candidate_5",
+        "groupId": "g_blk_candidate_9",
         "type": "short_text",
         "settings": {
           "placeholder": "https://"
@@ -86,7 +86,7 @@
       },
       {
         "id": "blk_candidate_10",
-        "groupId": "grp_candidate_6",
+        "groupId": "g_blk_candidate_11",
         "type": "title",
         "text": [
           {
@@ -96,13 +96,13 @@
       },
       {
         "id": "blk_candidate_11",
-        "groupId": "grp_candidate_6",
+        "groupId": "g_blk_candidate_11",
         "type": "number",
         "settings": {}
       },
       {
         "id": "blk_candidate_12",
-        "groupId": "grp_candidate_7",
+        "groupId": "g_blk_candidate_13",
         "type": "title",
         "text": [
           {
@@ -112,14 +112,14 @@
       },
       {
         "id": "blk_candidate_13",
-        "groupId": "grp_candidate_7",
+        "groupId": "g_blk_candidate_13",
         "type": "long_text",
         "required": true,
         "settings": {}
       },
       {
         "id": "blk_candidate_14",
-        "groupId": "grp_candidate_8",
+        "groupId": "g_blk_candidate_14",
         "type": "consent",
         "text": [
           {

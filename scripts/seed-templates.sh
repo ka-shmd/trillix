@@ -36,13 +36,19 @@ api() { curl -sS -b "$jar" -c "$jar" -H 'Content-Type: application/json' "$base/
 # csrf — двойная отправка: значение читается из cookie и повторяется заголовком.
 csrf() { awk '$6 == "csrf_token" { print $7 }' "$jar" | tail -1; }
 
+# ⚠ ПАРОЛЬ НЕ ХОДИТ АРГУМЕНТОМ НИ ОДНОЙ КОМАНДЫ. Аргументы видны всякому на машине
+# (`ps -ef`, /proc/<pid>/cmdline) и попадают в записи auditd, а заливку гоняют на том
+# же сервере, где живёт витрина. Поэтому jq берёт значение из окружения своего
+# процесса, а тело уезжает в curl через stdin (`@-`), а не строкой в командной
+# строке.
 echo "==> вход $email на $base"
-login=$(api /auth/login -X POST --data-binary "$(jq -nc --arg e "$email" --arg p "$password" '{email:$e,password:$p}')")
+login=$(TRILLIX_PASSWORD="$password" jq -nc --arg e "$email" '{email:$e,password:env.TRILLIX_PASSWORD}' |
+	api /auth/login -X POST --data-binary @-)
 if [ "$(jq -r '.twoFactorRequired // false' <<<"$login")" = true ]; then
 	read -rp "код из письма: " code
 	# Второй шаг CSRF не требует: сессии, от имени которой подделывают запрос,
 	# ещё нет — право предъявляет подписанная cookie пропуска плюс код.
-	login=$(api /auth/login-2fa -X POST --data-binary "$(jq -nc --arg c "$code" '{code:$c}')")
+	login=$(jq -nc --arg c "$code" '{code:$c}' | api /auth/login-2fa -X POST --data-binary @-)
 fi
 if [ -z "$(jq -r '.id // empty' <<<"$login")" ]; then
 	echo "вход не удался: $(jq -r '.error.code // .' <<<"$login")" >&2

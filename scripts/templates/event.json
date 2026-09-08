@@ -6,7 +6,7 @@
     "blocks": [
       {
         "id": "blk_event_1",
-        "groupId": "grp_event_1",
+        "groupId": "g_blk_event_1",
         "type": "form_title",
         "text": [
           {
@@ -16,7 +16,7 @@
       },
       {
         "id": "blk_event_2",
-        "groupId": "grp_event_2",
+        "groupId": "g_blk_event_2",
         "type": "text",
         "text": [
           {
@@ -26,7 +26,7 @@
       },
       {
         "id": "blk_event_3",
-        "groupId": "grp_event_3",
+        "groupId": "g_blk_event_4",
         "type": "title",
         "text": [
           {
@@ -36,14 +36,14 @@
       },
       {
         "id": "blk_event_4",
-        "groupId": "grp_event_3",
+        "groupId": "g_blk_event_4",
         "type": "short_text",
         "required": true,
         "settings": {}
       },
       {
         "id": "blk_event_5",
-        "groupId": "grp_event_4",
+        "groupId": "g_blk_event_6",
         "type": "title",
         "text": [
           {
@@ -53,7 +53,7 @@
       },
       {
         "id": "blk_event_6",
-        "groupId": "grp_event_4",
+        "groupId": "g_blk_event_6",
         "type": "email",
         "required": true,
         "settings": {
@@ -62,7 +62,7 @@
       },
       {
         "id": "blk_event_7",
-        "groupId": "grp_event_5",
+        "groupId": "g_blk_event_8",
         "type": "title",
         "text": [
           {
@@ -72,7 +72,7 @@
       },
       {
         "id": "blk_event_8",
-        "groupId": "grp_event_5",
+        "groupId": "g_blk_event_8",
         "type": "single_choice",
         "required": true,
         "settings": {
@@ -90,7 +90,7 @@
       },
       {
         "id": "blk_event_9",
-        "groupId": "grp_event_6",
+        "groupId": "g_blk_event_10",
         "type": "title",
         "text": [
           {
@@ -100,7 +100,7 @@
       },
       {
         "id": "blk_event_10",
-        "groupId": "grp_event_6",
+        "groupId": "g_blk_event_10",
         "type": "multi_choice",
         "settings": {
           "options": [
@@ -125,7 +125,7 @@
       },
       {
         "id": "blk_event_11",
-        "groupId": "grp_event_7",
+        "groupId": "g_blk_event_12",
         "type": "title",
         "text": [
           {
@@ -135,13 +135,13 @@
       },
       {
         "id": "blk_event_12",
-        "groupId": "grp_event_7",
+        "groupId": "g_blk_event_12",
         "type": "long_text",
         "settings": {}
       },
       {
         "id": "blk_event_13",
-        "groupId": "grp_event_8",
+        "groupId": "g_blk_event_13",
         "type": "consent",
         "text": [
           {

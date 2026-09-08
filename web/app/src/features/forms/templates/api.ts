@@ -9,13 +9,17 @@ import { apiRequest } from '../../../shared/api/client'
 // Транспорт шаблонов: каждый ответ парсится Zod-схемой на границе; удаление —
 // 204 без тела.
 
-// listTemplates — галерея одним запросом: публичные шаблоны плюс свои, если
-// названо пространство. Одной ручкой, а не двумя, потому что галерея всегда
-// рисует обе вкладки разом — две загрузки на одном экране означали бы, что он
-// может показаться наполовину.
-export function listTemplates(workspaceId?: string): Promise<{ items: FormTemplate[] }> {
-  const query = workspaceId ? `?workspaceId=${encodeURIComponent(workspaceId)}` : ''
-  return apiRequest(`/templates${query}`, { schema: templatesResponseSchema })
+// listTemplates — галерея одним запросом: публичные шаблоны плюс свои. Одной
+// ручкой, а не двумя, потому что галерея всегда рисует обе вкладки разом — две
+// загрузки на одном экране означали бы, что он может показаться наполовину.
+//
+// Пространство обязательно, хотя ручка живёт и без него: у кабинета нет экрана
+// «шаблоны вообще», а необязательный параметр здесь означал бы, что таб «Мои»
+// может молча оказаться пустым, пока пространство не разрезолвилось.
+export function listTemplates(workspaceId: string): Promise<{ items: FormTemplate[] }> {
+  return apiRequest(`/templates?workspaceId=${encodeURIComponent(workspaceId)}`, {
+    schema: templatesResponseSchema,
+  })
 }
 
 // saveFormAsTemplate — «Сохранить как шаблон» из меню формы. Пустое название
@@ -39,13 +43,17 @@ export function saveFormAsTemplate(params: {
 //
 // Ответ — только id, slug и title: у свежей формы счётчики и публикация пусты по
 // определению. Кабинету нужен slug — им адресуется редактор.
+// ⚠ Пространство обязательно, и это не педантизм: отсутствие поля в теле сервер
+// трактует как ЛИЧНОЕ пространство (internal/forms, resolveWorkspace). Передай
+// сюда `undefined` — и форма из шаблона молча ляжет не туда, под адресом
+// командного пространства.
 export function createFormFromTemplate(
   templateId: string,
-  workspaceId?: string,
+  workspaceId: string,
 ): Promise<CreatedForm> {
   return apiRequest(`/templates/${templateId}/use`, {
     method: 'POST',
-    body: workspaceId ? { workspaceId } : {},
+    body: { workspaceId },
     schema: createdFormSchema,
   })
 }
