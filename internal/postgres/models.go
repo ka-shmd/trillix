@@ -142,6 +142,24 @@ type Invitation struct {
 	CreatedAt   pgtype.Timestamptz
 }
 
+type KnownDevice struct {
+	ID         uuid.UUID
+	UserID     uuid.UUID
+	TokenHash  []byte
+	Label      string
+	CreatedAt  pgtype.Timestamptz
+	LastSeenAt pgtype.Timestamptz
+	ExpiresAt  pgtype.Timestamptz
+}
+
+type LoginCode struct {
+	UserID    uuid.UUID
+	CodeHash  []byte
+	ExpiresAt pgtype.Timestamptz
+	Attempts  int16
+	CreatedAt pgtype.Timestamptz
+}
+
 type Outbox struct {
 	ID            uuid.UUID
 	Channel       string
@@ -247,23 +265,17 @@ type Subscription struct {
 	UserID           uuid.UUID
 }
 
-type TotpRecoveryCode struct {
-	CodeHash  []byte
-	UserID    uuid.UUID
-	UsedAt    pgtype.Timestamptz
-	CreatedAt pgtype.Timestamptz
-}
-
 type User struct {
-	ID              uuid.UUID
-	Email           string
-	PasswordHash    pgtype.Text
-	CreatedAt       pgtype.Timestamptz
-	EmailVerifiedAt pgtype.Timestamptz
-	FirstName       pgtype.Text
-	LastName        pgtype.Text
-	DeletedAt       pgtype.Timestamptz
-	AvatarKey       pgtype.Text
+	ID               uuid.UUID
+	Email            string
+	PasswordHash     pgtype.Text
+	CreatedAt        pgtype.Timestamptz
+	EmailVerifiedAt  pgtype.Timestamptz
+	FirstName        pgtype.Text
+	LastName         pgtype.Text
+	DeletedAt        pgtype.Timestamptz
+	AvatarKey        pgtype.Text
+	TwoFactorEnabled bool
 }
 
 type UserIdentity struct {
@@ -272,14 +284,6 @@ type UserIdentity struct {
 	UserID         uuid.UUID
 	CreatedAt      pgtype.Timestamptz
 	ProviderEmail  pgtype.Text
-}
-
-type UserTotp struct {
-	UserID      uuid.UUID
-	Secret      []byte
-	ConfirmedAt pgtype.Timestamptz
-	LastStep    pgtype.Int8
-	CreatedAt   pgtype.Timestamptz
 }
 
 type Workspace struct {

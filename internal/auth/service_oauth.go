@@ -54,7 +54,7 @@ type IdentityProfile struct {
 // Три исхода: привязка найдена — вход; аккаунта с таким email нет — заводим
 // новый без пароля; аккаунт есть, привязки нет — ErrPasswordLinkRequired.
 // Автосвязывания нет ни при каких условиях.
-func (s *Service) LoginWithIdentity(ctx context.Context, p IdentityProfile) (User, string, error) {
+func (s *Service) LoginWithIdentity(ctx context.Context, p IdentityProfile, dev Device) (User, string, error) {
 	email := normalizeEmail(p.Email)
 
 	user, err := s.repo.GetUserByIdentity(ctx, s.db, p.Provider, p.ProviderUserID)
@@ -77,7 +77,7 @@ func (s *Service) LoginWithIdentity(ctx context.Context, p IdentityProfile) (Use
 		}
 		// Второй фактор применяется и к входу через провайдера: иначе он
 		// обходится в один клик, то есть не существует (слайс F).
-		return s.sessionOrChallenge(ctx, user)
+		return s.sessionOrChallenge(ctx, user, dev)
 	case !errors.Is(err, pgx.ErrNoRows):
 		return User{}, "", err
 	}
@@ -101,7 +101,7 @@ func (s *Service) LoginWithIdentity(ctx context.Context, p IdentityProfile) (Use
 			// Тот же адрес завели параллельно — почти всегда это тот же человек
 			// в двух вкладках. Соседняя транзакция уже создала и аккаунт, и
 			// привязку, поэтому повторный поиск даёт вход, а не тупик.
-			return s.resolveAfterRace(ctx, p, email)
+			return s.resolveAfterRace(ctx, p, email, dev)
 		}
 		return User{}, "", err
 	}
@@ -117,10 +117,10 @@ var errConcurrentSignup = errors.New("auth: аккаунт с этим email с�
 
 // resolveAfterRace разбирает исход гонки: привязка соседней транзакции — вход;
 // иначе адрес занят кем-то ещё, и работают обычные правила.
-func (s *Service) resolveAfterRace(ctx context.Context, p IdentityProfile, email string) (User, string, error) {
+func (s *Service) resolveAfterRace(ctx context.Context, p IdentityProfile, email string, dev Device) (User, string, error) {
 	user, err := s.repo.GetUserByIdentity(ctx, s.db, p.Provider, p.ProviderUserID)
 	if err == nil {
-		return s.sessionOrChallenge(ctx, user)
+		return s.sessionOrChallenge(ctx, user, dev)
 	}
 	if !errors.Is(err, pgx.ErrNoRows) {
 		return User{}, "", err
@@ -161,40 +161,51 @@ func (s *Service) resolveAfterRace(ctx context.Context, p IdentityProfile, email
 // знающий кода прицепляет свою личность у провайдера к чужому аккаунту —
 // ровно та атака, ради которой intent=link держат в подписанной cookie
 // (design/account-settings.md, §9), только зашедшая с другой стороны.
-func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password, code, provider, providerUserID string) (User, string, error) {
+func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password, code, provider, providerUserID string, dev Device) (User, string, string, error) {
 	email = normalizeEmail(email)
 
 	user, err := s.repo.GetUserByEmail(ctx, s.db, email)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			equalizeTiming(password)
-			return User{}, "", domain.ErrInvalidCredentials
+			return User{}, "", "", domain.ErrInvalidCredentials
 		}
-		return User{}, "", err
+		return User{}, "", "", err
 	}
 	// Аккаунт без пароля привязать паролем нельзя: доказывать нечем.
 	if user.PasswordHash == nil {
 		equalizeTiming(password)
-		return User{}, "", domain.ErrInvalidCredentials
+		return User{}, "", "", domain.ErrInvalidCredentials
 	}
 	ok, err := VerifyPassword(*user.PasswordHash, password)
 	if err != nil {
-		return User{}, "", err
+		return User{}, "", "", err
 	}
 	if !ok {
-		return User{}, "", domain.ErrInvalidCredentials
+		return User{}, "", "", domain.ErrInvalidCredentials
 	}
 
-	enabled, err := s.TwoFactorEnabled(ctx, user.ID)
-	if err != nil {
-		return User{}, "", err
-	}
-	if enabled {
-		if code == "" {
-			return user, "", ErrTwoFactorRequired
+	deviceToken := dev.Token
+	if user.TwoFactorEnabled {
+		known, err := s.deviceKnown(ctx, user.ID, dev)
+		if err != nil {
+			return User{}, "", "", err
 		}
-		if err := s.consumeSecondFactor(ctx, user.ID, code); err != nil {
-			return User{}, "", err
+		if !known {
+			// Незнакомый браузер: первый заход сюда приезжает без кода — шлём
+			// письмо и просим его той же формой.
+			if code == "" {
+				if err := s.SendLoginCode(ctx, user); err != nil {
+					return User{}, "", "", err
+				}
+				return user, "", "", ErrTwoFactorRequired
+			}
+			if err := s.consumeLoginCode(ctx, user.ID, code); err != nil {
+				return User{}, "", "", err
+			}
+			if deviceToken, err = s.rememberDevice(ctx, user.ID, dev); err != nil {
+				return User{}, "", "", err
+			}
 		}
 	}
 
@@ -202,18 +213,18 @@ func (s *Service) LinkIdentityWithPassword(ctx context.Context, email, password,
 		// Тот же аккаунт провайдера уже привязан (к этому пользователю или к
 		// другому) — повторный клик по «привязать» не должен выглядеть аварией.
 		if isUniqueViolation(err) {
-			return User{}, "", fmt.Errorf("%w: этот аккаунт провайдера уже привязан", domain.ErrConflict)
+			return User{}, "", "", fmt.Errorf("%w: этот аккаунт провайдера уже привязан", domain.ErrConflict)
 		}
-		return User{}, "", err
+		return User{}, "", "", err
 	}
 
 	// sessionOrChallenge здесь не зовётся: второй фактор уже разобран выше, до
 	// побочного эффекта. Повторный вызов потребовал бы второй код на тот же вход.
 	token, err := s.createSession(ctx, user.ID)
 	if err != nil {
-		return User{}, "", err
+		return User{}, "", "", err
 	}
-	return user, token, nil
+	return user, token, deviceToken, nil
 }
 
 // fillProfileFromProvider проставляет имя из профиля провайдера, НЕ трогая уже

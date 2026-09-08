@@ -65,6 +65,22 @@ const (
 	// Data: {"link": "<url восстановления>"}. Ссылки-токена в нём нет: письмо не
 	// даёт никаких прав, а только сообщает о случившемся.
 	TemplatePasswordChanged Template = "password_changed"
+	// TemplateLoginCode — код второго фактора при входе с незнакомого устройства
+	// (0056). Data: {"code": "123456"}.
+	//
+	// ⚠ Единственное письмо, чей payload — действующий секрет, поэтому доставленные
+	// строки outbox с ним удаляются уборщиком (DeleteDeliveredOutboxByTemplate,
+	// cmd/api/main.go): в БД код лежит под HMAC, и открытая копия в архиве outbox
+	// сделала бы эту защиту декоративной. Появится второй такой шаблон — его надо
+	// добавить в список уборщика, иначе секрет останется в архиве навсегда.
+	TemplateLoginCode Template = "login_code"
+	// TemplateTwoFactorChanged — уведомление о включении или выключении второго
+	// фактора. Data: {"state": "включена" | "выключена"}.
+	TemplateTwoFactorChanged Template = "two_factor_changed"
+	// TemplateAccountActionCode — код подтверждения действия в настройках (смена
+	// адреса, удаление аккаунта). Data: {"code": "123456"}. Хранилище кода общее
+	// с TemplateLoginCode, и уборщик секретов (см. выше) обязан знать про оба.
+	TemplateAccountActionCode Template = "account_action_code"
 )
 
 type mailTemplate struct {
@@ -234,6 +250,40 @@ var templates = map[Template]mailTemplate{
 				"Если это сделали вы — ничего делать не нужно.\n\n" +
 				"Если нет — восстановите доступ по ссылке «Забыли пароль?»:\n\n" +
 				"{{.link}}\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplateLoginCode: {
+		subject: "Код для входа",
+		body: template.Must(template.New("login_code").Parse(
+			"Здравствуйте!\n\n" +
+				"Код для входа в Trillix: {{.code}}\n\n" +
+				"Он действует десять минут и нужен потому, что вход выполняется " +
+				"с устройства, которое мы ещё не видели.\n\n" +
+				"Если входили не вы — код никому не сообщайте и смените пароль.\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplateAccountActionCode: {
+		subject: "Код подтверждения",
+		body: template.Must(template.New("account_action_code").Parse(
+			"Здравствуйте!\n\n" +
+				"Код для подтверждения действия в вашем аккаунте Trillix: {{.code}}\n\n" +
+				"Он действует десять минут.\n\n" +
+				"Если вы ничего не подтверждали — код никому не сообщайте и смените " +
+				"пароль.\n\n" +
+				"— Trillix",
+		)),
+	},
+	TemplateTwoFactorChanged: {
+		subject: "Двухфакторная аутентификация",
+		body: template.Must(template.New("two_factor_changed").Parse(
+			"Здравствуйте!\n\n" +
+				"Двухфакторная аутентификация в вашем аккаунте Trillix только что " +
+				"{{.state}}.\n\n" +
+				"Если это сделали вы — ничего делать не нужно.\n\n" +
+				"Если нет — смените пароль: тот, кто менял настройку, уже вошёл " +
+				"в аккаунт.\n\n" +
 				"— Trillix",
 		)),
 	},

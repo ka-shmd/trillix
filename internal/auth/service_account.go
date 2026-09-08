@@ -175,12 +175,8 @@ func (s *Service) RequestEmailChange(ctx context.Context, user User, newEmail, c
 	// Мина: у аккаунта, заведённого через провайдера, пароля нет, и без этой
 	// проверки увести адрес можно было бы одной угнанной сессией — доказывать
 	// было бы нечем вообще. Второй фактор здесь и есть то, чем доказывают.
-	enabled, err := s.TwoFactorEnabled(ctx, user.ID)
-	if err != nil {
-		return err
-	}
-	if enabled {
-		if err := s.consumeSecondFactor(ctx, user.ID, code); err != nil {
+	if user.TwoFactorEnabled {
+		if err := s.consumeLoginCode(ctx, user.ID, code); err != nil {
 			return err
 		}
 	}
@@ -302,12 +298,8 @@ func (s *Service) DeleteAccount(ctx context.Context, user User, currentPassword,
 			return domain.ErrInvalidCredentials
 		}
 	}
-	enabled, err := s.TwoFactorEnabled(ctx, user.ID)
-	if err != nil {
-		return err
-	}
-	if enabled {
-		if err := s.consumeSecondFactor(ctx, user.ID, code); err != nil {
+	if user.TwoFactorEnabled {
+		if err := s.consumeLoginCode(ctx, user.ID, code); err != nil {
 			return err
 		}
 	}

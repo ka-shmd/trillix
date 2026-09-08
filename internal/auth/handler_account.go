@@ -49,9 +49,16 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 		h.RequireAuth(http.HandlerFunc(h.startIdentityLink)))
 	// Второй фактор (слайс F). Включение и выключение — свои мутации; второй шаг
 	// ВХОДА живёт в Routes, потому что сессии на нём ещё нет.
-	mux.Handle("POST /api/v1/account/2fa/setup", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.setupTOTP))))
-	mux.Handle("POST /api/v1/account/2fa/enable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.enableTOTP))))
-	mux.Handle("POST /api/v1/account/2fa/disable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.disableTOTP))))
+	mux.Handle("POST /api/v1/account/2fa/enable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.enableTwoFactor))))
+	mux.Handle("POST /api/v1/account/2fa/disable", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.disableTwoFactor))))
+	// Код подтверждения действия: его просят формы смены адреса и удаления
+	// аккаунта — у аккаунта с включённым фактором взять код больше негде.
+	mux.Handle("POST /api/v1/account/2fa/send-code", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.sendActionCode))))
+	// Известные устройства (0056). Список — под сессией; забывание меняет
+	// состояние, поэтому под CSRF.
+	mux.Handle("GET /api/v1/account/devices", h.RequireAuth(http.HandlerFunc(h.listDevices)))
+	mux.Handle("DELETE /api/v1/account/devices/{id}", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.forgetDevice))))
+	mux.Handle("DELETE /api/v1/account/devices", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.forgetAllDevices))))
 	// Удаление аккаунта (слайс G) — POST, а не DELETE: у запроса есть тело
 	// (подтверждение паролем и кодом), а DELETE с телом читают не все прокси.
 	mux.Handle("POST /api/v1/account/delete", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.deleteAccount))))
@@ -98,16 +105,11 @@ func (h *Handler) updateProfile(w http.ResponseWriter, r *http.Request) {
 	h.writeProfile(w, r, updated)
 }
 
-// writeProfile отвечает профилем на любую его правку (имя, аватар). Флаг второго
-// фактора дозапрашивается: он живёт в другой таблице, а кабинет патчит этим
-// ответом кэш целиком — соврать про фактор здесь значит выключить его на экране.
+// writeProfile отвечает профилем на любую его правку (имя, аватар). Кабинет
+// патчит этим ответом кэш целиком, поэтому флаг второго фактора обязан ехать
+// вместе со всем остальным — он живёт в самой строке users (0056).
 func (h *Handler) writeProfile(w http.ResponseWriter, r *http.Request, u User) {
-	twoFactor, err := h.svc.TwoFactorEnabled(r.Context(), u.ID)
-	if err != nil {
-		httpserver.WriteError(w, r, err)
-		return
-	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(u, twoFactor))
+	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(u))
 }
 
 // maxAvatarBytes зеркалит media.MaxImageBytes: импортировать оттуда нельзя

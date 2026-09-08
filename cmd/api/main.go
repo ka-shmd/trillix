@@ -285,6 +285,11 @@ const (
 	// быстрее всех, потому что ключуются IP. Медленные переживают лишний проход и
 	// уезжают на следующем — их карты и так малы.
 	ratelimitGCInterval = 10 * time.Minute
+	// secretMailRetention — сколько доставленное письмо с кодом лежит в outbox
+	// до уборки. Не ноль: диагностика «письмо ушло или нет» должна оставаться
+	// возможной хотя бы в пределах часа, а сам код живёт десять минут и к этому
+	// времени уже недействителен.
+	secretMailRetention = time.Hour
 )
 
 // senderAddress и senderName — адрес и имя из MAIL_FROM. Пустая строка, если
@@ -400,7 +405,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// Ключ шифрования секретов второго фактора выводится HKDF от того же
 	// FORM_TOKEN_SECRET (своей env-переменной нет сознательно — спека §6).
 	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, mailSvc, auth.DefaultSessionTTL, cfg.AppOrigin).
-		WithTOTPKey(cfg.FormTokenSecret)
+		WithLoginCodeKey(cfg.FormTokenSecret)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
 	registerLimiter := ratelimit.NewTokenBucket(registerRatePerSec, registerBurst)
 	// Именованной переменной, а не выражением в вызове: ведро ключуется id
@@ -721,6 +726,60 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("expired password reset tokens purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	// Второй фактор (0056): протухшие коды и знакомства с браузерами. Уборка,
+	// а не защита: срок и того и другого проверяется в самих запросах, здесь
+	// только освобождается место.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "login-code-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
+			defer cancel()
+			n, err := authSvc.PurgeExpiredLoginCodes(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired login codes purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "known-device-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
+			defer cancel()
+			n, err := authSvc.PurgeExpiredKnownDevices(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("expired known devices purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	// А ЭТО — не уборка места, а защита: письмо с кодом несёт действующий
+	// секрет, доставленные строки outbox не удаляются сами, и открытая копия
+	// кода рядом с его HMAC в базе сделала бы хранение под HMAC декоративным.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "secret-mail-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, resetTokenCleanupTimeout)
+			defer cancel()
+			n, err := mailSvc.PurgeDeliveredSecrets(ctx, secretMailRetention)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("delivered secret mail purged", slog.Int64("count", n))
 			}
 			return nil
 		},

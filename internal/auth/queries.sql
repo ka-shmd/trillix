@@ -3,7 +3,7 @@
 -- name: CreateUser :one
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
 
 -- Четыре запроса ниже (GetUserByID, GetUserByEmail, GetSessionUser,
 -- GetUserByIdentity) — ВСЕ пути, которыми код узнаёт пользователя, и у каждого
@@ -26,12 +26,12 @@ RETURNING id, email, password_hash, created_at, email_verified_at, first_name, l
 -- name: GetUserByID :one
 -- Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
 -- кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
 FROM users
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled
 FROM users
 WHERE email = $1 AND deleted_at IS NULL;
 
@@ -66,7 +66,7 @@ VALUES ($1, $2, $3);
 
 -- name: GetSessionUser :one
 -- Пользователь по живой (не истёкшей) сессии — для RequireAuth и /auth/me.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL;
@@ -81,7 +81,7 @@ DELETE FROM sessions WHERE expires_at <= now();
 -- Пользователь по привязке к провайдеру (миграция 0009). Ключ — пара
 -- (провайдер, идентификатор у провайдера), а не email: адрес у провайдера
 -- сменить можно, идентификатор — нет.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL;
@@ -130,7 +130,7 @@ DELETE FROM user_identities WHERE user_id = $1 AND provider = $2;
 -- нельзя. Пустое приезжает как NULL — приведение делает repo (pgText).
 UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
 
 -- name: SetUserAvatarKey :one
 -- Ключ аватара целиком: значение — поставить, NULL — снять. Отдельным запросом,
@@ -139,7 +139,7 @@ RETURNING id, email, password_hash, created_at, email_verified_at, first_name, l
 -- слать чужое поле, чтобы его не затереть.
 UPDATE users SET avatar_key = $2
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
 
 -- name: FillEmptyProfile :one
 -- Дозаполнение профиля данными провайдера (фаза 23, слайс B). COALESCE, а не
@@ -150,7 +150,7 @@ UPDATE users
    SET first_name = COALESCE(first_name, $2),
        last_name  = COALESCE(last_name,  $3)
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
 
 -- name: SetUserPassword :exec
 -- Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит
@@ -162,6 +162,13 @@ UPDATE users SET password_hash = $2 WHERE id = $1;
 -- Рвёт все сессии пользователя — обязательный шаг сброса пароля (кто угодно,
 -- знавший старый пароль или укравший сессию, разлогинивается).
 DELETE FROM sessions WHERE user_id = $1;
+
+-- name: DeleteSessionsByUserExcept :exec
+-- То же, но щадит одну сессию — ту, из которой человек нажал «забыть
+-- устройства». Кнопку жмут, когда подозревают чужого, а чужой сидит в живой
+-- сессии, которой второй фактор уже не мешает: забыть устройства и оставить
+-- его работать ещё до тридцати суток значит не сделать ничего.
+DELETE FROM sessions WHERE user_id = $1 AND token_hash <> $2;
 
 -- name: CreatePasswordResetToken :exec
 -- Кладёт одноразовый токен сброса (в БД — только SHA-256 сырого токена).
@@ -224,53 +231,80 @@ RETURNING user_id, new_email;
 UPDATE users
    SET email = $2, email_verified_at = now()
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled;
 
 -- name: DeleteExpiredEmailChangeTokens :execrows
 DELETE FROM email_change_tokens WHERE expires_at <= now();
 
--- name: UpsertTOTPSecret :exec
--- Начало настройки второго фактора (фаза 23, слайс F). Перезапись поверх
--- НЕподтверждённой попытки — норма: человек мог начать настройку и бросить, а
--- новый секрет обязан затирать старый. Подтверждённый фактор так не
--- перезаписывается: сервис до этого запроса проверяет, что фактор выключен.
-INSERT INTO user_totp (user_id, secret) VALUES ($1, $2)
+-- name: SetTwoFactorEnabled :exec
+-- Включение и выключение второго фактора (код на почту, 0056). Отдельного
+-- состояния «настройка начата» больше нет: настраивать нечего, адрес у аккаунта
+-- уже есть.
+UPDATE users SET two_factor_enabled = $2 WHERE id = $1;
+
+-- name: UpsertLoginCode :exec
+-- Активный код на аккаунт ровно один: новый запрос переписывает строку и
+-- обнуляет счётчик попыток. Иначе «отправить ещё раз» копило бы валидные коды
+-- в чужом ящике.
+INSERT INTO login_codes (user_id, code_hash, expires_at) VALUES ($1, $2, $3)
 ON CONFLICT (user_id) DO UPDATE
-SET secret = EXCLUDED.secret, confirmed_at = NULL, last_step = NULL, created_at = now();
+SET code_hash = EXCLUDED.code_hash, expires_at = EXCLUDED.expires_at, attempts = 0, created_at = now();
 
--- name: GetTOTP :one
-SELECT secret, confirmed_at, last_step FROM user_totp WHERE user_id = $1;
-
--- name: ConfirmTOTP :exec
-UPDATE user_totp SET confirmed_at = now(), last_step = $2 WHERE user_id = $1;
-
--- name: MarkTOTPStep :execrows
--- Отметка «этот шаг уже израсходован»: ноль строк — код предъявлен повторно.
--- Условие атомарно, поэтому гонка двух одинаковых кодов даёт успех одному.
+-- name: ConsumeLoginCodeAttempt :one
+-- Списывает попытку и отдаёт хеш для сверки — ОДНИМ запросом и ДО сверки.
 --
--- Мина: сравнение обязано быть строгим неравенством, а не «шаг отличается от
--- последнего». Окно проверки — ±1 шаг, то есть валидны три соседних кода
--- одновременно; при нестрогом условии last_step уезжает назад, и код, уже
--- потреблённый на шаге N, снова проходит после входа кодом шага N+1. last_step
--- IS NULL — фактор только что подтверждён, израсходованных шагов ещё нет.
-UPDATE user_totp SET last_step = $2
-WHERE user_id = $1 AND (last_step IS NULL OR last_step < $2);
+-- Мина: порядок обязателен именно такой. Сверять первым значило бы, что верный
+-- код обходит исчерпанный счётчик, и перебор стоил бы ровно столько же, сколько
+-- без счётчика. Тот же приём, что у пароля формы (ARCHITECTURE §10).
+--
+-- Ноль строк — кода нет, он просрочен или попытки кончились; снаружи это один
+-- ответ, потому что различать их значит рассказывать перебирающему, где он
+-- оказался ближе.
+UPDATE login_codes SET attempts = attempts + 1
+WHERE user_id = $1 AND attempts < $2 AND expires_at > now()
+RETURNING code_hash;
 
--- name: DeleteTOTP :exec
-DELETE FROM user_totp WHERE user_id = $1;
+-- name: DeleteLoginCode :exec
+DELETE FROM login_codes WHERE user_id = $1;
 
--- name: CreateRecoveryCode :exec
-INSERT INTO totp_recovery_codes (code_hash, user_id) VALUES ($1, $2);
+-- name: DeleteExpiredLoginCodes :execrows
+DELETE FROM login_codes WHERE expires_at <= now();
 
--- name: ConsumeRecoveryCode :execrows
--- Атомарное потребление резервного кода: помечает использованным ровно при
--- условии «этот пользователь, не использован». Ноль строк — кода нет или он
--- уже сгорел (снаружи это один ответ).
-UPDATE totp_recovery_codes SET used_at = now()
-WHERE code_hash = $1 AND user_id = $2 AND used_at IS NULL;
+-- name: CreateKnownDevice :exec
+-- Строка заводится ТОЛЬКО после принятого кода. Конфликт по паре
+-- «токен + аккаунт» — тот же браузер входит повторно после того, как его
+-- знакомство истекло: продлеваем, а не заводим вторую строку.
+INSERT INTO known_devices (id, user_id, token_hash, label, expires_at)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (token_hash, user_id) DO UPDATE
+SET label = EXCLUDED.label, expires_at = EXCLUDED.expires_at, last_seen_at = now();
 
--- name: DeleteRecoveryCodes :exec
-DELETE FROM totp_recovery_codes WHERE user_id = $1;
+-- name: TouchKnownDevice :execrows
+-- «Знаком ли этот браузер аккаунту» и «отметить, что заходил» — один запрос:
+-- ноль строк означает незнакомое устройство, и второй ходки за ответом не
+-- нужно. Просроченное знакомство не считается: expires_at проверяется здесь,
+-- а не уборщиком, — уборщик только чистит место.
+UPDATE known_devices SET last_seen_at = now()
+WHERE token_hash = $1 AND user_id = $2 AND expires_at > now();
+
+-- name: ListKnownDevices :many
+-- token_hash в выдаче нужен экрану настроек, чтобы пометить текущее устройство
+-- (сервис сравнивает его с хешем cookie); наружу он не отдаётся.
+SELECT id, token_hash, label, created_at, last_seen_at
+FROM known_devices
+WHERE user_id = $1 AND expires_at > now()
+ORDER BY last_seen_at DESC;
+
+-- name: DeleteKnownDevice :execrows
+-- user_id в условии — не лишний: id из URL не является доказательством права
+-- на строку.
+DELETE FROM known_devices WHERE id = $1 AND user_id = $2;
+
+-- name: DeleteKnownDevicesByUser :exec
+DELETE FROM known_devices WHERE user_id = $1;
+
+-- name: DeleteExpiredKnownDevices :execrows
+DELETE FROM known_devices WHERE expires_at <= now();
 
 -- name: MarkUserDeleted :execrows
 -- Удаление аккаунта пометкой (фаза 23, слайс G). Условие deleted_at IS NULL —

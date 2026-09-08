@@ -108,17 +108,17 @@ type fakeStore struct {
 	updatedEmail            string
 	changeTokensPurged      int64
 
-	// Второй фактор (фаза 23, слайс F).
-	totp           *TOTPState
-	totpUpserted   bool
-	totpConfirmed  bool
-	totpStep       int64
-	totpStepFresh  bool
-	totpDeleted    bool
-	recoveryHashes [][]byte
-	recoveryUsable bool
-	recoveryUsed   bool
-	recoveryWiped  bool
+	// Второй фактор — код на почту (0056).
+	twoFactorSet      bool
+	twoFactorEnabled  bool
+	loginCodeHash     []byte
+	loginCodeAttempts int16
+	loginCodeExpired  bool
+	loginCodeDeleted  bool
+	knownDevices      []KnownDevice
+	deviceKnown       bool
+	devicesWiped      bool
+	sessionsWiped     bool
 
 	// Удаление аккаунта (фаза 23, слайс G).
 	emailTaken     bool
@@ -127,67 +127,78 @@ type fakeStore struct {
 	alreadyDeleted bool
 }
 
-func (f *fakeStore) UpsertTOTPSecret(_ context.Context, _ postgres.DBTX, _ uuid.UUID, secret []byte) error {
-	f.totpUpserted = true
-	f.totp = &TOTPState{Secret: secret}
+func (f *fakeStore) SetTwoFactorEnabled(_ context.Context, _ postgres.DBTX, _ uuid.UUID, enabled bool) error {
+	f.twoFactorSet = true
+	f.twoFactorEnabled = enabled
+	f.user.TwoFactorEnabled = enabled
 	return nil
 }
 
-func (f *fakeStore) GetTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (TOTPState, error) {
-	if f.totp == nil {
-		return TOTPState{}, pgx.ErrNoRows
-	}
-	return *f.totp, nil
-}
-
-func (f *fakeStore) ConfirmTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID, step int64) error {
-	f.totpConfirmed = true
-	f.totpStep = step
-	if f.totp != nil {
-		now := time.Now()
-		f.totp.ConfirmedAt = &now
-	}
+func (f *fakeStore) UpsertLoginCode(_ context.Context, _ postgres.DBTX, _ uuid.UUID, codeHash []byte, _ time.Time) error {
+	f.loginCodeHash = codeHash
+	f.loginCodeAttempts = 0
+	f.loginCodeExpired = false
 	return nil
 }
 
-// MarkTOTPStep повторяет семантику запроса: false на любом шаге, который не
-// новее последнего отмеченного, — не только на в точности том же.
-func (f *fakeStore) MarkTOTPStep(_ context.Context, _ postgres.DBTX, _ uuid.UUID, step int64) (bool, error) {
-	if f.totp != nil && f.totp.LastStep != nil && *f.totp.LastStep >= step {
-		return false, nil
+// ConsumeLoginCodeAttempt повторяет семантику запроса: попытка списывается ДО
+// сверки, а исчерпанный счётчик, отсутствие строки и просроченный код
+// неразличимы — все три дают ErrNoRows.
+func (f *fakeStore) ConsumeLoginCodeAttempt(_ context.Context, _ postgres.DBTX, _ uuid.UUID, maxAttempts int16) ([]byte, error) {
+	if f.loginCodeHash == nil || f.loginCodeExpired || f.loginCodeAttempts >= maxAttempts {
+		return nil, pgx.ErrNoRows
 	}
-	f.totpStepFresh = true
-	f.totpStep = step
-	if f.totp != nil {
-		v := step
-		f.totp.LastStep = &v
-	}
-	return true, nil
+	f.loginCodeAttempts++
+	return f.loginCodeHash, nil
 }
 
-func (f *fakeStore) DeleteTOTP(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
-	f.totpDeleted = true
-	f.totp = nil
+func (f *fakeStore) DeleteLoginCode(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.loginCodeDeleted = true
+	f.loginCodeHash = nil
 	return nil
 }
 
-func (f *fakeStore) CreateRecoveryCode(_ context.Context, _ postgres.DBTX, codeHash []byte, _ uuid.UUID) error {
-	f.recoveryHashes = append(f.recoveryHashes, codeHash)
+func (f *fakeStore) DeleteExpiredLoginCodes(_ context.Context, _ postgres.DBTX) (int64, error) {
+	return 0, nil
+}
+
+func (f *fakeStore) CreateKnownDevice(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID, tokenHash []byte, label string, _ time.Time) error {
+	f.knownDevices = append(f.knownDevices, KnownDevice{ID: id, TokenHash: tokenHash, Label: label})
+	f.deviceKnown = true
 	return nil
 }
 
-func (f *fakeStore) ConsumeRecoveryCode(_ context.Context, _ postgres.DBTX, _ []byte, _ uuid.UUID) (bool, error) {
-	if !f.recoveryUsable {
-		return false, nil
-	}
-	f.recoveryUsable = false
-	f.recoveryUsed = true
-	return true, nil
+func (f *fakeStore) TouchKnownDevice(_ context.Context, _ postgres.DBTX, _ []byte, _ uuid.UUID) (bool, error) {
+	return f.deviceKnown, nil
 }
 
-func (f *fakeStore) DeleteRecoveryCodes(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
-	f.recoveryWiped = true
-	f.recoveryHashes = nil
+func (f *fakeStore) ListKnownDevices(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]KnownDevice, error) {
+	return f.knownDevices, nil
+}
+
+func (f *fakeStore) DeleteKnownDevice(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID) (bool, error) {
+	for i, d := range f.knownDevices {
+		if d.ID == id {
+			f.knownDevices = append(f.knownDevices[:i], f.knownDevices[i+1:]...)
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeStore) DeleteKnownDevicesByUser(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.devicesWiped = true
+	f.knownDevices = nil
+	f.deviceKnown = false
+	return nil
+}
+
+func (f *fakeStore) DeleteExpiredKnownDevices(_ context.Context, _ postgres.DBTX) (int64, error) {
+	return 0, nil
+}
+
+func (f *fakeStore) DeleteSessionsByUserExcept(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ []byte) error {
+	f.sessionsWiped = true
 	return nil
 }
 
@@ -543,7 +554,7 @@ func TestLogin_Success(t *testing.T) {
 	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "a@b.com", PasswordHash: &hash}}
 	svc := newService(store)
 
-	user, token, err := svc.Login(context.Background(), "a@b.com", "correct-password")
+	user, token, err := svc.Login(context.Background(), "a@b.com", "correct-password", Device{})
 	if err != nil {
 		t.Fatalf("Login: %v", err)
 	}
@@ -560,7 +571,7 @@ func TestLogin_WrongPassword(t *testing.T) {
 	store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "a@b.com", PasswordHash: &hash}}
 	svc := newService(store)
 
-	_, _, err := svc.Login(context.Background(), "a@b.com", "wrong-password")
+	_, _, err := svc.Login(context.Background(), "a@b.com", "wrong-password", Device{})
 	if !errors.Is(err, domain.ErrInvalidCredentials) {
 		t.Fatalf("err = %v, want ErrInvalidCredentials", err)
 	}
@@ -570,7 +581,7 @@ func TestLogin_UnknownEmail(t *testing.T) {
 	store := &fakeStore{userExists: false}
 	svc := newService(store)
 
-	_, _, err := svc.Login(context.Background(), "missing@b.com", "any-password")
+	_, _, err := svc.Login(context.Background(), "missing@b.com", "any-password", Device{})
 	if !errors.Is(err, domain.ErrInvalidCredentials) {
 		t.Fatalf("err = %v, want ErrInvalidCredentials", err)
 	}
@@ -585,7 +596,7 @@ func TestLogin_PasswordlessAccount(t *testing.T) {
 	svc := newService(store)
 
 	start := time.Now()
-	_, _, err := svc.Login(context.Background(), "oauth@b.com", "any-password")
+	_, _, err := svc.Login(context.Background(), "oauth@b.com", "any-password", Device{})
 	elapsed := time.Since(start)
 
 	if !errors.Is(err, domain.ErrInvalidCredentials) {
@@ -610,12 +621,12 @@ func TestLogin_TimingEqualized(t *testing.T) {
 	svc := newService(store)
 
 	start := time.Now()
-	_, _, _ = svc.Login(context.Background(), "a@b.com", "wrong-password")
+	_, _, _ = svc.Login(context.Background(), "a@b.com", "wrong-password", Device{})
 	wrongPw := time.Since(start)
 
 	store.userExists = false
 	start = time.Now()
-	_, _, _ = svc.Login(context.Background(), "missing@b.com", "any-password")
+	_, _, _ = svc.Login(context.Background(), "missing@b.com", "any-password", Device{})
 	unknown := time.Since(start)
 
 	if unknown < wrongPw/5 {

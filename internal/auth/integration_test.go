@@ -48,7 +48,7 @@ func newAuthService() *auth.Service {
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), mailSvc, testAppOrigin)
 	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, mailSvc, time.Hour, testAppOrigin).
-		WithTOTPKey([]byte("integration-test-totp-key")).
+		WithLoginCodeKey([]byte("integration-test-login-code-key")).
 		WithTeams(wsSvc).
 		WithAvatars(stubAvatars{})
 }
@@ -79,7 +79,7 @@ func TestMain(m *testing.M) {
 func resetDB(t *testing.T) {
 	t.Helper()
 	_, err := testPool.Exec(context.Background(),
-		`TRUNCATE users, user_identities, workspaces, workspace_members, sessions, password_reset_tokens, email_verification_tokens, email_change_tokens, user_totp, totp_recovery_codes, outbox CASCADE`)
+		`TRUNCATE users, user_identities, workspaces, workspace_members, sessions, password_reset_tokens, email_verification_tokens, email_change_tokens, login_codes, known_devices, outbox CASCADE`)
 	if err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
@@ -296,6 +296,23 @@ func post(t *testing.T, c *http.Client, url, jsonBody, csrf string) *http.Respon
 	}
 	if jsonBody != "" {
 		req.Header.Set("Content-Type", "application/json")
+	}
+	if csrf != "" {
+		req.Header.Set("X-CSRF-Token", csrf)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("do request: %v", err)
+	}
+	return resp
+}
+
+// del — DELETE с CSRF-заголовком: забывание устройств меняет состояние.
+func del(t *testing.T, c *http.Client, url, csrf string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, url, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
 	}
 	if csrf != "" {
 		req.Header.Set("X-CSRF-Token", csrf)

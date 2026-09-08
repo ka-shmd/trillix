@@ -10,6 +10,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/mail"
 )
 
 // Таблица случаев из DEV-PLAN фазы 11 шага 4, ставшая таблицей тестов.
@@ -19,7 +20,7 @@ func TestLoginWithIdentity_KnownIdentity(t *testing.T) {
 	store := &fakeStore{identityExists: true, identityUser: known}
 	svc := newService(store)
 
-	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru"})
+	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru"}, Device{})
 	if err != nil {
 		t.Fatalf("LoginWithIdentity: %v", err)
 	}
@@ -35,7 +36,7 @@ func TestLoginWithIdentity_NewUser(t *testing.T) {
 	store := &fakeStore{identityExists: false, userExists: false}
 	svc := newService(store)
 
-	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "  New@Yandex.RU "})
+	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "  New@Yandex.RU "}, Device{})
 	if err != nil {
 		t.Fatalf("LoginWithIdentity: %v", err)
 	}
@@ -78,7 +79,7 @@ func TestLoginWithIdentity_ExistingEmailRequiresPassword(t *testing.T) {
 	}
 	svc := newService(store)
 
-	_, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "attacker-id", Email: "victim@yandex.ru"})
+	_, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "attacker-id", Email: "victim@yandex.ru"}, Device{})
 	if !errors.Is(err, ErrPasswordLinkRequired) {
 		t.Fatalf("err = %v, want ErrPasswordLinkRequired", err)
 	}
@@ -105,7 +106,7 @@ func TestLoginWithIdentity_ExistingPasswordlessAccount(t *testing.T) {
 	}
 	svc := newService(store)
 
-	_, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "new-id", Email: "user@yandex.ru"})
+	_, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "new-id", Email: "user@yandex.ru"}, Device{})
 	if !errors.Is(err, ErrProviderOnlyAccount) {
 		t.Fatalf("err = %v, want ErrProviderOnlyAccount", err)
 	}
@@ -131,7 +132,7 @@ func TestLoginWithIdentity_ConcurrentSignupLetsIn(t *testing.T) {
 	}
 	svc := newService(store)
 
-	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru"})
+	user, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru"}, Device{})
 	if err != nil {
 		t.Fatalf("LoginWithIdentity: %v — гонка двух вкладок не должна быть отказом", err)
 	}
@@ -146,7 +147,7 @@ func TestLinkIdentityWithPassword_Success(t *testing.T) {
 	store := &fakeStore{userExists: true, user: owner}
 	svc := newService(store)
 
-	user, token, err := svc.LinkIdentityWithPassword(context.Background(), "owner@yandex.ru", "correct-password", "", "yandex", "1234567")
+	user, token, _, err := svc.LinkIdentityWithPassword(context.Background(), "owner@yandex.ru", "correct-password", "", "yandex", "1234567", Device{})
 	if err != nil {
 		t.Fatalf("LinkIdentityWithPassword: %v", err)
 	}
@@ -180,7 +181,7 @@ func TestLinkIdentityWithPassword_Rejects(t *testing.T) {
 	for name, c := range cases {
 		t.Run(name, func(t *testing.T) {
 			svc := newService(c.store)
-			_, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", c.password, "", "yandex", "1234567")
+			_, _, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", c.password, "", "yandex", "1234567", Device{})
 			if !errors.Is(err, domain.ErrInvalidCredentials) {
 				t.Fatalf("err = %v, want ErrInvalidCredentials", err)
 			}
@@ -199,18 +200,20 @@ func TestLinkIdentityWithPassword_Rejects(t *testing.T) {
 // знающий пароль прицепил бы к чужому аккаунту свою личность у провайдера и
 // получил бы постоянный вход на тот день, когда владелец выключит фактор.
 func TestLinkIdentityWithPassword_TwoFactor(t *testing.T) {
-	setup := func(t *testing.T) (*fakeStore, *Service, []byte) {
+	setup := func(t *testing.T) (*fakeStore, *Service, *fakeEnqueuer, User) {
 		t.Helper()
 		hash, _ := HashPassword("correct-password")
-		store := &fakeStore{userExists: true, user: User{ID: domain.NewID(), Email: "o@y.ru", PasswordHash: &hash}}
-		svc := newTOTPService(store)
-		return store, svc, enabledTOTP(t, store)
+		user := User{ID: domain.NewID(), Email: "o@y.ru", PasswordHash: &hash}
+		store := &fakeStore{userExists: true, user: user}
+		enableFactorFor(store, &user)
+		mailer := &fakeEnqueuer{}
+		return store, newCodeService(store, mailer), mailer, user
 	}
 
-	t.Run("без кода — запрос кода, привязки нет", func(t *testing.T) {
-		store, svc, _ := setup(t)
+	t.Run("без кода — код уходит письмом, привязки нет", func(t *testing.T) {
+		store, svc, mailer, _ := setup(t)
 
-		_, token, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", "", "yandex", "1234567")
+		_, token, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", "", "yandex", "1234567", Device{})
 		if !errors.Is(err, ErrTwoFactorRequired) {
 			t.Fatalf("err = %v, want ErrTwoFactorRequired", err)
 		}
@@ -220,12 +223,16 @@ func TestLinkIdentityWithPassword_TwoFactor(t *testing.T) {
 		if store.createdIdentity {
 			t.Fatal("привязка создана до проверки второго фактора")
 		}
+		sentCode(t, mailer, mail.TemplateLoginCode)
 	})
 
 	t.Run("неверный код — отказ, привязки нет", func(t *testing.T) {
-		store, svc, _ := setup(t)
+		store, svc, _, user := setup(t)
+		if err := svc.SendLoginCode(context.Background(), user); err != nil {
+			t.Fatalf("SendLoginCode: %v", err)
+		}
 
-		_, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", "000000", "yandex", "1234567")
+		_, _, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", "000000", "yandex", "1234567", Device{})
 		if !errors.Is(err, domain.ErrInvalidCredentials) {
 			t.Fatalf("err = %v, want ErrInvalidCredentials", err)
 		}
@@ -237,16 +244,37 @@ func TestLinkIdentityWithPassword_TwoFactor(t *testing.T) {
 		}
 	})
 
-	t.Run("верный код — привязка и сессия", func(t *testing.T) {
-		store, svc, secret := setup(t)
+	t.Run("верный код — привязка, сессия и знакомство с браузером", func(t *testing.T) {
+		store, svc, mailer, user := setup(t)
+		if err := svc.SendLoginCode(context.Background(), user); err != nil {
+			t.Fatalf("SendLoginCode: %v", err)
+		}
+		code := sentCode(t, mailer, mail.TemplateLoginCode)
 
-		code := totpCode(secret, time.Now().Unix()/30)
-		_, token, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", code, "yandex", "1234567")
+		_, token, deviceToken, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", code, "yandex", "1234567", Device{})
 		if err != nil || token == "" {
 			t.Fatalf("привязка с кодом: err=%v token=%q", err, token)
 		}
+		if deviceToken == "" {
+			t.Fatal("браузер не запомнен — следующий вход снова потребует код")
+		}
 		if !store.createdIdentity {
 			t.Fatal("привязка не создана")
+		}
+	})
+
+	// Знакомому браузеру код не нужен и здесь: иначе привязка вела бы себя
+	// строже обычного входа, у которого те же доказательства.
+	t.Run("знакомый браузер — без кода", func(t *testing.T) {
+		store, svc, mailer, _ := setup(t)
+		store.deviceKnown = true
+
+		_, token, _, err := svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "correct-password", "", "yandex", "1234567", Device{Token: "known"})
+		if err != nil || token == "" {
+			t.Fatalf("привязка со знакомого браузера: err=%v token=%q", err, token)
+		}
+		if len(mailer.msgs) != 0 {
+			t.Fatalf("знакомому браузеру отправлено письмо: %+v", mailer.msgs)
 		}
 	})
 }
@@ -259,12 +287,12 @@ func TestLinkIdentityWithPassword_TimingEqualized(t *testing.T) {
 	svc := newService(store)
 
 	start := time.Now()
-	_, _, _ = svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "wrong-password", "", "yandex", "1")
+	_, _, _, _ = svc.LinkIdentityWithPassword(context.Background(), "o@y.ru", "wrong-password", "", "yandex", "1", Device{})
 	wrongPw := time.Since(start)
 
 	store.userExists = false
 	start = time.Now()
-	_, _, _ = svc.LinkIdentityWithPassword(context.Background(), "missing@y.ru", "any-password", "", "yandex", "1")
+	_, _, _, _ = svc.LinkIdentityWithPassword(context.Background(), "missing@y.ru", "any-password", "", "yandex", "1", Device{})
 	unknown := time.Since(start)
 
 	if unknown < wrongPw/5 {
@@ -282,7 +310,7 @@ func TestLoginWithIdentity_NewUserGetsProviderName(t *testing.T) {
 	user, _, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{
 		Provider: "yandex", ProviderUserID: "1234567", Email: "new@yandex.ru",
 		FirstName: "Иван", LastName: "Петров",
-	})
+	}, Device{})
 	if err != nil {
 		t.Fatalf("LoginWithIdentity: %v", err)
 	}
@@ -302,7 +330,7 @@ func TestLoginWithIdentity_ProviderDoesNotOverwriteName(t *testing.T) {
 	user, _, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{
 		Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru",
 		FirstName: "ИзЯндекса", LastName: "Петров",
-	})
+	}, Device{})
 	if err != nil {
 		t.Fatalf("LoginWithIdentity: %v", err)
 	}
@@ -324,7 +352,7 @@ func TestLoginWithIdentity_NoNameNoWrite(t *testing.T) {
 	// быть не должно вовсе: это вход, а не правка профиля.
 	if _, _, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{
 		Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru",
-	}); err != nil {
+	}, Device{}); err != nil {
 		t.Fatalf("LoginWithIdentity: %v", err)
 	}
 	if store.profileFilled {
@@ -342,7 +370,7 @@ func TestLoginWithIdentity_OversizedProviderNameDoesNotBlockLogin(t *testing.T) 
 	_, token, err := svc.LoginWithIdentity(context.Background(), IdentityProfile{
 		Provider: "yandex", ProviderUserID: "1234567", Email: "user@yandex.ru",
 		FirstName: strings.Repeat("я", MaxPersonNameLen+1),
-	})
+	}, Device{})
 	if err != nil {
 		t.Fatalf("вход отвергнут из-за длинного имени у провайдера: %v", err)
 	}

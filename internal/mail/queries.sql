@@ -46,3 +46,14 @@ WHERE id = $1;
 UPDATE outbox
 SET attempts = $2, next_attempt_at = $3, last_error = $4
 WHERE id = $1;
+
+-- name: DeleteDeliveredOutboxByTemplate :execrows
+-- Убирает из архива outbox доставленные письма, чей payload — действующий
+-- секрет (сегодня это только код входа).
+--
+-- Мина: без этой уборки HMAC кода в login_codes декоративен — тот же код лежал
+-- бы рядом открытым текстом и навсегда, потому что доставленные строки outbox
+-- не удаляются вовсе. Отбор по payload->>'template', индекса под это нет и не
+-- нужно: строк с sent_at IS NOT NULL немного, а гоняется запрос раз в час.
+DELETE FROM outbox
+WHERE payload->>'template' = @template::text AND sent_at IS NOT NULL AND sent_at <= @sent_before;

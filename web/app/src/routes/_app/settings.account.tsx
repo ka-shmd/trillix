@@ -9,10 +9,13 @@ import {
   providersQueryOptions,
   useChangePassword,
   useDeleteAccount,
+  devicesQueryOptions,
   useDisableTwoFactor,
   useEnableTwoFactor,
+  useForgetAllDevices,
+  useForgetDevice,
   useRequestEmailChange,
-  useSetupTwoFactor,
+  useSendActionCode,
   useRefreshIdentities,
   useUnlinkIdentity,
   useUpdateProfile,
@@ -134,19 +137,7 @@ function DeleteAccountSection({ user }: { user: User }) {
             </div>
           )}
           {user.twoFactorEnabled && (
-            <div>
-              <Label htmlFor="delete-code" className="mb-2 block">
-                Код из приложения или резервный
-              </Label>
-              <Input
-                id="delete-code"
-                inputMode="numeric"
-                autoComplete="one-time-code"
-                value={code}
-                onChange={(e) => setCode(e.target.value)}
-                placeholder="123456"
-              />
-            </div>
+            <CodeField id="delete-code" value={code} onChange={setCode} />
           )}
 
           <div className="flex items-center gap-3">
@@ -535,21 +526,7 @@ function EmailForm({ user }: { user: User }) {
             />
           </div>
         )}
-        {user.twoFactorEnabled && (
-          <div>
-            <Label htmlFor="email-code" className="mb-2 block">
-              Код из приложения или резервный
-            </Label>
-            <Input
-              id="email-code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="123456"
-            />
-          </div>
-        )}
+        {user.twoFactorEnabled && <CodeField id="email-code" value={code} onChange={setCode} />}
 
         <div>
           <Button type="submit" disabled={!ready || request.isPending}>
@@ -741,175 +718,180 @@ function linkOutcomeText(link: 'ok' | 'conflict' | 'expired' | 'failed'): string
   }
 }
 
-// TwoFactorSection — второй фактор (слайс F). Три состояния: выключен, идёт
-// настройка (секрет показан, кода ещё не было) и включён. Ремаунт по флагу
-// сбрасывает промежуточное состояние, когда фактор включился или выключился.
+// CodeField — поле кода из письма с кнопкой «прислать». Общее для трёх форм
+// (смена адреса, удаление аккаунта, выключение фактора): у аккаунта с включённым
+// фактором код взять больше негде, и форма, спрашивающая его без кнопки, была бы
+// тупиком.
+function CodeField({
+  id,
+  value,
+  onChange,
+}: {
+  id: string
+  value: string
+  onChange: (v: string) => void
+}) {
+  const send = useSendActionCode()
+  return (
+    <div>
+      <Label htmlFor={id} className="mb-2 block">
+        Код из письма
+      </Label>
+      <div className="flex items-start gap-2">
+        <Input
+          id={id}
+          inputMode="numeric"
+          autoComplete="one-time-code"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="123456"
+        />
+        <Button
+          type="button"
+          variant="outline"
+          onClick={() => send.mutate()}
+          disabled={send.isPending}
+        >
+          {send.isPending ? 'Отправляем…' : 'Прислать код'}
+        </Button>
+      </div>
+      {send.isSuccess && !send.isPending && (
+        <p className="mt-2 text-sm text-muted-foreground">
+          Письмо с кодом отправлено. Оно приходит в течение минуты.
+        </p>
+      )}
+      {send.isError && (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {twoFactorErrorText(send.error)}
+        </p>
+      )}
+    </div>
+  )
+}
+
+// TwoFactorSection — второй фактор: код на почту при входе с незнакомого
+// устройства (docs/design/two-factor-email.md). Ремаунт по флагу сбрасывает
+// поле пароля, когда фактор включился или выключился.
 function TwoFactorSection({ user }: { user: User }) {
-  const setup = useSetupTwoFactor()
   const enable = useEnableTwoFactor()
   const disable = useDisableTwoFactor()
-  const [code, setCode] = useState('')
   const [password, setPassword] = useState('')
-  const [codes, setCodes] = useState<string[] | null>(null)
-
-  // Резервные коды показываются РОВНО ОДИН РАЗ: в базе лежат хеши, и повторно
-  // достать их нельзя ни нам, ни тому, кто получит дамп.
-  if (codes) {
-    return (
-      <section className="flex flex-col gap-4 border-t pt-8">
-        <div>
-          <h2 className="text-lg font-medium">Резервные коды</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            Сохраните их сейчас: второй раз мы их не покажем. Каждый код работает один раз и
-            заменяет код из приложения, если телефон потерян.
-          </p>
-        </div>
-        <ul className="grid gap-1 rounded-lg border p-4 font-mono text-sm sm:grid-cols-2">
-          {codes.map((c) => (
-            <li key={c}>{c}</li>
-          ))}
-        </ul>
-        <div>
-          <Button variant="outline" onClick={() => setCodes(null)}>
-            Я сохранил коды
-          </Button>
-        </div>
-      </section>
-    )
-  }
-
-  if (user.twoFactorEnabled) {
-    return (
-      <section className="flex flex-col gap-4 border-t pt-8">
-        <div>
-          <h2 className="text-lg font-medium">Двухфакторная аутентификация включена</h2>
-          <p className="mt-1 text-sm text-muted-foreground">
-            При входе после пароля запрашивается код из приложения.
-          </p>
-        </div>
-        <form
-          className="flex flex-col gap-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            disable.mutate({ currentPassword: password, code: code.trim() })
-          }}
-        >
-          {user.hasPassword && (
-            <div>
-              <Label htmlFor="disable-password" className="mb-2 block">
-                Текущий пароль
-              </Label>
-              <Input
-                id="disable-password"
-                type="password"
-                autoComplete="current-password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-              />
-            </div>
-          )}
-          <div>
-            <Label htmlFor="disable-code" className="mb-2 block">
-              Код из приложения или резервный
-            </Label>
-            {/* Код обязателен и здесь: снять второй фактор, не предъявив второй
-                фактор, значит его не иметь. */}
-            <Input
-              id="disable-code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="123456"
-            />
-          </div>
-          <div>
-            <Button
-              type="submit"
-              variant="outline"
-              disabled={
-                code.trim() === '' || (user.hasPassword && password === '') || disable.isPending
-              }
-            >
-              {disable.isPending ? 'Выключаем…' : 'Выключить'}
-            </Button>
-          </div>
-          {disable.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {twoFactorErrorText(disable.error)}
-            </p>
-          )}
-        </form>
-      </section>
-    )
-  }
+  const on = user.twoFactorEnabled
+  const pending = enable.isPending || disable.isPending
+  // Пароль спрашиваем, только если он есть: у аккаунта через провайдера
+  // доказательством служит сама сессия, как и везде в настройках.
+  const ready = !user.hasPassword || password !== ''
 
   return (
     <section className="flex flex-col gap-4 border-t pt-8">
       <div>
         <h2 className="text-lg font-medium">Двухфакторная аутентификация</h2>
         <p className="mt-1 text-sm text-muted-foreground">
-          Дополнительный код при входе — из приложения-аутентификатора на телефоне.
+          {on
+            ? 'При входе с нового устройства после пароля запрашивается код из письма. На этом компьютере код спрашивать не будем.'
+            : 'Вход с незнакомого устройства будет требовать код, отправленный на почту аккаунта.'}
         </p>
       </div>
-
-      {!setup.data ? (
-        <div>
-          <Button onClick={() => setup.mutate()} disabled={setup.isPending}>
-            {setup.isPending ? 'Готовим…' : 'Включить'}
-          </Button>
-          {setup.isError && (
-            <p role="alert" className="mt-2 text-sm text-destructive">
-              {twoFactorErrorText(setup.error)}
-            </p>
-          )}
-        </div>
-      ) : (
-        <form
-          className="flex flex-col gap-4"
-          onSubmit={(e) => {
-            e.preventDefault()
-            enable.mutate({ code: code.trim() }, { onSuccess: (issued) => setCodes(issued) })
-          }}
-        >
-          <div className="rounded-lg border p-4">
-            <p className="text-sm">Введите этот ключ в приложении:</p>
-            <p className="mt-2 font-mono text-sm break-all">{setup.data.secret}</p>
-            {/* QR не рисуем (решение владельца): на телефоне эта ссылка
-                открывает приложение сама, на компьютере ключ вводят руками. */}
-            <a
-              href={setup.data.otpauthUrl}
-              className="mt-3 inline-block text-sm text-primary underline-offset-4 hover:underline"
-            >
-              Открыть в приложении
-            </a>
-          </div>
+      <form
+        className="flex flex-col gap-4"
+        onSubmit={(e) => {
+          e.preventDefault()
+          if (!ready) return
+          const body = { currentPassword: password }
+          if (on) disable.mutate(body)
+          else enable.mutate(body)
+        }}
+      >
+        {user.hasPassword && (
           <div>
-            <Label htmlFor="enable-code" className="mb-2 block">
-              Код из приложения
+            <Label htmlFor="2fa-password" className="mb-2 block">
+              Текущий пароль
             </Label>
             <Input
-              id="enable-code"
-              inputMode="numeric"
-              autoComplete="one-time-code"
-              value={code}
-              onChange={(e) => setCode(e.target.value)}
-              placeholder="123456"
+              id="2fa-password"
+              type="password"
+              autoComplete="current-password"
+              value={password}
+              onChange={(e) => setPassword(e.target.value)}
             />
           </div>
-          <div>
-            <Button type="submit" disabled={code.trim() === '' || enable.isPending}>
-              {enable.isPending ? 'Проверяем…' : 'Подтвердить и включить'}
-            </Button>
-          </div>
-          {enable.isError && (
-            <p role="alert" className="text-sm text-destructive">
-              {twoFactorErrorText(enable.error)}
-            </p>
-          )}
-        </form>
-      )}
+        )}
+        <div>
+          <Button type="submit" variant={on ? 'outline' : 'default'} disabled={!ready || pending}>
+            {pending ? 'Сохраняем…' : on ? 'Выключить' : 'Включить'}
+          </Button>
+        </div>
+        {(enable.isError || disable.isError) && (
+          <p role="alert" className="text-sm text-destructive">
+            {twoFactorErrorText(enable.error ?? disable.error)}
+          </p>
+        )}
+      </form>
+
+      {on && <DevicesList />}
     </section>
+  )
+}
+
+// DevicesList — устройства, которым код больше не нужен. Показывается только при
+// включённом факторе: с выключенным строк нет и быть не может (бэк забывает их
+// при выключении).
+function DevicesList() {
+  const { data: devices, isPending, isError } = useQuery(devicesQueryOptions)
+  const forget = useForgetDevice()
+  const forgetAll = useForgetAllDevices()
+
+  if (isPending) return <p className="text-sm text-muted-foreground">Загружаем устройства…</p>
+  if (isError) {
+    return (
+      <p role="alert" className="text-sm text-destructive">
+        Не удалось загрузить список устройств.
+      </p>
+    )
+  }
+  if (devices.length === 0) {
+    return (
+      <p className="text-sm text-muted-foreground">
+        Знакомых устройств пока нет: код спросят при первом входе с любого браузера.
+      </p>
+    )
+  }
+
+  return (
+    <div className="flex flex-col gap-3">
+      <h3 className="text-sm font-semibold">Устройства без кода</h3>
+      <ul className="divide-y rounded-lg border">
+        {devices.map((d) => (
+          <li key={d.id} className="flex items-center justify-between gap-4 px-4 py-3">
+            <div className="min-w-0">
+              <p className="truncate text-sm">
+                {d.label}
+                {d.current && <span className="text-muted-foreground"> · это устройство</span>}
+              </p>
+              <p className="text-sm text-muted-foreground">
+                последний вход {formatDate(d.lastSeenAt)}
+              </p>
+            </div>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => forget.mutate(d.id)}
+              disabled={forget.isPending}
+            >
+              Забыть
+            </Button>
+          </li>
+        ))}
+      </ul>
+      <div>
+        <Button variant="outline" onClick={() => forgetAll.mutate()} disabled={forgetAll.isPending}>
+          {forgetAll.isPending ? 'Забываем…' : 'Забыть все и выйти на других устройствах'}
+        </Button>
+        <p className="mt-2 text-sm text-muted-foreground">
+          Все сеансы, кроме текущего, будут завершены.
+        </p>
+      </div>
+    </div>
   )
 }
 

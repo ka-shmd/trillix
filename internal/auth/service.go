@@ -89,14 +89,18 @@ type Store interface {
 	UpdateUserEmail(ctx context.Context, db postgres.DBTX, userID uuid.UUID, email string) (User, error)
 	DeleteExpiredEmailChangeTokens(ctx context.Context, db postgres.DBTX) (int64, error)
 	DeleteExpiredEmailVerificationTokens(ctx context.Context, db postgres.DBTX) (int64, error)
-	UpsertTOTPSecret(ctx context.Context, db postgres.DBTX, userID uuid.UUID, secret []byte) error
-	GetTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (TOTPState, error)
-	ConfirmTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) error
-	MarkTOTPStep(ctx context.Context, db postgres.DBTX, userID uuid.UUID, step int64) (bool, error)
-	DeleteTOTP(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
-	CreateRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) error
-	ConsumeRecoveryCode(ctx context.Context, db postgres.DBTX, codeHash []byte, userID uuid.UUID) (bool, error)
-	DeleteRecoveryCodes(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
+	SetTwoFactorEnabled(ctx context.Context, db postgres.DBTX, userID uuid.UUID, enabled bool) error
+	UpsertLoginCode(ctx context.Context, db postgres.DBTX, userID uuid.UUID, codeHash []byte, expiresAt time.Time) error
+	ConsumeLoginCodeAttempt(ctx context.Context, db postgres.DBTX, userID uuid.UUID, maxAttempts int16) ([]byte, error)
+	DeleteLoginCode(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
+	DeleteExpiredLoginCodes(ctx context.Context, db postgres.DBTX) (int64, error)
+	CreateKnownDevice(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID, tokenHash []byte, label string, expiresAt time.Time) error
+	TouchKnownDevice(ctx context.Context, db postgres.DBTX, tokenHash []byte, userID uuid.UUID) (bool, error)
+	ListKnownDevices(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]KnownDevice, error)
+	DeleteKnownDevice(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID) (bool, error)
+	DeleteKnownDevicesByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
+	DeleteExpiredKnownDevices(ctx context.Context, db postgres.DBTX) (int64, error)
+	DeleteSessionsByUserExcept(ctx context.Context, db postgres.DBTX, userID uuid.UUID, tokenHash []byte) error
 }
 
 var _ Store = Repo{}
@@ -125,11 +129,11 @@ type Service struct {
 	// appBaseURL — origin кабинета, из которого строится ссылка сброса в письме
 	// (${appBaseURL}/reset-password?token=…). Совпадает с cfg.AppOrigin.
 	appBaseURL string
-	// totpSecretKey — сырой секрет окружения (FORM_TOKEN_SECRET), из которого
-	// HKDF выводит ключ шифрования секретов второго фактора. Пустой = второй
-	// фактор не сконфигурирован, и его эндпоинты отвечают ошибкой, а не пишут
-	// в базу мусор (фаза 23, слайс F).
-	totpSecretKey []byte
+	// loginCodeKey — сырой секрет окружения (FORM_TOKEN_SECRET), которым
+	// подписывается HMAC кода входа (0056). Пустой = второй фактор не
+	// сконфигурирован, и его эндпоинты отвечают ошибкой, а не пишут в базу
+	// мусор.
+	loginCodeKey []byte
 	// teams — источник ответа «мешают ли удалению аккаунта его команды»
 	// (реализация — *workspaces.Service, подключается WithTeams). nil =
 	// удаление аккаунта не сконфигурировано и отвечает ошибкой, а не догадкой.
@@ -164,11 +168,11 @@ func (s *Service) WithTeams(t teamOwnership) *Service {
 	return s
 }
 
-// WithTOTPKey подключает шифрование секретов второго фактора. Отдельный метод,
-// а не седьмой аргумент NewService: ключ параметризует один узел, а не всю
-// сборку сервиса (тот же приём, что у WithPasswordReset у транспорта).
-func (s *Service) WithTOTPKey(key []byte) *Service {
-	s.totpSecretKey = key
+// WithLoginCodeKey подключает ключ, которым подписываются коды входа. Отдельный
+// метод, а не седьмой аргумент NewService: ключ параметризует один узел, а не
+// всю сборку сервиса (тот же приём, что у WithPasswordReset у транспорта).
+func (s *Service) WithLoginCodeKey(key []byte) *Service {
+	s.loginCodeKey = key
 	return s
 }
 
@@ -232,7 +236,7 @@ func (s *Service) Register(ctx context.Context, email, password string) (User, s
 // Login проверяет пароль и открывает сессию. Время ответа одинаково для
 // «нет такого email» и «неверный пароль»: в обоих случаях выполняется одна
 // argon2-проверка (для несуществующего email — против фиктивного хеша).
-func (s *Service) Login(ctx context.Context, email, password string) (User, string, error) {
+func (s *Service) Login(ctx context.Context, email, password string, dev Device) (User, string, error) {
 	email = normalizeEmail(email)
 
 	user, err := s.repo.GetUserByEmail(ctx, s.db, email)
@@ -261,8 +265,9 @@ func (s *Service) Login(ctx context.Context, email, password string) (User, stri
 		return User{}, "", domain.ErrInvalidCredentials
 	}
 
-	// Пароль верен — но это ещё не вход, если включён второй фактор (слайс F).
-	return s.sessionOrChallenge(ctx, user)
+	// Пароль верен — но это ещё не вход, если включён второй фактор и браузер
+	// незнаком (0056).
+	return s.sessionOrChallenge(ctx, user, dev)
 }
 
 // Logout удаляет сессию по её токену. Отсутствие сессии — не ошибка.
