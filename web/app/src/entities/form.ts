@@ -41,6 +41,16 @@ export const formSchema = z.object({
   visitSubmittedCount: z.number().int(),
 })
 
+// Свежесозданная форма — ровно то, что нужно, чтобы в неё перейти. Отдаётся
+// ручкой создания из шаблона (internal/templates): у только что заведённой формы
+// счётчики и публикация пусты по определению, и отдавать карточку целиком значило
+// бы держать вторую копию её DTO в чужом модуле.
+//
+// `pick` от карточки, а не своё описание полей: разъехаться этим двум типам
+// нечем.
+export const createdFormSchema = formSchema.pick({ id: true, slug: true, title: true })
+export type CreatedForm = z.infer<typeof createdFormSchema>
+
 export type Form = z.infer<typeof formSchema>
 
 // Дефолт названия с бэкенда (internal/forms/service.go) для формы без имени. В UI

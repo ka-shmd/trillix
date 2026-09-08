@@ -3,6 +3,7 @@ import { Link, useNavigate } from '@tanstack/react-router'
 import {
   CircleSlash,
   CopyPlus,
+  LayoutTemplate,
   Link2,
   MoreHorizontal,
   Pencil,
@@ -14,6 +15,7 @@ import { toast } from 'sonner'
 import { type Form, displayFormName } from '../../entities/form'
 import { copyFormLink } from './copyLink'
 import { useDeleteForm, useDuplicateForm, useUnpublishForm, useUpdateFormName } from './queries'
+import { useSaveFormAsTemplate } from './templates/queries'
 import {
   AlertDialog,
   AlertDialogAction,
@@ -42,9 +44,10 @@ import {
 } from '@/components/ui/dropdown-menu'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Textarea } from '@/components/ui/textarea'
 
 // Меню действий над формой: редактировать, переименовать, копировать ссылку,
-// дублировать, закрыть приём, удалить. ОДНО на две поверхности — заголовок страницы
+// дублировать, сохранить как шаблон, закрыть приём, удалить. ОДНО на две поверхности — заголовок страницы
 // формы и строку списка: одинаковое «⋯» над одним объектом обязано открывать
 // одинаковый набор, иначе на память опереться нельзя.
 //
@@ -81,7 +84,9 @@ export function FormActionsMenu({
   const remove = useDeleteForm()
   const unpublish = useUnpublishForm()
   const [renaming, setRenaming] = useState(false)
+  const [saving, setSaving] = useState(false)
   const [confirmDelete, setConfirmDelete] = useState(false)
+  const saveAsTemplate = useSaveFormAsTemplate()
   const label = displayFormName(form)
 
   // Дублирование НЕ уводит с формы: человек нажал действие над той, что открыта, и
@@ -154,6 +159,10 @@ export function FormActionsMenu({
             <Link2 className="size-4" />
             Копировать ссылку
           </DropdownMenuItem>
+          <DropdownMenuItem onSelect={() => setSaving(true)}>
+            <LayoutTemplate className="size-4" />
+            Сохранить как шаблон
+          </DropdownMenuItem>
           <DropdownMenuItem onSelect={handleDuplicate} disabled={duplicate.isPending}>
             <CopyPlus className="size-4" />
             {duplicate.isPending ? 'Дублируем…' : 'Дублировать'}
@@ -177,6 +186,25 @@ export function FormActionsMenu({
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>
+
+      <SaveAsTemplateDialog
+        open={saving}
+        onOpenChange={setSaving}
+        initial={label}
+        pending={saveAsTemplate.isPending}
+        onSubmit={(title, description) =>
+          saveAsTemplate.mutate(
+            { formId: form.id, title, description },
+            {
+              onSuccess: (template) => {
+                setSaving(false)
+                toast.success(`Шаблон «${template.title}» сохранён — он в разделе «Шаблоны»`)
+              },
+              onError: () => toast.error('Не удалось сохранить шаблон'),
+            },
+          )
+        }
+      />
 
       <RenameDialog
         open={renaming}
@@ -270,6 +298,95 @@ function RenameDialog({
             </Button>
             <Button type="submit" disabled={pending || !trimmed}>
               {pending ? 'Сохраняем…' : 'Сохранить'}
+            </Button>
+          </DialogFooter>
+        </form>
+      </DialogContent>
+    </Dialog>
+  )
+}
+
+// Сохранение формы шаблоном пространства: название на полке галереи и строка о
+// том, чем шаблон полезен.
+//
+// Копируется ДОКУМЕНТ формы — вопросы, оформление, обложка, логотип. Настройки
+// вне документа (пароль, лимит ответов, письма, интеграции, расписание записи) в
+// шаблон не едут, и окно говорит об этом вслух: иначе автор ждал бы от заготовки
+// своих уведомлений.
+function SaveAsTemplateDialog({
+  open,
+  onOpenChange,
+  initial,
+  pending,
+  onSubmit,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  initial: string
+  pending: boolean
+  onSubmit: (title: string, description: string) => void
+}) {
+  const [title, setTitle] = useState(initial)
+  const [description, setDescription] = useState('')
+  const trimmed = title.trim()
+
+  return (
+    <Dialog
+      open={open}
+      onOpenChange={(next) => {
+        // Открытие возвращает поля к исходному — тот же сброс и по той же причине,
+        // что у переименования: окно живёт дольше одного показа.
+        if (next) {
+          setTitle(initial)
+          setDescription('')
+        }
+        onOpenChange(next)
+      }}
+    >
+      <DialogContent className="sm:max-w-md">
+        <form
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (trimmed) onSubmit(trimmed, description.trim())
+          }}
+        >
+          <DialogHeader>
+            <DialogTitle>Сохранить как шаблон</DialogTitle>
+            <DialogDescription>
+              Шаблон увидят все участники пространства. В него поедут вопросы и оформление формы;
+              настройки приёма — пароль, лимит ответов, письма и интеграции — останутся только у
+              самой формы.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="my-4 flex flex-col gap-4">
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="template-title">Название шаблона</Label>
+              <Input
+                id="template-title"
+                value={title}
+                onChange={(e) => setTitle(e.target.value)}
+                autoFocus
+                maxLength={200}
+              />
+            </div>
+            <div className="flex flex-col gap-2">
+              <Label htmlFor="template-description">Чем полезен</Label>
+              <Textarea
+                id="template-description"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="Строка под названием в галерее — необязательно"
+                maxLength={500}
+                rows={3}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+              Отмена
+            </Button>
+            <Button type="submit" disabled={pending || !trimmed}>
+              {pending ? 'Сохраняем…' : 'Сохранить шаблон'}
             </Button>
           </DialogFooter>
         </form>

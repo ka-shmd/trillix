@@ -11,46 +11,84 @@ import {
   RouterProvider,
 } from '@tanstack/react-router'
 
-import { TemplatesView } from './TemplatesView'
-import { TEMPLATES, questionCaptions } from './templates'
+import { type Block, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
 
-// Сторожа на то, что ломается МОЛЧА. Плитка теперь показывает саму форму, и обещание
+import { TemplatesView } from './TemplatesView'
+
+// Сторожа на то, что ломается МОЛЧА. Плитка показывает саму форму, и обещание
 // «увидишь то же, что получишь» не проверяется ни типами, ни тестом на поведение:
 // подмени лист картинкой-заглушкой — экран продолжит работать, а обещание исчезнет.
 // Второе такое место — `inert` на миниатюре: без него каждая плитка приводит тому,
-// кто ходит табом, семь полей, в которые нельзя писать.
+// кто ходит табом, семь полей, в которые нельзя писать. Третье — провайдеры `@fields`
+// на листе: шаблон теперь снят с ЖИВОЙ формы, и в нём бывает всё, что автор поставил
+// на полотно.
 
-const FORM = {
-  id: 'f-1',
-  name: null,
+const FIELD = 'blk_name'
+
+// Документ публичного шаблона: заголовок формы, вопрос с подписью, подстановка
+// ответа в подписи второго вопроса и запись на время. Последние два — ровно то,
+// чего у встроенных шаблонов не бывало и что приезжает из живой формы.
+const blocks: Block[] = [
+  { id: 'blk_h', groupId: 'grp_h', type: 'form_title', text: textFromString('Обратная связь') },
+  { id: 'blk_c1', groupId: 'grp_1', type: 'title', text: textFromString('Как вас зовут?') },
+  { id: FIELD, groupId: 'grp_1', type: 'short_text' },
+  {
+    id: 'blk_c2',
+    groupId: 'grp_2',
+    type: 'title',
+    text: [{ t: 'Когда вам удобно, ' }, { t: 'ваше имя', ref: FIELD }, { t: '?' }],
+  },
+  { id: 'blk_slot', groupId: 'grp_2', type: 'slot' },
+]
+
+const PUBLIC = {
+  id: 'tpl-public',
   title: 'Обратная связь',
-  slug: 'obratnaya-svyaz',
-  status: 'draft',
-  createdAt: '2026-09-08T10:00:00Z',
-  updatedAt: '2026-09-08T10:00:00Z',
-  publishedVersion: null,
-  publishedVersionId: null,
-  hasUnpublishedChanges: false,
-  submissionCount: 0,
-  lastSubmissionAt: null,
-  visitCount: 0,
-  visitSubmittedCount: 0,
+  description: 'Заготовка сервиса',
+  schema: { schemaVersion: SCHEMA_VERSION, blocks },
+  visibility: 'public',
+  workspaceId: null,
 }
 
+const OWN = {
+  id: 'tpl-own',
+  title: 'Бриф студии',
+  description: 'Наш шаблон пространства',
+  schema: {
+    schemaVersion: SCHEMA_VERSION,
+    blocks: [
+      { id: 'blk_h2', groupId: 'grp_h2', type: 'form_title', text: textFromString('Бриф студии') },
+      { id: 'blk_c3', groupId: 'grp_3', type: 'title', text: textFromString('Что за проект?') },
+      { id: 'blk_f3', groupId: 'grp_3', type: 'long_text' },
+    ],
+  },
+  visibility: 'private',
+  workspaceId: 'ws-1',
+}
+
+const CREATED = { id: 'f-1', slug: 'obratnaya-svyaz', title: 'Обратная связь' }
+
 let calls: string[] = []
+
+function json(body: unknown): Promise<Response> {
+  return Promise.resolve(
+    new Response(JSON.stringify(body), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }),
+  )
+}
 
 beforeEach(() => {
   calls = []
   vi.stubGlobal(
     'fetch',
     vi.fn((url: string, init?: RequestInit) => {
-      calls.push(`${init?.method ?? 'GET'} ${url}`)
-      return Promise.resolve(
-        new Response(JSON.stringify(FORM), {
-          status: 200,
-          headers: { 'Content-Type': 'application/json' },
-        }),
-      )
+      const method = init?.method ?? 'GET'
+      calls.push(`${method} ${url}`)
+      if (method === 'GET') return json({ items: [PUBLIC, OWN] })
+      if (url.endsWith('/use')) return json(CREATED)
+      return Promise.resolve(new Response(null, { status: 204 }))
     }),
   )
 })
@@ -86,22 +124,41 @@ async function renderGallery() {
   await act(async () => {
     await router.load()
   })
+  await screen.findByRole('button', { name: `Посмотреть шаблон «${PUBLIC.title}»` })
+  return router
 }
 
-const first = TEMPLATES[0]!
+// Плитка ищется по своей растянутой кнопке: у карточки нет ни роли, ни имени, а
+// кнопка называет шаблон словами (она же — единственный способ его открыть).
+function tileOf(title: string): HTMLElement {
+  return screen.getByRole('button', { name: `Посмотреть шаблон «${title}»` }).parentElement!
+}
+
+it('галерея берёт шаблоны с сервера — одним запросом, с пространством в адресе', async () => {
+  await renderGallery()
+
+  expect(calls).toEqual(['GET /api/v1/templates?workspaceId=ws-1'])
+})
 
 it('плитка показывает саму форму, а не рассказ о ней', async () => {
   await renderGallery()
-  const tile = screen.getByRole('button', {
-    name: `Посмотреть шаблон «${first.title}»`,
-  }).parentElement!
+  const tile = tileOf(PUBLIC.title)
 
   // Заголовок формы и её вопросы стоят в плитке разметкой полотна (rf-*), а не
   // строчками списка: подмена листа заглушкой уронит этот тест.
   expect(tile.querySelector('.rf-page')).not.toBeNull()
-  for (const caption of questionCaptions(first)) {
-    expect(within(tile).getAllByText(caption).length).toBeGreaterThan(0)
-  }
+  expect(within(tile).getAllByText('Как вас зовут?').length).toBeGreaterThan(0)
+})
+
+it('лист надевает провайдеры @fields — запись рисуется, подстановка не выдаёт имя вопроса', async () => {
+  await renderGallery()
+  const tile = tileOf(PUBLIC.title)
+
+  // МИНА. Без SlotStubProvider вопрос записи нарисовался бы пустотой, без
+  // MentionContext подстановка `@` — именем вопроса («ваше имя») вместо ответа.
+  // Оба отказа тихие: экран продолжает работать, показывая не ту форму.
+  expect(tile.querySelector('.rf-slots--stub')).not.toBeNull()
+  expect(within(tile).queryByText(/ваше имя/)).toBeNull()
 })
 
 it('контролы листа не disabled — иначе показывался бы не тот вид', async () => {
@@ -125,17 +182,43 @@ it('миниатюра inert — поля формы не забирают та�
   expect(thumb.getAttribute('aria-hidden')).toBe('true')
 })
 
-it('нажатие на плитку открывает просмотр, оттуда заводится форма', async () => {
+it('вкладки разводят витрину и шаблоны пространства', async () => {
   await renderGallery()
-  fireEvent.click(screen.getByRole('button', { name: `Посмотреть шаблон «${first.title}»` }))
+
+  // Первой стоит витрина: своих шаблонов у нового пространства нет.
+  expect(screen.queryByRole('button', { name: `Посмотреть шаблон «${OWN.title}»` })).toBeNull()
+
+  // Вкладка переключается нажатием мыши, а не click(): Radix слушает mousedown.
+  fireEvent.mouseDown(screen.getByRole('tab', { name: 'Мои' }))
+
+  await screen.findByRole('button', { name: `Посмотреть шаблон «${OWN.title}»` })
+  expect(screen.queryByRole('button', { name: `Посмотреть шаблон «${PUBLIC.title}»` })).toBeNull()
+  // Удаление есть только у своего: витрина правится там же, где заводится.
+  expect(screen.getByRole('button', { name: `Действия с шаблоном «${OWN.title}»` })).toBeTruthy()
+})
+
+it('нажатие на плитку открывает просмотр, оттуда заводится форма', async () => {
+  const router = await renderGallery()
+  fireEvent.click(screen.getByRole('button', { name: `Посмотреть шаблон «${PUBLIC.title}»` }))
 
   const dialog = await screen.findByRole('dialog')
-  expect(within(dialog).getByText(first.description)).toBeTruthy()
-  // Окно называет, сколько вопросов получит автор.
-  expect(within(dialog).getByText(new RegExp(`^${questionCaptions(first).length}\\s`))).toBeTruthy()
+  expect(within(dialog).getByText(PUBLIC.description)).toBeTruthy()
+  // Окно называет, сколько вопросов получит автор: отвечаемых блоков документа
+  // (поле имени и запись), а не всех подряд.
+  expect(within(dialog).getByText(/^2\s/)).toBeTruthy()
 
   fireEvent.click(within(dialog).getByRole('button', { name: 'Использовать шаблон' }))
 
-  // Два запроса подряд: пустая форма, затем её черновик (queries.ts).
-  await waitFor(() => expect(calls).toEqual(['POST /api/v1/forms', 'PATCH /api/v1/forms/f-1']))
+  // ОДИН запрос, а не пара «создать форму + записать черновик»: сорванный второй
+  // оставлял бы на дашборде пустую форму.
+  await waitFor(() =>
+    expect(calls).toEqual([
+      'GET /api/v1/templates?workspaceId=ws-1',
+      'POST /api/v1/templates/tpl-public/use',
+    ]),
+  )
+  // И уводит в редактор заведённой формы — по slug из ответа.
+  await waitFor(() =>
+    expect(router.state.location.pathname).toBe('/w/team/forms/obratnaya-svyaz/edit'),
+  )
 })

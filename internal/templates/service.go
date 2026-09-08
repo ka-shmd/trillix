@@ -119,9 +119,18 @@ func (s *Service) SaveFromForm(ctx context.Context, userID, formID uuid.UUID, ti
 	}
 	// Документ проверяется на входе в шаблон, а не на выходе из него: битую
 	// схему (её могла оставить только правка мимо продукта) честнее не пустить
-	// в витрину, чем однажды отдать создателю формы 422 на чужой ошибке.
-	if _, err := domain.ValidateSchema(form.DraftSchema); err != nil {
+	// в галерею, чем однажды отдать создателю формы 422 на чужой ошибке.
+	parsed, err := domain.ValidateSchema(form.DraftSchema)
+	if err != nil {
 		return Template{}, err
+	}
+	// Заголовок дописывается в документ, если тот о нём не высказался. Иначе
+	// шаблон формы, ни разу не открытой в редакторе, приезжал бы в галерею без
+	// заголовка (колонка forms.title в документе не лежит — её синтезирует
+	// EnsureFormTitle на чтении черновика, а шаблон читается не тем путём).
+	doc, err := json.Marshal(domain.EnsureFormTitle(parsed, form.Title, form.ID.String()))
+	if err != nil {
+		return Template{}, fmt.Errorf("marshal form schema %s: %w", formID, err)
 	}
 	return s.repo.Create(ctx, s.db, Template{
 		ID:          domain.NewID(),
@@ -129,7 +138,7 @@ func (s *Service) SaveFromForm(ctx context.Context, userID, formID uuid.UUID, ti
 		AuthorID:    userID,
 		Title:       title,
 		Description: description,
-		Schema:      form.DraftSchema,
+		Schema:      doc,
 		Visibility:  VisibilityPrivate,
 	})
 }
