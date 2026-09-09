@@ -399,6 +399,12 @@ func TestPlanForm_TextAndDates(t *testing.T) {
 		// Строгое отрицание, как у is_not: пара «отвечен И не содержит» складывается группой.
 		{"не содержит у неотвеченного — истинно", leaf("txt", OpNotContains, "иван"), map[string]any{}, true},
 		{"содержит у числового источника — инертен", leaf("num", OpContains, "5"), map[string]any{"num": "5"}, true},
+		{"начинается с", leaf("txt", OpStartsWith, "иван"), map[string]any{"txt": "Иванов Иван"}, true},
+		{"начинается с: не начало", leaf("txt", OpStartsWith, "иван"), map[string]any{"txt": "Пётр Иванов"}, false},
+		{"не начинается с", leaf("txt", OpNotStartsWith, "иван"), map[string]any{"txt": "Пётр"}, true},
+		{"заканчивается на", leaf("txt", OpEndsWith, "ов"), map[string]any{"txt": "Иванов"}, true},
+		{"заканчивается на: не конец", leaf("txt", OpEndsWith, "ов"), map[string]any{"txt": "Иванова"}, false},
+		{"не заканчивается на", leaf("txt", OpNotEndsWith, "ов"), map[string]any{"txt": "Иванова"}, true},
 		{"дата позже", leaf("day", OpGt, "2026-01-01"), map[string]any{"day": "2026-05-01"}, true},
 		{"дата не позже", leaf("day", OpGt, "2026-05-01"), map[string]any{"day": "2026-01-01"}, false},
 		{"дата раньше", leaf("day", OpLt, "2026-05-01"), map[string]any{"day": "2026-01-01"}, true},

@@ -59,16 +59,17 @@ const (
 type LogicOp string
 
 const (
-	// Наличие ответа — у любого отвечаемого типа.
-	OpAnswered LogicOp = "answered"
-	OpEmpty    LogicOp = "empty"
 	// Равенство: id варианта у одиночного выбора, число у шкалы и number, ConsentYes у
 	// согласия, точная строка у текстовых.
 	OpIs    LogicOp = "is"
 	OpIsNot LogicOp = "is_not"
-	// Подстрока — только у текстовых типов.
-	OpContains    LogicOp = "contains"
-	OpNotContains LogicOp = "not_contains"
+	// Текстовые типы: подстрока, начало и конец ответа.
+	OpContains      LogicOp = "contains"
+	OpNotContains   LogicOp = "not_contains"
+	OpStartsWith    LogicOp = "starts_with"
+	OpNotStartsWith LogicOp = "not_starts_with"
+	OpEndsWith      LogicOp = "ends_with"
+	OpNotEndsWith   LogicOp = "not_ends_with"
 	// Множественный выбор: содержит ли ответ этот вариант.
 	OpIncludes LogicOp = "includes"
 	OpExcludes LogicOp = "excludes"
@@ -78,16 +79,22 @@ const (
 	OpLt  LogicOp = "lt"
 	OpGte LogicOp = "gte"
 	OpLte LogicOp = "lte"
+	// Наличие ответа — у любого отвечаемого типа. В списке у автора идёт последним:
+	// порядок кортежа logicOps и есть порядок пунктов (см. conditions.ts).
+	OpAnswered LogicOp = "answered"
+	OpEmpty    LogicOp = "empty"
 )
 
 // logicOps — все операторы одним списком, и он же источник valid(). Один список, а не
 // switch плюс отдельный перечень: ровно тот урок, который фаза 16 вынесла из blockTypes.
 var logicOps = []LogicOp{
-	OpAnswered, OpEmpty,
 	OpIs, OpIsNot,
 	OpContains, OpNotContains,
+	OpStartsWith, OpNotStartsWith,
+	OpEndsWith, OpNotEndsWith,
 	OpIncludes, OpExcludes,
 	OpGt, OpLt, OpGte, OpLte,
+	OpAnswered, OpEmpty,
 }
 
 func (op LogicOp) valid() bool { return slices.Contains(logicOps, op) }
@@ -109,9 +116,9 @@ func (op LogicOp) appliesTo(t BlockType) bool {
 	case OpIs, OpIsNot:
 		// У множественного выбора «равно» неопределимо: ответ — массив. Ему includes.
 		return !t.isMultiChoice()
-	case OpContains, OpNotContains:
-		// Подстрока осмысленна там, где ответ — свободный текст. У числа и даты «содержит»
-		// значило бы поиск по записи ответа, а не по его значению.
+	case OpContains, OpNotContains, OpStartsWith, OpNotStartsWith, OpEndsWith, OpNotEndsWith:
+		// Куски строки осмысленны там, где ответ — свободный текст. У числа и даты
+		// «содержит» значило бы поиск по записи ответа, а не по его значению.
 		return valueDomain(t) == "text"
 	case OpIncludes, OpExcludes:
 		return t.isMultiChoice()
@@ -694,12 +701,10 @@ func (ev *evaluator) leaf(c Condition, carrier int) (result, ok bool) {
 		// равно» остаётся композируемым (нужна пара «отвечено И не равно» — автор
 		// складывает её группой), а не молча означает две разные вещи.
 		return !sameAnswer(src.Type, val.text, want), true
-	case OpContains:
-		return containsAnswer(val.text, want), true
-	case OpNotContains:
-		// Строгое отрицание, как у is_not: у неотвеченного источника «не содержит»
+	case OpContains, OpNotContains, OpStartsWith, OpNotStartsWith, OpEndsWith, OpNotEndsWith:
+		// Отрицания строгие, как у is_not: у неотвеченного источника «не содержит»
 		// истинно, а пара «отвечен И не содержит» складывается группой.
-		return !containsAnswer(val.text, want), true
+		return textHolds(val.text, want, c.Op), true
 	case OpIncludes:
 		return slices.Contains(val.list, want), true
 	case OpExcludes:
@@ -725,10 +730,28 @@ func (ev *evaluator) leaf(c Condition, carrier int) (result, ok bool) {
 	}
 }
 
-// containsAnswer — вхождение подстроки БЕЗ учёта регистра: автор пишет условие про
-// смысл ответа, а не про то, какой клавишей респондент начал слово.
-func containsAnswer(answer, want string) bool {
-	return strings.Contains(strings.ToLower(answer), strings.ToLower(want))
+// textHolds — верно ли текстовое сравнение. Регистр не учитывается ни в одном из шести:
+// автор пишет условие про смысл ответа, а не про то, какой клавишей респондент начал
+// слово. Одна точка на все шесть — иначе «начинается с» и «содержит» разошлись бы
+// правилом регистра на первой же правке.
+func textHolds(answer, want string, op LogicOp) bool {
+	a, w := strings.ToLower(answer), strings.ToLower(want)
+	switch op {
+	case OpContains:
+		return strings.Contains(a, w)
+	case OpNotContains:
+		return !strings.Contains(a, w)
+	case OpStartsWith:
+		return strings.HasPrefix(a, w)
+	case OpNotStartsWith:
+		return !strings.HasPrefix(a, w)
+	case OpEndsWith:
+		return strings.HasSuffix(a, w)
+	case OpNotEndsWith:
+		return !strings.HasSuffix(a, w)
+	default:
+		return false
+	}
 }
 
 // orderHolds — верен ли порядок, который требует оператор, при знаке сравнения sign

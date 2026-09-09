@@ -27,6 +27,7 @@ import { useBuilderStore } from '../storeContext'
 import { ConditionEditor, JoinSelect } from './ConditionEditor'
 import { RowMenu } from './rowMenu'
 import {
+  ACTION_ICONS,
   ACTION_LABELS,
   JUMP_END,
   asRootGroup,
@@ -71,11 +72,10 @@ export function LogicBlockEditor({ block }: { block: Block }) {
     // досюда» должно читаться всегда, а не когда полотну вздумается. Второй: блок —
     // одиночка (`canShareRow: false`), группы у него нет вовсе, и вешать его вид на
     // чужую механику значило бы завести ей исключение.
-    // Цвет рейла — `--highlight` (решение владельца 2026-09-09): по дизайн-системе это
-    // «деталь, которая ничего не значит», а рейлу ровно эту роль и играть — отличать
-    // правило от вопросов, ничего не обещая. Синий здесь читался бы как «сюда можно
-    // нажать», а нейтральная линия сливалась бы с рамками контролов внутри блока.
-    <div className="border-highlight/50 flex flex-col gap-2 border-l-[3px] py-1 pl-3 text-sm">
+    // Рейл СЕРЫЙ (решение владельца 2026-09-09): он границей блока и работает, а не
+    // меткой, — цветной звал бы к себе внимание, которое принадлежит самому правилу.
+    // Ширина 3px, а не 2: на сером в сером двух пикселей не видно.
+    <div className="border-border flex flex-col gap-2 border-l-[3px] py-1 pl-3 text-sm">
       <Tier
         label="Когда"
         trailing={
@@ -173,6 +173,12 @@ export function LogicBlockEditor({ block }: { block: Block }) {
 const FILL = 'bg-muted px-2 dark:bg-muted'
 
 const CONTROL = `h-7 w-52 max-w-full ${FILL} *:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate`
+
+// Контрол ДЕЙСТВИЯ — исключение: его значение не голый текст, а «значок + название»
+// (ActionName), поэтому флекс слота не перебивается (на нём держится просвет
+// значок→имя), многоточие ставит сам ActionName, а слоту достаётся один `min-w-0`.
+// Тот же случай, что у контрола источника в ConditionEditor.
+const CONTROL_GLYPH = `h-7 w-52 max-w-full ${FILL} *:data-[slot=select-value]:min-w-0`
 
 // Ярус: подпись СВОЕЙ строкой, содержимое под ней и БЕЗ отступа (решение владельца
 // 2026-08-16). Подпись колонкой слева съедала бы ширину у строки условий, а в ней три
@@ -290,13 +296,13 @@ function ActionRow({
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <Select value={kind ?? ''} onValueChange={(k) => pickKind(k as LogicActionKind)}>
-        <SelectTrigger size="sm" className={CONTROL} aria-label="Действие">
+        <SelectTrigger size="sm" className={CONTROL_GLYPH} aria-label="Действие">
           <SelectValue placeholder="Выберите действие" />
         </SelectTrigger>
         <SelectContent>
           {LOGIC_ACTIONS.map((k) => (
             <SelectItem key={k} value={k}>
-              {ACTION_LABELS[k]}
+              <ActionName kind={k} />
             </SelectItem>
           ))}
         </SelectContent>
@@ -499,6 +505,20 @@ const toggled = <T,>(set: ReadonlySet<T>, key: T): ReadonlySet<T> => {
   const next = new Set(set)
   if (!next.delete(key)) next.add(key)
   return next
+}
+
+// «Значок действия + название» — тот же приём, что GlyphName у вопроса: в списке из пяти
+// длинных строк значок находит нужную быстрее, чем чтение. Разметка рассчитана на
+// хозяина-флекс (SelectItem и слот значения у SelectTrigger), поэтому своей рамки и
+// своего размера значка здесь нет — только просвет и обрезка имени.
+function ActionName({ kind }: { kind: LogicActionKind }) {
+  const Icon = ACTION_ICONS[kind]
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <Icon className="text-muted-foreground size-4 shrink-0" aria-hidden />
+      <span className="truncate">{ACTION_LABELS[kind]}</span>
+    </span>
+  )
 }
 
 // Ветка дерева: отступ плюс вертикальный рейл, тот самый, что держит вложенность на глаз.

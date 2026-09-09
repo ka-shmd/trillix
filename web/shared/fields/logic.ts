@@ -289,11 +289,14 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
         // остаётся композируемым — пара «отвечено И не равно» складывается группой.
         return [!sameAnswer(src, val.text, value), true]
       case 'contains':
-        return [containsAnswer(val.text, value), true]
       case 'not_contains':
-        // Строгое отрицание, как у is_not: у неотвеченного источника «не содержит»
+      case 'starts_with':
+      case 'not_starts_with':
+      case 'ends_with':
+      case 'not_ends_with':
+        // Отрицания строгие, как у is_not: у неотвеченного источника «не содержит»
         // истинно, а пара «отвечен И не содержит» складывается группой.
-        return [!containsAnswer(val.text, value), true]
+        return [textHolds(val.text, value, c.op), true]
       case 'includes':
         return [val.list.includes(value), true]
       case 'excludes':
@@ -467,7 +470,11 @@ export function operatorsFor(type: BlockType): LogicOperator[] {
         return !multi
       case 'contains':
       case 'not_contains':
-        // Подстрока осмысленна там, где ответ — свободный текст. У числа и даты
+      case 'starts_with':
+      case 'not_starts_with':
+      case 'ends_with':
+      case 'not_ends_with':
+        // Куски строки осмысленны там, где ответ — свободный текст. У числа и даты
         // «содержит» значило бы поиск по записи ответа, а не по его значению.
         return domain === 'text'
       case 'includes':
@@ -598,10 +605,29 @@ function sameAnswer(src: Block, answer: string, want: string): boolean {
   return answer === want
 }
 
-// Вхождение подстроки БЕЗ учёта регистра: автор пишет условие про смысл ответа, а не
-// про то, какой клавишей респондент начал слово.
-function containsAnswer(answer: string, want: string): boolean {
-  return answer.toLowerCase().includes(want.toLowerCase())
+// Верно ли текстовое сравнение. Регистр не учитывается ни в одном из шести: автор пишет
+// условие про смысл ответа, а не про то, какой клавишей респондент начал слово. Одна
+// точка на все шесть — иначе «начинается с» и «содержит» разошлись бы правилом регистра
+// на первой же правке. Зеркалит textHolds в internal/domain/logic.go.
+function textHolds(answer: string, want: string, op: LogicOperator): boolean {
+  const a = answer.toLowerCase()
+  const w = want.toLowerCase()
+  switch (op) {
+    case 'contains':
+      return a.includes(w)
+    case 'not_contains':
+      return !a.includes(w)
+    case 'starts_with':
+      return a.startsWith(w)
+    case 'not_starts_with':
+      return !a.startsWith(w)
+    case 'ends_with':
+      return a.endsWith(w)
+    case 'not_ends_with':
+      return !a.endsWith(w)
+    default:
+      return false
+  }
 }
 
 const compareStrings = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)

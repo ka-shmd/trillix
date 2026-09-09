@@ -1,3 +1,5 @@
+import { Asterisk, Ban, CornerDownRight, Eye, EyeOff, type LucideIcon } from 'lucide-react'
+
 import {
   type Block,
   type BlockType,
@@ -118,18 +120,22 @@ export function asRootGroup(cond: LogicCondition): Group {
 // подстрока (contains), у множественного выбора — вариант в ответе (includes), и
 // одному типу источника предлагается ровно один из них.
 const OPERATOR_LABELS: Record<LogicOperator, string> = {
-  answered: 'отвечен',
-  empty: 'не отвечен',
   is: 'равен',
   is_not: 'не равен',
   contains: 'содержит',
   not_contains: 'не содержит',
+  starts_with: 'начинается с',
+  not_starts_with: 'не начинается с',
+  ends_with: 'заканчивается на',
+  not_ends_with: 'не заканчивается на',
   includes: 'содержит',
   excludes: 'не содержит',
   gt: 'больше',
   lt: 'меньше',
   gte: 'больше или равно',
   lte: 'меньше или равно',
+  answered: 'отвечен',
+  empty: 'не отвечен',
 }
 
 // У ДАТЫ порядок называется временем, а не величиной: «дата больше 1 мая» читается как
@@ -373,6 +379,21 @@ export const ACTION_LABELS: Record<LogicActionKind, string> = {
   require: 'Сделать обязательным',
   jump: 'Перейти на страницу',
   block_submit: 'Скрыть кнопку отправки',
+}
+
+// Значок действия — по тому же доводу, по которому вопрос в логике зовут глифом типа:
+// пять названий начинаются с разных слов, но читаются одинаково длинными строками, и
+// значок ловит нужную быстрее, чем чтение. Пары «показать/скрыть» и «есть кнопка/нет
+// кнопки» узнаются именно значком — зачёркнутый глаз и запрет.
+//
+// Исчерпывающий Record, а не словарь с дефолтом: новое действие не соберётся, пока ему
+// не выбрали значок (то же правило, что у реестра типов блоков).
+export const ACTION_ICONS: Record<LogicActionKind, LucideIcon> = {
+  show: Eye,
+  hide: EyeOff,
+  require: Asterisk,
+  jump: CornerDownRight,
+  block_submit: Ban,
 }
 
 // Подпись вопроса для источника, у которого имя не задано, выводит derivedQuestionName;
