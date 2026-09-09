@@ -568,11 +568,17 @@ function TreeRow({
       {checked !== undefined && (
         <span
           className={`flex size-4 shrink-0 items-center justify-center rounded-sm border ${
-            checked ? 'bg-primary border-primary text-primary-foreground' : 'border-input'
+            checked ? 'bg-primary border-primary' : 'border-input'
           }`}
           aria-hidden="true"
         >
-          {checked && <Check className="size-3" />}
+          {/* МИНА: цвет галочки задан НА САМОЙ галочке, а не на коробке. `CommandItem`
+              красит вложенные svg правилом `[&_svg:not([class*='text-'])]`, то есть
+              перебивает любой унаследованный цвет — галочка выходила серой на синей
+              заливке и читалась как пустой залитый квадрат. Класс с `text-` на самом
+              svg выводит его из-под этого правила (тот же приём, что `size-3` выводит
+              из-под навязанного размера). */}
+          {checked && <Check className="text-primary-foreground size-3" />}
         </span>
       )}
       {glyphType === undefined ? (
