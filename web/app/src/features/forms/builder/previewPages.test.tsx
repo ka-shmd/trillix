@@ -210,6 +210,17 @@ describe('превью и страница «Спасибо»', () => {
     expect(screen.queryByLabelText(/Почта/)).toBeNull()
   })
 
+  // Форма БЕЗ такой страницы: отправка обязана что-то показать. Контрол, живой на вид и
+  // пустой на нажатие, читается как поломка продукта, а не как «этой страницы у вас
+  // нет», и ловится он только нажатием — по разметке кнопка неотличима от рабочей.
+  it('без страницы «Спасибо» отправка объясняет, что увидит респондент, а не молчит', () => {
+    renderPreview(twoPages())
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect(screen.getByText(/Экран после отправки в этой форме не собран/)).toBeTruthy()
+    expect(screen.getByRole('button', { name: /Вернуться к форме/ })).toBeTruthy()
+  })
+
   it('вопрос на этой странице гасит флаг: она снова обычный шаг', () => {
     renderPreview([
       ...twoPages(),

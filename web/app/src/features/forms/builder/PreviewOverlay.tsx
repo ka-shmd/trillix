@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useRef } from 'react'
 import { ArrowLeft } from 'lucide-react'
 import type { StoreApi } from 'zustand'
 
@@ -44,6 +44,53 @@ function ScrollbarGutterOff() {
   return null
 }
 
+// ВОЗВРАТ ФОКУСА — НАШ, потому что радиксовый здесь не работает вовсе. Модальный
+// диалог на закрытии отменяет умолчание браузера и ставит фокус на ТРИГГЕР
+// (`triggerRef.current?.focus()` в react-dialog). Триггера у просмотра нет: слой
+// открывает обычная кнопка верхнего бара через состояние, а не `SheetTrigger`, и
+// ссылка пустая. Фокус тогда не достаётся никому и падает в `body` — автор
+// возвращается на полотно, где нельзя ни печатать, ни уйти Tab'ом от своего места, а
+// обещание слоя (вернуть туда же, с той же прокруткой и той же кареткой) выполняется
+// наполовину.
+//
+// Каретка помнится ОТДЕЛЬНО от последнего фокуса вообще: кнопка «Просмотр» забирает
+// фокус кликом раньше, чем слой открывается, поэтому «последний сфокусированный» —
+// это она, а не строка полотна. Слушатель живёт только пока слой закрыт: внутри слоя
+// фокус наш собственный, и запоминать его незачем.
+function useReturnFocus(open: boolean) {
+  const caret = useRef<HTMLElement | null>(null)
+  const anyFocus = useRef<HTMLElement | null>(null)
+
+  useEffect(() => {
+    if (open) return
+    const onFocusIn = (e: Event) => {
+      const el = e.target
+      if (!(el instanceof HTMLElement)) return
+      anyFocus.current = el
+      const typable =
+        el.isContentEditable ||
+        el instanceof HTMLTextAreaElement ||
+        el instanceof HTMLInputElement
+      if (typable) caret.current = el
+    }
+    document.addEventListener('focusin', onFocusIn)
+    return () => document.removeEventListener('focusin', onFocusIn)
+  }, [open])
+
+  return (event: Event) => {
+    // Строку могли снести, пока автор смотрел форму (правка из шторки оформления,
+    // отмена) — тогда возвращаемся на то, что было в фокусе до слоя, а если и его
+    // нет, отдаём событие Radix: пусть лучше решает он, чем мы фокусируем труп.
+    const back = [caret.current, anyFocus.current].find((el) => el?.isConnected)
+    if (!back) return
+    event.preventDefault()
+    // МИНА: preventScroll обязателен. Без него браузер подкрутит окно к возвращаемой
+    // строке — и прокрутка, ради сохранения которой полотно всё это время и остаётся
+    // смонтированным, уедет ровно в момент возврата.
+    back.focus({ preventScroll: true })
+  }
+}
+
 export function PreviewOverlay({
   open,
   onOpenChange,
@@ -62,6 +109,7 @@ export function PreviewOverlay({
   progress?: boolean
   allowBack?: boolean
 }) {
+  const returnFocus = useReturnFocus(open)
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       {/* aria-describedby={undefined} — у просмотра нет пояснения, а Radix иначе
@@ -70,6 +118,7 @@ export function PreviewOverlay({
         side="full"
         showCloseButton={false}
         aria-describedby={undefined}
+        onCloseAutoFocus={returnFocus}
         className="gap-0 overflow-hidden p-0"
       >
         <SheetTitle className="sr-only">Просмотр формы</SheetTitle>
