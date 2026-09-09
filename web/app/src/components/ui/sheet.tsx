@@ -24,13 +24,29 @@ function SheetPortal({ ...props }: React.ComponentProps<typeof SheetPrimitive.Po
 
 function SheetOverlay({
   className,
+  // animated — наша добавка, и она про то же, про что оговорка у SLIDE_ANIMATION
+  // ниже. Подложка со стороной `full` не видна НИКОГДА: содержимое непрозрачное
+  // (`bg-background`) и лежит на весь вьюпорт поверх неё. Затухать нечему, а плата
+  // за анимацию настоящая — Radix снимает узел по событию `animationend`, и если
+  // кадры в этот момент не рисуются (вкладка ушла в фон, окно свёрнуто), событие не
+  // приходит вовсе.
+  //
+  // МИНА: неснятая подложка остаётся в документе как `fixed inset-0 z-50` с
+  // `pointer-events: auto` и почти нулевой прозрачностью — невидимый щит поверх
+  // всего кабинета, который глотает КАЖДЫЙ клик. Выглядит это как «приложение
+  // перестало реагировать», и связать это с закрытым час назад просмотром нельзя
+  // ничем. Без анимации Presence снимает узел синхронно (ветка `animationName ===
+  // 'none'`), и ставки на событие не остаётся.
+  animated = true,
   ...props
-}: React.ComponentProps<typeof SheetPrimitive.Overlay>) {
+}: React.ComponentProps<typeof SheetPrimitive.Overlay> & { animated?: boolean }) {
   return (
     <SheetPrimitive.Overlay
       data-slot="sheet-overlay"
       className={cn(
-        'fixed inset-0 z-50 bg-black/50 data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0',
+        'fixed inset-0 z-50 bg-black/50',
+        animated &&
+          'data-[state=closed]:animate-out data-[state=closed]:fade-out-0 data-[state=open]:animate-in data-[state=open]:fade-in-0',
         className,
       )}
       {...props}
@@ -42,7 +58,8 @@ function SheetOverlay({
 // уехала из базовых классов в каждую ветку именно поэтому. `full` обязана обходиться
 // БЕЗ `animate-out`, а не с нулевой длительностью: Radix снимает содержимое по
 // событию `animationend`, и анимация с именем, но без времени — лишняя ставка на то,
-// что браузер это событие всё-таки пришлёт.
+// что браузер это событие всё-таки пришлёт. То же правило и по той же причине держит
+// подложка (`animated` у SheetOverlay).
 const SLIDE_ANIMATION =
   'data-[state=closed]:animate-out data-[state=closed]:duration-300 data-[state=open]:animate-in data-[state=open]:duration-500'
 
@@ -69,7 +86,7 @@ function SheetContent({
 }) {
   return (
     <SheetPortal>
-      {showOverlay && <SheetOverlay />}
+      {showOverlay && <SheetOverlay animated={side !== 'full'} />}
       <SheetPrimitive.Content
         data-slot="sheet-content"
         className={cn(

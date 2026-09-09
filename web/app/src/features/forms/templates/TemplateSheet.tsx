@@ -1,6 +1,6 @@
 import { useLayoutEffect, useMemo, useRef, useState } from 'react'
 
-import { DEFAULT_SUBMIT_LABEL, type FormSchema } from '@entities/formSchema'
+import { DEFAULT_NEXT_LABEL, DEFAULT_SUBMIT_LABEL, type FormSchema } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import { designClasses, designToVars } from '@fields/design'
@@ -12,15 +12,14 @@ import {
   groupRowWidths,
   packGroupRows,
   packRows,
-  splitFormTitle,
-  splitPages,
-  splitThankYou,
 } from '@fields/groups'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
 import { SlotStubProvider } from '@fields/booking'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { SlotStub } from '@fields/slots/SlotStub'
 import { groupClass } from '@fields/space'
+
+import { templateScreens } from './templateScreens'
 
 // Лист шаблона — та самая страница, которую получит автор, нарисованная теми же
 // кирпичами, что превью редактора и публичный рендерер. Не картинка «про форму», а
@@ -56,18 +55,55 @@ import { groupClass } from '@fields/space'
 //
 // Резолвер зовётся БЕЗ плана: лист логику не считает (см. выше), и передавать сюда
 // половину расчёта значило бы обещать точность, которой у листа нет.
-export function TemplateSheet({ schema }: { schema: FormSchema }) {
+export function TemplateSheet({
+  schema,
+  // КАКОЙ ЭКРАН РИСОВАТЬ, решает не лист. Он показывает один экран — страницу формы
+  // или экран после отправки, — а ведёт по ним тот, кто шаблон показывает: окно
+  // (`TemplateDialog`) даёт автору пройти форму, плитка не даёт ничего и остаётся
+  // первым экраном.
+  //
+  // Так, а не своим состоянием внутри листа, потому что ход по страницам — это
+  // просмотр, а не форма (решение владельца 2026-09-09): контролы хода живут в
+  // окне, рядом с «Использовать шаблон», и номер страницы окно обязано знать само.
+  // Держи лист состояние — окну пришлось бы выпрашивать его обратно.
+  //
+  // Логика при этом НЕ считается (см. выше): страницы статические, документ как
+  // есть. Шаблон листается по разрывам, а не проходится по ветвлению.
+  page = 0,
+  done = false,
+  // Нажатия кнопок ШАГА самой формы. Без них кнопки нерабочие — ровно то, что нужно
+  // плитке: она `inert` и декоративна.
+  onNext,
+  onSubmit,
+}: {
+  schema: FormSchema
+  page?: number
+  done?: boolean
+  onNext?: () => void
+  onSubmit?: () => void
+}) {
   const { design, cover, logo } = schema
-  // Заголовок формы — блок документа, но рисуется ВНЕ .rf-form: тем же разделителем,
-  // что у рендерера, иначе он получил бы ритм «между вопросами» вместо своего.
-  const { title, rest } = splitFormTitle(schema.blocks)
-  // ПЕРВЫЙ ЭКРАН, а не документ целиком: экран после отправки и вторая страница —
-  // не то, что респондент увидит, открыв ссылку. Оба отрезаются теми же помощниками,
-  // что у рендерера, поэтому граница страницы у галереи и у формы одна.
-  const { blocks } = splitThankYou(rest)
-  const firstPage = splitPages(blocks)[0] ?? []
-  const groups = groupMeta(firstPage)
+  // Разбор на экраны — общий с окном (`templateScreens`), чтобы «Страница 2 из 3»
+  // там и нарисованное здесь считались одними правилами.
+  const { title, pages, thankYou } = templateScreens(schema)
+  const lastPage = pages.length - 1
+  // Номер приходит извне, и опереться на его разумность нельзя: автор мог смотреть
+  // третью страницу, а окно — открыться на шаблоне из одной. Clamp вместо пустоты.
+  const at = Math.min(Math.max(page, 0), lastPage)
+  const shown = done ? (thankYou ?? []) : (pages[at]?.blocks ?? [])
+  // Многостраничность считается по ЧИСЛУ СТРАНИЦ, а не по наличию закрывающего
+  // разрыва: разрыв последним блоком закрывает страницу, за которой ничего нет, и
+  // форма остаётся одностраничной — кнопка на ней отправляет.
+  const hasNextPage = at < lastPage
+  // Подпись перехода живёт на закрывающем разрыве страницы (`settings.nextLabel`) —
+  // затем `templateScreens` и отдаёт страницы вместе с ними.
+  const nextLabel = pages[at]?.closer?.settings?.nextLabel?.trim() || DEFAULT_NEXT_LABEL
+  const groups = groupMeta(shown)
   const label = schema.submitLabel?.trim() || DEFAULT_SUBMIT_LABEL
+  // Хром (обложка, логотип, заголовок) — только на первом экране, как у респондента и
+  // у превью редактора. МИНА: без этой проверки вторая страница шаблона приезжала бы с
+  // обложкой и заголовком формы, которых на ней у респондента нет.
+  const chrome = at === 0 && !done
   // КОНТРОЛЫ НЕ `disabled`, И ЭТО НЕСУЩЕЕ. `disabled` — не «то же самое, но нельзя
   // трогать»: `.rf-submit:disabled` гасит кнопку до половинной прозрачности, а
   // `.rf-input:disabled` подставляет полю ПРОЗРАЧНЫЙ фон вместо `--rf-field-bg`
@@ -85,79 +121,109 @@ export function TemplateSheet({ schema }: { schema: FormSchema }) {
       <MentionContext.Provider value={mentions}>
         {/* Контейнер темы обнимает обложку и страницу разом — как у рендерера и полотна. */}
         <div className={`tpl-sheet rf-theme ${designClasses(design)}`} style={designToVars(design)}>
-          <CoverBand cover={cover} />
-          <div className={pageClass(cover)}>
-            <LogoMark logo={logo} over={Boolean(cover)} />
-            {title && <BlockField block={title} />}
-            <div className="rf-form">
-              {packRows(groupBlocks(firstPage)).map((row) => {
-                const renderGroup = (group: (typeof row)[number][number]) => (
-                  // Ступень воздуха перед вопросом — по типу его первого блока
-                  // (@fields/space), тем же кодом, что у рендерера и полотна.
-                  <div key={group.id} className={groupClass(group.blocks)}>
-                    {packGroupRows(group.blocks).map((innerRow) => {
-                      const render = (block: (typeof innerRow)[number][number]) => (
-                        <BlockField
-                          key={block.id}
-                          block={block}
-                          captionText={groups.get(block.groupId)?.caption}
-                          captionRequired={groups.get(block.groupId)?.required}
-                          value={answers[block.id]}
-                          onChange={(value: Answer) =>
-                            setAnswers((prev) => ({ ...prev, [block.id]: value }))
-                          }
-                          disabled={false}
-                        />
-                      )
-                      const innerWidths = blockRowWidths(innerRow)
-                      return innerRow.length > 1 ? (
-                        <div key={innerRow[0]![0]!.id} className="rf-row">
-                          {innerRow.map((cell, i) => (
-                            <div
-                              key={cell[0]!.id}
-                              className="rf-cell"
-                              style={cellVars(innerWidths, i)}
-                            >
-                              {cell.map(render)}
-                            </div>
-                          ))}
+          <CoverBand cover={chrome ? cover : undefined} />
+          <div className={pageClass(chrome ? cover : undefined)}>
+            {chrome && <LogoMark logo={logo} over={Boolean(cover)} />}
+            {chrome && title && <BlockField block={title} />}
+            {done && !thankYou ? (
+              // ШАБЛОН БЕЗ СТРАНИЦЫ «СПАСИБО»: экран после отправки у формы всё равно
+              // будет — заглушка рендерера с текстом благодарности из настроек. Её
+              // классы (`.status`) живут в рендерере и в `@fields` не переезжали, а
+              // копия здесь разъехалась бы с оригиналом при первой правке, поэтому
+              // говорим словами. Текст адресован автору — та же подсказка-заглушка, что
+              // у превью редактора, и тем же классом.
+              <p className="rf-empty">
+                Экран после отправки в этом шаблоне не собран — у формы будет стандартная страница
+                благодарности с текстом из её настроек.
+              </p>
+            ) : (
+              <div className="rf-form">
+                {packRows(groupBlocks(shown)).map((row) => {
+                  const renderGroup = (group: (typeof row)[number][number]) => (
+                    // Ступень воздуха перед вопросом — по типу его первого блока
+                    // (@fields/space), тем же кодом, что у рендерера и полотна.
+                    <div key={group.id} className={groupClass(group.blocks)}>
+                      {packGroupRows(group.blocks).map((innerRow) => {
+                        const render = (block: (typeof innerRow)[number][number]) => (
+                          <BlockField
+                            key={block.id}
+                            block={block}
+                            captionText={groups.get(block.groupId)?.caption}
+                            captionRequired={groups.get(block.groupId)?.required}
+                            value={answers[block.id]}
+                            onChange={(value: Answer) =>
+                              setAnswers((prev) => ({ ...prev, [block.id]: value }))
+                            }
+                            disabled={false}
+                          />
+                        )
+                        const innerWidths = blockRowWidths(innerRow)
+                        return innerRow.length > 1 ? (
+                          <div key={innerRow[0]![0]!.id} className="rf-row">
+                            {innerRow.map((cell, i) => (
+                              <div
+                                key={cell[0]!.id}
+                                className="rf-cell"
+                                style={cellVars(innerWidths, i)}
+                              >
+                                {cell.map(render)}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          render(innerRow[0]![0]!)
+                        )
+                      })}
+                    </div>
+                  )
+                  const first = row[0]?.[0]
+                  if (!first) return null
+                  // Обёртка rf-row — только у настоящей пары колонок: одиночный ряд остаётся
+                  // прямым ребёнком rf-form (лишний div не меняет вид, но шумит в DOM).
+                  const widths = groupRowWidths(row)
+                  return row.length > 1 ? (
+                    <div key={first.id} className="rf-row">
+                      {row.map((cell, i) => (
+                        <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
+                          {cell.map(renderGroup)}
                         </div>
-                      ) : (
-                        render(innerRow[0]![0]!)
-                      )
-                    })}
-                  </div>
-                )
-                const first = row[0]?.[0]
-                if (!first) return null
-                // Обёртка rf-row — только у настоящей пары колонок: одиночный ряд остаётся
-                // прямым ребёнком rf-form (лишний div не меняет вид, но шумит в DOM).
-                const widths = groupRowWidths(row)
-                return row.length > 1 ? (
-                  <div key={first.id} className="rf-row">
-                    {row.map((cell, i) => (
-                      <div key={cell[0]!.id} className="rf-cell" style={cellVars(widths, i)}>
-                        {cell.map(renderGroup)}
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  renderGroup(first)
-                )
-              })}
-            </div>
-            {/* Кнопка отправки — часть вида страницы, поэтому лист без неё был бы неполным.
+                      ))}
+                    </div>
+                  ) : (
+                    renderGroup(first)
+                  )
+                })}
+              </div>
+            )}
+            {/* Кнопка шага — часть вида страницы, поэтому лист без неё был бы неполным.
             Ряд и коробка те же, что у респондента: выравнивание кнопки задаётся внутри
             коробки, и без неё настройка «кнопка по центру» до листа не доехала бы.
             Без `disabled` и без обработчика — как у превью редактора: гашение до
-            половинной прозрачности показало бы кнопку, которой на форме не бывает. */}
-            <div className="rf-nav">
-              <div className="rf-nav-main">
-                <button type="button" className="rf-submit">
-                  {label}
-                </button>
+            половинной прозрачности показало бы кнопку, которой на форме не бывает.
+
+            На непоследней странице это «Далее» (`rf-next`, подпись автора или дефолт),
+            а не отправка: первый экран многостраничной формы кнопки отправки не носит,
+            и галерея, показывая её, обещала бы форму из одного шага.
+
+            «Назад» ФОРМЫ здесь не бывает вовсе: ход назад — живое свойство формы
+            (`allowBack`, миграция 0055), а шаблон несёт только документ. Обратный ход
+            просмотра и номер страницы — контролы окна и стоят в его подвале: внутри
+            листа они выдавали бы себя за часть формы, которой у респондента нет. */}
+            {!done && (
+              <div className="rf-nav">
+                <div className="rf-nav-main">
+                  {hasNextPage ? (
+                    <button type="button" className="rf-submit rf-next" onClick={onNext}>
+                      {nextLabel}
+                    </button>
+                  ) : (
+                    <button type="button" className="rf-submit" onClick={onSubmit}>
+                      {label}
+                    </button>
+                  )}
+                </div>
               </div>
-            </div>
+            )}
           </div>
         </div>
       </MentionContext.Provider>
