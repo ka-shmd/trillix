@@ -82,8 +82,17 @@ const TRUNCATE =
 // вопроса стоит глиф его типа (GlyphName). Поэтому и обрезка у него своя: флекс слота
 // значения не перебивается (на нём держится просвет глиф→имя), многоточие ставит сам
 // GlyphName, а слоту остаётся разрешение сжиматься.
-const SOURCE = 'h-7 w-56 max-w-full *:data-[slot=select-value]:min-w-0'
-const OPERATOR = `h-7 w-36 max-w-full ${TRUNCATE}`
+//
+// ЗАЛИВКА И ПАДИНГИ у всех контролов строки общие (решение владельца 2026-09-09): серая
+// подложка `--muted` вместо прозрачной и `px-2` вместо трёх у shadcn. Плотность задаёт
+// поле значения — под него подогнаны остальные, а не наоборот. Обе правки объявлены
+// ТЕМИ ЖЕ вариантами, что перебиваемое (`dark:bg-muted` против `dark:bg-input/30`),
+// иначе tailwind-merge их не сольёт и победит порядок в собранном CSS, а не строка
+// className (web/CLAUDE.md).
+const FILL = 'bg-muted px-2 dark:bg-muted'
+
+const SOURCE = `h-7 w-56 max-w-full ${FILL} *:data-[slot=select-value]:min-w-0`
+const OPERATOR = `h-7 w-36 max-w-full ${FILL} ${TRUNCATE}`
 
 const childrenOf = (g: Group): LogicCondition[] => ('all' in g ? g.all : g.any)
 const isAnd = (g: Group): boolean => 'all' in g
@@ -390,7 +399,7 @@ function LeafRow({
 // «печатать ИЛИ выбрать» в одном поле. Собран он из тех же токенов и классов, что
 // Input; рамка, тень и кольцо фокуса переехали на обёртку через focus-within.
 const FIELD_BOX =
-  'flex h-7 w-44 max-w-full items-center rounded-md border border-input bg-transparent shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30'
+  'flex h-7 w-44 max-w-full items-center rounded-md border border-input bg-muted shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-muted'
 
 // Левая половина, когда она кнопка: значение выбирается только списком (варианты,
 // шкала) либо уже занято ссылкой. Своей рамки у неё нет — рамка одна, у обёртки.

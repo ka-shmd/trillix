@@ -71,7 +71,11 @@ export function LogicBlockEditor({ block }: { block: Block }) {
     // досюда» должно читаться всегда, а не когда полотну вздумается. Второй: блок —
     // одиночка (`canShareRow: false`), группы у него нет вовсе, и вешать его вид на
     // чужую механику значило бы завести ей исключение.
-    <div className="border-border flex flex-col gap-2 border-l-2 py-1 pl-3 text-sm">
+    // Цвет рейла — `--highlight` (решение владельца 2026-09-09): по дизайн-системе это
+    // «деталь, которая ничего не значит», а рейлу ровно эту роль и играть — отличать
+    // правило от вопросов, ничего не обещая. Синий здесь читался бы как «сюда можно
+    // нажать», а нейтральная линия сливалась бы с рамками контролов внутри блока.
+    <div className="border-highlight/50 flex flex-col gap-2 border-l-[3px] py-1 pl-3 text-sm">
       <Tier
         label="Когда"
         trailing={
@@ -159,8 +163,16 @@ export function LogicBlockEditor({ block }: { block: Block }) {
 // ConditionEditor (`TRUNCATE`): `block` перебивает флекс слота, иначе `text-overflow` не
 // действует и текст режется посреди буквы, `min-w-0` разрешает флекс-элементу сжаться,
 // `truncate` ставит саму обрезку.
-const CONTROL =
-  'h-7 w-52 max-w-full *:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate'
+//
+// ЗАЛИВКА И ПАДИНГИ — общие у всех контролов блока (решение владельца 2026-09-09):
+// серая подложка `--muted` вместо прозрачной и `px-2` вместо трёх у shadcn. Обе правки
+// объявлены ТЕМИ ЖЕ вариантами, что перебиваемое (`dark:bg-muted` против
+// `dark:bg-input/30`, `has-[>svg]:px-2` против `has-[>svg]:px-2.5` у кнопки), иначе
+// tailwind-merge их не сольёт и победит порядок в собранном CSS, а не строка className
+// (web/CLAUDE.md).
+const FILL = 'bg-muted px-2 dark:bg-muted'
+
+const CONTROL = `h-7 w-52 max-w-full ${FILL} *:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate`
 
 // Ярус: подпись СВОЕЙ строкой, содержимое под ней и БЕЗ отступа (решение владельца
 // 2026-08-16). Подпись колонкой слева съедала бы ширину у строки условий, а в ней три
@@ -339,7 +351,7 @@ function JumpTarget({
         onChange(v === JUMP_END ? { kind: 'jump', end: true } : { kind: 'jump', to: v })
       }
     >
-      <SelectTrigger size="sm" className="h-7 min-w-36 flex-1" aria-label="Куда перейти">
+      <SelectTrigger size="sm" className={`h-7 min-w-36 flex-1 ${FILL}`} aria-label="Куда перейти">
         <SelectValue placeholder="Страница…" />
       </SelectTrigger>
       <SelectContent>
@@ -415,7 +427,7 @@ function TargetPicker({
           aria-expanded={open}
           aria-label="Цели действия"
           disabled={disabled}
-          className={`${CONTROL} justify-between font-normal`}
+          className={`${CONTROL} justify-between font-normal has-[>svg]:px-2`}
         >
           <span className="min-w-0 truncate">{summary}</span>
           <ChevronDown className="size-4 shrink-0 opacity-50" />
