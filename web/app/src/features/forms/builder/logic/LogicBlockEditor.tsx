@@ -106,7 +106,7 @@ export function LogicBlockEditor({ block }: { block: Block }) {
         )}
       </Tier>
 
-      <Tier label="Тогда">
+      <Tier label="Тогда" spaced>
         <div className="flex flex-col gap-1">
           {actions.map((action, i) => (
             <ActionRow
@@ -182,14 +182,19 @@ const CONTROL_GLYPH = `h-7 w-52 max-w-full ${FILL} ${GLYPH_VALUE}`
 function Tier({
   label,
   trailing,
+  spaced = false,
   children,
 }: {
   label: string
   trailing?: React.ReactNode
+  // Воздух перед ярусом — только у «Тогда» (решение владельца 2026-09-09): между
+  // условием и действиями граница смысла, а не следующая строка того же списка, и
+  // общий `gap` блока её не выражает — он одинаков для всего.
+  spaced?: boolean
   children: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-1">
+    <div className={`flex flex-col gap-1 ${spaced ? 'mt-1.5' : ''}`}>
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground text-xs font-medium">{label}</span>
         {trailing}
