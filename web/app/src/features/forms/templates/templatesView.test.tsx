@@ -11,8 +11,11 @@ import {
   RouterProvider,
 } from '@tanstack/react-router'
 
-import { type Block, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
+import { type Block, type FormSchema, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
 
+import { type FormTemplate } from '../../../entities/template'
+import { TemplateDialog } from './TemplateDialog'
+import { TemplateSheet } from './TemplateSheet'
 import { TemplatesView } from './TemplatesView'
 
 // Сторожа на то, что ломается МОЛЧА. Плитка показывает саму форму, и обещание
@@ -221,4 +224,180 @@ it('нажатие на плитку открывает просмотр, отт
   await waitFor(() =>
     expect(router.state.location.pathname).toBe('/w/team/forms/obratnaya-svyaz/edit'),
   )
+})
+
+// КНОПКА ПЕРВОГО ЭКРАНА — сторож на молчаливое расхождение галереи с формой. Лист
+// показывает ОДНУ страницу, и кнопка под ней обязана быть той, что увидит респондент:
+// у многостраничной формы это переход, а не отправка. Отправка на первом экране
+// обещает форму из одного шага — а шаблон берут именно по этому обещанию.
+const sheet = (blocks: Block[], submitLabel?: string): FormSchema => ({
+  schemaVersion: SCHEMA_VERSION,
+  blocks,
+  ...(submitLabel === undefined ? {} : { submitLabel }),
+})
+
+const pageOne: Block[] = [
+  { id: 'p1_c', groupId: 'g1', type: 'title', text: textFromString('Как вас зовут?') },
+  { id: 'p1_f', groupId: 'g1', type: 'short_text' },
+]
+const pageTwo: Block[] = [
+  { id: 'p2_c', groupId: 'g2', type: 'title', text: textFromString('Почта') },
+  { id: 'p2_f', groupId: 'g2', type: 'email' },
+]
+const stepButton = (container: HTMLElement) => container.querySelector('.rf-submit')!
+
+it('первый экран многостраничного шаблона ведёт переходом, а не отправкой', () => {
+  const { container } = render(
+    <TemplateSheet
+      schema={sheet(
+        [
+          ...pageOne,
+          { id: 'brk', groupId: '', type: 'page_break', settings: { nextLabel: 'Дальше' } },
+          ...pageTwo,
+        ],
+        'Записаться',
+      )}
+    />,
+  )
+  const btn = stepButton(container)
+  expect(btn.textContent).toBe('Дальше')
+  expect(btn.classList.contains('rf-next')).toBe(true)
+})
+
+it('без подписи автора переход подписан дефолтом', () => {
+  const { container } = render(
+    <TemplateSheet
+      schema={sheet([...pageOne, { id: 'brk', groupId: '', type: 'page_break' }, ...pageTwo])}
+    />,
+  )
+  expect(stepButton(container).textContent).toBe('Далее')
+})
+
+// Разрыв последним блоком второй страницы не открывает (splitPagesWithClosers), то есть
+// форма остаётся одностраничной — и кнопка на ней отправляет. Считать многостраничность
+// по наличию закрывающего разрыва здесь было бы ошибкой.
+it('разрыв в конце документа не превращает отправку в переход', () => {
+  const { container } = render(
+    <TemplateSheet
+      schema={sheet([...pageOne, { id: 'brk', groupId: '', type: 'page_break' }], 'Записаться')}
+    />,
+  )
+  const btn = stepButton(container)
+  expect(btn.textContent).toBe('Записаться')
+  expect(btn.classList.contains('rf-next')).toBe(false)
+})
+
+// ЛИСТАНИЕ ЖИВЁТ В ОКНЕ, А НЕ В ЛИСТЕ (решение владельца 2026-09-09). Кнопки «Далее» и
+// «Отправить» принадлежат форме и стоят внутри листа; «Назад» и номер страницы форме не
+// принадлежат — у респондента их нет — и стоят в подвале окна. Поэтому и проверяется ход
+// через окно: у листа своей памяти больше нет, он рисует тот экран, который ему назвали.
+const titled: Block[] = [
+  { id: 'tpl_h', groupId: 'gh', type: 'form_title', text: textFromString('Заявка') },
+  ...pageOne,
+]
+const twoPages = (extra: Block[] = []): Block[] => [
+  ...titled,
+  { id: 'brk', groupId: '', type: 'page_break', settings: { nextLabel: 'Дальше' } },
+  ...pageTwo,
+  ...extra,
+]
+
+// Окно рисуется в портале, поэтому ищем по документу, а не по контейнеру рендера.
+const stepBtn = () => document.querySelector<HTMLButtonElement>('.rf-submit')!
+const field = () => document.querySelector<HTMLInputElement>('.rf-input')!
+
+function openWalk(blocks: Block[], submitLabel?: string) {
+  const template: FormTemplate = {
+    id: 'tpl-walk',
+    title: 'Проба',
+    description: 'шаблон с разрывом',
+    schema: sheet(blocks, submitLabel),
+    visibility: 'public',
+    workspaceId: null,
+  }
+  return render(
+    <TemplateDialog
+      template={template}
+      onOpenChange={() => {}}
+      onUse={() => {}}
+      pending={false}
+      failed={false}
+    />,
+  )
+}
+
+it('в окне «Далее» уводит на вторую страницу — без хрома и с отправкой', () => {
+  openWalk(twoPages(), 'Записаться')
+  expect(screen.getByText('Заявка')).toBeTruthy()
+
+  fireEvent.click(stepBtn())
+
+  expect(screen.getByText('Почта')).toBeTruthy()
+  expect(screen.queryByText('Как вас зовут?')).toBeNull()
+  // Заголовок формы — хром первого экрана: на второй странице его у респондента нет.
+  expect(screen.queryByText('Заявка')).toBeNull()
+  expect(stepBtn().textContent).toBe('Записаться')
+  expect(stepBtn().classList.contains('rf-next')).toBe(false)
+})
+
+it('«Назад» окна возвращает на страницу и не теряет ответ', () => {
+  openWalk(twoPages())
+  fireEvent.change(field(), { target: { value: 'Кирилл' } })
+  fireEvent.click(stepBtn())
+  fireEvent.click(screen.getByRole('button', { name: /Назад/ }))
+
+  expect(screen.getByText('Как вас зовут?')).toBeTruthy()
+  expect(field().value).toBe('Кирилл')
+})
+
+// «Назад» и номер — В ПОДВАЛЕ ОКНА, а не внутри формы. Сторож на возврат их в лист:
+// внутри `.rf-page` они выдавали бы себя за контролы формы, которых у респондента нет.
+it('обратный ход и номер страницы стоят вне листа формы', () => {
+  openWalk(twoPages())
+  fireEvent.click(stepBtn())
+  const back = screen.getByRole('button', { name: /Назад/ })
+  expect(back.closest('.rf-page')).toBeNull()
+  expect(screen.getByText('Страница 2 из 2').closest('.rf-page')).toBeNull()
+})
+
+it('номер страницы говорит, где автор и сколько всего', () => {
+  openWalk(twoPages())
+  expect(screen.getByText('Страница 1 из 2')).toBeTruthy()
+  fireEvent.click(stepBtn())
+  expect(screen.getByText('Страница 2 из 2')).toBeTruthy()
+})
+
+it('у одностраничного шаблона номера страницы нет вовсе', () => {
+  openWalk(pageOne)
+  expect(screen.queryByText(/Страница \d+ из/)).toBeNull()
+  expect(screen.queryByRole('button', { name: /Назад/ })).toBeNull()
+})
+
+it('отправка показывает страницу «Спасибо» шаблона', () => {
+  const thanks: Block[] = [
+    { id: 'brkTY', groupId: '', type: 'page_break', settings: { thankYou: true } },
+    { id: 'ty_h', groupId: 'gty', type: 'heading', text: textFromString('Ждём вас!') },
+  ]
+  openWalk(twoPages(thanks))
+  // Страница «Спасибо» не шаг: страниц по-прежнему две.
+  expect(screen.getByText('Страница 1 из 2')).toBeTruthy()
+  fireEvent.click(stepBtn())
+  fireEvent.click(stepBtn())
+  expect(screen.getByText('Ждём вас!')).toBeTruthy()
+  // Экран после отправки — не страница формы, номера у него нет.
+  expect(screen.queryByText(/Страница \d+ из/)).toBeNull()
+})
+
+it('без страницы «Спасибо» отправка говорит, что будет у формы, а не молчит', () => {
+  openWalk(twoPages())
+  fireEvent.click(stepBtn())
+  fireEvent.click(stepBtn())
+  expect(screen.getByText(/Экран после отправки в этом шаблоне не собран/)).toBeTruthy()
+})
+
+it('плитка не листается: «Далее» не уводит со страницы', () => {
+  const { container } = render(<TemplateSheet schema={sheet(twoPages())} />)
+  fireEvent.click(stepButton(container))
+  expect(screen.getByText('Как вас зовут?')).toBeTruthy()
+  expect(stepButton(container).textContent).toBe('Дальше')
 })
