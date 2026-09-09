@@ -125,6 +125,10 @@ func remapCondition(c *Condition, ids map[string]string) *Condition {
 	// у прочих типов число или ConsentYes. Карта решает сама: чужого в ней нет,
 	// и «5» с «yes» проходят мимо, потому что таких ключей в ней не бывает.
 	out.Value = remapID(c.Value, ids)
+	// ValueRef — id БЛОКА, чей ответ стоит в правой части («больше, чем стоимость»).
+	// Не переадресовать его значит отдать копию, где половина условий смотрит на
+	// вопросы формы-оригинала: правило не падает, оно молча становится инертным.
+	out.ValueRef = remapID(c.ValueRef, ids)
 	out.All = remapConditions(c.All, ids)
 	out.Any = remapConditions(c.Any, ids)
 	return &out

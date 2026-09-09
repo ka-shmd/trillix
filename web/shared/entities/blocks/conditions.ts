@@ -22,19 +22,33 @@ import { MAX_ID_LEN, MAX_LOGIC_DEPTH, MAX_LOGIC_NODES, MAX_LOGIC_VALUE_LEN } fro
 
 // Операторы сравнения. Порядок контрактный: по этому кортежу идёт паритет-тест с Go
 // (internal/domain/logicparity_test.go), который читает ЭТОТ файл.
+// ПОРЯДОК КОНТРАКТНЫЙ И ОН ЖЕ ПОРЯДОК В СПИСКЕ У АВТОРА: `operatorsFor` фильтрует этот
+// кортеж, ничего не переставляя. Сначала то, чем пользуются каждый день (равенство,
+// подстрока), потом порядковые сравнения, и только в конце проверка наличия ответа —
+// «отвечен» первым пунктом заставлял бы пролистывать его к «равен» на каждом условии.
 export const LOGIC_OPERATORS = [
-  // наличие ответа — у любого отвечаемого типа
-  'answered',
-  'empty',
   // равенство: id варианта, число, ConsentYes, точная строка
   'is',
   'is_not',
+  // текстовые типы (короткий и длинный текст, почта, телефон): подстрока, начало, конец
+  'contains',
+  'not_contains',
+  'starts_with',
+  'not_starts_with',
+  'ends_with',
+  'not_ends_with',
   // множественный выбор: содержит ли ответ вариант
   'includes',
   'excludes',
-  // числовое сравнение — только scale и number
+  // порядок — у чисел, шкалы и ДАТЫ (ISO-строка сравнивается лексикографически, а это
+  // и есть хронологический порядок)
   'gt',
   'lt',
+  'gte',
+  'lte',
+  // наличие ответа — у любого отвечаемого типа
+  'answered',
+  'empty',
 ] as const
 
 export type LogicOperator = (typeof LOGIC_OPERATORS)[number]
@@ -52,7 +66,18 @@ const blockRefSchema = z.string().min(1).max(MAX_ID_LEN)
 
 // Лист условия: на чей ответ смотрим, как сравниваем и с чем.
 //
-// value необязательно и МОЖЕТ БЫТЬ ПУСТЫМ — это законное состояние черновика: автор
+// СРАВНИВАТЬ МОЖНО С ДВУМЯ ВЕЩАМИ, и это ровно один из двух ключей: `value` — заданное
+// автором значение (id варианта, число, дата, строка), `valueRef` — id ДРУГОГО
+// отвечаемого блока, то есть «сравни с его ответом» («бюджет больше, чем стоимость»).
+// Оба сразу — противоречие, а не черновик: непонятно, что из них сравнивать, и такой
+// документ отвергается.
+//
+// Совместимость типов источника и ссылки здесь НЕ проверяется (текст со шкалой сравнить
+// нельзя) — это кросс-блочное, как и всё остальное в доклоке файла: несовместимая пара
+// делает правило ИНЕРТНЫМ, а не невалидным. Правило домена — у вычислителя
+// (@fields/logic.ts, `canReferenceAnswer`).
+//
+// Оба ключа необязательны и МОГУТ БЫТЬ ПУСТЫМИ — это законное состояние черновика: автор
 // добавил условие и ещё не выбрал значение. Правило с пустым значением инертно, а не
 // невалидно, иначе попап настроек ловил бы 422 на каждом полуготовом условии.
 const leafSchema = z
@@ -60,14 +85,36 @@ const leafSchema = z
     blockId: blockRefSchema,
     op: logicOperatorSchema,
     value: z.string().max(MAX_LOGIC_VALUE_LEN).optional(),
+    // Пустая строка здесь равна отсутствующему ключу — как и у `value`, и по
+    // техническому доводу: в Go пустое поле и пропущенное неразличимы (пустая структура
+    // и omitempty), а расхождение сторон в том, что считать валидным документом, — это
+    // 422 на ровном месте. Строгость `min(1)` осталась у blockId: там пусто значит
+    // «лист без источника», то есть сломанная форма узла, и Go отвергает её тоже.
+    valueRef: z.string().max(MAX_ID_LEN).optional(),
   })
   .superRefine((leaf, ctx) => {
-    if (leaf.value && !opNeedsValue(leaf.op)) {
+    if (leaf.value && leaf.valueRef) {
       ctx.addIssue({
         code: 'custom',
-        message: `оператор ${leaf.op} не сравнивает со значением`,
-        path: ['value'],
+        message: 'у условия и значение, и ссылка на ответ',
+        path: ['valueRef'],
       })
+    }
+    if (!opNeedsValue(leaf.op)) {
+      if (leaf.value) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `оператор ${leaf.op} не сравнивает со значением`,
+          path: ['value'],
+        })
+      }
+      if (leaf.valueRef) {
+        ctx.addIssue({
+          code: 'custom',
+          message: `оператор ${leaf.op} не сравнивает со значением`,
+          path: ['valueRef'],
+        })
+      }
     }
   })
 
@@ -77,7 +124,7 @@ const leafSchema = z
 export type LogicCondition =
   | { all: LogicCondition[] }
   | { any: LogicCondition[] }
-  | { blockId: string; op: LogicOperator; value?: string }
+  | { blockId: string; op: LogicOperator; value?: string; valueRef?: string }
 
 export const conditionSchema: z.ZodType<LogicCondition> = z.lazy(() =>
   z.union([

@@ -1,3 +1,5 @@
+import { Asterisk, Ban, CornerDownRight, Eye, EyeOff, type LucideIcon } from 'lucide-react'
+
 import {
   type Block,
   type BlockType,
@@ -10,7 +12,7 @@ import {
   scaleRange,
 } from '@entities/formSchema'
 import { pageName, pageNumbers, thankYouOpener } from '@fields/groups'
-import { operatorsFor, ruleWarnings } from '@fields/logic'
+import { canReferenceAnswer, operatorsFor, ruleWarnings } from '@fields/logic'
 
 import { editorKind } from '../kinds'
 import { derivedQuestionName } from '../questionName'
@@ -82,6 +84,29 @@ export function valueChoices(source: Block): { value: string; label: string }[] 
   return []
 }
 
+// Каким полем вводится значение: у даты — календарь браузера (тот же нативный контрол,
+// что у респондента), у числа — числовое поле. Иначе автор набирает дату руками и
+// промахивается форматом молча: ответ хранится как YYYY-MM-DD, а пишут «01.05.2026».
+export function valueInputType(source: Block): 'date' | 'number' | 'text' {
+  if (source.type === 'date') return 'date'
+  if (source.type === 'number') return 'number'
+  return 'text'
+}
+
+// Вопросы, чей ОТВЕТ годится в правую часть условия об этом источнике: правило доменов
+// спрашивается у вычислителя (canReferenceAnswer), чтобы список и семантика не
+// разъехались. Сам источник из списка убран — «равен сам себе» не условие.
+//
+// Позиционного фильтра здесь нет по тому же доводу, что у logicSources: инертность
+// меряется у ЦЕЛИ, а целей у правила бывает несколько и в разных местах. Ссылку ниже
+// цели называет предупреждение (logicBlockWarnings), а не отсутствие пункта.
+export function referenceSources(blocks: readonly Block[], source: Block): Block[] {
+  return blocks.filter(
+    (b) =>
+      b.id !== source.id && isAnswerableType(b.type) && canReferenceAnswer(source.type, b.type),
+  )
+}
+
 // Группа условий — узел с детьми. Корень правила редактор всегда держит группой (два
 // способа выразить одно правило означали бы две ветки в каждой его операции), поэтому
 // одинокий лист из чужого документа заворачивается на чтении, а не мигрируется в схеме.
@@ -91,15 +116,43 @@ export function asRootGroup(cond: LogicCondition): Group {
   return 'all' in cond || 'any' in cond ? cond : { all: [cond] }
 }
 
-export const OPERATOR_LABELS: Record<LogicOperator, string> = {
-  answered: 'отвечен',
-  empty: 'не отвечен',
+// Как оператор зовётся у автора. «Содержит» стоит дважды и это не ошибка: у текста это
+// подстрока (contains), у множественного выбора — вариант в ответе (includes), и
+// одному типу источника предлагается ровно один из них.
+const OPERATOR_LABELS: Record<LogicOperator, string> = {
   is: 'равен',
   is_not: 'не равен',
+  contains: 'содержит',
+  not_contains: 'не содержит',
+  starts_with: 'начинается с',
+  not_starts_with: 'не начинается с',
+  ends_with: 'заканчивается на',
+  not_ends_with: 'не заканчивается на',
   includes: 'содержит',
   excludes: 'не содержит',
   gt: 'больше',
   lt: 'меньше',
+  gte: 'больше или равно',
+  lte: 'меньше или равно',
+  answered: 'отвечен',
+  empty: 'не отвечен',
+}
+
+// У ДАТЫ порядок называется временем, а не величиной: «дата больше 1 мая» читается как
+// ошибка перевода. Оператор при этом тот же самый — разными словами зовётся одно и то
+// же сравнение.
+const DATE_ORDER_LABELS: Record<'gt' | 'lt' | 'gte' | 'lte', string> = {
+  gt: 'позже',
+  lt: 'раньше',
+  gte: 'не раньше',
+  lte: 'не позже',
+}
+
+export function operatorLabel(op: LogicOperator, sourceType?: BlockType): string {
+  if (sourceType === 'date' && op in DATE_ORDER_LABELS) {
+    return DATE_ORDER_LABELS[op as keyof typeof DATE_ORDER_LABELS]
+  }
+  return OPERATOR_LABELS[op]
 }
 
 // Значение поля `to`, означающее «страниц дальше нет». В схеме это отдельный флаг `end`,
@@ -326,6 +379,21 @@ export const ACTION_LABELS: Record<LogicActionKind, string> = {
   require: 'Сделать обязательным',
   jump: 'Перейти на страницу',
   block_submit: 'Скрыть кнопку отправки',
+}
+
+// Значок действия — по тому же доводу, по которому вопрос в логике зовут глифом типа:
+// пять названий начинаются с разных слов, но читаются одинаково длинными строками, и
+// значок ловит нужную быстрее, чем чтение. Пары «показать/скрыть» и «есть кнопка/нет
+// кнопки» узнаются именно значком — зачёркнутый глаз и запрет.
+//
+// Исчерпывающий Record, а не словарь с дефолтом: новое действие не соберётся, пока ему
+// не выбрали значок (то же правило, что у реестра типов блоков).
+export const ACTION_ICONS: Record<LogicActionKind, LucideIcon> = {
+  show: Eye,
+  hide: EyeOff,
+  require: Asterisk,
+  jump: CornerDownRight,
+  block_submit: Ban,
 }
 
 // Подпись вопроса для источника, у которого имя не задано, выводит derivedQuestionName;

@@ -61,6 +61,13 @@ const leaf = (blockId: string, op: LogicOperator, value = ''): LogicCondition =>
   ...(value === '' ? {} : { value }),
 })
 
+// Лист, у которого правая часть не значение, а ОТВЕТ другого блока.
+const leafRef = (blockId: string, op: LogicOperator, valueRef: string): LogicCondition => ({
+  blockId,
+  op,
+  valueRef,
+})
+
 const pageIds = (plan: ReturnType<typeof planForm>): string[][] =>
   plan.pages.map((page) => page.map((b) => b.id))
 
@@ -83,9 +90,19 @@ describe('planForm: видимость вопроса', () => {
     ['answered — виден при любом ответе', leaf('src', 'answered'), { src: 'no' }, true],
     ['answered без ответа — скрыт', leaf('src', 'answered'), {}, false],
     ['empty без ответа — виден', leaf('src', 'empty'), {}, true],
-    ['ссылка на несуществующий блок — инертна', leaf('нет-такого', 'is', 'yes'), { src: 'no' }, true],
+    [
+      'ссылка на несуществующий блок — инертна',
+      leaf('нет-такого', 'is', 'yes'),
+      { src: 'no' },
+      true,
+    ],
     ['ссылка вперёд — инертна', leaf('later', 'is', 'x'), {}, true],
-    ['оператор не подходит типу источника — инертен', leaf('src', 'includes', 'yes'), { src: 'no' }, true],
+    [
+      'оператор не подходит типу источника — инертен',
+      leaf('src', 'includes', 'yes'),
+      { src: 'no' },
+      true,
+    ],
     ['значение не выбрано — инертно', { blockId: 'src', op: 'is', value: '' }, { src: 'no' }, true],
     [
       'all: обе истинны — виден',
@@ -114,7 +131,10 @@ describe('planForm: видимость вопроса', () => {
     [
       'вложенность: any(all, leaf)',
       {
-        any: [{ all: [leaf('src', 'answered'), leaf('src', 'is', 'no')] }, leaf('src', 'is', 'yes')],
+        any: [
+          { all: [leaf('src', 'answered'), leaf('src', 'is', 'no')] },
+          leaf('src', 'is', 'yes'),
+        ],
       },
       { src: 'no' },
       true,
@@ -188,8 +208,20 @@ describe('planForm: обязательность', () => {
   const cases: [string, boolean, LogicCondition | null, Answers, boolean][] = [
     ['required без условия', true, null, {}, true],
     ['условие обязательности сработало', false, leaf('src', 'is', 'call'), { src: 'call' }, true],
-    ['условие обязательности не сработало', false, leaf('src', 'is', 'call'), { src: 'mail' }, false],
-    ['условие обязательности инертно — не обязателен', false, leaf('нет-такого', 'is', 'x'), {}, false],
+    [
+      'условие обязательности не сработало',
+      false,
+      leaf('src', 'is', 'call'),
+      { src: 'mail' },
+      false,
+    ],
+    [
+      'условие обязательности инертно — не обязателен',
+      false,
+      leaf('нет-такого', 'is', 'x'),
+      {},
+      false,
+    ],
   ]
 
   it.each(cases)('%s', (_name, flag, rule, answers, required) => {
@@ -207,7 +239,11 @@ describe('planForm: обязательность', () => {
 
 describe('planForm: варианты', () => {
   const src = choice('src', 'g1', 'single_choice', [{ id: 'dog' }, { id: 'cat' }])
-  const list = choice('list', 'g2', 'multi_choice', [{ id: 'leash' }, { id: 'tray' }, { id: 'food' }])
+  const list = choice('list', 'g2', 'multi_choice', [
+    { id: 'leash' },
+    { id: 'tray' },
+    { id: 'food' },
+  ])
   const ruled: Block[] = [
     src,
     optionRule('list', leaf('src', 'is', 'dog'), 'leash'),
@@ -256,14 +292,154 @@ describe('planForm: числа', () => {
     ['gt по шкале не сработал', leaf('nps', 'gt', '8'), { nps: '8' }, false],
     ['lt по шкале', leaf('nps', 'lt', '5'), { nps: '3' }, true],
     ['is у number сравнивает числом, а не строкой', leaf('age', 'is', '5.0'), { age: '5' }, true],
-    ['gt у нечислового ответа — ложь, но правило действует', leaf('age', 'gt', '5'), { age: 'abc' }, false],
+    [
+      'gt у нечислового ответа — ложь, но правило действует',
+      leaf('age', 'gt', '5'),
+      { age: 'abc' },
+      false,
+    ],
     ['gt у текстового источника — инертен', leaf('txt', 'gt', '5'), {}, true],
+    ['gte на равном значении', leaf('age', 'gte', '5'), { age: '5' }, true],
+    ['gte ниже границы', leaf('age', 'gte', '5'), { age: '4' }, false],
+    ['lte на равном значении', leaf('nps', 'lte', '3'), { nps: '3' }, true],
   ]
 
   it.each(cases)('%s', (_name, rule, answers, visible) => {
     const dep = blk('dep', 'g4', 'short_text')
     const blocks = [scale, num, txt, showRule('dep', rule), dep]
     expect(planForm(blocks, answers).visible.has('dep')).toBe(visible)
+  })
+})
+
+describe('planForm: текст и даты', () => {
+  const txt = blk('txt', 'g1', 'short_text')
+  const day = blk('day', 'g2', 'date')
+  const num = blk('num', 'g3', 'number')
+
+  const cases: [string, LogicCondition, Answers, boolean][] = [
+    ['содержит подстроку', leaf('txt', 'contains', 'иван'), { txt: 'Иван Иванов' }, true],
+    ['содержит: регистр не важен', leaf('txt', 'contains', 'ИВАН'), { txt: 'иван' }, true],
+    ['содержит: подстроки нет', leaf('txt', 'contains', 'пётр'), { txt: 'Иван' }, false],
+    ['не содержит', leaf('txt', 'not_contains', 'пётр'), { txt: 'Иван' }, true],
+    // Строгое отрицание, как у is_not: пара «отвечен И не содержит» складывается группой.
+    ['не содержит у неотвеченного — истинно', leaf('txt', 'not_contains', 'иван'), {}, true],
+    ['содержит у числового источника — инертен', leaf('num', 'contains', '5'), { num: '5' }, true],
+    ['начинается с', leaf('txt', 'starts_with', 'иван'), { txt: 'Иванов Иван' }, true],
+    ['начинается с: не начало', leaf('txt', 'starts_with', 'иван'), { txt: 'Пётр Иванов' }, false],
+    ['не начинается с', leaf('txt', 'not_starts_with', 'иван'), { txt: 'Пётр' }, true],
+    ['заканчивается на', leaf('txt', 'ends_with', 'ов'), { txt: 'Иванов' }, true],
+    ['заканчивается на: не конец', leaf('txt', 'ends_with', 'ов'), { txt: 'Иванова' }, false],
+    ['не заканчивается на', leaf('txt', 'not_ends_with', 'ов'), { txt: 'Иванова' }, true],
+    ['дата позже', leaf('day', 'gt', '2026-01-01'), { day: '2026-05-01' }, true],
+    ['дата не позже', leaf('day', 'gt', '2026-05-01'), { day: '2026-01-01' }, false],
+    ['дата раньше', leaf('day', 'lt', '2026-05-01'), { day: '2026-01-01' }, true],
+    [
+      'дата не раньше (gte) на равной дате',
+      leaf('day', 'gte', '2026-05-01'),
+      { day: '2026-05-01' },
+      true,
+    ],
+    ['дата за границей года', leaf('day', 'gt', '2025-12-31'), { day: '2026-01-01' }, true],
+    ['пустая дата — ложь, но правило действует', leaf('day', 'gt', '2026-01-01'), {}, false],
+  ]
+
+  it.each(cases)('%s', (_name, rule, answers, visible) => {
+    const dep = blk('dep', 'g9', 'short_text')
+    const blocks = [txt, day, num, showRule('dep', rule), dep]
+    expect(planForm(blocks, answers).visible.has('dep')).toBe(visible)
+  })
+})
+
+describe('planForm: правая часть — ссылка на ответ другого вопроса', () => {
+  const mail = blk('mail', 'g1', 'email')
+  const mail2 = blk('mail2', 'g2', 'short_text')
+  const budget = blk('budget', 'g3', 'number')
+  const price = blk('price', 'g4', 'number')
+  const pick = choice('pick', 'g5', 'single_choice', [{ id: 'o1' }, { id: 'o2' }])
+  const pick2 = choice('pick2', 'g6', 'single_choice', [{ id: 'o3' }])
+
+  const cases: [string, LogicCondition, Answers, boolean][] = [
+    [
+      'равенство по ссылке сработало',
+      leafRef('mail', 'is', 'mail2'),
+      { mail: 'a@b', mail2: 'a@b' },
+      true,
+    ],
+    [
+      'равенство по ссылке не сработало',
+      leafRef('mail', 'is', 'mail2'),
+      { mail: 'a@b', mail2: 'c@d' },
+      false,
+    ],
+    [
+      'неравенство по ссылке',
+      leafRef('mail', 'is_not', 'mail2'),
+      { mail: 'a@b', mail2: 'c@d' },
+      true,
+    ],
+    // Инертное «показать» показало бы цель — значит true здесь означал бы, что пустая
+    // ссылка сделала правило инертным. Она его таковым НЕ делает.
+    [
+      'пустой ответ по ссылке — пустая правая часть, а не инертность',
+      leafRef('mail', 'is', 'mail2'),
+      { mail: 'a@b' },
+      false,
+    ],
+    ['оба ответа пусты — равны', leafRef('mail', 'is', 'mail2'), {}, true],
+    [
+      'число больше, чем ответ другого вопроса',
+      leafRef('budget', 'gt', 'price'),
+      { budget: '100', price: '50' },
+      true,
+    ],
+    [
+      'число не больше ответа другого вопроса',
+      leafRef('budget', 'gt', 'price'),
+      { budget: '40', price: '50' },
+      false,
+    ],
+    [
+      'почта и короткий текст — один домен',
+      leafRef('mail', 'is', 'mail2'),
+      { mail: 'x', mail2: 'x' },
+      true,
+    ],
+    [
+      'ссылка на удалённый блок — инертна',
+      leafRef('mail', 'is', 'нет-такого'),
+      { mail: 'a@b' },
+      true,
+    ],
+    [
+      'ссылка на другой домен — инертна',
+      leafRef('mail', 'is', 'budget'),
+      { mail: '5', budget: '5' },
+      true,
+    ],
+    [
+      'ссылка на выбор — инертна: id вариантов разных списков не совпадают',
+      leafRef('pick', 'is', 'pick2'),
+      { pick: 'o1', pick2: 'o1' },
+      true,
+    ],
+  ]
+
+  it.each(cases)('%s', (_name, rule, answers, visible) => {
+    const dep = blk('dep', 'g9', 'short_text')
+    const blocks = [mail, mail2, budget, price, pick, pick2, showRule('dep', rule), dep]
+    expect(planForm(blocks, answers).visible.has('dep')).toBe(visible)
+  })
+
+  // Ссылка ниже ЦЕЛИ инертна ровно так же, как источник ниже цели: к моменту, когда
+  // решается цель, ответа по ссылке ещё нет, и сравнивать не с чем.
+  it('ссылка ниже цели — инертна', () => {
+    const blocks = [
+      mail,
+      showRule('dep', leafRef('mail', 'is', 'later')),
+      blk('dep', 'g2', 'short_text'),
+      blk('later', 'g3', 'short_text'),
+    ]
+    expect(planForm(blocks, { mail: 'a@b', later: 'a@b' }).visible.has('dep')).toBe(true)
   })
 })
 
@@ -399,12 +575,7 @@ describe('planForm: блок logic — показ и скрытие', () => {
       { src: 'no' },
       true,
     ],
-    [
-      'блок без действий ничего не делает',
-      { when: leaf('src', 'is', 'yes') },
-      { src: 'no' },
-      true,
-    ],
+    ['блок без действий ничего не делает', { when: leaf('src', 'is', 'yes') }, { src: 'no' }, true],
     [
       'действие на удалённую цель инертно',
       { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['призрак'] }] },
@@ -439,7 +610,10 @@ describe('planForm: блок logic — показ и скрытие', () => {
       choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
       blk('cap', 'g2', 'title'),
       blk('dep', 'g2', 'short_text'),
-      logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] }),
+      logic('L', 'gL', {
+        when: leaf('src', 'is', 'yes'),
+        then: [{ kind: 'show', targets: ['cap'] }],
+      }),
     ]
     expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(false)
     expect(planForm(blocks, { src: 'yes' }).visible.has('dep')).toBe(true)
@@ -450,7 +624,10 @@ describe('planForm: блок logic — показ и скрытие', () => {
       blk('cap', 'g1', 'title'),
       blk('dep', 'g1', 'short_text'),
       choice('src', 'g2', 'single_choice', [{ id: 'yes' }]),
-      logic('L', 'gL', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] }),
+      logic('L', 'gL', {
+        when: leaf('src', 'is', 'yes'),
+        then: [{ kind: 'show', targets: ['cap'] }],
+      }),
     ]
     expect(planForm(blocks, { src: 'no' }).visible.has('dep')).toBe(true)
   })
@@ -458,8 +635,14 @@ describe('planForm: блок logic — показ и скрытие', () => {
   it('скрыть побеждает показать', () => {
     const blocks: Block[] = [
       choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
-      logic('L1', 'gL1', { when: leaf('src', 'answered'), then: [{ kind: 'show', targets: ['cap'] }] }),
-      logic('L2', 'gL2', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'hide', targets: ['cap'] }] }),
+      logic('L1', 'gL1', {
+        when: leaf('src', 'answered'),
+        then: [{ kind: 'show', targets: ['cap'] }],
+      }),
+      logic('L2', 'gL2', {
+        when: leaf('src', 'is', 'yes'),
+        then: [{ kind: 'hide', targets: ['cap'] }],
+      }),
       blk('cap', 'g2', 'title'),
       blk('dep', 'g2', 'short_text'),
     ]
@@ -489,8 +672,14 @@ describe('planForm: блок logic — показ и скрытие', () => {
     const src = choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }])
     const blocks: Block[] = [
       src,
-      logic('L1', 'gL1', { when: leaf('src', 'is', 'yes'), then: [{ kind: 'show', targets: ['cap'] }] }),
-      logic('L2', 'gL2', { when: leaf('src', 'is', 'no'), then: [{ kind: 'show', targets: ['cap'] }] }),
+      logic('L1', 'gL1', {
+        when: leaf('src', 'is', 'yes'),
+        then: [{ kind: 'show', targets: ['cap'] }],
+      }),
+      logic('L2', 'gL2', {
+        when: leaf('src', 'is', 'no'),
+        then: [{ kind: 'show', targets: ['cap'] }],
+      }),
       blk('cap', 'g2', 'title'),
       blk('dep', 'g2', 'short_text'),
     ]
@@ -560,7 +749,11 @@ describe('planForm: блок logic — обязательность', () => {
 
 describe('planForm: блок logic — варианты', () => {
   const src = choice('src', 'g1', 'single_choice', [{ id: 'dog' }, { id: 'cat' }])
-  const list = choice('list', 'g2', 'multi_choice', [{ id: 'leash' }, { id: 'tray' }, { id: 'food' }])
+  const list = choice('list', 'g2', 'multi_choice', [
+    { id: 'leash' },
+    { id: 'tray' },
+    { id: 'food' },
+  ])
   const rule = (then: NonNullable<Block['logic']>['then']): Block => ({
     id: 'L',
     groupId: 'gL',
@@ -600,7 +793,10 @@ describe('planForm: блок logic — варианты', () => {
 
 describe('planForm: блок logic — переход и кнопка', () => {
   // Три страницы: [src, L] | [q2] | [q3].
-  const paged = (then: NonNullable<Block['logic']>['then'], when = leaf('src', 'is', 'no')): Block[] => [
+  const paged = (
+    then: NonNullable<Block['logic']>['then'],
+    when = leaf('src', 'is', 'no'),
+  ): Block[] => [
     choice('src', 'g1', 'single_choice', [{ id: 'yes' }, { id: 'no' }]),
     { id: 'L', groupId: 'gL', type: 'logic', logic: { when, then } },
     blk('br1', 'gb1', 'page_break'),
@@ -619,7 +815,9 @@ describe('planForm: блок logic — переход и кнопка', () => {
   })
 
   it('end обрывает форму на текущей странице', () => {
-    expect(pageIds(planForm(paged([{ kind: 'jump', end: true }]), { src: 'no' }))).toEqual([['src']])
+    expect(pageIds(planForm(paged([{ kind: 'jump', end: true }]), { src: 'no' }))).toEqual([
+      ['src'],
+    ])
   })
 
   it('переход назад инертен', () => {
@@ -640,13 +838,9 @@ describe('planForm: блок logic — переход и кнопка', () => {
   })
 
   it('«скрыть кнопку» старше перехода с той же страницы', () => {
-    const plan = planForm(
-      paged([
-        { kind: 'jump', to: 'br2' },
-        { kind: 'block_submit' },
-      ]),
-      { src: 'no' },
-    )
+    const plan = planForm(paged([{ kind: 'jump', to: 'br2' }, { kind: 'block_submit' }]), {
+      src: 'no',
+    })
     expect(plan.blocked).toBe(true)
     expect(pageIds(plan)).toEqual([['src']])
   })
@@ -724,12 +918,20 @@ describe('схема: форма правил', () => {
     [
       'условие листом',
       doc([
-        { id: 'a', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да' }] } },
+        {
+          id: 'a',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Да' }] },
+        },
         {
           id: 'L',
           groupId: 'gL',
           type: 'logic',
-          logic: { when: { blockId: 'a', op: 'is', value: 'o1' }, then: [{ kind: 'show', targets: ['b'] }] },
+          logic: {
+            when: { blockId: 'a', op: 'is', value: 'o1' },
+            then: [{ kind: 'show', targets: ['b'] }],
+          },
         },
         { id: 'b', groupId: 'g2', type: 'short_text' },
       ]),
@@ -745,7 +947,12 @@ describe('схема: форма правил', () => {
           logic: {
             when: {
               any: [
-                { all: [{ blockId: 'a', op: 'answered' }, { blockId: 'a', op: 'is', value: 'x' }] },
+                {
+                  all: [
+                    { blockId: 'a', op: 'answered' },
+                    { blockId: 'a', op: 'is', value: 'x' },
+                  ],
+                },
                 { blockId: 'a', op: 'is', value: 'y' },
               ],
             },
@@ -757,19 +964,74 @@ describe('схема: форма правил', () => {
       'значение не выбрано — законный черновик',
       doc([
         { id: 'a', groupId: 'g1', type: 'short_text' },
-        { id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'is', value: '' } } },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', value: '' } },
+        },
+      ]),
+    ],
+    [
+      'правая часть ссылкой на ответ',
+      doc([
+        { id: 'a', groupId: 'g1', type: 'number' },
+        { id: 'b', groupId: 'g2', type: 'number' },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'gt', valueRef: 'b' } },
+        },
+      ]),
+    ],
+    [
+      'ссылка на несравнимый тип — инертна, но валидна',
+      doc([
+        { id: 'a', groupId: 'g1', type: 'number' },
+        { id: 'b', groupId: 'g2', type: 'short_text' },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', valueRef: 'b' } },
+        },
+      ]),
+    ],
+    [
+      'пустая ссылка — как отсутствующая',
+      doc([
+        { id: 'a', groupId: 'g1', type: 'short_text' },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', value: 'x', valueRef: '' } },
+        },
       ]),
     ],
     [
       'ссылка вперёд — инертна, но валидна',
       doc([
-        { id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'answered' } } },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'answered' } },
+        },
         { id: 'a', groupId: 'g1', type: 'short_text' },
       ]),
     ],
     [
       'ссылка на удалённый блок — инертна, но валидна',
-      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'призрак', op: 'answered' } } }]),
+      doc([
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'призрак', op: 'answered' } },
+        },
+      ]),
     ],
     [
       'обязательность по условию',
@@ -779,7 +1041,10 @@ describe('схема: форма правил', () => {
           id: 'L',
           groupId: 'gL',
           type: 'logic',
-          logic: { when: { blockId: 'a', op: 'answered' }, then: [{ kind: 'require', targets: ['b'] }] },
+          logic: {
+            when: { blockId: 'a', op: 'answered' },
+            then: [{ kind: 'require', targets: ['b'] }],
+          },
         },
         { id: 'b', groupId: 'g2', type: 'phone' },
       ]),
@@ -840,7 +1105,12 @@ describe('схема: форма правил', () => {
     [
       'блок logic: условие и все виды действий',
       doc([
-        { id: 'a', groupId: 'g1', type: 'single_choice', settings: { options: [{ id: 'o1', label: 'Да' }] } },
+        {
+          id: 'a',
+          groupId: 'g1',
+          type: 'single_choice',
+          settings: { options: [{ id: 'o1', label: 'Да' }] },
+        },
         {
           id: 'L',
           groupId: 'g2',
@@ -871,14 +1141,24 @@ describe('схема: форма правил', () => {
     [
       'действие на удалённую цель — инертно, но валидно',
       doc([
-        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'show', targets: ['призрак'] }] } },
+        {
+          id: 'L',
+          groupId: 'g1',
+          type: 'logic',
+          logic: { then: [{ kind: 'show', targets: ['призрак'] }] },
+        },
       ]),
     ],
     [
       'цель СТОИТ ВЫШЕ блока — инертно, но валидно',
       doc([
         { id: 'b', groupId: 'g1', type: 'short_text' },
-        { id: 'L', groupId: 'g2', type: 'logic', logic: { then: [{ kind: 'show', targets: ['b'] }] } },
+        {
+          id: 'L',
+          groupId: 'g2',
+          type: 'logic',
+          logic: { then: [{ kind: 'show', targets: ['b'] }] },
+        },
       ]),
     ],
   ]
@@ -890,7 +1170,10 @@ describe('схема: форма правил', () => {
   const deep = { all: [{ all: [{ all: [{ all: [{ blockId: 'a', op: 'answered' }] }] }] }] }
   const invalid: [string, unknown][] = [
     ['пустое условие', doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: {} } }])],
-    ['пустая группа', doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { all: [] } } }])],
+    [
+      'пустая группа',
+      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { all: [] } } }]),
+    ],
     [
       'all и any одновременно',
       doc([
@@ -898,7 +1181,9 @@ describe('схема: форма правил', () => {
           id: 'L',
           groupId: 'gL',
           type: 'logic',
-          logic: { when: { all: [{ blockId: 'a', op: 'answered' }], any: [{ blockId: 'a', op: 'empty' }] } },
+          logic: {
+            when: { all: [{ blockId: 'a', op: 'answered' }], any: [{ blockId: 'a', op: 'empty' }] },
+          },
         },
       ]),
     ],
@@ -909,22 +1194,65 @@ describe('схема: форма правил', () => {
           id: 'L',
           groupId: 'gL',
           type: 'logic',
-          logic: { when: { all: [{ blockId: 'a', op: 'answered' }], blockId: 'a', op: 'is', value: 'x' } },
+          logic: {
+            when: { all: [{ blockId: 'a', op: 'answered' }], blockId: 'a', op: 'is', value: 'x' },
+          },
+        },
+      ]),
+    ],
+    [
+      'и значение, и ссылка сразу',
+      doc([
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', value: 'x', valueRef: 'b' } },
+        },
+      ]),
+    ],
+    [
+      'ссылка у оператора, который не сравнивает',
+      doc([
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'answered', valueRef: 'b' } },
         },
       ]),
     ],
     [
       'неизвестный оператор',
-      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'matches', value: 'x' } } }]),
+      doc([
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'matches', value: 'x' } },
+        },
+      ]),
     ],
-    ['оператора нет вовсе', doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a' } } }])],
+    [
+      'оператора нет вовсе',
+      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a' } } }]),
+    ],
     [
       'пустой blockId',
-      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: '', op: 'answered' } } }]),
+      doc([
+        { id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: '', op: 'answered' } } },
+      ]),
     ],
     [
       'значение у answered',
-      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'answered', value: 'x' } } }]),
+      doc([
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'answered', value: 'x' } },
+        },
+      ]),
     ],
     [
       'значение длиннее лимита',
@@ -937,7 +1265,10 @@ describe('схема: форма правил', () => {
         },
       ]),
     ],
-    ['вложенность глубже лимита', doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: deep } }])],
+    [
+      'вложенность глубже лимита',
+      doc([{ id: 'L', groupId: 'gL', type: 'logic', logic: { when: deep } }]),
+    ],
     [
       'лишний ключ в условии',
       doc([
@@ -951,11 +1282,20 @@ describe('схема: форма правил', () => {
     ],
     [
       'старое поле visibleIf в документе',
-      doc([{ id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { blockId: 'a', op: 'answered' } }]),
+      doc([
+        { id: 'b', groupId: 'g1', type: 'short_text', visibleIf: { blockId: 'a', op: 'answered' } },
+      ]),
     ],
     [
       'старое поле requiredIf в документе',
-      doc([{ id: 'b', groupId: 'g1', type: 'short_text', requiredIf: { blockId: 'a', op: 'answered' } }]),
+      doc([
+        {
+          id: 'b',
+          groupId: 'g1',
+          type: 'short_text',
+          requiredIf: { blockId: 'a', op: 'answered' },
+        },
+      ]),
     ],
     [
       'старое поле jumpIf в документе',
@@ -968,7 +1308,9 @@ describe('схема: форма правил', () => {
           id: 'b',
           groupId: 'g1',
           type: 'multi_choice',
-          settings: { options: [{ id: 'o1', label: 'Раз', visibleIf: { blockId: 'a', op: 'answered' } }] },
+          settings: {
+            options: [{ id: 'o1', label: 'Раз', visibleIf: { blockId: 'a', op: 'answered' } }],
+          },
         },
       ]),
     ],
@@ -985,7 +1327,14 @@ describe('схема: форма правил', () => {
     ],
     [
       'неизвестное действие',
-      doc([{ id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'calculate', target: 'b' }] } }]),
+      doc([
+        {
+          id: 'L',
+          groupId: 'g1',
+          type: 'logic',
+          logic: { then: [{ kind: 'calculate', target: 'b' }] },
+        },
+      ]),
     ],
     [
       'действие без цели',
@@ -993,12 +1342,19 @@ describe('схема: форма правил', () => {
     ],
     [
       'пустая цель',
-      doc([{ id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'show', target: '' }] } }]),
+      doc([
+        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'show', target: '' }] } },
+      ]),
     ],
     [
       'варианты без списка',
       doc([
-        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'hide_options', target: 'c' }] } },
+        {
+          id: 'L',
+          groupId: 'g1',
+          type: 'logic',
+          logic: { then: [{ kind: 'hide_options', target: 'c' }] },
+        },
       ]),
     ],
     [
@@ -1041,7 +1397,12 @@ describe('схема: форма правил', () => {
     [
       'цель перехода у действия, которое не переход',
       doc([
-        { id: 'L', groupId: 'g1', type: 'logic', logic: { then: [{ kind: 'block_submit', to: 'br' }] } },
+        {
+          id: 'L',
+          groupId: 'g1',
+          type: 'logic',
+          logic: { then: [{ kind: 'block_submit', to: 'br' }] },
+        },
       ]),
     ],
     [
@@ -1056,7 +1417,10 @@ describe('схема: форма правил', () => {
           groupId: 'g1',
           type: 'logic',
           logic: {
-            then: Array.from({ length: MAX_LOGIC_ACTIONS + 1 }, () => ({ kind: 'show', targets: ['b'] })),
+            then: Array.from({ length: MAX_LOGIC_ACTIONS + 1 }, () => ({
+              kind: 'show',
+              targets: ['b'],
+            })),
           },
         },
       ]),

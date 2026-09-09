@@ -25,8 +25,10 @@ import {
 import { GlyphName } from '../GlyphName'
 import { useBuilderStore } from '../storeContext'
 import { ConditionEditor, JoinSelect } from './ConditionEditor'
+import { FILL, GLYPH_VALUE, TRUNCATE } from './controls'
 import { RowMenu } from './rowMenu'
 import {
+  ACTION_ICONS,
   ACTION_LABELS,
   JUMP_END,
   asRootGroup,
@@ -71,7 +73,14 @@ export function LogicBlockEditor({ block }: { block: Block }) {
     // досюда» должно читаться всегда, а не когда полотну вздумается. Второй: блок —
     // одиночка (`canShareRow: false`), группы у него нет вовсе, и вешать его вид на
     // чужую механику значило бы завести ей исключение.
-    <div className="border-border flex flex-col gap-2 border-l-2 py-1 pl-3 text-sm">
+    // Рейл СЕРЫЙ (решение владельца 2026-09-09): он границей блока и работает, а не
+    // меткой, — цветной звал бы к себе внимание, которое принадлежит самому правилу.
+    // Ширина 3px, а не 2: на сером в сером двух пикселей не видно.
+    //
+    // ВОЗДУХ ПЕРЕД БЛОКОМ задаёт не этот div, а СТРОКА (`spacedTop` в реестре типа,
+    // BlockRow): кластер значков стоит absolute от верха строки, и отступ, заданный
+    // здесь, увёл бы вниз только содержимое — значки повисли бы над блоком.
+    <div className="border-border flex flex-col gap-1.5 border-l-[3px] py-0.5 pl-3 text-sm font-medium">
       <Tier
         label="Когда"
         trailing={
@@ -97,8 +106,8 @@ export function LogicBlockEditor({ block }: { block: Block }) {
         )}
       </Tier>
 
-      <Tier label="Тогда">
-        <div className="flex flex-col gap-1.5">
+      <Tier label="Тогда" spaced>
+        <div className="flex flex-col gap-1">
           {actions.map((action, i) => (
             <ActionRow
               key={i}
@@ -155,12 +164,14 @@ export function LogicBlockEditor({ block }: { block: Block }) {
 // длинное имя вопроса всё равно не помещается целиком — его обрезает многоточие.
 // `max-w-full` оставлен, чтобы на узком полотне контрол не выпирал за край.
 //
-// Многоточие в конце — тремя классами разом; почему именно тремя, разобрано в
-// ConditionEditor (`TRUNCATE`): `block` перебивает флекс слота, иначе `text-overflow` не
-// действует и текст режется посреди буквы, `min-w-0` разрешает флекс-элементу сжаться,
-// `truncate` ставит саму обрезку.
-const CONTROL =
-  'h-7 w-52 max-w-full *:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate'
+// Заливка, падинг, вес текста и обрезка — общие на оба яруса, `logic/controls.ts`.
+const CONTROL = `h-7 w-52 max-w-full ${FILL} ${TRUNCATE}`
+
+// Контрол ДЕЙСТВИЯ — исключение: его значение не голый текст, а «значок + название»
+// (ActionName), поэтому флекс слота не перебивается (на нём держится просвет
+// значок→имя), многоточие ставит сам ActionName, а слоту достаётся один `min-w-0`.
+// Тот же случай, что у контрола источника в ConditionEditor.
+const CONTROL_GLYPH = `h-7 w-52 max-w-full ${FILL} ${GLYPH_VALUE}`
 
 // Ярус: подпись СВОЕЙ строкой, содержимое под ней и БЕЗ отступа (решение владельца
 // 2026-08-16). Подпись колонкой слева съедала бы ширину у строки условий, а в ней три
@@ -171,16 +182,21 @@ const CONTROL =
 function Tier({
   label,
   trailing,
+  spaced = false,
   children,
 }: {
   label: string
   trailing?: React.ReactNode
+  // Воздух перед ярусом — только у «Тогда» (решение владельца 2026-09-09): между
+  // условием и действиями граница смысла, а не следующая строка того же списка, и
+  // общий `gap` блока её не выражает — он одинаков для всего.
+  spaced?: boolean
   children: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className={`flex flex-col gap-1 ${spaced ? 'mt-1.5' : ''}`}>
       <div className="flex items-center gap-2">
-        <span className="text-muted-foreground text-xs tracking-wide uppercase">{label}</span>
+        <span className="text-muted-foreground text-xs font-medium">{label}</span>
         {trailing}
       </div>
       <div className="min-w-0">{children}</div>
@@ -278,13 +294,13 @@ function ActionRow({
   return (
     <div className="flex flex-wrap items-center gap-1.5">
       <Select value={kind ?? ''} onValueChange={(k) => pickKind(k as LogicActionKind)}>
-        <SelectTrigger size="sm" className={CONTROL} aria-label="Действие">
+        <SelectTrigger size="sm" className={CONTROL_GLYPH} aria-label="Действие">
           <SelectValue placeholder="Выберите действие" />
         </SelectTrigger>
         <SelectContent>
           {LOGIC_ACTIONS.map((k) => (
             <SelectItem key={k} value={k}>
-              {ACTION_LABELS[k]}
+              <ActionName kind={k} />
             </SelectItem>
           ))}
         </SelectContent>
@@ -339,7 +355,7 @@ function JumpTarget({
         onChange(v === JUMP_END ? { kind: 'jump', end: true } : { kind: 'jump', to: v })
       }
     >
-      <SelectTrigger size="sm" className="h-7 min-w-36 flex-1" aria-label="Куда перейти">
+      <SelectTrigger size="sm" className={`h-7 min-w-36 flex-1 ${FILL}`} aria-label="Куда перейти">
         <SelectValue placeholder="Страница…" />
       </SelectTrigger>
       <SelectContent>
@@ -415,7 +431,7 @@ function TargetPicker({
           aria-expanded={open}
           aria-label="Цели действия"
           disabled={disabled}
-          className={`${CONTROL} justify-between font-normal`}
+          className={`${CONTROL} justify-between has-[>svg]:px-2`}
         >
           <span className="min-w-0 truncate">{summary}</span>
           <ChevronDown className="size-4 shrink-0 opacity-50" />
@@ -489,6 +505,20 @@ const toggled = <T,>(set: ReadonlySet<T>, key: T): ReadonlySet<T> => {
   return next
 }
 
+// «Значок действия + название» — тот же приём, что GlyphName у вопроса: в списке из пяти
+// длинных строк значок находит нужную быстрее, чем чтение. Разметка рассчитана на
+// хозяина-флекс (SelectItem и слот значения у SelectTrigger), поэтому своей рамки и
+// своего размера значка здесь нет — только просвет и обрезка имени.
+function ActionName({ kind }: { kind: LogicActionKind }) {
+  const Icon = ACTION_ICONS[kind]
+  return (
+    <span className="flex min-w-0 items-center gap-2">
+      <Icon className="text-muted-foreground size-4 shrink-0" aria-hidden />
+      <span className="truncate">{ACTION_LABELS[kind]}</span>
+    </span>
+  )
+}
+
 // Ветка дерева: отступ плюс вертикальный рейл, тот самый, что держит вложенность на глаз.
 function Rail({ children }: { children: React.ReactNode }) {
   return <div className="border-border ml-[13px] border-l pl-2">{children}</div>
@@ -543,11 +573,17 @@ function TreeRow({
       {checked !== undefined && (
         <span
           className={`flex size-4 shrink-0 items-center justify-center rounded-sm border ${
-            checked ? 'bg-primary border-primary text-primary-foreground' : 'border-input'
+            checked ? 'bg-primary border-primary' : 'border-input'
           }`}
           aria-hidden="true"
         >
-          {checked && <Check className="size-3" />}
+          {/* МИНА: цвет галочки задан НА САМОЙ галочке, а не на коробке. `CommandItem`
+              красит вложенные svg правилом `[&_svg:not([class*='text-'])]`, то есть
+              перебивает любой унаследованный цвет — галочка выходила серой на синей
+              заливке и читалась как пустой залитый квадрат. Класс с `text-` на самом
+              svg выводит его из-под этого правила (тот же приём, что `size-3` выводит
+              из-под навязанного размера). */}
+          {checked && <Check className="text-primary-foreground size-3" />}
         </span>
       )}
       {glyphType === undefined ? (

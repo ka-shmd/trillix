@@ -7,6 +7,7 @@ import {
   filterTargetTree,
   jumpTargetsFrom,
   logicBlockWarnings,
+  referenceSources,
   targetTree,
 } from './model'
 
@@ -219,6 +220,50 @@ describe('цели перехода — страницы ниже блока', (
   })
 })
 
+describe('вопросы для правой части условия', () => {
+  const refDoc: Block[] = [
+    blk('txt', 'g1', 'short_text'),
+    blk('mail', 'g2', 'email'),
+    blk('num', 'g3', 'number'),
+    blk('nps', 'g4', 'scale'),
+    blk('day', 'g5', 'date'),
+    blk('pick', 'g6', 'single_choice'),
+    blk('cap', 'g7', 'title'),
+  ]
+  const refsFor = (id: string): string[] =>
+    referenceSources(
+      refDoc,
+      refDoc.find((b) => b.id === id)!,
+    ).map((b) => b.id)
+
+  it('текстовые сравниваются между собой', () => {
+    expect(refsFor('txt')).toEqual(['mail'])
+  })
+
+  it('число и шкала — один домен', () => {
+    expect(refsFor('num')).toEqual(['nps'])
+    expect(refsFor('nps')).toEqual(['num'])
+  })
+
+  it('дата сравнима только с датой, а второй даты в форме нет', () => {
+    expect(refsFor('day')).toEqual([])
+  })
+
+  // id варианта принадлежит своему блоку: между двумя списками они не совпадут никогда,
+  // и ссылка означала бы всегда ложное условие.
+  it('у выбора ссылок нет вовсе', () => {
+    expect(refsFor('pick')).toEqual([])
+  })
+
+  it('сам источник в список не попадает', () => {
+    expect(refsFor('mail')).not.toContain('mail')
+  })
+
+  it('неотвечаемые блоки в список не попадают', () => {
+    expect(refsFor('txt')).not.toContain('cap')
+  })
+})
+
 describe('предупреждения блока', () => {
   const warn = (l: Block['logic'], blocks = doc(l)): string[] => {
     const block = blocks.find((b) => b.id === 'L')!
@@ -262,6 +307,38 @@ describe('предупреждения блока', () => {
       logic('L', l),
     ]
     expect(logicBlockWarnings(blocks, blocks[4]!)).toEqual([])
+  })
+
+  it('вопрос, с ответом которого сравниваем, удалён', () => {
+    const out = warn({
+      when: { blockId: 'q1', op: 'is', valueRef: 'призрак' },
+      then: [{ kind: 'show', targets: ['q2cap'] }],
+    })
+    expect(out.join(' ')).toContain('удалён')
+  })
+
+  it('вопрос для сравнения стоит ниже цели', () => {
+    // Источник q1 выше цели q2cap, а ссылка (list) — ниже неё: сравнивать не с чем.
+    const out = warn({
+      when: { blockId: 'q1', op: 'is', valueRef: 'list' },
+      then: [{ kind: 'show', targets: ['q2cap'] }],
+    })
+    expect(out.join(' ')).toContain('ниже')
+  })
+
+  it('ответы разных доменов сравнивать нечем', () => {
+    // Текст с числом: обе стороны стоят выше цели, то есть дело именно в типах.
+    const l: Block['logic'] = {
+      when: { blockId: 'txt', op: 'is', valueRef: 'num' },
+      then: [{ kind: 'show', targets: ['dep'] }],
+    }
+    const blocks: Block[] = [
+      blk('txt', 'g1', 'short_text'),
+      blk('num', 'g2', 'number'),
+      logic('L', l),
+      blk('dep', 'g3', 'phone'),
+    ]
+    expect(logicBlockWarnings(blocks, blocks[2]!).join(' ')).toContain('нечем')
   })
 
   it('цель удалена', () => {

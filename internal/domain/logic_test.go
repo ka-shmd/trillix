@@ -359,6 +359,9 @@ func TestPlanForm_Numbers(t *testing.T) {
 		{"is у number сравнивает числом, а не строкой", leaf("age", OpIs, "5.0"), map[string]any{"age": "5"}, true},
 		{"gt у нечислового ответа — ложь, но правило действует", leaf("age", OpGt, "5"), map[string]any{"age": "abc"}, false},
 		{"gt у текстового источника — инертен", leaf("txt", OpGt, "5"), map[string]any{}, true},
+		{"gte на равном значении", leaf("age", OpGte, "5"), map[string]any{"age": "5"}, true},
+		{"gte ниже границы", leaf("age", OpGte, "5"), map[string]any{"age": "4"}, false},
+		{"lte на равном значении", leaf("nps", OpLte, "3"), map[string]any{"nps": "3"}, true},
 	}
 
 	for _, tc := range cases {
@@ -373,6 +376,118 @@ func TestPlanForm_Numbers(t *testing.T) {
 				t.Fatalf("видимость: got %v, want %v", got, tc.visible)
 			}
 		})
+	}
+}
+
+// ---------- текст и даты ----------
+
+func TestPlanForm_TextAndDates(t *testing.T) {
+	txt := lblk("txt", "g1", BlockShortText)
+	day := lblk("day", "g2", BlockDate)
+	num := lblk("num", "g3", BlockNumber)
+
+	cases := []struct {
+		name    string
+		rule    *Condition
+		answers map[string]any
+		visible bool
+	}{
+		{"содержит подстроку", leaf("txt", OpContains, "иван"), map[string]any{"txt": "Иван Иванов"}, true},
+		{"содержит: регистр не важен", leaf("txt", OpContains, "ИВАН"), map[string]any{"txt": "иван"}, true},
+		{"содержит: подстроки нет", leaf("txt", OpContains, "пётр"), map[string]any{"txt": "Иван"}, false},
+		{"не содержит", leaf("txt", OpNotContains, "пётр"), map[string]any{"txt": "Иван"}, true},
+		// Строгое отрицание, как у is_not: пара «отвечен И не содержит» складывается группой.
+		{"не содержит у неотвеченного — истинно", leaf("txt", OpNotContains, "иван"), map[string]any{}, true},
+		{"содержит у числового источника — инертен", leaf("num", OpContains, "5"), map[string]any{"num": "5"}, true},
+		{"начинается с", leaf("txt", OpStartsWith, "иван"), map[string]any{"txt": "Иванов Иван"}, true},
+		{"начинается с: не начало", leaf("txt", OpStartsWith, "иван"), map[string]any{"txt": "Пётр Иванов"}, false},
+		{"не начинается с", leaf("txt", OpNotStartsWith, "иван"), map[string]any{"txt": "Пётр"}, true},
+		{"заканчивается на", leaf("txt", OpEndsWith, "ов"), map[string]any{"txt": "Иванов"}, true},
+		{"заканчивается на: не конец", leaf("txt", OpEndsWith, "ов"), map[string]any{"txt": "Иванова"}, false},
+		{"не заканчивается на", leaf("txt", OpNotEndsWith, "ов"), map[string]any{"txt": "Иванова"}, true},
+		{"дата позже", leaf("day", OpGt, "2026-01-01"), map[string]any{"day": "2026-05-01"}, true},
+		{"дата не позже", leaf("day", OpGt, "2026-05-01"), map[string]any{"day": "2026-01-01"}, false},
+		{"дата раньше", leaf("day", OpLt, "2026-05-01"), map[string]any{"day": "2026-01-01"}, true},
+		{"дата не раньше (gte) на равной дате", leaf("day", OpGte, "2026-05-01"), map[string]any{"day": "2026-05-01"}, true},
+		{"дата за границей года", leaf("day", OpGt, "2025-12-31"), map[string]any{"day": "2026-01-01"}, true},
+		{"пустая дата — ложь, но правило действует", leaf("day", OpGt, "2026-01-01"), map[string]any{}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := lblk("dep", "g9", BlockShortText)
+			blocks := []Block{txt, day, num, showRule("dep", tc.rule), dep}
+			plan := PlanForm(blocks, answers(tc.answers))
+			if got := plan.Visible["dep"]; got != tc.visible {
+				t.Fatalf("видимость: got %v, want %v", got, tc.visible)
+			}
+		})
+	}
+}
+
+// ---------- правая часть: ссылка на ответ другого вопроса ----------
+
+// leafRef — лист, у которого правая часть не значение, а ОТВЕТ другого блока.
+func leafRef(blockID string, op LogicOp, ref string) *Condition {
+	return &Condition{BlockID: blockID, Op: op, ValueRef: ref}
+}
+
+func TestPlanForm_ValueRef(t *testing.T) {
+	mail := lblk("mail", "g1", BlockEmail)
+	mail2 := lblk("mail2", "g2", BlockShortText)
+	budget := lblk("budget", "g3", BlockNumber)
+	price := lblk("price", "g4", BlockNumber)
+	pick := lchoice("pick", "g5", BlockSingleChoice, Option{ID: "o1"}, Option{ID: "o2"})
+	pick2 := lchoice("pick2", "g6", BlockSingleChoice, Option{ID: "o3"})
+
+	cases := []struct {
+		name    string
+		rule    *Condition
+		answers map[string]any
+		visible bool
+	}{
+		{"равенство по ссылке сработало", leafRef("mail", OpIs, "mail2"), map[string]any{"mail": "a@b", "mail2": "a@b"}, true},
+		{"равенство по ссылке не сработало", leafRef("mail", OpIs, "mail2"), map[string]any{"mail": "a@b", "mail2": "c@d"}, false},
+		{"неравенство по ссылке", leafRef("mail", OpIsNot, "mail2"), map[string]any{"mail": "a@b", "mail2": "c@d"}, true},
+		// Инертное «показать» показало бы цель — значит true здесь означал бы, что
+		// пустая ссылка сделала правило инертным. Она его таковым НЕ делает.
+		{"пустой ответ по ссылке — пустая правая часть, а не инертность", leafRef("mail", OpIs, "mail2"), map[string]any{"mail": "a@b"}, false},
+		{"оба ответа пусты — равны", leafRef("mail", OpIs, "mail2"), map[string]any{}, true},
+		{"число больше, чем ответ другого вопроса", leafRef("budget", OpGt, "price"), map[string]any{"budget": "100", "price": "50"}, true},
+		{"число не больше ответа другого вопроса", leafRef("budget", OpGt, "price"), map[string]any{"budget": "40", "price": "50"}, false},
+		{"почта и короткий текст — один домен", leafRef("mail", OpIs, "mail2"), map[string]any{"mail": "x", "mail2": "x"}, true},
+		{"ссылка на удалённый блок — инертна", leafRef("mail", OpIs, "нет-такого"), map[string]any{"mail": "a@b"}, true},
+		{"ссылка на другой домен — инертна", leafRef("mail", OpIs, "budget"), map[string]any{"mail": "5", "budget": "5"}, true},
+		{"ссылка на выбор — инертна: id вариантов разных списков не совпадают", leafRef("pick", OpIs, "pick2"), map[string]any{"pick": "o1", "pick2": "o1"}, true},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := lblk("dep", "g9", BlockShortText)
+			blocks := []Block{
+				mail, mail2, budget, price, pick, pick2,
+				showRule("dep", tc.rule), dep,
+			}
+			plan := PlanForm(blocks, answers(tc.answers))
+			if got := plan.Visible["dep"]; got != tc.visible {
+				t.Fatalf("видимость: got %v, want %v", got, tc.visible)
+			}
+		})
+	}
+}
+
+// Ссылка ниже ЦЕЛИ инертна ровно так же, как источник ниже цели: к моменту, когда
+// решается цель, ответа по ссылке ещё нет, и сравнивать не с чем.
+func TestPlanForm_ValueRefBelowTarget(t *testing.T) {
+	mail := lblk("mail", "g1", BlockEmail)
+	dep := lblk("dep", "g2", BlockShortText)
+	later := lblk("later", "g3", BlockShortText)
+	blocks := []Block{
+		mail, showRule("dep", leafRef("mail", OpIs, "later")), dep, later,
+	}
+	plan := PlanForm(blocks, answers(map[string]any{"mail": "a@b", "later": "a@b"}))
+	if !plan.Visible["dep"] {
+		t.Fatal("правило со ссылкой ниже цели обязано быть инертным — цель видима")
 	}
 }
 
@@ -1063,6 +1178,20 @@ func TestValidateSchema_LogicValid(t *testing.T) {
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":""}}}
 		]}`,
+		"правая часть ссылкой на ответ": `{"schemaVersion":1,"blocks":[
+			{"id":"a","groupId":"g1","type":"number","settings":{}},
+			{"id":"b","groupId":"g2","type":"number","settings":{}},
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"gt","valueRef":"b"}}}
+		]}`,
+		"ссылка на несравнимый тип — инертна, но валидна": `{"schemaVersion":1,"blocks":[
+			{"id":"a","groupId":"g1","type":"number","settings":{}},
+			{"id":"b","groupId":"g2","type":"short_text","settings":{}},
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","valueRef":"b"}}}
+		]}`,
+		"пустая ссылка — как отсутствующая": `{"schemaVersion":1,"blocks":[
+			{"id":"a","groupId":"g1","type":"short_text","settings":{}},
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"x","valueRef":""}}}
+		]}`,
 		"ссылка вперёд — инертна, но валидна": `{"schemaVersion":1,"blocks":[
 			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"answered"}}},
 			{"id":"a","groupId":"g1","type":"short_text","settings":{}}
@@ -1155,6 +1284,12 @@ func TestValidateSchema_LogicInvalid(t *testing.T) {
 		"группа с полями листа": `{"schemaVersion":1,"blocks":[
 			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{
 				"all":[{"blockId":"a","op":"answered"}],"blockId":"a","op":"is","value":"x"}}}
+		]}`,
+		"и значение, и ссылка сразу": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"is","value":"x","valueRef":"b"}}}
+		]}`,
+		"ссылка у оператора, который не сравнивает": `{"schemaVersion":1,"blocks":[
+			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"answered","valueRef":"b"}}}
 		]}`,
 		"неизвестный оператор": `{"schemaVersion":1,"blocks":[
 			{"id":"L","groupId":"gL","type":"logic","logic":{"when":{"blockId":"a","op":"matches","value":"x"}}}

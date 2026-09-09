@@ -1,10 +1,12 @@
 package domain
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -57,24 +59,43 @@ const (
 type LogicOp string
 
 const (
-	// Наличие ответа — у любого отвечаемого типа.
-	OpAnswered LogicOp = "answered"
-	OpEmpty    LogicOp = "empty"
 	// Равенство: id варианта у одиночного выбора, число у шкалы и number, ConsentYes у
 	// согласия, точная строка у текстовых.
 	OpIs    LogicOp = "is"
 	OpIsNot LogicOp = "is_not"
+	// Текстовые типы: подстрока, начало и конец ответа.
+	OpContains      LogicOp = "contains"
+	OpNotContains   LogicOp = "not_contains"
+	OpStartsWith    LogicOp = "starts_with"
+	OpNotStartsWith LogicOp = "not_starts_with"
+	OpEndsWith      LogicOp = "ends_with"
+	OpNotEndsWith   LogicOp = "not_ends_with"
 	// Множественный выбор: содержит ли ответ этот вариант.
 	OpIncludes LogicOp = "includes"
 	OpExcludes LogicOp = "excludes"
-	// Числовое сравнение — только шкала и number.
-	OpGt LogicOp = "gt"
-	OpLt LogicOp = "lt"
+	// Порядок — у чисел, шкалы и ДАТЫ: ISO-строка сравнивается лексикографически, а это
+	// и есть хронологический порядок.
+	OpGt  LogicOp = "gt"
+	OpLt  LogicOp = "lt"
+	OpGte LogicOp = "gte"
+	OpLte LogicOp = "lte"
+	// Наличие ответа — у любого отвечаемого типа. В списке у автора идёт последним:
+	// порядок кортежа logicOps и есть порядок пунктов (см. conditions.ts).
+	OpAnswered LogicOp = "answered"
+	OpEmpty    LogicOp = "empty"
 )
 
 // logicOps — все операторы одним списком, и он же источник valid(). Один список, а не
 // switch плюс отдельный перечень: ровно тот урок, который фаза 16 вынесла из blockTypes.
-var logicOps = []LogicOp{OpAnswered, OpEmpty, OpIs, OpIsNot, OpIncludes, OpExcludes, OpGt, OpLt}
+var logicOps = []LogicOp{
+	OpIs, OpIsNot,
+	OpContains, OpNotContains,
+	OpStartsWith, OpNotStartsWith,
+	OpEndsWith, OpNotEndsWith,
+	OpIncludes, OpExcludes,
+	OpGt, OpLt, OpGte, OpLte,
+	OpAnswered, OpEmpty,
+}
 
 func (op LogicOp) valid() bool { return slices.Contains(logicOps, op) }
 
@@ -95,13 +116,46 @@ func (op LogicOp) appliesTo(t BlockType) bool {
 	case OpIs, OpIsNot:
 		// У множественного выбора «равно» неопределимо: ответ — массив. Ему includes.
 		return !t.isMultiChoice()
+	case OpContains, OpNotContains, OpStartsWith, OpNotStartsWith, OpEndsWith, OpNotEndsWith:
+		// Куски строки осмысленны там, где ответ — свободный текст. У числа и даты
+		// «содержит» значило бы поиск по записи ответа, а не по его значению.
+		return valueDomain(t) == "text"
 	case OpIncludes, OpExcludes:
 		return t.isMultiChoice()
-	case OpGt, OpLt:
-		return t == BlockScale || t == BlockNumber
+	case OpGt, OpLt, OpGte, OpLte:
+		d := valueDomain(t)
+		return d == "number" || d == "date"
 	default:
 		return false
 	}
+}
+
+// valueDomain — с чем ответ этого типа СРАВНИМ. Пустая строка значит «ни с чьим
+// ответом»: правая часть у такого источника бывает только заданным значением.
+//
+// Домены крупные нарочно: почту с коротким текстом сравнить осмысленно («совпадает ли
+// с тем, что человек вписал выше»), а шкалу с датой — нет. Выбор в доменах не участвует
+// вовсе, и это не забывчивость: ответ выбора — id варианта, а варианты принадлежат
+// своему блоку, поэтому id из двух разных списков не совпадут НИКОГДА. Ссылка там
+// означала бы условие, которое всегда ложно, — предлагать её хуже, чем не иметь.
+func valueDomain(t BlockType) string {
+	switch t {
+	case BlockShortText, BlockLongText, BlockEmail, BlockPhone:
+		return "text"
+	case BlockNumber, BlockScale:
+		return "number"
+	case BlockDate:
+		return "date"
+	default:
+		return ""
+	}
+}
+
+// canReferenceAnswer — годится ли ответ ref правой частью условия об src. Зеркалит
+// canReferenceAnswer в @fields/logic.ts; проверяется таблицами кейсов обеих сторон.
+func canReferenceAnswer(src, ref BlockType) bool {
+	d := valueDomain(src)
+	return d != "" && d == valueDomain(ref)
 }
 
 // Condition — узел дерева условий: группа «все» (all), группа «любое» (any) или лист
@@ -123,6 +177,14 @@ type Condition struct {
 	// молчащее «условие никогда не срабатывает». Пусто у answered/empty; пусто у
 	// остальных — недособранный черновик (автор ещё не выбрал), правило инертно.
 	Value string `json:"value,omitempty"`
+	// ValueRef — ВТОРОЙ способ задать правую часть: id другого отвечаемого блока,
+	// «сравни с его ответом» («бюджет больше, чем стоимость»). С Value взаимно
+	// исключается — это форма узла, и она проверяется схемой.
+	//
+	// Совместимость типов схемой НЕ проверяется (текстовый ответ со шкалой сравнивать
+	// нечем): пара доменов кросс-блочная, как и всё остальное здесь, и несовместимая
+	// делает правило ИНЕРТНЫМ. Правило домена — sameValueDomain ниже.
+	ValueRef string `json:"valueRef,omitempty"`
 }
 
 // LogicActionKind — что правило ДЕЛАЕТ, когда условие сработало. Зеркалит LOGIC_ACTIONS
@@ -248,7 +310,7 @@ func validateCondNode(c Condition, what string, depth int, nodes *int) error {
 	}
 
 	isAll, isAny := len(c.All) > 0, len(c.Any) > 0
-	isLeaf := c.BlockID != "" || c.Op != "" || c.Value != ""
+	isLeaf := c.BlockID != "" || c.Op != "" || c.Value != "" || c.ValueRef != ""
 	switch {
 	case isAll && isAny:
 		return fmt.Errorf("%s: у группы условий одновременно all и any", what)
@@ -283,8 +345,16 @@ func validateCondNode(c Condition, what string, depth int, nodes *int) error {
 	if n := utf8.RuneCountInString(c.Value); n > MaxLogicValueLen {
 		return fmt.Errorf("%s: значение длиннее %d символов", what, MaxLogicValueLen)
 	}
-	if !c.Op.needsValue() && c.Value != "" {
+	if c.Value != "" && c.ValueRef != "" {
+		return fmt.Errorf("%s: у условия и значение, и ссылка на ответ", what)
+	}
+	if !c.Op.needsValue() && (c.Value != "" || c.ValueRef != "") {
 		return fmt.Errorf("%s: оператор %q не сравнивает со значением", what, c.Op)
+	}
+	if c.ValueRef != "" {
+		if err := validateID(c.ValueRef); err != nil {
+			return fmt.Errorf("%s: valueRef: %s", what, err)
+		}
 	}
 	return nil
 }
@@ -591,10 +661,33 @@ func (ev *evaluator) leaf(c Condition, carrier int) (result, ok bool) {
 	if !c.Op.appliesTo(src.Type) {
 		return false, false // оператор не подходит типу источника
 	}
-	if c.Op.needsValue() && c.Value == "" {
-		return false, false // автор ещё не выбрал значение
+	if c.Op.needsValue() && c.Value == "" && c.ValueRef == "" {
+		return false, false // автор ещё не выбрал ни значения, ни ссылки
 	}
 	val := ev.decided[c.BlockID]
+
+	// Правая часть: заданное автором значение либо ОТВЕТ другого блока. У ссылки те же
+	// три причины инертности, что у источника, — и по той же причине: обход
+	// однопроходный, и обе стороны сравнения обязаны быть решены к моменту, когда
+	// решается цель.
+	want := c.Value
+	if c.ValueRef != "" {
+		ref, exists := ev.byID[c.ValueRef]
+		if !exists {
+			return false, false // блока, на чей ответ ссылались, нет в документе
+		}
+		if ev.pos[c.ValueRef] >= carrier {
+			return false, false // ссылка не решена к этому месту обхода
+		}
+		if !canReferenceAnswer(src.Type, ref.Type) {
+			return false, false // текст с числом сравнивать нечем
+		}
+		// ПУСТОЙ ответ по ссылке — это пустая правая часть, а не инертность. Инертное
+		// «показать» делает цель ВИДИМОЙ (§15.4 EDITOR.md), то есть форма показывала бы
+		// ветку всем, кто до второго вопроса ещё не дошёл. То же правило, что у скрытого
+		// источника: не отвечено — значит пусто.
+		want = ev.decided[c.ValueRef].text
+	}
 
 	switch c.Op {
 	case OpAnswered:
@@ -602,28 +695,80 @@ func (ev *evaluator) leaf(c Condition, carrier int) (result, ok bool) {
 	case OpEmpty:
 		return val.empty(), true
 	case OpIs:
-		return sameAnswer(src.Type, val.text, c.Value), true
+		return sameAnswer(src.Type, val.text, want), true
 	case OpIsNot:
 		// Строгое отрицание: у неотвеченного источника «не равно» истинно. Так «не
 		// равно» остаётся композируемым (нужна пара «отвечено И не равно» — автор
 		// складывает её группой), а не молча означает две разные вещи.
-		return !sameAnswer(src.Type, val.text, c.Value), true
+		return !sameAnswer(src.Type, val.text, want), true
+	case OpContains, OpNotContains, OpStartsWith, OpNotStartsWith, OpEndsWith, OpNotEndsWith:
+		// Отрицания строгие, как у is_not: у неотвеченного источника «не содержит»
+		// истинно, а пара «отвечен И не содержит» складывается группой.
+		return textHolds(val.text, want, c.Op), true
 	case OpIncludes:
-		return slices.Contains(val.list, c.Value), true
+		return slices.Contains(val.list, want), true
 	case OpExcludes:
-		return !slices.Contains(val.list, c.Value), true
-	case OpGt, OpLt:
+		return !slices.Contains(val.list, want), true
+	case OpGt, OpLt, OpGte, OpLte:
+		// Дата — ISO-строка (YYYY-MM-DD), у неё лексикографический порядок совпадает с
+		// хронологическим; ничего не разбираем, потому что разбор дат — это часовые
+		// пояса, которых у ответа нет.
+		if valueDomain(src.Type) == "date" {
+			if val.text == "" || want == "" {
+				return false, true // сравнивать не с чем — но правило действует
+			}
+			return orderHolds(strings.Compare(val.text, want), c.Op), true
+		}
 		a, errA := strconv.ParseFloat(val.text, 64)
-		b, errB := strconv.ParseFloat(c.Value, 64)
+		b, errB := strconv.ParseFloat(want, 64)
 		if errA != nil || errB != nil {
 			return false, true // нечисловой ответ не больше и не меньше — но правило действует
 		}
-		if c.Op == OpGt {
-			return a > b, true
-		}
-		return a < b, true
+		return orderHolds(cmp.Compare(a, b), c.Op), true
 	default:
 		return false, false
+	}
+}
+
+// textHolds — верно ли текстовое сравнение. Регистр не учитывается ни в одном из шести:
+// автор пишет условие про смысл ответа, а не про то, какой клавишей респондент начал
+// слово. Одна точка на все шесть — иначе «начинается с» и «содержит» разошлись бы
+// правилом регистра на первой же правке.
+func textHolds(answer, want string, op LogicOp) bool {
+	a, w := strings.ToLower(answer), strings.ToLower(want)
+	switch op {
+	case OpContains:
+		return strings.Contains(a, w)
+	case OpNotContains:
+		return !strings.Contains(a, w)
+	case OpStartsWith:
+		return strings.HasPrefix(a, w)
+	case OpNotStartsWith:
+		return !strings.HasPrefix(a, w)
+	case OpEndsWith:
+		return strings.HasSuffix(a, w)
+	case OpNotEndsWith:
+		return !strings.HasSuffix(a, w)
+	default:
+		return false
+	}
+}
+
+// orderHolds — верен ли порядок, который требует оператор, при знаке сравнения sign
+// (как у strings.Compare и cmp.Compare: -1, 0, 1). Одна точка на числа и даты: иначе
+// «больше или равно» разъехалось бы между ними на первой же правке.
+func orderHolds(sign int, op LogicOp) bool {
+	switch op {
+	case OpGt:
+		return sign > 0
+	case OpLt:
+		return sign < 0
+	case OpGte:
+		return sign >= 0
+	case OpLte:
+		return sign <= 0
+	default:
+		return false
 	}
 }
 

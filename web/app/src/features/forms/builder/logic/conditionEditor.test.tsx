@@ -112,6 +112,113 @@ describe('глиф вопроса-источника', () => {
   })
 })
 
+// Правая часть: значение ИЛИ ответ другого вопроса. Раскрытый список из happy-dom не
+// виден (Popover, как и Select, здесь не раскрывается), зато видно, ИЗ ЧЕГО собран
+// контрол и что на нём написано, — а ломается это молча.
+describe('правая часть условия', () => {
+  const cmp = (blockId: string): LogicCondition => ({ blockId, op: 'is' })
+  const chevron = () => screen.queryByLabelText('Выбрать значение')
+
+  it('слева поле ввода, справа шеврон — одно поле на вид', () => {
+    setup({ all: [cmp('a')] })
+    expect(screen.getByLabelText('Значение').tagName).toBe('INPUT')
+    expect(chevron()).toBeTruthy()
+  })
+
+  // Шеврон, за которым пусто, обещает выбор, которого нет.
+  it('сравнивать не с чем — шеврона нет, остаётся один ввод', () => {
+    const blocks = [src('a')]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [cmp('a')] }}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(chevron()).toBeNull()
+    expect(screen.getByLabelText('Значение').tagName).toBe('INPUT')
+  })
+
+  // У закрытого списка шеврон — единственный способ задать значение, и сравнимые
+  // вопросы тут ни при чём.
+  it('у закрытого списка шеврон есть и без сравнимых вопросов', () => {
+    const blocks: Block[] = [
+      {
+        id: 'a',
+        groupId: 'g_a',
+        type: 'single_choice',
+        settings: { options: [{ id: 'o1', label: 'Да' }] },
+      },
+    ]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [cmp('a')] }}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(chevron()).toBeTruthy()
+  })
+
+  // Из ссылки нужен выход к вводу («Вписать значение»), даже когда сравнимых вопросов
+  // на форме не осталось.
+  it('у поставленной ссылки шеврон есть всегда', () => {
+    const blocks = [src('a')]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [{ blockId: 'a', op: 'is', valueRef: 'призрак' }] }}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(chevron()).toBeTruthy()
+  })
+
+  it('у закрытого списка левая половина не поле ввода, а показ выбранного', () => {
+    const blocks: Block[] = [
+      {
+        id: 'a',
+        groupId: 'g_a',
+        type: 'single_choice',
+        settings: { options: [{ id: 'o1', label: 'Да' }] },
+      },
+    ]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [{ blockId: 'a', op: 'is', value: 'o1' }] }}
+        onChange={vi.fn()}
+      />,
+    )
+    const face = screen.getByLabelText('Значение')
+    expect(face.tagName).toBe('BUTTON')
+    expect(face.textContent).toContain('Да')
+  })
+
+  it('ссылка занимает поле целиком и называется именем вопроса', () => {
+    setup({ all: [{ blockId: 'a', op: 'is', valueRef: 'b' }] })
+    const face = screen.getByLabelText('Значение')
+    expect(face.tagName).toBe('BUTTON')
+    expect(face.textContent).toContain('Короткий ответ 2')
+  })
+
+  it('удалённая ссылка называется словами', () => {
+    setup({ all: [{ blockId: 'a', op: 'is', valueRef: 'призрак' }] })
+    expect(screen.getByLabelText('Значение').textContent).toContain('Удалённый вопрос')
+  })
+
+  // Источник ещё не выбран — неизвестно и то, из чего выбирать: поле стоит на месте
+  // выключенным, а шеврона нет.
+  it('у незаполненной строки шеврона нет', () => {
+    setup({ all: [] })
+    expect(chevron()).toBeNull()
+  })
+})
+
 describe('меню строки', () => {
   it('стоит у каждого заполненного условия', () => {
     setup({ all: [leaf('a'), leaf('b')] })

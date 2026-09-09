@@ -250,15 +250,31 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
   }
 
   const evalLeaf = (
-    c: { blockId: string; op: LogicOperator; value?: string },
+    c: { blockId: string; op: LogicOperator; value?: string; valueRef?: string },
     carrier: number,
   ): [boolean, boolean] => {
     const src = byId.get(c.blockId)
     if (src === undefined) return [false, false] // источника нет в документе
     if ((pos.get(c.blockId) ?? 0) >= carrier) return [false, false] // не решён к этому месту
     if (!opApplies(c.op, src)) return [false, false] // оператор не подходит типу
-    const value = c.value ?? ''
-    if (opNeedsValue(c.op) && value === '') return [false, false] // значение не выбрано
+    let value = c.value ?? ''
+    const ref = c.valueRef ?? ''
+    // Ни значения, ни ссылки — автор ещё не дошёл до правой части.
+    if (opNeedsValue(c.op) && value === '' && ref === '') return [false, false]
+
+    // Правая часть может быть ОТВЕТОМ другого блока. У ссылки те же три причины
+    // инертности, что у источника, и по той же причине: обход однопроходный, и обе
+    // стороны сравнения обязаны быть решены к моменту, когда решается цель.
+    if (ref !== '') {
+      const refBlock = byId.get(ref)
+      if (refBlock === undefined) return [false, false] // блока по ссылке нет в документе
+      if ((pos.get(ref) ?? 0) >= carrier) return [false, false] // ссылка не решена к месту
+      if (!canReferenceAnswer(src.type, refBlock.type)) return [false, false] // разные домены
+      // ПУСТОЙ ответ по ссылке — пустая правая часть, а не инертность: инертное
+      // «показать» делает цель видимой (EDITOR §15.4), то есть ветку увидел бы каждый,
+      // кто до второго вопроса ещё не дошёл. То же правило, что у скрытого источника.
+      value = (decided.get(ref) ?? EMPTY).text
+    }
 
     const val = decided.get(c.blockId) ?? EMPTY
     switch (c.op) {
@@ -272,16 +288,36 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
         // Строгое отрицание: у неотвеченного источника «не равно» истинно. Так оператор
         // остаётся композируемым — пара «отвечено И не равно» складывается группой.
         return [!sameAnswer(src, val.text, value), true]
+      case 'contains':
+      case 'not_contains':
+      case 'starts_with':
+      case 'not_starts_with':
+      case 'ends_with':
+      case 'not_ends_with':
+        // Отрицания строгие, как у is_not: у неотвеченного источника «не содержит»
+        // истинно, а пара «отвечен И не содержит» складывается группой.
+        return [textHolds(val.text, value, c.op), true]
       case 'includes':
         return [val.list.includes(value), true]
       case 'excludes':
         return [!val.list.includes(value), true]
       case 'gt':
-      case 'lt': {
+      case 'lt':
+      case 'gte':
+      case 'lte': {
+        // Дата — ISO-строка (YYYY-MM-DD), у неё лексикографический порядок совпадает с
+        // хронологическим; ничего не разбираем, потому что разбор дат — это часовые
+        // пояса, которых у ответа нет.
+        if (valueDomain(src.type) === 'date') {
+          if (val.text === '' || value === '') return [false, true]
+          return [orderHolds(compareStrings(val.text, value), c.op), true]
+        }
         const a = Number(val.text)
         const b = Number(value)
-        if (val.text === '' || !Number.isFinite(a) || !Number.isFinite(b)) return [false, true]
-        return [c.op === 'gt' ? a > b : a < b, true]
+        if (val.text === '' || value === '' || !Number.isFinite(a) || !Number.isFinite(b)) {
+          return [false, true]
+        }
+        return [orderHolds(Math.sign(a - b), c.op), true]
       }
     }
   }
@@ -422,7 +458,7 @@ function groupRuns(blocks: readonly Block[]): [number, number][] {
 // который движок считает инертным, то есть молча не работающим.
 export function operatorsFor(type: BlockType): LogicOperator[] {
   if (!isAnswerableType(type)) return []
-  const numeric = type === 'scale' || type === 'number'
+  const domain = valueDomain(type)
   const multi = isMultiChoiceType(type)
   return LOGIC_OPERATORS.filter((op) => {
     switch (op) {
@@ -432,12 +468,23 @@ export function operatorsFor(type: BlockType): LogicOperator[] {
       case 'is':
       case 'is_not':
         return !multi
+      case 'contains':
+      case 'not_contains':
+      case 'starts_with':
+      case 'not_starts_with':
+      case 'ends_with':
+      case 'not_ends_with':
+        // Куски строки осмысленны там, где ответ — свободный текст. У числа и даты
+        // «содержит» значило бы поиск по записи ответа, а не по его значению.
+        return domain === 'text'
       case 'includes':
       case 'excludes':
         return multi
       case 'gt':
       case 'lt':
-        return numeric
+      case 'gte':
+      case 'lte':
+        return domain === 'number' || domain === 'date'
     }
   })
 }
@@ -446,6 +493,39 @@ export function operatorsFor(type: BlockType): LogicOperator[] {
 // иначе роняла бы 422 в автосейв) — несовместимая пара делает правило инертным.
 function opApplies(op: LogicOperator, src: Block): boolean {
   return operatorsFor(src.type).includes(op)
+}
+
+// С чем ответ этого типа СРАВНИМ. Пустая строка значит «ни с чьим ответом»: правая
+// часть у такого источника бывает только заданным значением.
+//
+// Домены крупные нарочно: почту с коротким текстом сравнить осмысленно («совпадает ли с
+// тем, что человек вписал выше»), а шкалу с датой — нет. Выбор в доменах не участвует
+// вовсе, и это не забывчивость: ответ выбора — id варианта, а варианты принадлежат
+// своему блоку, поэтому id из двух разных списков не совпадут НИКОГДА. Ссылка там
+// означала бы условие, которое всегда ложно, — предлагать её хуже, чем не иметь.
+function valueDomain(type: BlockType): string {
+  switch (type) {
+    case 'short_text':
+    case 'long_text':
+    case 'email':
+    case 'phone':
+      return 'text'
+    case 'number':
+    case 'scale':
+      return 'number'
+    case 'date':
+      return 'date'
+    default:
+      return ''
+  }
+}
+
+// Годится ли ответ ref правой частью условия об src. Зеркалит canReferenceAnswer в
+// internal/domain/logic.go; спрашивает и редактор — из чего собирать список ссылок
+// (builder/logic/model.ts), чтобы список и вычислитель не разъехались.
+export function canReferenceAnswer(src: BlockType, ref: BlockType): boolean {
+  const d = valueDomain(src)
+  return d !== '' && d === valueDomain(ref)
 }
 
 // Почему правило не действует — для ПРЕДУПРЕЖДЕНИЙ билдера (не для схемы: там всё это
@@ -487,6 +567,24 @@ export function ruleWarnings(
       out.push({ blockId: c.blockId, reason: 'сравнение не подходит типу источника' })
       return
     }
+    // Правая часть — ссылка на ответ: у неё свои три причины не сработать, и каждая
+    // молчаливая (правило выглядит собранным и не делает ничего).
+    const ref = c.valueRef ?? ''
+    if (ref !== '') {
+      const refAt = blocks.findIndex((b) => b.id === ref)
+      if (refAt < 0) {
+        out.push({ blockId: c.blockId, reason: 'вопрос, с ответом которого сравниваем, удалён' })
+        return
+      }
+      if (carrier >= 0 && refAt >= carrier) {
+        out.push({ blockId: c.blockId, reason: 'вопрос для сравнения стоит ниже — условие не действует' })
+        return
+      }
+      if (!canReferenceAnswer(blocks[at]!.type, blocks[refAt]!.type)) {
+        out.push({ blockId: c.blockId, reason: 'ответы этих вопросов сравнивать нечем' })
+      }
+      return
+    }
     if (opNeedsValue(c.op) && (c.value ?? '') === '') {
       out.push({ blockId: c.blockId, reason: 'не выбрано значение' })
     }
@@ -505,6 +603,51 @@ function sameAnswer(src: Block, answer: string, want: string): boolean {
     if (answer !== '' && want !== '' && Number.isFinite(a) && Number.isFinite(b)) return a === b
   }
   return answer === want
+}
+
+// Верно ли текстовое сравнение. Регистр не учитывается ни в одном из шести: автор пишет
+// условие про смысл ответа, а не про то, какой клавишей респондент начал слово. Одна
+// точка на все шесть — иначе «начинается с» и «содержит» разошлись бы правилом регистра
+// на первой же правке. Зеркалит textHolds в internal/domain/logic.go.
+function textHolds(answer: string, want: string, op: LogicOperator): boolean {
+  const a = answer.toLowerCase()
+  const w = want.toLowerCase()
+  switch (op) {
+    case 'contains':
+      return a.includes(w)
+    case 'not_contains':
+      return !a.includes(w)
+    case 'starts_with':
+      return a.startsWith(w)
+    case 'not_starts_with':
+      return !a.startsWith(w)
+    case 'ends_with':
+      return a.endsWith(w)
+    case 'not_ends_with':
+      return !a.endsWith(w)
+    default:
+      return false
+  }
+}
+
+const compareStrings = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
+// Верен ли порядок, которого требует оператор, при знаке сравнения sign (-1, 0, 1).
+// Одна точка на числа и даты: иначе «больше или равно» разъехалось бы между ними на
+// первой же правке. Зеркалит orderHolds в internal/domain/logic.go.
+function orderHolds(sign: number, op: LogicOperator): boolean {
+  switch (op) {
+    case 'gt':
+      return sign > 0
+    case 'lt':
+      return sign < 0
+    case 'gte':
+      return sign >= 0
+    case 'lte':
+      return sign <= 0
+    default:
+      return false
+  }
 }
 
 // Видимость вариантов; null, если блока не касается ни одно правило (значит видны все).
