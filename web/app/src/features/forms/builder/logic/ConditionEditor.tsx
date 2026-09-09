@@ -379,9 +379,10 @@ function LeafRow({
 // сообщение «это одна вещь, задать её можно двумя способами»: два отдельных контрола
 // читались бы как два разных значения.
 //
-// ШЕВРОН СТОИТ ВСЕГДА, даже когда сравнивать не с чем (на форме один вопрос): список
-// тогда открывается и говорит об этом словами. Контрол, который то есть, то нет,
-// заставлял бы искать его глазами заново на каждой форме.
+// ШЕВРОН СТОИТ ТАМ, ГДЕ СПИСКУ ЕСТЬ ЧТО ПОКАЗАТЬ (решение владельца), а это три случая:
+// на форме есть сравнимый вопрос, значение выбирается из закрытого списка (варианты,
+// шкала, согласие) или ссылка уже стоит и из неё нужен выход. Иначе поле остаётся одним
+// вводом: шеврон, за которым пусто, обещает выбор, которого нет.
 //
 // Составной контрол вместо готового — отступление от «весь кабинет из shadcn»
 // (web/CLAUDE.md), и оно осознанное: ни Input, ни Select, ни их сочетание не дают
@@ -424,6 +425,8 @@ function ValueField({
   // только пункт списка.
   const closedList = choices.length > 0
   const chosen = choices.find((c) => c.value === value?.value)
+  // Есть ли в списке хоть что-нибудь. Нет — нет и шеврона (см. доклок выше).
+  const canPick = value !== null && (refs.length > 0 || closedList || value.valueRef !== undefined)
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
@@ -473,16 +476,24 @@ function ValueField({
               }
             />
           )}
-          <PopoverTrigger asChild>
-            <button
-              type="button"
-              aria-label="Выбрать значение"
-              disabled={value === null}
-              className="text-muted-foreground flex h-full items-center px-1.5 outline-none hover:text-foreground focus-visible:text-foreground"
-            >
-              <ChevronDown className="size-4 shrink-0 opacity-70" />
-            </button>
-          </PopoverTrigger>
+          {canPick && (
+            <>
+              {/* Разделитель — половина сообщения «это одно поле, а не два»: рамка
+                  говорит, что вещь одна, черта — что задать её можно двумя способами.
+                  Тем же цветом, что рамка, и короче поля: полная высота разрезала бы
+                  контрол пополам вместо того, чтобы поделить его. */}
+              <span aria-hidden className="bg-input h-4 w-px shrink-0" />
+              <PopoverTrigger asChild>
+                <button
+                  type="button"
+                  aria-label="Выбрать значение"
+                  className="text-muted-foreground hover:text-foreground focus-visible:text-foreground flex h-full items-center px-1.5 outline-none"
+                >
+                  <ChevronDown className="size-4 shrink-0 opacity-70" />
+                </button>
+              </PopoverTrigger>
+            </>
+          )}
         </div>
       </PopoverAnchor>
 

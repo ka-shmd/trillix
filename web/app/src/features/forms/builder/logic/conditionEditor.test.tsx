@@ -125,14 +125,52 @@ describe('правая часть условия', () => {
     expect(chevron()).toBeTruthy()
   })
 
-  // Контрол, который то есть, то нет, автор ищет глазами заново на каждой форме.
-  it('шеврон стоит и тогда, когда сравнивать не с чем', () => {
+  // Шеврон, за которым пусто, обещает выбор, которого нет.
+  it('сравнивать не с чем — шеврона нет, остаётся один ввод', () => {
     const blocks = [src('a')]
     render(
       <ConditionEditor
         blocks={blocks}
         sources={blocks}
         value={{ all: [cmp('a')] }}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(chevron()).toBeNull()
+    expect(screen.getByLabelText('Значение').tagName).toBe('INPUT')
+  })
+
+  // У закрытого списка шеврон — единственный способ задать значение, и сравнимые
+  // вопросы тут ни при чём.
+  it('у закрытого списка шеврон есть и без сравнимых вопросов', () => {
+    const blocks: Block[] = [
+      {
+        id: 'a',
+        groupId: 'g_a',
+        type: 'single_choice',
+        settings: { options: [{ id: 'o1', label: 'Да' }] },
+      },
+    ]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [cmp('a')] }}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(chevron()).toBeTruthy()
+  })
+
+  // Из ссылки нужен выход к вводу («Вписать значение»), даже когда сравнимых вопросов
+  // на форме не осталось.
+  it('у поставленной ссылки шеврон есть всегда', () => {
+    const blocks = [src('a')]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [{ blockId: 'a', op: 'is', valueRef: 'призрак' }] }}
         onChange={vi.fn()}
       />,
     )
@@ -173,9 +211,11 @@ describe('правая часть условия', () => {
     expect(screen.getByLabelText('Значение').textContent).toContain('Удалённый вопрос')
   })
 
-  it('у незаполненной строки шеврон выключен вместе с полем', () => {
+  // Источник ещё не выбран — неизвестно и то, из чего выбирать: поле стоит на месте
+  // выключенным, а шеврона нет.
+  it('у незаполненной строки шеврона нет', () => {
     setup({ all: [] })
-    expect(chevron()?.hasAttribute('disabled')).toBe(true)
+    expect(chevron()).toBeNull()
   })
 })
 
