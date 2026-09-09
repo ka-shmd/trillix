@@ -76,7 +76,11 @@ export function LogicBlockEditor({ block }: { block: Block }) {
     // Рейл СЕРЫЙ (решение владельца 2026-09-09): он границей блока и работает, а не
     // меткой, — цветной звал бы к себе внимание, которое принадлежит самому правилу.
     // Ширина 3px, а не 2: на сером в сером двух пикселей не видно.
-    <div className="border-border flex flex-col gap-1.5 border-l-[3px] py-0.5 pl-3 text-sm font-medium">
+    //
+    // ВОЗДУХ СВЕРХУ — часть вида блока (`mt-3.5`, 14px, нижняя ступень ритма полотна):
+    // правило относится к тому, что стоит НИЖЕ него, и без отрыва от предыдущего
+    // вопроса читалось бы его продолжением. Снизу воздуха нет по той же причине.
+    <div className="border-border mt-3.5 flex flex-col gap-1.5 border-l-[3px] py-0.5 pl-3 text-sm font-medium">
       <Tier
         label="Когда"
         trailing={
@@ -187,7 +191,7 @@ function Tier({
   return (
     <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
-        <span className="text-muted-foreground text-xs tracking-wide uppercase">{label}</span>
+        <span className="text-muted-foreground text-xs font-medium">{label}</span>
         {trailing}
       </div>
       <div className="min-w-0">{children}</div>
