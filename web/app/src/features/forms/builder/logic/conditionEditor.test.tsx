@@ -113,13 +113,20 @@ describe('глиф вопроса-источника', () => {
 })
 
 // Правая часть: значение ИЛИ ответ другого вопроса. Раскрытый список из happy-dom не
-// виден (Popover, как и Select, здесь не раскрывается), зато видно, КАКОЙ контрол
-// поставлен и что на нём написано, — а ломается это молча.
+// виден (Popover, как и Select, здесь не раскрывается), зато видно, ИЗ ЧЕГО собран
+// контрол и что на нём написано, — а ломается это молча.
 describe('правая часть условия', () => {
   const cmp = (blockId: string): LogicCondition => ({ blockId, op: 'is' })
+  const chevron = () => screen.queryByLabelText('Выбрать значение')
 
-  it('сравнимых вопросов нет — остаётся строка ввода', () => {
-    // Один вопрос на форме: сравнивать его ответ не с чьим.
+  it('слева поле ввода, справа шеврон — одно поле на вид', () => {
+    setup({ all: [cmp('a')] })
+    expect(screen.getByLabelText('Значение').tagName).toBe('INPUT')
+    expect(chevron()).toBeTruthy()
+  })
+
+  // Контрол, который то есть, то нет, автор ищет глазами заново на каждой форме.
+  it('шеврон стоит и тогда, когда сравнивать не с чем', () => {
     const blocks = [src('a')]
     render(
       <ConditionEditor
@@ -129,24 +136,46 @@ describe('правая часть условия', () => {
         onChange={vi.fn()}
       />,
     )
-    expect(screen.getByLabelText('Значение').tagName).toBe('INPUT')
+    expect(chevron()).toBeTruthy()
   })
 
-  it('есть сравнимый вопрос — контрол становится списком с разделами', () => {
-    setup({ all: [cmp('a')] })
-    const control = screen.getByLabelText('Значение')
-    expect(control.tagName).toBe('BUTTON')
-    expect(control.getAttribute('role')).toBe('combobox')
+  it('у закрытого списка левая половина не поле ввода, а показ выбранного', () => {
+    const blocks: Block[] = [
+      {
+        id: 'a',
+        groupId: 'g_a',
+        type: 'single_choice',
+        settings: { options: [{ id: 'o1', label: 'Да' }] },
+      },
+    ]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [{ blockId: 'a', op: 'is', value: 'o1' }] }}
+        onChange={vi.fn()}
+      />,
+    )
+    const face = screen.getByLabelText('Значение')
+    expect(face.tagName).toBe('BUTTON')
+    expect(face.textContent).toContain('Да')
   })
 
-  it('на контроле со ссылкой написано имя вопроса, а не пустота', () => {
+  it('ссылка занимает поле целиком и называется именем вопроса', () => {
     setup({ all: [{ blockId: 'a', op: 'is', valueRef: 'b' }] })
-    expect(screen.getByLabelText('Значение').textContent).toContain('Короткий ответ 2')
+    const face = screen.getByLabelText('Значение')
+    expect(face.tagName).toBe('BUTTON')
+    expect(face.textContent).toContain('Короткий ответ 2')
   })
 
   it('удалённая ссылка называется словами', () => {
     setup({ all: [{ blockId: 'a', op: 'is', valueRef: 'призрак' }] })
     expect(screen.getByLabelText('Значение').textContent).toContain('Удалённый вопрос')
+  })
+
+  it('у незаполненной строки шеврон выключен вместе с полем', () => {
+    setup({ all: [] })
+    expect(chevron()?.hasAttribute('disabled')).toBe(true)
   })
 })
 

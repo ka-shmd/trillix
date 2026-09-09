@@ -11,9 +11,7 @@ import {
 } from '@entities/formSchema'
 import { operatorsFor } from '@fields/logic'
 
-import { Button } from '@/components/ui/button'
-import { Input } from '@/components/ui/input'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Popover, PopoverAnchor, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -64,7 +62,9 @@ import { RowMenu as RowMenuButton } from './rowMenu'
 // длинное имя вопроса всё равно не помещается целиком — его обрезает многоточие.
 // `max-w-full` оставлен, чтобы на узком полотне контрол не выпирал за край.
 //
-// МНОГОТОЧИЕ, А НЕ ОБРЕЗКА ПО ЖИВОМУ. Три класса, и ни один не лишний:
+// МНОГОТОЧИЕ, А НЕ ОБРЕЗКА ПО ЖИВОМУ — у контролов источника и сравнения (значение с
+// 2026-09-09 не Select, а своё поле, и обрезает оно себя само). Три класса, и ни один
+// не лишний:
 //
 //   • `block` ПЕРЕБИВАЕТ `flex`, который shadcn ставит слоту значения. На флекс-
 //     контейнере `text-overflow` не действует вовсе — текст клипается по границе, ровно
@@ -84,7 +84,6 @@ const TRUNCATE =
 // GlyphName, а слоту остаётся разрешение сжиматься.
 const SOURCE = 'h-7 w-56 max-w-full *:data-[slot=select-value]:min-w-0'
 const OPERATOR = `h-7 w-36 max-w-full ${TRUNCATE}`
-const VALUE = `h-7 w-44 max-w-full ${TRUNCATE}`
 
 const childrenOf = (g: Group): LogicCondition[] => ('all' in g ? g.all : g.any)
 const isAnd = (g: Group): boolean => 'all' in g
@@ -286,8 +285,9 @@ function LeafRow({
   const source = value ? blocks.find((b) => b.id === value.blockId) : undefined
   const ops = source ? operatorsFor(source.type) : []
   const choices = source ? valueChoices(source) : []
-  // Есть ли на форме вопросы, чей ответ годится правой частью. Нет — контрол значения
-  // остаётся тем же, чем был: список вариантов либо строка ввода.
+  // Вопросы, чей ответ годится правой частью. Пусто — контрол не меняется: список
+  // открывается всё равно и говорит, что сравнивать не с чем (решение владельца
+  // 2026-09-09). Контрол, который то есть, то нет, автор ищет глазами заново.
   const refs = source ? referenceSources(blocks, source) : []
   // Чем значение вводится: у даты — календарём браузера, у числа — числовым полем.
   const inputType = source ? valueInputType(source) : 'text'
@@ -352,75 +352,49 @@ function LeafRow({
         </SelectContent>
       </Select>
 
-      {needsValue &&
-        (value !== null && refs.length > 0 ? (
-          <ValuePicker
-            blocks={blocks}
-            value={value}
-            choices={choices}
-            refs={refs}
-            inputType={inputType}
-            onChange={onChange}
-          />
-        ) : value !== null && choices.length > 0 ? (
-          <Select value={value.value ?? ''} onValueChange={(v) => onChange({ ...value, value: v })}>
-            <SelectTrigger size="sm" className={VALUE} aria-label="Значение">
-              <SelectValue placeholder="Значение…" />
-            </SelectTrigger>
-            <SelectContent>
-              {choices.map((c) => (
-                <SelectItem key={c.value} value={c.value}>
-                  {c.label}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        ) : (
-          <Input
-            className="h-7 w-44 max-w-full text-sm"
-            type={inputType}
-            disabled={value === null}
-            value={value?.value ?? ''}
-            placeholder="Значение…"
-            aria-label="Значение"
-            // Потолок ровно тот, что у схемы: без него вставка длинной строки роняла
-            // автосейв в 422 и черновик перестал бы сохраняться, а сообщения про лимит
-            // автор не видит нигде. То же правило, по которому ограничено имя вопроса.
-            maxLength={MAX_LOGIC_VALUE_LEN}
-            onChange={(e) =>
-              value !== null &&
-              onChange(
-                e.target.value === ''
-                  ? { blockId: value.blockId, op: value.op }
-                  : { ...value, value: e.target.value },
-              )
-            }
-          />
-        ))}
+      {needsValue && (
+        <ValueField
+          blocks={blocks}
+          value={value}
+          choices={choices}
+          refs={refs}
+          inputType={inputType}
+          onChange={onChange}
+        />
+      )}
 
       {menu && <RowActions menu={menu} />}
     </div>
   )
 }
 
-// ЗНАЧЕНИЕ ИЛИ ОТВЕТ ДРУГОГО ВОПРОСА — один контрол с двумя разделами (решение
-// владельца 2026-09-09). Правая часть условия перестала быть только литералом: с ней
-// сравнивают и ответ другого вопроса («бюджет больше, чем стоимость»). Что с чем
-// сравнимо, решает вычислитель (`canReferenceAnswer` через `referenceSources`), а не
-// этот файл: список и семантика обязаны говорить одно и то же.
+// ЗНАЧЕНИЕ ИЛИ ОТВЕТ ДРУГОГО ВОПРОСА — ОДИН составной контрол (решение владельца
+// 2026-09-09). Правая часть условия перестала быть только литералом: с ней сравнивают
+// и ответ другого вопроса («бюджет больше, чем стоимость»). Что с чем сравнимо, решает
+// вычислитель (`canReferenceAnswer` через `referenceSources`), а не этот файл: список и
+// семантика обязаны говорить одно и то же.
 //
-// Контрол ОДИН, а не поле плюс тумблер: правая часть — одна мысль автора, и разводить
-// её по двум местам значит спрашивать «литерал или ссылка?» раньше, чем автор решил,
-// что он вообще сравнивает. Разделов в списке два — «Значение» и «Ответ на вопрос».
+// Устроен как ОДНО поле на вид: слева ввод — значение пишется сразу, ничего не
+// открывая, — справа шеврон, открывающий список. Общая рамка не украшение, а
+// сообщение «это одна вещь, задать её можно двумя способами»: два отдельных контрола
+// читались бы как два разных значения.
 //
-// Список источников контрол НЕ сужает позицией (ссылка ниже цели инертна, но законна) —
-// негодную пару называет предупреждение блока, как и у самого источника.
+// ШЕВРОН СТОИТ ВСЕГДА, даже когда сравнивать не с чем (на форме один вопрос): список
+// тогда открывается и говорит об этом словами. Контрол, который то есть, то нет,
+// заставлял бы искать его глазами заново на каждой форме.
 //
-// СТРОКА ПОИСКА ЗДЕСЬ ЖЕ И СТРОКА ВВОДА, и у свободного ввода она пишет в документ ПО
-// БУКВЕ, а не по Enter. Иначе набранное «до 18» терялось бы от клика мимо попапа — это
-// поле ввода значения, и вести себя оно должно как поле ввода. Там, где список закрыт
-// (шкала), ввод остаётся поиском: значением бывает только пункт списка.
-function ValuePicker({
+// Составной контрол вместо готового — отступление от «весь кабинет из shadcn»
+// (web/CLAUDE.md), и оно осознанное: ни Input, ни Select, ни их сочетание не дают
+// «печатать ИЛИ выбрать» в одном поле. Собран он из тех же токенов и классов, что
+// Input; рамка, тень и кольцо фокуса переехали на обёртку через focus-within.
+const FIELD_BOX =
+  'flex h-7 w-44 max-w-full items-center rounded-md border border-input bg-transparent shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-input/30'
+
+// Левая половина, когда она кнопка: значение выбирается только списком (варианты,
+// шкала) либо уже занято ссылкой. Своей рамки у неё нет — рамка одна, у обёртки.
+const FIELD_FACE = 'flex min-w-0 flex-1 items-center gap-1 px-2 text-left text-sm outline-none'
+
+function ValueField({
   blocks,
   value,
   choices,
@@ -429,44 +403,96 @@ function ValuePicker({
   onChange,
 }: {
   blocks: readonly Block[]
-  value: Leaf
+  value: Leaf | null
   choices: { value: string; label: string }[]
   refs: readonly Block[]
   inputType: 'date' | 'number' | 'text'
   onChange: (next: LogicCondition) => void
 }) {
   const [open, setOpen] = useState(false)
-  const ref = value.valueRef ? blocks.find((b) => b.id === value.valueRef) : undefined
+  const ref = value?.valueRef ? blocks.find((b) => b.id === value.valueRef) : undefined
 
+  // Правая часть у листа одна: новое значение или новая ссылка ЗАМЕЩАЕТ прежнюю, а не
+  // ложится рядом (обе сразу схема отвергает).
   const leafWith = (rest: Partial<Leaf>): LogicCondition => ({
-    blockId: value.blockId,
-    op: value.op,
+    blockId: value?.blockId ?? '',
+    op: value?.op ?? 'is',
     ...rest,
   })
 
+  // Список закрыт (варианты, шкала, согласие) — вписывать нечего, значением бывает
+  // только пункт списка.
+  const closedList = choices.length > 0
+  const chosen = choices.find((c) => c.value === value?.value)
+
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="sm"
-          role="combobox"
-          aria-expanded={open}
-          aria-label="Значение"
-          className={`${VALUE} justify-between font-normal`}
-        >
-          <ValueSummary blocks={blocks} value={value} choices={choices} refBlock={ref} />
-          <ChevronDown className="size-4 shrink-0 opacity-50" />
-        </Button>
-      </PopoverTrigger>
+      <PopoverAnchor asChild>
+        <div className={`${FIELD_BOX} ${value === null ? 'pointer-events-none opacity-50' : ''}`}>
+          {value !== null && value.valueRef !== undefined ? (
+            // Ссылка занимает поле целиком: печатать поверх имени вопроса нечего, а
+            // вернуться к вводу даёт пункт «Вписать значение».
+            <button
+              type="button"
+              aria-label="Значение"
+              className={FIELD_FACE}
+              onClick={() => setOpen(true)}
+            >
+              {ref ? (
+                <GlyphName type={ref.type}>{sourceLabel(blocks, ref)}</GlyphName>
+              ) : (
+                <span className="min-w-0 truncate">Удалённый вопрос</span>
+              )}
+            </button>
+          ) : closedList ? (
+            <button
+              type="button"
+              aria-label="Значение"
+              className={FIELD_FACE}
+              onClick={() => setOpen(true)}
+            >
+              <span className={`min-w-0 truncate ${chosen ? '' : 'text-muted-foreground'}`}>
+                {chosen?.label ?? 'Значение…'}
+              </span>
+            </button>
+          ) : (
+            <input
+              className="min-w-0 flex-1 bg-transparent px-2 text-sm outline-none placeholder:text-muted-foreground"
+              type={inputType}
+              disabled={value === null}
+              value={value?.value ?? ''}
+              placeholder="Значение…"
+              aria-label="Значение"
+              // Потолок ровно тот, что у схемы: без него вставка длинной строки роняла
+              // автосейв в 422 и черновик перестал бы сохраняться, а сообщения про лимит
+              // автор не видит нигде. То же правило, по которому ограничено имя вопроса.
+              maxLength={MAX_LOGIC_VALUE_LEN}
+              onChange={(e) =>
+                value !== null &&
+                onChange(leafWith(e.target.value === '' ? {} : { value: e.target.value }))
+              }
+            />
+          )}
+          <PopoverTrigger asChild>
+            <button
+              type="button"
+              aria-label="Выбрать значение"
+              disabled={value === null}
+              className="text-muted-foreground flex h-full items-center px-1.5 outline-none hover:text-foreground focus-visible:text-foreground"
+            >
+              <ChevronDown className="size-4 shrink-0 opacity-70" />
+            </button>
+          </PopoverTrigger>
+        </div>
+      </PopoverAnchor>
+
       <PopoverContent className="w-64 p-2" align="start">
         <Section title="Значение">
-          {choices.length > 0 ? (
+          {closedList ? (
             choices.map((c) => (
               <PickerRow
                 key={c.value}
-                selected={value.value === c.value}
+                selected={value?.value === c.value}
                 onSelect={() => {
                   onChange(leafWith({ value: c.value }))
                   setOpen(false)
@@ -475,40 +501,44 @@ function ValuePicker({
                 {c.label}
               </PickerRow>
             ))
+          ) : value?.valueRef !== undefined ? (
+            // Единственный выход из ссылки обратно к вводу: снять её и отдать поле
+            // клавиатуре. Крестика у ссылки нет — он был бы вторым способом того же.
+            <PickerRow
+              selected={false}
+              onSelect={() => {
+                onChange(leafWith({}))
+                setOpen(false)
+              }}
+            >
+              Вписать значение
+            </PickerRow>
           ) : (
-            <Input
-              className="h-7 text-sm"
-              type={inputType}
-              autoFocus
-              value={value.value ?? ''}
-              placeholder="Значение…"
-              aria-label="Значение условия"
-              // Потолок ровно тот, что у схемы: без него вставка длинной строки роняла
-              // бы автосейв в 422, а сообщения про лимит автор не видит нигде.
-              maxLength={MAX_LOGIC_VALUE_LEN}
-              // Пишем ПО БУКВЕ, как в обычном поле: попап не диалог с кнопкой «ОК», и
-              // набранное не должно теряться от клика мимо. Ввод гасит ссылку — правая
-              // часть одна, и две сразу схема отвергает.
-              onChange={(e) =>
-                onChange(leafWith(e.target.value === '' ? {} : { value: e.target.value }))
-              }
-            />
+            <div className="text-muted-foreground px-2 py-1 text-sm">Вписывается слева в поле</div>
           )}
         </Section>
 
         <Section title="Ответ на вопрос">
-          {refs.map((b) => (
-            <PickerRow
-              key={b.id}
-              selected={value.valueRef === b.id}
-              onSelect={() => {
-                onChange(leafWith({ valueRef: b.id }))
-                setOpen(false)
-              }}
-            >
-              <GlyphName type={b.type}>{sourceLabel(blocks, b)}</GlyphName>
-            </PickerRow>
-          ))}
+          {refs.length > 0 ? (
+            refs.map((b) => (
+              <PickerRow
+                key={b.id}
+                selected={value?.valueRef === b.id}
+                onSelect={() => {
+                  onChange(leafWith({ valueRef: b.id }))
+                  setOpen(false)
+                }}
+              >
+                <GlyphName type={b.type}>{sourceLabel(blocks, b)}</GlyphName>
+              </PickerRow>
+            ))
+          ) : (
+            // Пустой раздел объясняется словами, а не исчезает: «почему у меня нет
+            // такого пункта» — вопрос, на который интерфейс обязан отвечать сам.
+            <div className="text-muted-foreground px-2 py-1 text-sm">
+              Сравнивать не с чем: на форме нет вопроса того же вида
+            </div>
+          )}
         </Section>
       </PopoverContent>
     </Popover>
@@ -528,7 +558,7 @@ function Section({ title, children }: { title: string; children: React.ReactNode
 
 // Строка выбора. Кнопка, а не CommandItem: список короткий (сравнимые вопросы одного
 // домена да варианты одного списка), поиск ему не нужен, а cmdk забрал бы у поля ввода
-// стрелки и Enter — то есть у ТОГО контрола, ради которого попап и открывают.
+// стрелки и Enter — то есть у ТОГО контрола, ради которого поле и сделано составным.
 function PickerRow({
   selected,
   onSelect,
@@ -542,41 +572,13 @@ function PickerRow({
     <button
       type="button"
       onClick={onSelect}
-      className={`flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-accent ${
+      className={`hover:bg-accent flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm ${
         selected ? 'bg-accent' : ''
       }`}
     >
       <span className="min-w-0 flex-1 truncate">{children}</span>
     </button>
   )
-}
-
-// Что написано на контроле. Ссылка называется вопросом с глифом его типа — тем же, чем
-// вопрос зовётся в списке источников; удалённая ссылка остаётся видимой словами, а не
-// пустотой, иначе правило выглядело бы недозаполненным.
-function ValueSummary({
-  blocks,
-  value,
-  choices,
-  refBlock,
-}: {
-  blocks: readonly Block[]
-  value: Leaf
-  choices: { value: string; label: string }[]
-  refBlock: Block | undefined
-}) {
-  if (value.valueRef !== undefined) {
-    return refBlock ? (
-      <GlyphName type={refBlock.type}>{sourceLabel(blocks, refBlock)}</GlyphName>
-    ) : (
-      <span className="min-w-0 truncate">Удалённый вопрос</span>
-    )
-  }
-  const literal = value.value ?? ''
-  if (literal === '')
-    return <span className="text-muted-foreground min-w-0 truncate">Значение…</span>
-  const label = choices.find((c) => c.value === literal)?.label ?? literal
-  return <span className="min-w-0 truncate">{label}</span>
 }
 
 // Меню операций строки. Состав и порядок пунктов взяты у Tally (образец вида полотна,
