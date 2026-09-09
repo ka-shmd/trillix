@@ -25,6 +25,7 @@ import {
 import { GlyphName } from '../GlyphName'
 import { useBuilderStore } from '../storeContext'
 import { ConditionEditor, JoinSelect } from './ConditionEditor'
+import { FILL, GLYPH_VALUE, TRUNCATE } from './controls'
 import { RowMenu } from './rowMenu'
 import {
   ACTION_ICONS,
@@ -75,7 +76,7 @@ export function LogicBlockEditor({ block }: { block: Block }) {
     // Рейл СЕРЫЙ (решение владельца 2026-09-09): он границей блока и работает, а не
     // меткой, — цветной звал бы к себе внимание, которое принадлежит самому правилу.
     // Ширина 3px, а не 2: на сером в сером двух пикселей не видно.
-    <div className="border-border flex flex-col gap-2 border-l-[3px] py-1 pl-3 text-sm">
+    <div className="border-border flex flex-col gap-1.5 border-l-[3px] py-0.5 pl-3 text-sm font-medium">
       <Tier
         label="Когда"
         trailing={
@@ -102,7 +103,7 @@ export function LogicBlockEditor({ block }: { block: Block }) {
       </Tier>
 
       <Tier label="Тогда">
-        <div className="flex flex-col gap-1.5">
+        <div className="flex flex-col gap-1">
           {actions.map((action, i) => (
             <ActionRow
               key={i}
@@ -159,26 +160,14 @@ export function LogicBlockEditor({ block }: { block: Block }) {
 // длинное имя вопроса всё равно не помещается целиком — его обрезает многоточие.
 // `max-w-full` оставлен, чтобы на узком полотне контрол не выпирал за край.
 //
-// Многоточие в конце — тремя классами разом; почему именно тремя, разобрано в
-// ConditionEditor (`TRUNCATE`): `block` перебивает флекс слота, иначе `text-overflow` не
-// действует и текст режется посреди буквы, `min-w-0` разрешает флекс-элементу сжаться,
-// `truncate` ставит саму обрезку.
-//
-// ЗАЛИВКА И ПАДИНГИ — общие у всех контролов блока (решение владельца 2026-09-09):
-// серая подложка `--muted` вместо прозрачной и `px-2` вместо трёх у shadcn. Обе правки
-// объявлены ТЕМИ ЖЕ вариантами, что перебиваемое (`dark:bg-muted` против
-// `dark:bg-input/30`, `has-[>svg]:px-2` против `has-[>svg]:px-2.5` у кнопки), иначе
-// tailwind-merge их не сольёт и победит порядок в собранном CSS, а не строка className
-// (web/CLAUDE.md).
-const FILL = 'bg-muted px-2 dark:bg-muted'
-
-const CONTROL = `h-7 w-52 max-w-full ${FILL} *:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate`
+// Заливка, падинг, вес текста и обрезка — общие на оба яруса, `logic/controls.ts`.
+const CONTROL = `h-7 w-52 max-w-full ${FILL} ${TRUNCATE}`
 
 // Контрол ДЕЙСТВИЯ — исключение: его значение не голый текст, а «значок + название»
 // (ActionName), поэтому флекс слота не перебивается (на нём держится просвет
 // значок→имя), многоточие ставит сам ActionName, а слоту достаётся один `min-w-0`.
 // Тот же случай, что у контрола источника в ConditionEditor.
-const CONTROL_GLYPH = `h-7 w-52 max-w-full ${FILL} *:data-[slot=select-value]:min-w-0`
+const CONTROL_GLYPH = `h-7 w-52 max-w-full ${FILL} ${GLYPH_VALUE}`
 
 // Ярус: подпись СВОЕЙ строкой, содержимое под ней и БЕЗ отступа (решение владельца
 // 2026-08-16). Подпись колонкой слева съедала бы ширину у строки условий, а в ней три
@@ -196,7 +185,7 @@ function Tier({
   children: React.ReactNode
 }) {
   return (
-    <div className="flex flex-col gap-1.5">
+    <div className="flex flex-col gap-1">
       <div className="flex items-center gap-2">
         <span className="text-muted-foreground text-xs tracking-wide uppercase">{label}</span>
         {trailing}
@@ -433,7 +422,7 @@ function TargetPicker({
           aria-expanded={open}
           aria-label="Цели действия"
           disabled={disabled}
-          className={`${CONTROL} justify-between font-normal has-[>svg]:px-2`}
+          className={`${CONTROL} justify-between has-[>svg]:px-2`}
         >
           <span className="min-w-0 truncate">{summary}</span>
           <ChevronDown className="size-4 shrink-0 opacity-50" />

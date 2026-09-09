@@ -30,6 +30,7 @@ import {
   valueChoices,
   valueInputType,
 } from './model'
+import { FILL, GLYPH_VALUE, TRUNCATE } from './controls'
 import { RowMenu as RowMenuButton } from './rowMenu'
 
 // Редактор дерева условий. Рекурсивный: группа рисует своих детей тем же компонентом,
@@ -62,36 +63,8 @@ import { RowMenu as RowMenuButton } from './rowMenu'
 // длинное имя вопроса всё равно не помещается целиком — его обрезает многоточие.
 // `max-w-full` оставлен, чтобы на узком полотне контрол не выпирал за край.
 //
-// МНОГОТОЧИЕ, А НЕ ОБРЕЗКА ПО ЖИВОМУ — у контролов источника и сравнения (значение с
-// 2026-09-09 не Select, а своё поле, и обрезает оно себя само). Три класса, и ни один
-// не лишний:
-//
-//   • `block` ПЕРЕБИВАЕТ `flex`, который shadcn ставит слоту значения. На флекс-
-//     контейнере `text-overflow` не действует вовсе — текст клипается по границе, ровно
-//     посреди буквы;
-//   • `min-w-0` — слот лежит внутри флекса-триггера, а флекс-элемент по умолчанию не
-//     сжимается уже своего содержимого, и обрезать было бы нечего;
-//   • `truncate` — собственно `overflow:hidden` + `ellipsis` + `nowrap`.
-//
-// Все три объявлены ТЕМ ЖЕ вариантом, что и перебиваемое (`*:data-[slot=select-value]:`),
-// иначе tailwind-merge их не сольёт и победит порядок в собранном CSS, а не в строке
-// (web/CLAUDE.md). Проверяется только computed-стилем.
-const TRUNCATE =
-  '*:data-[slot=select-value]:block *:data-[slot=select-value]:min-w-0 *:data-[slot=select-value]:truncate'
-// Источник — единственный контрол строки, чьё значение НЕ голый текст: рядом с именем
-// вопроса стоит глиф его типа (GlyphName). Поэтому и обрезка у него своя: флекс слота
-// значения не перебивается (на нём держится просвет глиф→имя), многоточие ставит сам
-// GlyphName, а слоту остаётся разрешение сжиматься.
-//
-// ЗАЛИВКА И ПАДИНГИ у всех контролов строки общие (решение владельца 2026-09-09): серая
-// подложка `--muted` вместо прозрачной и `px-2` вместо трёх у shadcn. Плотность задаёт
-// поле значения — под него подогнаны остальные, а не наоборот. Обе правки объявлены
-// ТЕМИ ЖЕ вариантами, что перебиваемое (`dark:bg-muted` против `dark:bg-input/30`),
-// иначе tailwind-merge их не сольёт и победит порядок в собранном CSS, а не строка
-// className (web/CLAUDE.md).
-const FILL = 'bg-muted px-2 dark:bg-muted'
-
-const SOURCE = `h-7 w-56 max-w-full ${FILL} *:data-[slot=select-value]:min-w-0`
+// Заливка, падинг, вес текста и обрезка — общие на оба яруса, `logic/controls.ts`.
+const SOURCE = `h-7 w-56 max-w-full ${FILL} ${GLYPH_VALUE}`
 const OPERATOR = `h-7 w-36 max-w-full ${FILL} ${TRUNCATE}`
 
 const childrenOf = (g: Group): LogicCondition[] => ('all' in g ? g.all : g.any)
@@ -203,7 +176,7 @@ export function ConditionEditor({
 
   return (
     <div
-      className={depth > 1 ? 'border-muted space-y-2 rounded-md border-l-2 py-2 pl-3' : 'space-y-2'}
+      className={depth > 1 ? 'border-muted space-y-1 rounded-md border-l-2 py-1 pl-3' : 'space-y-1'}
     >
       {(showJoin || menu) && (
         <div className="flex items-center gap-1">
@@ -470,7 +443,7 @@ function ValueField({
             </button>
           ) : (
             <input
-              className="min-w-0 flex-1 bg-transparent px-2 text-sm outline-none placeholder:text-muted-foreground"
+              className="placeholder:text-muted-foreground min-w-0 flex-1 bg-transparent px-2 text-sm outline-none"
               type={inputType}
               disabled={value === null}
               value={value?.value ?? ''}
@@ -497,7 +470,7 @@ function ValueField({
                 <button
                   type="button"
                   aria-label="Выбрать значение"
-                  className="text-muted-foreground hover:text-foreground focus-visible:text-foreground flex h-full items-center px-1.5 outline-none"
+                  className="text-muted-foreground hover:text-foreground focus-visible:text-foreground flex h-full items-center px-2 outline-none"
                 >
                   <ChevronDown className="size-4 shrink-0 opacity-70" />
                 </button>
