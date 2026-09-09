@@ -226,6 +226,9 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
   // КОНТРОЛОМ — --rf-control-h (36px). Разница видна сразу: с высотой текста кластер у
   // поля вставал на 6px выше его середины (высота поля 36 = 6 паддинга + 24 строка + 6).
   const rowLineH = row?.lineH ?? 'h-6'
+  // Воздух перед строкой объявляет ТИП (см. topGap ниже); сужение по surface — цена
+  // разделённого объединения RowFacts, а не ветка по типу.
+  const spacedTop = row?.surface === 'object' && row.spacedTop === true
 
   // Кластер значков строки ВЫБОРА снят (решение владельца, ADR §10). Управление списком
   // живёт у карточек вариантов (у каждой свой кластер и свой попап), а самой строкой — у
@@ -256,6 +259,21 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
     addCaption()
   }
 
+  // Отступ СВЕРХУ у строки. Обычный интервал внутри вопроса — 12px по плотности минус
+  // 6px чужого padding'а; у первой строки группы его нет вовсе (интервал между вопросами
+  // несёт сам вопрос), и -mt-1.5 гасит собственный padding, чтобы группа обнимала
+  // чистый контент.
+  //
+  // `spacedTop` — единственная добавка к этому правилу, и она факт ТИПА (реестр
+  // `kinds/<type>.tsx`), а не ветка по имени типа здесь: строке нужен воздух перед
+  // собой сверх обычного. 14px = нижняя ступень ритма полотна, и они считаются от
+  // погашенного padding'а: -6px + 14px = +8px, то есть `mt-2`.
+  const topGap = firstInGroup
+    ? spacedTop
+      ? 'mt-2'
+      : '-mt-1.5'
+    : 'mt-[calc(0.75rem*var(--rf-density)_-_0.375rem)]'
+
   return (
     <div
       ref={setNodeRef}
@@ -285,9 +303,9 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // pointer-events-auto возвращает наведение ТОЛЬКО перетаскиваемой строке: её
       // группа во время чужого жеста погашена (GroupRow), иначе грип под курсором
       // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
-      className={`group ${GAP_BRIDGE} relative rounded-md py-1.5 -mb-1.5 ${
-        firstInGroup ? '-mt-1.5' : 'mt-[calc(0.75rem*var(--rf-density)_-_0.375rem)]'
-      } ${isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''}`}
+      className={`group ${GAP_BRIDGE} relative rounded-md py-1.5 -mb-1.5 ${topGap} ${
+        isDragging ? `z-10 pointer-events-auto ${DRAGGED_LOOK}` : ''
+      }`}
     >
       {/* Все элементы управления — в левом поле (вне колонки текста, absolute), поэтому
           сам текст остаётся по центру колонки. Проявляются по hover/фокусу строки;
@@ -695,7 +713,6 @@ const BlockRowBody = memo(function BlockRowBody({
       backspaceHandles: () => c.caretAtStart(),
     })
   }
-
 
   function pickType(item: MenuItem) {
     // «Вопросы» → бандл подпись+поле; «Отдельные поля» → голое поле; и то, и другое

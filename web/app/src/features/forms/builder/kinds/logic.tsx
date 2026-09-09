@@ -12,5 +12,13 @@ export const logic: EditorKind = {
   menu: { question: false, field: false, layout: true },
   label: 'Условие',
   description: 'Показать, спрятать или сделать обязательным — в зависимости от ответа.',
-  row: { surface: 'object', lineH: 'h-6', Control: LogicField, hint: 'object' },
+  // spacedTop — воздух перед строкой: правило относится к тому, что ниже него, и без
+  // отрыва читается продолжением предыдущего вопроса (решение владельца 2026-09-09).
+  row: {
+    surface: 'object',
+    lineH: 'h-6',
+    Control: LogicField,
+    hint: 'object',
+    spacedTop: true,
+  },
 }
