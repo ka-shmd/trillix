@@ -61,6 +61,13 @@ const leaf = (blockId: string, op: LogicOperator, value = ''): LogicCondition =>
   ...(value === '' ? {} : { value }),
 })
 
+// Лист, у которого правая часть не значение, а ОТВЕТ другого блока.
+const leafRef = (blockId: string, op: LogicOperator, valueRef: string): LogicCondition => ({
+  blockId,
+  op,
+  valueRef,
+})
+
 const pageIds = (plan: ReturnType<typeof planForm>): string[][] =>
   plan.pages.map((page) => page.map((b) => b.id))
 
@@ -264,6 +271,49 @@ describe('planForm: числа', () => {
     const dep = blk('dep', 'g4', 'short_text')
     const blocks = [scale, num, txt, showRule('dep', rule), dep]
     expect(planForm(blocks, answers).visible.has('dep')).toBe(visible)
+  })
+})
+
+describe('planForm: правая часть — ссылка на ответ другого вопроса', () => {
+  const mail = blk('mail', 'g1', 'email')
+  const mail2 = blk('mail2', 'g2', 'short_text')
+  const budget = blk('budget', 'g3', 'number')
+  const price = blk('price', 'g4', 'number')
+  const pick = choice('pick', 'g5', 'single_choice', [{ id: 'o1' }, { id: 'o2' }])
+  const pick2 = choice('pick2', 'g6', 'single_choice', [{ id: 'o3' }])
+
+  const cases: [string, LogicCondition, Answers, boolean][] = [
+    ['равенство по ссылке сработало', leafRef('mail', 'is', 'mail2'), { mail: 'a@b', mail2: 'a@b' }, true],
+    ['равенство по ссылке не сработало', leafRef('mail', 'is', 'mail2'), { mail: 'a@b', mail2: 'c@d' }, false],
+    ['неравенство по ссылке', leafRef('mail', 'is_not', 'mail2'), { mail: 'a@b', mail2: 'c@d' }, true],
+    // Инертное «показать» показало бы цель — значит true здесь означал бы, что пустая
+    // ссылка сделала правило инертным. Она его таковым НЕ делает.
+    ['пустой ответ по ссылке — пустая правая часть, а не инертность', leafRef('mail', 'is', 'mail2'), { mail: 'a@b' }, false],
+    ['оба ответа пусты — равны', leafRef('mail', 'is', 'mail2'), {}, true],
+    ['число больше, чем ответ другого вопроса', leafRef('budget', 'gt', 'price'), { budget: '100', price: '50' }, true],
+    ['число не больше ответа другого вопроса', leafRef('budget', 'gt', 'price'), { budget: '40', price: '50' }, false],
+    ['почта и короткий текст — один домен', leafRef('mail', 'is', 'mail2'), { mail: 'x', mail2: 'x' }, true],
+    ['ссылка на удалённый блок — инертна', leafRef('mail', 'is', 'нет-такого'), { mail: 'a@b' }, true],
+    ['ссылка на другой домен — инертна', leafRef('mail', 'is', 'budget'), { mail: '5', budget: '5' }, true],
+    ['ссылка на выбор — инертна: id вариантов разных списков не совпадают', leafRef('pick', 'is', 'pick2'), { pick: 'o1', pick2: 'o1' }, true],
+  ]
+
+  it.each(cases)('%s', (_name, rule, answers, visible) => {
+    const dep = blk('dep', 'g9', 'short_text')
+    const blocks = [mail, mail2, budget, price, pick, pick2, showRule('dep', rule), dep]
+    expect(planForm(blocks, answers).visible.has('dep')).toBe(visible)
+  })
+
+  // Ссылка ниже ЦЕЛИ инертна ровно так же, как источник ниже цели: к моменту, когда
+  // решается цель, ответа по ссылке ещё нет, и сравнивать не с чем.
+  it('ссылка ниже цели — инертна', () => {
+    const blocks = [
+      mail,
+      showRule('dep', leafRef('mail', 'is', 'later')),
+      blk('dep', 'g2', 'short_text'),
+      blk('later', 'g3', 'short_text'),
+    ]
+    expect(planForm(blocks, { mail: 'a@b', later: 'a@b' }).visible.has('dep')).toBe(true)
   })
 })
 
@@ -761,6 +811,34 @@ describe('схема: форма правил', () => {
       ]),
     ],
     [
+      'правая часть ссылкой на ответ',
+      doc([
+        { id: 'a', groupId: 'g1', type: 'number' },
+        { id: 'b', groupId: 'g2', type: 'number' },
+        { id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'gt', valueRef: 'b' } } },
+      ]),
+    ],
+    [
+      'ссылка на несравнимый тип — инертна, но валидна',
+      doc([
+        { id: 'a', groupId: 'g1', type: 'number' },
+        { id: 'b', groupId: 'g2', type: 'short_text' },
+        { id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'is', valueRef: 'b' } } },
+      ]),
+    ],
+    [
+      'пустая ссылка — как отсутствующая',
+      doc([
+        { id: 'a', groupId: 'g1', type: 'short_text' },
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', value: 'x', valueRef: '' } },
+        },
+      ]),
+    ],
+    [
       'ссылка вперёд — инертна, но валидна',
       doc([
         { id: 'L', groupId: 'gL', type: 'logic', logic: { when: { blockId: 'a', op: 'answered' } } },
@@ -910,6 +988,28 @@ describe('схема: форма правил', () => {
           groupId: 'gL',
           type: 'logic',
           logic: { when: { all: [{ blockId: 'a', op: 'answered' }], blockId: 'a', op: 'is', value: 'x' } },
+        },
+      ]),
+    ],
+    [
+      'и значение, и ссылка сразу',
+      doc([
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'is', value: 'x', valueRef: 'b' } },
+        },
+      ]),
+    ],
+    [
+      'ссылка у оператора, который не сравнивает',
+      doc([
+        {
+          id: 'L',
+          groupId: 'gL',
+          type: 'logic',
+          logic: { when: { blockId: 'a', op: 'answered', valueRef: 'b' } },
         },
       ]),
     ],

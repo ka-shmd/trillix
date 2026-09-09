@@ -250,15 +250,31 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
   }
 
   const evalLeaf = (
-    c: { blockId: string; op: LogicOperator; value?: string },
+    c: { blockId: string; op: LogicOperator; value?: string; valueRef?: string },
     carrier: number,
   ): [boolean, boolean] => {
     const src = byId.get(c.blockId)
     if (src === undefined) return [false, false] // источника нет в документе
     if ((pos.get(c.blockId) ?? 0) >= carrier) return [false, false] // не решён к этому месту
     if (!opApplies(c.op, src)) return [false, false] // оператор не подходит типу
-    const value = c.value ?? ''
-    if (opNeedsValue(c.op) && value === '') return [false, false] // значение не выбрано
+    let value = c.value ?? ''
+    const ref = c.valueRef ?? ''
+    // Ни значения, ни ссылки — автор ещё не дошёл до правой части.
+    if (opNeedsValue(c.op) && value === '' && ref === '') return [false, false]
+
+    // Правая часть может быть ОТВЕТОМ другого блока. У ссылки те же три причины
+    // инертности, что у источника, и по той же причине: обход однопроходный, и обе
+    // стороны сравнения обязаны быть решены к моменту, когда решается цель.
+    if (ref !== '') {
+      const refBlock = byId.get(ref)
+      if (refBlock === undefined) return [false, false] // блока по ссылке нет в документе
+      if ((pos.get(ref) ?? 0) >= carrier) return [false, false] // ссылка не решена к месту
+      if (!canReferenceAnswer(src.type, refBlock.type)) return [false, false] // разные домены
+      // ПУСТОЙ ответ по ссылке — пустая правая часть, а не инертность: инертное
+      // «показать» делает цель видимой (EDITOR §15.4), то есть ветку увидел бы каждый,
+      // кто до второго вопроса ещё не дошёл. То же правило, что у скрытого источника.
+      value = (decided.get(ref) ?? EMPTY).text
+    }
 
     const val = decided.get(c.blockId) ?? EMPTY
     switch (c.op) {
@@ -448,6 +464,39 @@ function opApplies(op: LogicOperator, src: Block): boolean {
   return operatorsFor(src.type).includes(op)
 }
 
+// С чем ответ этого типа СРАВНИМ. Пустая строка значит «ни с чьим ответом»: правая
+// часть у такого источника бывает только заданным значением.
+//
+// Домены крупные нарочно: почту с коротким текстом сравнить осмысленно («совпадает ли с
+// тем, что человек вписал выше»), а шкалу с датой — нет. Выбор в доменах не участвует
+// вовсе, и это не забывчивость: ответ выбора — id варианта, а варианты принадлежат
+// своему блоку, поэтому id из двух разных списков не совпадут НИКОГДА. Ссылка там
+// означала бы условие, которое всегда ложно, — предлагать её хуже, чем не иметь.
+function valueDomain(type: BlockType): string {
+  switch (type) {
+    case 'short_text':
+    case 'long_text':
+    case 'email':
+    case 'phone':
+      return 'text'
+    case 'number':
+    case 'scale':
+      return 'number'
+    case 'date':
+      return 'date'
+    default:
+      return ''
+  }
+}
+
+// Годится ли ответ ref правой частью условия об src. Зеркалит canReferenceAnswer в
+// internal/domain/logic.go; спрашивает и редактор — из чего собирать список ссылок
+// (builder/logic/model.ts), чтобы список и вычислитель не разъехались.
+export function canReferenceAnswer(src: BlockType, ref: BlockType): boolean {
+  const d = valueDomain(src)
+  return d !== '' && d === valueDomain(ref)
+}
+
 // Почему правило не действует — для ПРЕДУПРЕЖДЕНИЙ билдера (не для схемы: там всё это
 // законно, см. доклок). Пусто — правило действует.
 //
@@ -485,6 +534,24 @@ export function ruleWarnings(
     }
     if (!opApplies(c.op, blocks[at]!)) {
       out.push({ blockId: c.blockId, reason: 'сравнение не подходит типу источника' })
+      return
+    }
+    // Правая часть — ссылка на ответ: у неё свои три причины не сработать, и каждая
+    // молчаливая (правило выглядит собранным и не делает ничего).
+    const ref = c.valueRef ?? ''
+    if (ref !== '') {
+      const refAt = blocks.findIndex((b) => b.id === ref)
+      if (refAt < 0) {
+        out.push({ blockId: c.blockId, reason: 'вопрос, с ответом которого сравниваем, удалён' })
+        return
+      }
+      if (carrier >= 0 && refAt >= carrier) {
+        out.push({ blockId: c.blockId, reason: 'вопрос для сравнения стоит ниже — условие не действует' })
+        return
+      }
+      if (!canReferenceAnswer(blocks[at]!.type, blocks[refAt]!.type)) {
+        out.push({ blockId: c.blockId, reason: 'ответы этих вопросов сравнивать нечем' })
+      }
       return
     }
     if (opNeedsValue(c.op) && (c.value ?? '') === '') {

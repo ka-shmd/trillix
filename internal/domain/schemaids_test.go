@@ -5,10 +5,10 @@ import (
 	"testing"
 )
 
-// docWithRefs — документ со всеми четырьмя видами ссылок на id разом: условие,
-// цели действия (блок и ВАРИАНТ), переход на страницу и подстановка ответа.
-// Один документ на все проверки: переадресация обязана быть полной, а не
-// «полной для того вида ссылок, про который вспомнил автор теста».
+// docWithRefs — документ со всеми ПЯТЬЮ видами ссылок на id разом: условие, правая
+// часть условия (ссылка на ответ), цели действия (блок и ВАРИАНТ), переход на страницу
+// и подстановка ответа. Один документ на все проверки: переадресация обязана быть
+// полной, а не «полной для того вида ссылок, про который вспомнил автор теста».
 func docWithRefs() FormSchema {
 	src := lchoice("src", "g_src", BlockSingleChoice,
 		Option{ID: "opt-yes", Label: "Да"},
@@ -18,13 +18,18 @@ func docWithRefs() FormSchema {
 	cap_.Text = []Span{{T: "Привет, "}, {T: "Имя", Ref: "src"}, {T: "!"}}
 	dep := lblk("dep", "g_dep", BlockShortText)
 	brk := lblk("brk", "g_brk", BlockPageBreak)
-	rule := llogic("L", "g_L", all(leaf("src", OpIs, "opt-yes"), any_(leaf("dep", OpAnswered, ""))),
+	rule := llogic("L", "g_L", all(
+		leaf("src", OpIs, "opt-yes"),
+		any_(leaf("dep", OpAnswered, "")),
+		leafRef("dep", OpIs, "dep2"),
+	),
 		act(ActShow, "dep", "opt-no"),
 		LogicAction{Kind: ActJump, To: "brk"},
 	)
+	dep2 := lblk("dep2", "g_dep2", BlockShortText)
 	return FormSchema{
 		SchemaVersion: SchemaVersion,
-		Blocks:        []Block{src, cap_, dep, brk, rule},
+		Blocks:        []Block{src, cap_, dep, brk, rule, dep2},
 	}
 }
 
@@ -119,6 +124,9 @@ func TestNewSchemaIDs_RewritesReferences(t *testing.T) {
 	}
 	if got := logic.When.All[1].Any[0].BlockID; got != newDep {
 		t.Errorf("вложенное условие смотрит на %q, ожидался %q", got, newDep)
+	}
+	if got, want := logic.When.All[2].ValueRef, out.Blocks[5].ID; got != want {
+		t.Errorf("правая часть ссылается на %q, ожидался %q", got, want)
 	}
 	if got := logic.Then[0].Targets; got[0] != newDep || got[1] != newOptNo {
 		t.Errorf("цели действия %v, ожидались [%s %s]", got, newDep, newOptNo)

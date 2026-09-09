@@ -104,6 +104,34 @@ func (op LogicOp) appliesTo(t BlockType) bool {
 	}
 }
 
+// valueDomain — с чем ответ этого типа СРАВНИМ. Пустая строка значит «ни с чьим
+// ответом»: правая часть у такого источника бывает только заданным значением.
+//
+// Домены крупные нарочно: почту с коротким текстом сравнить осмысленно («совпадает ли
+// с тем, что человек вписал выше»), а шкалу с датой — нет. Выбор в доменах не участвует
+// вовсе, и это не забывчивость: ответ выбора — id варианта, а варианты принадлежат
+// своему блоку, поэтому id из двух разных списков не совпадут НИКОГДА. Ссылка там
+// означала бы условие, которое всегда ложно, — предлагать её хуже, чем не иметь.
+func valueDomain(t BlockType) string {
+	switch t {
+	case BlockShortText, BlockLongText, BlockEmail, BlockPhone:
+		return "text"
+	case BlockNumber, BlockScale:
+		return "number"
+	case BlockDate:
+		return "date"
+	default:
+		return ""
+	}
+}
+
+// canReferenceAnswer — годится ли ответ ref правой частью условия об src. Зеркалит
+// canReferenceAnswer в @fields/logic.ts; проверяется таблицами кейсов обеих сторон.
+func canReferenceAnswer(src, ref BlockType) bool {
+	d := valueDomain(src)
+	return d != "" && d == valueDomain(ref)
+}
+
 // Condition — узел дерева условий: группа «все» (all), группа «любое» (any) или лист
 // сравнения (blockId + op + value). Ровно одна из трёх форм заполнена — это
 // проверяется схемой (внутриузловое правило, промежуточных состояний драга не имеет).
@@ -123,6 +151,14 @@ type Condition struct {
 	// молчащее «условие никогда не срабатывает». Пусто у answered/empty; пусто у
 	// остальных — недособранный черновик (автор ещё не выбрал), правило инертно.
 	Value string `json:"value,omitempty"`
+	// ValueRef — ВТОРОЙ способ задать правую часть: id другого отвечаемого блока,
+	// «сравни с его ответом» («бюджет больше, чем стоимость»). С Value взаимно
+	// исключается — это форма узла, и она проверяется схемой.
+	//
+	// Совместимость типов схемой НЕ проверяется (текстовый ответ со шкалой сравнивать
+	// нечем): пара доменов кросс-блочная, как и всё остальное здесь, и несовместимая
+	// делает правило ИНЕРТНЫМ. Правило домена — sameValueDomain ниже.
+	ValueRef string `json:"valueRef,omitempty"`
 }
 
 // LogicActionKind — что правило ДЕЛАЕТ, когда условие сработало. Зеркалит LOGIC_ACTIONS
@@ -248,7 +284,7 @@ func validateCondNode(c Condition, what string, depth int, nodes *int) error {
 	}
 
 	isAll, isAny := len(c.All) > 0, len(c.Any) > 0
-	isLeaf := c.BlockID != "" || c.Op != "" || c.Value != ""
+	isLeaf := c.BlockID != "" || c.Op != "" || c.Value != "" || c.ValueRef != ""
 	switch {
 	case isAll && isAny:
 		return fmt.Errorf("%s: у группы условий одновременно all и any", what)
@@ -283,8 +319,16 @@ func validateCondNode(c Condition, what string, depth int, nodes *int) error {
 	if n := utf8.RuneCountInString(c.Value); n > MaxLogicValueLen {
 		return fmt.Errorf("%s: значение длиннее %d символов", what, MaxLogicValueLen)
 	}
-	if !c.Op.needsValue() && c.Value != "" {
+	if c.Value != "" && c.ValueRef != "" {
+		return fmt.Errorf("%s: у условия и значение, и ссылка на ответ", what)
+	}
+	if !c.Op.needsValue() && (c.Value != "" || c.ValueRef != "") {
 		return fmt.Errorf("%s: оператор %q не сравнивает со значением", what, c.Op)
+	}
+	if c.ValueRef != "" {
+		if err := validateID(c.ValueRef); err != nil {
+			return fmt.Errorf("%s: valueRef: %s", what, err)
+		}
 	}
 	return nil
 }
@@ -591,10 +635,33 @@ func (ev *evaluator) leaf(c Condition, carrier int) (result, ok bool) {
 	if !c.Op.appliesTo(src.Type) {
 		return false, false // оператор не подходит типу источника
 	}
-	if c.Op.needsValue() && c.Value == "" {
-		return false, false // автор ещё не выбрал значение
+	if c.Op.needsValue() && c.Value == "" && c.ValueRef == "" {
+		return false, false // автор ещё не выбрал ни значения, ни ссылки
 	}
 	val := ev.decided[c.BlockID]
+
+	// Правая часть: заданное автором значение либо ОТВЕТ другого блока. У ссылки те же
+	// три причины инертности, что у источника, — и по той же причине: обход
+	// однопроходный, и обе стороны сравнения обязаны быть решены к моменту, когда
+	// решается цель.
+	want := c.Value
+	if c.ValueRef != "" {
+		ref, exists := ev.byID[c.ValueRef]
+		if !exists {
+			return false, false // блока, на чей ответ ссылались, нет в документе
+		}
+		if ev.pos[c.ValueRef] >= carrier {
+			return false, false // ссылка не решена к этому месту обхода
+		}
+		if !canReferenceAnswer(src.Type, ref.Type) {
+			return false, false // текст с числом сравнивать нечем
+		}
+		// ПУСТОЙ ответ по ссылке — это пустая правая часть, а не инертность. Инертное
+		// «показать» делает цель ВИДИМОЙ (§15.4 EDITOR.md), то есть форма показывала бы
+		// ветку всем, кто до второго вопроса ещё не дошёл. То же правило, что у скрытого
+		// источника: не отвечено — значит пусто.
+		want = ev.decided[c.ValueRef].text
+	}
 
 	switch c.Op {
 	case OpAnswered:
@@ -602,19 +669,19 @@ func (ev *evaluator) leaf(c Condition, carrier int) (result, ok bool) {
 	case OpEmpty:
 		return val.empty(), true
 	case OpIs:
-		return sameAnswer(src.Type, val.text, c.Value), true
+		return sameAnswer(src.Type, val.text, want), true
 	case OpIsNot:
 		// Строгое отрицание: у неотвеченного источника «не равно» истинно. Так «не
 		// равно» остаётся композируемым (нужна пара «отвечено И не равно» — автор
 		// складывает её группой), а не молча означает две разные вещи.
-		return !sameAnswer(src.Type, val.text, c.Value), true
+		return !sameAnswer(src.Type, val.text, want), true
 	case OpIncludes:
-		return slices.Contains(val.list, c.Value), true
+		return slices.Contains(val.list, want), true
 	case OpExcludes:
-		return !slices.Contains(val.list, c.Value), true
+		return !slices.Contains(val.list, want), true
 	case OpGt, OpLt:
 		a, errA := strconv.ParseFloat(val.text, 64)
-		b, errB := strconv.ParseFloat(c.Value, 64)
+		b, errB := strconv.ParseFloat(want, 64)
 		if errA != nil || errB != nil {
 			return false, true // нечисловой ответ не больше и не меньше — но правило действует
 		}
