@@ -288,16 +288,33 @@ export function planForm(blocks: readonly Block[], answers: Answers): FormPlan {
         // Строгое отрицание: у неотвеченного источника «не равно» истинно. Так оператор
         // остаётся композируемым — пара «отвечено И не равно» складывается группой.
         return [!sameAnswer(src, val.text, value), true]
+      case 'contains':
+        return [containsAnswer(val.text, value), true]
+      case 'not_contains':
+        // Строгое отрицание, как у is_not: у неотвеченного источника «не содержит»
+        // истинно, а пара «отвечен И не содержит» складывается группой.
+        return [!containsAnswer(val.text, value), true]
       case 'includes':
         return [val.list.includes(value), true]
       case 'excludes':
         return [!val.list.includes(value), true]
       case 'gt':
-      case 'lt': {
+      case 'lt':
+      case 'gte':
+      case 'lte': {
+        // Дата — ISO-строка (YYYY-MM-DD), у неё лексикографический порядок совпадает с
+        // хронологическим; ничего не разбираем, потому что разбор дат — это часовые
+        // пояса, которых у ответа нет.
+        if (valueDomain(src.type) === 'date') {
+          if (val.text === '' || value === '') return [false, true]
+          return [orderHolds(compareStrings(val.text, value), c.op), true]
+        }
         const a = Number(val.text)
         const b = Number(value)
-        if (val.text === '' || !Number.isFinite(a) || !Number.isFinite(b)) return [false, true]
-        return [c.op === 'gt' ? a > b : a < b, true]
+        if (val.text === '' || value === '' || !Number.isFinite(a) || !Number.isFinite(b)) {
+          return [false, true]
+        }
+        return [orderHolds(Math.sign(a - b), c.op), true]
       }
     }
   }
@@ -438,7 +455,7 @@ function groupRuns(blocks: readonly Block[]): [number, number][] {
 // который движок считает инертным, то есть молча не работающим.
 export function operatorsFor(type: BlockType): LogicOperator[] {
   if (!isAnswerableType(type)) return []
-  const numeric = type === 'scale' || type === 'number'
+  const domain = valueDomain(type)
   const multi = isMultiChoiceType(type)
   return LOGIC_OPERATORS.filter((op) => {
     switch (op) {
@@ -448,12 +465,19 @@ export function operatorsFor(type: BlockType): LogicOperator[] {
       case 'is':
       case 'is_not':
         return !multi
+      case 'contains':
+      case 'not_contains':
+        // Подстрока осмысленна там, где ответ — свободный текст. У числа и даты
+        // «содержит» значило бы поиск по записи ответа, а не по его значению.
+        return domain === 'text'
       case 'includes':
       case 'excludes':
         return multi
       case 'gt':
       case 'lt':
-        return numeric
+      case 'gte':
+      case 'lte':
+        return domain === 'number' || domain === 'date'
     }
   })
 }
@@ -572,6 +596,32 @@ function sameAnswer(src: Block, answer: string, want: string): boolean {
     if (answer !== '' && want !== '' && Number.isFinite(a) && Number.isFinite(b)) return a === b
   }
   return answer === want
+}
+
+// Вхождение подстроки БЕЗ учёта регистра: автор пишет условие про смысл ответа, а не
+// про то, какой клавишей респондент начал слово.
+function containsAnswer(answer: string, want: string): boolean {
+  return answer.toLowerCase().includes(want.toLowerCase())
+}
+
+const compareStrings = (a: string, b: string): number => (a < b ? -1 : a > b ? 1 : 0)
+
+// Верен ли порядок, которого требует оператор, при знаке сравнения sign (-1, 0, 1).
+// Одна точка на числа и даты: иначе «больше или равно» разъехалось бы между ними на
+// первой же правке. Зеркалит orderHolds в internal/domain/logic.go.
+function orderHolds(sign: number, op: LogicOperator): boolean {
+  switch (op) {
+    case 'gt':
+      return sign > 0
+    case 'lt':
+      return sign < 0
+    case 'gte':
+      return sign >= 0
+    case 'lte':
+      return sign <= 0
+    default:
+      return false
+  }
 }
 
 // Видимость вариантов; null, если блока не касается ни одно правило (значит видны все).

@@ -12,13 +12,6 @@ import {
 import { operatorsFor } from '@fields/logic'
 
 import { Button } from '@/components/ui/button'
-import {
-  Command,
-  CommandGroup,
-  CommandInput,
-  CommandItem,
-  CommandList,
-} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
@@ -32,11 +25,12 @@ import {
 import { GlyphName } from '../GlyphName'
 import {
   type Group,
-  OPERATOR_LABELS,
   defaultLeaf,
+  operatorLabel,
   referenceSources,
   sourceLabel,
   valueChoices,
+  valueInputType,
 } from './model'
 import { RowMenu as RowMenuButton } from './rowMenu'
 
@@ -295,6 +289,8 @@ function LeafRow({
   // Есть ли на форме вопросы, чей ответ годится правой частью. Нет — контрол значения
   // остаётся тем же, чем был: список вариантов либо строка ввода.
   const refs = source ? referenceSources(blocks, source) : []
+  // Чем значение вводится: у даты — календарём браузера, у числа — числовым полем.
+  const inputType = source ? valueInputType(source) : 'text'
   const needsValue = value === null || opNeedsValue(value.op)
 
   // Смена источника роняет оператор и значение, если они ему не подходят: id варианта
@@ -350,7 +346,7 @@ function LeafRow({
         <SelectContent>
           {ops.map((op) => (
             <SelectItem key={op} value={op}>
-              {OPERATOR_LABELS[op]}
+              {operatorLabel(op, source?.type)}
             </SelectItem>
           ))}
         </SelectContent>
@@ -363,6 +359,7 @@ function LeafRow({
             value={value}
             choices={choices}
             refs={refs}
+            inputType={inputType}
             onChange={onChange}
           />
         ) : value !== null && choices.length > 0 ? (
@@ -381,6 +378,7 @@ function LeafRow({
         ) : (
           <Input
             className="h-7 w-44 max-w-full text-sm"
+            type={inputType}
             disabled={value === null}
             value={value?.value ?? ''}
             placeholder="Значение…"
@@ -427,18 +425,17 @@ function ValuePicker({
   value,
   choices,
   refs,
+  inputType,
   onChange,
 }: {
   blocks: readonly Block[]
   value: Leaf
   choices: { value: string; label: string }[]
   refs: readonly Block[]
+  inputType: 'date' | 'number' | 'text'
   onChange: (next: LogicCondition) => void
 }) {
   const [open, setOpen] = useState(false)
-  const [query, setQuery] = useState(value.value ?? '')
-
-  const freeText = choices.length === 0
   const ref = value.valueRef ? blocks.find((b) => b.id === value.valueRef) : undefined
 
   const leafWith = (rest: Partial<Leaf>): LogicCondition => ({
@@ -447,25 +444,8 @@ function ValuePicker({
     ...rest,
   })
 
-  const onQuery = (q: string): void => {
-    setQuery(q)
-    if (freeText) onChange(leafWith(q === '' ? {} : { value: q }))
-  }
-
-  const hit = (s: string): boolean => s.toLowerCase().includes(query.trim().toLowerCase())
-  const foundChoices = choices.filter((c) => hit(c.label))
-  const foundRefs = refs.filter((b) => hit(sourceLabel(blocks, b)))
-
   return (
-    <Popover
-      open={open}
-      onOpenChange={(next) => {
-        setOpen(next)
-        // Строка открывается тем, что в правиле УЖЕ стоит: у литерала — им самим (его
-        // и правят), у ссылки — пустой (искать в списке).
-        if (next) setQuery(value.valueRef ? '' : (value.value ?? ''))
-      }}
-    >
+    <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
         <Button
           type="button"
@@ -480,71 +460,94 @@ function ValuePicker({
           <ChevronDown className="size-4 shrink-0 opacity-50" />
         </Button>
       </PopoverTrigger>
-      <PopoverContent className="w-72 p-0" align="start">
-        <Command shouldFilter={false}>
-          <CommandInput
-            placeholder={freeText ? 'Значение или вопрос' : 'Поиск'}
-            value={query}
-            onValueChange={onQuery}
-            // Потолок ровно тот, что у схемы: без него вставка длинной строки роняла бы
-            // автосейв в 422, а сообщения про лимит автор не видит нигде.
-            maxLength={MAX_LOGIC_VALUE_LEN}
-          />
-          <CommandList className="max-h-72">
-            {/* У свободного ввода пункт «Значение» — не ввод, а ВЫХОД: набранное уже в
-                документе, и Enter по нему просто закрывает попап. Без него Enter выбрал
-                бы первый вопрос списка, то есть набранное молча заменилось бы ссылкой. */}
-            {freeText
-              ? query !== '' && (
-                  <CommandGroup heading="Значение">
-                    <CommandItem value={`literal:${query}`} onSelect={() => setOpen(false)}>
-                      <span className="truncate">{query}</span>
-                    </CommandItem>
-                  </CommandGroup>
-                )
-              : foundChoices.length > 0 && (
-                  <CommandGroup heading="Значение">
-                    {foundChoices.map((c) => (
-                      <CommandItem
-                        key={c.value}
-                        value={`choice:${c.value}`}
-                        onSelect={() => {
-                          onChange(leafWith({ value: c.value }))
-                          setOpen(false)
-                        }}
-                      >
-                        <span className="truncate">{c.label}</span>
-                      </CommandItem>
-                    ))}
-                  </CommandGroup>
-                )}
+      <PopoverContent className="w-64 p-2" align="start">
+        <Section title="Значение">
+          {choices.length > 0 ? (
+            choices.map((c) => (
+              <PickerRow
+                key={c.value}
+                selected={value.value === c.value}
+                onSelect={() => {
+                  onChange(leafWith({ value: c.value }))
+                  setOpen(false)
+                }}
+              >
+                {c.label}
+              </PickerRow>
+            ))
+          ) : (
+            <Input
+              className="h-7 text-sm"
+              type={inputType}
+              autoFocus
+              value={value.value ?? ''}
+              placeholder="Значение…"
+              aria-label="Значение условия"
+              // Потолок ровно тот, что у схемы: без него вставка длинной строки роняла
+              // бы автосейв в 422, а сообщения про лимит автор не видит нигде.
+              maxLength={MAX_LOGIC_VALUE_LEN}
+              // Пишем ПО БУКВЕ, как в обычном поле: попап не диалог с кнопкой «ОК», и
+              // набранное не должно теряться от клика мимо. Ввод гасит ссылку — правая
+              // часть одна, и две сразу схема отвергает.
+              onChange={(e) =>
+                onChange(leafWith(e.target.value === '' ? {} : { value: e.target.value }))
+              }
+            />
+          )}
+        </Section>
 
-            {foundRefs.length > 0 && (
-              <CommandGroup heading="Ответ на вопрос">
-                {foundRefs.map((b) => (
-                  <CommandItem
-                    key={b.id}
-                    value={`ref:${b.id}`}
-                    onSelect={() => {
-                      onChange(leafWith({ valueRef: b.id }))
-                      setOpen(false)
-                    }}
-                  >
-                    <GlyphName type={b.type}>{sourceLabel(blocks, b)}</GlyphName>
-                  </CommandItem>
-                ))}
-              </CommandGroup>
-            )}
-
-            {foundRefs.length === 0 && (freeText ? query === '' : foundChoices.length === 0) && (
-              <div className="text-muted-foreground py-6 text-center text-sm">
-                {freeText ? 'Впишите значение или найдите вопрос' : 'Ничего не найдено'}
-              </div>
-            )}
-          </CommandList>
-        </Command>
+        <Section title="Ответ на вопрос">
+          {refs.map((b) => (
+            <PickerRow
+              key={b.id}
+              selected={value.valueRef === b.id}
+              onSelect={() => {
+                onChange(leafWith({ valueRef: b.id }))
+                setOpen(false)
+              }}
+            >
+              <GlyphName type={b.type}>{sourceLabel(blocks, b)}</GlyphName>
+            </PickerRow>
+          ))}
+        </Section>
       </PopoverContent>
     </Popover>
+  )
+}
+
+// Раздел попапа: подпись и содержимое. Подписи здесь несут смысл — без них список
+// вопросов читается как продолжение списка значений.
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <div className="space-y-1 py-1">
+      <div className="text-muted-foreground px-2 text-xs font-medium">{title}</div>
+      {children}
+    </div>
+  )
+}
+
+// Строка выбора. Кнопка, а не CommandItem: список короткий (сравнимые вопросы одного
+// домена да варианты одного списка), поиск ему не нужен, а cmdk забрал бы у поля ввода
+// стрелки и Enter — то есть у ТОГО контрола, ради которого попап и открывают.
+function PickerRow({
+  selected,
+  onSelect,
+  children,
+}: {
+  selected: boolean
+  onSelect: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={`flex w-full items-center gap-2 rounded-sm px-2 py-1 text-left text-sm hover:bg-accent ${
+        selected ? 'bg-accent' : ''
+      }`}
+    >
+      <span className="min-w-0 flex-1 truncate">{children}</span>
+    </button>
   )
 }
 

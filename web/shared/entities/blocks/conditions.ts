@@ -29,12 +29,18 @@ export const LOGIC_OPERATORS = [
   // равенство: id варианта, число, ConsentYes, точная строка
   'is',
   'is_not',
+  // подстрока — только у текстовых типов (короткий и длинный текст, почта, телефон)
+  'contains',
+  'not_contains',
   // множественный выбор: содержит ли ответ вариант
   'includes',
   'excludes',
-  // числовое сравнение — только scale и number
+  // порядок — у чисел, шкалы и ДАТЫ (ISO-строка сравнивается лексикографически, а это
+  // и есть хронологический порядок)
   'gt',
   'lt',
+  'gte',
+  'lte',
 ] as const
 
 export type LogicOperator = (typeof LOGIC_OPERATORS)[number]

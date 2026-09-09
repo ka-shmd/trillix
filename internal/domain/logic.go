@@ -1,10 +1,12 @@
 package domain
 
 import (
+	"cmp"
 	"encoding/json"
 	"fmt"
 	"slices"
 	"strconv"
+	"strings"
 	"unicode/utf8"
 )
 
@@ -64,17 +66,29 @@ const (
 	// согласия, точная строка у текстовых.
 	OpIs    LogicOp = "is"
 	OpIsNot LogicOp = "is_not"
+	// Подстрока — только у текстовых типов.
+	OpContains    LogicOp = "contains"
+	OpNotContains LogicOp = "not_contains"
 	// Множественный выбор: содержит ли ответ этот вариант.
 	OpIncludes LogicOp = "includes"
 	OpExcludes LogicOp = "excludes"
-	// Числовое сравнение — только шкала и number.
-	OpGt LogicOp = "gt"
-	OpLt LogicOp = "lt"
+	// Порядок — у чисел, шкалы и ДАТЫ: ISO-строка сравнивается лексикографически, а это
+	// и есть хронологический порядок.
+	OpGt  LogicOp = "gt"
+	OpLt  LogicOp = "lt"
+	OpGte LogicOp = "gte"
+	OpLte LogicOp = "lte"
 )
 
 // logicOps — все операторы одним списком, и он же источник valid(). Один список, а не
 // switch плюс отдельный перечень: ровно тот урок, который фаза 16 вынесла из blockTypes.
-var logicOps = []LogicOp{OpAnswered, OpEmpty, OpIs, OpIsNot, OpIncludes, OpExcludes, OpGt, OpLt}
+var logicOps = []LogicOp{
+	OpAnswered, OpEmpty,
+	OpIs, OpIsNot,
+	OpContains, OpNotContains,
+	OpIncludes, OpExcludes,
+	OpGt, OpLt, OpGte, OpLte,
+}
 
 func (op LogicOp) valid() bool { return slices.Contains(logicOps, op) }
 
@@ -95,10 +109,15 @@ func (op LogicOp) appliesTo(t BlockType) bool {
 	case OpIs, OpIsNot:
 		// У множественного выбора «равно» неопределимо: ответ — массив. Ему includes.
 		return !t.isMultiChoice()
+	case OpContains, OpNotContains:
+		// Подстрока осмысленна там, где ответ — свободный текст. У числа и даты «содержит»
+		// значило бы поиск по записи ответа, а не по его значению.
+		return valueDomain(t) == "text"
 	case OpIncludes, OpExcludes:
 		return t.isMultiChoice()
-	case OpGt, OpLt:
-		return t == BlockScale || t == BlockNumber
+	case OpGt, OpLt, OpGte, OpLte:
+		d := valueDomain(t)
+		return d == "number" || d == "date"
 	default:
 		return false
 	}
@@ -675,22 +694,58 @@ func (ev *evaluator) leaf(c Condition, carrier int) (result, ok bool) {
 		// равно» остаётся композируемым (нужна пара «отвечено И не равно» — автор
 		// складывает её группой), а не молча означает две разные вещи.
 		return !sameAnswer(src.Type, val.text, want), true
+	case OpContains:
+		return containsAnswer(val.text, want), true
+	case OpNotContains:
+		// Строгое отрицание, как у is_not: у неотвеченного источника «не содержит»
+		// истинно, а пара «отвечен И не содержит» складывается группой.
+		return !containsAnswer(val.text, want), true
 	case OpIncludes:
 		return slices.Contains(val.list, want), true
 	case OpExcludes:
 		return !slices.Contains(val.list, want), true
-	case OpGt, OpLt:
+	case OpGt, OpLt, OpGte, OpLte:
+		// Дата — ISO-строка (YYYY-MM-DD), у неё лексикографический порядок совпадает с
+		// хронологическим; ничего не разбираем, потому что разбор дат — это часовые
+		// пояса, которых у ответа нет.
+		if valueDomain(src.Type) == "date" {
+			if val.text == "" || want == "" {
+				return false, true // сравнивать не с чем — но правило действует
+			}
+			return orderHolds(strings.Compare(val.text, want), c.Op), true
+		}
 		a, errA := strconv.ParseFloat(val.text, 64)
 		b, errB := strconv.ParseFloat(want, 64)
 		if errA != nil || errB != nil {
 			return false, true // нечисловой ответ не больше и не меньше — но правило действует
 		}
-		if c.Op == OpGt {
-			return a > b, true
-		}
-		return a < b, true
+		return orderHolds(cmp.Compare(a, b), c.Op), true
 	default:
 		return false, false
+	}
+}
+
+// containsAnswer — вхождение подстроки БЕЗ учёта регистра: автор пишет условие про
+// смысл ответа, а не про то, какой клавишей респондент начал слово.
+func containsAnswer(answer, want string) bool {
+	return strings.Contains(strings.ToLower(answer), strings.ToLower(want))
+}
+
+// orderHolds — верен ли порядок, который требует оператор, при знаке сравнения sign
+// (как у strings.Compare и cmp.Compare: -1, 0, 1). Одна точка на числа и даты: иначе
+// «больше или равно» разъехалось бы между ними на первой же правке.
+func orderHolds(sign int, op LogicOp) bool {
+	switch op {
+	case OpGt:
+		return sign > 0
+	case OpLt:
+		return sign < 0
+	case OpGte:
+		return sign >= 0
+	case OpLte:
+		return sign <= 0
+	default:
+		return false
 	}
 }
 

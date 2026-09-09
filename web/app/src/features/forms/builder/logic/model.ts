@@ -82,6 +82,15 @@ export function valueChoices(source: Block): { value: string; label: string }[] 
   return []
 }
 
+// Каким полем вводится значение: у даты — календарь браузера (тот же нативный контрол,
+// что у респондента), у числа — числовое поле. Иначе автор набирает дату руками и
+// промахивается форматом молча: ответ хранится как YYYY-MM-DD, а пишут «01.05.2026».
+export function valueInputType(source: Block): 'date' | 'number' | 'text' {
+  if (source.type === 'date') return 'date'
+  if (source.type === 'number') return 'number'
+  return 'text'
+}
+
 // Вопросы, чей ОТВЕТ годится в правую часть условия об этом источнике: правило доменов
 // спрашивается у вычислителя (canReferenceAnswer), чтобы список и семантика не
 // разъехались. Сам источник из списка убран — «равен сам себе» не условие.
@@ -105,15 +114,39 @@ export function asRootGroup(cond: LogicCondition): Group {
   return 'all' in cond || 'any' in cond ? cond : { all: [cond] }
 }
 
-export const OPERATOR_LABELS: Record<LogicOperator, string> = {
+// Как оператор зовётся у автора. «Содержит» стоит дважды и это не ошибка: у текста это
+// подстрока (contains), у множественного выбора — вариант в ответе (includes), и
+// одному типу источника предлагается ровно один из них.
+const OPERATOR_LABELS: Record<LogicOperator, string> = {
   answered: 'отвечен',
   empty: 'не отвечен',
   is: 'равен',
   is_not: 'не равен',
+  contains: 'содержит',
+  not_contains: 'не содержит',
   includes: 'содержит',
   excludes: 'не содержит',
   gt: 'больше',
   lt: 'меньше',
+  gte: 'больше или равно',
+  lte: 'меньше или равно',
+}
+
+// У ДАТЫ порядок называется временем, а не величиной: «дата больше 1 мая» читается как
+// ошибка перевода. Оператор при этом тот же самый — разными словами зовётся одно и то
+// же сравнение.
+const DATE_ORDER_LABELS: Record<'gt' | 'lt' | 'gte' | 'lte', string> = {
+  gt: 'позже',
+  lt: 'раньше',
+  gte: 'не раньше',
+  lte: 'не позже',
+}
+
+export function operatorLabel(op: LogicOperator, sourceType?: BlockType): string {
+  if (sourceType === 'date' && op in DATE_ORDER_LABELS) {
+    return DATE_ORDER_LABELS[op as keyof typeof DATE_ORDER_LABELS]
+  }
+  return OPERATOR_LABELS[op]
 }
 
 // Значение поля `to`, означающее «страниц дальше нет». В схеме это отдельный флаг `end`,

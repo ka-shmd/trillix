@@ -265,11 +265,42 @@ describe('planForm: числа', () => {
     ['is у number сравнивает числом, а не строкой', leaf('age', 'is', '5.0'), { age: '5' }, true],
     ['gt у нечислового ответа — ложь, но правило действует', leaf('age', 'gt', '5'), { age: 'abc' }, false],
     ['gt у текстового источника — инертен', leaf('txt', 'gt', '5'), {}, true],
+    ['gte на равном значении', leaf('age', 'gte', '5'), { age: '5' }, true],
+    ['gte ниже границы', leaf('age', 'gte', '5'), { age: '4' }, false],
+    ['lte на равном значении', leaf('nps', 'lte', '3'), { nps: '3' }, true],
   ]
 
   it.each(cases)('%s', (_name, rule, answers, visible) => {
     const dep = blk('dep', 'g4', 'short_text')
     const blocks = [scale, num, txt, showRule('dep', rule), dep]
+    expect(planForm(blocks, answers).visible.has('dep')).toBe(visible)
+  })
+})
+
+describe('planForm: текст и даты', () => {
+  const txt = blk('txt', 'g1', 'short_text')
+  const day = blk('day', 'g2', 'date')
+  const num = blk('num', 'g3', 'number')
+
+  const cases: [string, LogicCondition, Answers, boolean][] = [
+    ['содержит подстроку', leaf('txt', 'contains', 'иван'), { txt: 'Иван Иванов' }, true],
+    ['содержит: регистр не важен', leaf('txt', 'contains', 'ИВАН'), { txt: 'иван' }, true],
+    ['содержит: подстроки нет', leaf('txt', 'contains', 'пётр'), { txt: 'Иван' }, false],
+    ['не содержит', leaf('txt', 'not_contains', 'пётр'), { txt: 'Иван' }, true],
+    // Строгое отрицание, как у is_not: пара «отвечен И не содержит» складывается группой.
+    ['не содержит у неотвеченного — истинно', leaf('txt', 'not_contains', 'иван'), {}, true],
+    ['содержит у числового источника — инертен', leaf('num', 'contains', '5'), { num: '5' }, true],
+    ['дата позже', leaf('day', 'gt', '2026-01-01'), { day: '2026-05-01' }, true],
+    ['дата не позже', leaf('day', 'gt', '2026-05-01'), { day: '2026-01-01' }, false],
+    ['дата раньше', leaf('day', 'lt', '2026-05-01'), { day: '2026-01-01' }, true],
+    ['дата не раньше (gte) на равной дате', leaf('day', 'gte', '2026-05-01'), { day: '2026-05-01' }, true],
+    ['дата за границей года', leaf('day', 'gt', '2025-12-31'), { day: '2026-01-01' }, true],
+    ['пустая дата — ложь, но правило действует', leaf('day', 'gt', '2026-01-01'), {}, false],
+  ]
+
+  it.each(cases)('%s', (_name, rule, answers, visible) => {
+    const dep = blk('dep', 'g9', 'short_text')
+    const blocks = [txt, day, num, showRule('dep', rule), dep]
     expect(planForm(blocks, answers).visible.has('dep')).toBe(visible)
   })
 })

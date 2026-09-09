@@ -359,6 +359,9 @@ func TestPlanForm_Numbers(t *testing.T) {
 		{"is у number сравнивает числом, а не строкой", leaf("age", OpIs, "5.0"), map[string]any{"age": "5"}, true},
 		{"gt у нечислового ответа — ложь, но правило действует", leaf("age", OpGt, "5"), map[string]any{"age": "abc"}, false},
 		{"gt у текстового источника — инертен", leaf("txt", OpGt, "5"), map[string]any{}, true},
+		{"gte на равном значении", leaf("age", OpGte, "5"), map[string]any{"age": "5"}, true},
+		{"gte ниже границы", leaf("age", OpGte, "5"), map[string]any{"age": "4"}, false},
+		{"lte на равном значении", leaf("nps", OpLte, "3"), map[string]any{"nps": "3"}, true},
 	}
 
 	for _, tc := range cases {
@@ -368,6 +371,46 @@ func TestPlanForm_Numbers(t *testing.T) {
 				scale, num, lblk("txt", "g3", BlockShortText),
 				showRule("dep", tc.rule), dep,
 			}
+			plan := PlanForm(blocks, answers(tc.answers))
+			if got := plan.Visible["dep"]; got != tc.visible {
+				t.Fatalf("видимость: got %v, want %v", got, tc.visible)
+			}
+		})
+	}
+}
+
+// ---------- текст и даты ----------
+
+func TestPlanForm_TextAndDates(t *testing.T) {
+	txt := lblk("txt", "g1", BlockShortText)
+	day := lblk("day", "g2", BlockDate)
+	num := lblk("num", "g3", BlockNumber)
+
+	cases := []struct {
+		name    string
+		rule    *Condition
+		answers map[string]any
+		visible bool
+	}{
+		{"содержит подстроку", leaf("txt", OpContains, "иван"), map[string]any{"txt": "Иван Иванов"}, true},
+		{"содержит: регистр не важен", leaf("txt", OpContains, "ИВАН"), map[string]any{"txt": "иван"}, true},
+		{"содержит: подстроки нет", leaf("txt", OpContains, "пётр"), map[string]any{"txt": "Иван"}, false},
+		{"не содержит", leaf("txt", OpNotContains, "пётр"), map[string]any{"txt": "Иван"}, true},
+		// Строгое отрицание, как у is_not: пара «отвечен И не содержит» складывается группой.
+		{"не содержит у неотвеченного — истинно", leaf("txt", OpNotContains, "иван"), map[string]any{}, true},
+		{"содержит у числового источника — инертен", leaf("num", OpContains, "5"), map[string]any{"num": "5"}, true},
+		{"дата позже", leaf("day", OpGt, "2026-01-01"), map[string]any{"day": "2026-05-01"}, true},
+		{"дата не позже", leaf("day", OpGt, "2026-05-01"), map[string]any{"day": "2026-01-01"}, false},
+		{"дата раньше", leaf("day", OpLt, "2026-05-01"), map[string]any{"day": "2026-01-01"}, true},
+		{"дата не раньше (gte) на равной дате", leaf("day", OpGte, "2026-05-01"), map[string]any{"day": "2026-05-01"}, true},
+		{"дата за границей года", leaf("day", OpGt, "2025-12-31"), map[string]any{"day": "2026-01-01"}, true},
+		{"пустая дата — ложь, но правило действует", leaf("day", OpGt, "2026-01-01"), map[string]any{}, false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dep := lblk("dep", "g9", BlockShortText)
+			blocks := []Block{txt, day, num, showRule("dep", tc.rule), dep}
 			plan := PlanForm(blocks, answers(tc.answers))
 			if got := plan.Visible["dep"]; got != tc.visible {
 				t.Fatalf("видимость: got %v, want %v", got, tc.visible)
