@@ -10,7 +10,7 @@ import {
   scaleRange,
 } from '@entities/formSchema'
 import { pageName, pageNumbers, thankYouOpener } from '@fields/groups'
-import { operatorsFor, ruleWarnings } from '@fields/logic'
+import { canReferenceAnswer, operatorsFor, ruleWarnings } from '@fields/logic'
 
 import { editorKind } from '../kinds'
 import { derivedQuestionName } from '../questionName'
@@ -80,6 +80,20 @@ export function valueChoices(source: Block): { value: string; label: string }[] 
     return [{ value: 'yes', label: 'Отмечено' }]
   }
   return []
+}
+
+// Вопросы, чей ОТВЕТ годится в правую часть условия об этом источнике: правило доменов
+// спрашивается у вычислителя (canReferenceAnswer), чтобы список и семантика не
+// разъехались. Сам источник из списка убран — «равен сам себе» не условие.
+//
+// Позиционного фильтра здесь нет по тому же доводу, что у logicSources: инертность
+// меряется у ЦЕЛИ, а целей у правила бывает несколько и в разных местах. Ссылку ниже
+// цели называет предупреждение (logicBlockWarnings), а не отсутствие пункта.
+export function referenceSources(blocks: readonly Block[], source: Block): Block[] {
+  return blocks.filter(
+    (b) =>
+      b.id !== source.id && isAnswerableType(b.type) && canReferenceAnswer(source.type, b.type),
+  )
 }
 
 // Группа условий — узел с детьми. Корень правила редактор всегда держит группой (два

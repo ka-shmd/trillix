@@ -1,4 +1,5 @@
-import { Copy, Plus, Repeat, Trash2 } from 'lucide-react'
+import { ChevronDown, Copy, Plus, Repeat, Trash2 } from 'lucide-react'
+import { useState } from 'react'
 
 import {
   type Block,
@@ -10,7 +11,16 @@ import {
 } from '@entities/formSchema'
 import { operatorsFor } from '@fields/logic'
 
+import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
 import { Input } from '@/components/ui/input'
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import {
   Select,
   SelectContent,
@@ -20,7 +30,14 @@ import {
 } from '@/components/ui/select'
 
 import { GlyphName } from '../GlyphName'
-import { type Group, OPERATOR_LABELS, defaultLeaf, sourceLabel, valueChoices } from './model'
+import {
+  type Group,
+  OPERATOR_LABELS,
+  defaultLeaf,
+  referenceSources,
+  sourceLabel,
+  valueChoices,
+} from './model'
 import { RowMenu as RowMenuButton } from './rowMenu'
 
 // Редактор дерева условий. Рекурсивный: группа рисует своих детей тем же компонентом,
@@ -80,7 +97,7 @@ const isAnd = (g: Group): boolean => 'all' in g
 const asGroup = (children: LogicCondition[], and: boolean): Group =>
   and ? { all: children } : { any: children }
 
-type Leaf = { blockId: string; op: LogicOperator; value?: string }
+type Leaf = { blockId: string; op: LogicOperator; value?: string; valueRef?: string }
 
 const isLeaf = (c: LogicCondition): c is Leaf => !('all' in c) && !('any' in c)
 
@@ -275,6 +292,9 @@ function LeafRow({
   const source = value ? blocks.find((b) => b.id === value.blockId) : undefined
   const ops = source ? operatorsFor(source.type) : []
   const choices = source ? valueChoices(source) : []
+  // Есть ли на форме вопросы, чей ответ годится правой частью. Нет — контрол значения
+  // остаётся тем же, чем был: список вариантов либо строка ввода.
+  const refs = source ? referenceSources(blocks, source) : []
   const needsValue = value === null || opNeedsValue(value.op)
 
   // Смена источника роняет оператор и значение, если они ему не подходят: id варианта
@@ -315,9 +335,12 @@ function LeafRow({
           onChange({
             blockId: value.blockId,
             op: op as LogicOperator,
-            // «отвечен»/«не отвечен» значения не несут — схема непустое value у них
-            // отвергает, поэтому роняем его здесь, а не ловим 422 автосейвом.
+            // «отвечен»/«не отвечен» правой части не несут — схема отвергает у них и
+            // значение, и ссылку, поэтому роняем их здесь, а не ловим 422 автосейвом.
             ...(opNeedsValue(op as LogicOperator) && value.value ? { value: value.value } : {}),
+            ...(opNeedsValue(op as LogicOperator) && value.valueRef
+              ? { valueRef: value.valueRef }
+              : {}),
           })
         }
       >
@@ -334,7 +357,15 @@ function LeafRow({
       </Select>
 
       {needsValue &&
-        (value !== null && choices.length > 0 ? (
+        (value !== null && refs.length > 0 ? (
+          <ValuePicker
+            blocks={blocks}
+            value={value}
+            choices={choices}
+            refs={refs}
+            onChange={onChange}
+          />
+        ) : value !== null && choices.length > 0 ? (
           <Select value={value.value ?? ''} onValueChange={(v) => onChange({ ...value, value: v })}>
             <SelectTrigger size="sm" className={VALUE} aria-label="Значение">
               <SelectValue placeholder="Значение…" />
@@ -372,6 +403,177 @@ function LeafRow({
       {menu && <RowActions menu={menu} />}
     </div>
   )
+}
+
+// ЗНАЧЕНИЕ ИЛИ ОТВЕТ ДРУГОГО ВОПРОСА — один контрол с двумя разделами (решение
+// владельца 2026-09-09). Правая часть условия перестала быть только литералом: с ней
+// сравнивают и ответ другого вопроса («бюджет больше, чем стоимость»). Что с чем
+// сравнимо, решает вычислитель (`canReferenceAnswer` через `referenceSources`), а не
+// этот файл: список и семантика обязаны говорить одно и то же.
+//
+// Контрол ОДИН, а не поле плюс тумблер: правая часть — одна мысль автора, и разводить
+// её по двум местам значит спрашивать «литерал или ссылка?» раньше, чем автор решил,
+// что он вообще сравнивает. Разделов в списке два — «Значение» и «Ответ на вопрос».
+//
+// Список источников контрол НЕ сужает позицией (ссылка ниже цели инертна, но законна) —
+// негодную пару называет предупреждение блока, как и у самого источника.
+//
+// СТРОКА ПОИСКА ЗДЕСЬ ЖЕ И СТРОКА ВВОДА, и у свободного ввода она пишет в документ ПО
+// БУКВЕ, а не по Enter. Иначе набранное «до 18» терялось бы от клика мимо попапа — это
+// поле ввода значения, и вести себя оно должно как поле ввода. Там, где список закрыт
+// (шкала), ввод остаётся поиском: значением бывает только пункт списка.
+function ValuePicker({
+  blocks,
+  value,
+  choices,
+  refs,
+  onChange,
+}: {
+  blocks: readonly Block[]
+  value: Leaf
+  choices: { value: string; label: string }[]
+  refs: readonly Block[]
+  onChange: (next: LogicCondition) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [query, setQuery] = useState(value.value ?? '')
+
+  const freeText = choices.length === 0
+  const ref = value.valueRef ? blocks.find((b) => b.id === value.valueRef) : undefined
+
+  const leafWith = (rest: Partial<Leaf>): LogicCondition => ({
+    blockId: value.blockId,
+    op: value.op,
+    ...rest,
+  })
+
+  const onQuery = (q: string): void => {
+    setQuery(q)
+    if (freeText) onChange(leafWith(q === '' ? {} : { value: q }))
+  }
+
+  const hit = (s: string): boolean => s.toLowerCase().includes(query.trim().toLowerCase())
+  const foundChoices = choices.filter((c) => hit(c.label))
+  const foundRefs = refs.filter((b) => hit(sourceLabel(blocks, b)))
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        // Строка открывается тем, что в правиле УЖЕ стоит: у литерала — им самим (его
+        // и правят), у ссылки — пустой (искать в списке).
+        if (next) setQuery(value.valueRef ? '' : (value.value ?? ''))
+      }}
+    >
+      <PopoverTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          role="combobox"
+          aria-expanded={open}
+          aria-label="Значение"
+          className={`${VALUE} justify-between font-normal`}
+        >
+          <ValueSummary blocks={blocks} value={value} choices={choices} refBlock={ref} />
+          <ChevronDown className="size-4 shrink-0 opacity-50" />
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent className="w-72 p-0" align="start">
+        <Command shouldFilter={false}>
+          <CommandInput
+            placeholder={freeText ? 'Значение или вопрос' : 'Поиск'}
+            value={query}
+            onValueChange={onQuery}
+            // Потолок ровно тот, что у схемы: без него вставка длинной строки роняла бы
+            // автосейв в 422, а сообщения про лимит автор не видит нигде.
+            maxLength={MAX_LOGIC_VALUE_LEN}
+          />
+          <CommandList className="max-h-72">
+            {/* У свободного ввода пункт «Значение» — не ввод, а ВЫХОД: набранное уже в
+                документе, и Enter по нему просто закрывает попап. Без него Enter выбрал
+                бы первый вопрос списка, то есть набранное молча заменилось бы ссылкой. */}
+            {freeText
+              ? query !== '' && (
+                  <CommandGroup heading="Значение">
+                    <CommandItem value={`literal:${query}`} onSelect={() => setOpen(false)}>
+                      <span className="truncate">{query}</span>
+                    </CommandItem>
+                  </CommandGroup>
+                )
+              : foundChoices.length > 0 && (
+                  <CommandGroup heading="Значение">
+                    {foundChoices.map((c) => (
+                      <CommandItem
+                        key={c.value}
+                        value={`choice:${c.value}`}
+                        onSelect={() => {
+                          onChange(leafWith({ value: c.value }))
+                          setOpen(false)
+                        }}
+                      >
+                        <span className="truncate">{c.label}</span>
+                      </CommandItem>
+                    ))}
+                  </CommandGroup>
+                )}
+
+            {foundRefs.length > 0 && (
+              <CommandGroup heading="Ответ на вопрос">
+                {foundRefs.map((b) => (
+                  <CommandItem
+                    key={b.id}
+                    value={`ref:${b.id}`}
+                    onSelect={() => {
+                      onChange(leafWith({ valueRef: b.id }))
+                      setOpen(false)
+                    }}
+                  >
+                    <GlyphName type={b.type}>{sourceLabel(blocks, b)}</GlyphName>
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            )}
+
+            {foundRefs.length === 0 && (freeText ? query === '' : foundChoices.length === 0) && (
+              <div className="text-muted-foreground py-6 text-center text-sm">
+                {freeText ? 'Впишите значение или найдите вопрос' : 'Ничего не найдено'}
+              </div>
+            )}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// Что написано на контроле. Ссылка называется вопросом с глифом его типа — тем же, чем
+// вопрос зовётся в списке источников; удалённая ссылка остаётся видимой словами, а не
+// пустотой, иначе правило выглядело бы недозаполненным.
+function ValueSummary({
+  blocks,
+  value,
+  choices,
+  refBlock,
+}: {
+  blocks: readonly Block[]
+  value: Leaf
+  choices: { value: string; label: string }[]
+  refBlock: Block | undefined
+}) {
+  if (value.valueRef !== undefined) {
+    return refBlock ? (
+      <GlyphName type={refBlock.type}>{sourceLabel(blocks, refBlock)}</GlyphName>
+    ) : (
+      <span className="min-w-0 truncate">Удалённый вопрос</span>
+    )
+  }
+  const literal = value.value ?? ''
+  if (literal === '')
+    return <span className="text-muted-foreground min-w-0 truncate">Значение…</span>
+  const label = choices.find((c) => c.value === literal)?.label ?? literal
+  return <span className="min-w-0 truncate">{label}</span>
 }
 
 // Меню операций строки. Состав и порядок пунктов взяты у Tally (образец вида полотна,

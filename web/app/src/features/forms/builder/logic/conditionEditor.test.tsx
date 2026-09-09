@@ -112,6 +112,44 @@ describe('глиф вопроса-источника', () => {
   })
 })
 
+// Правая часть: значение ИЛИ ответ другого вопроса. Раскрытый список из happy-dom не
+// виден (Popover, как и Select, здесь не раскрывается), зато видно, КАКОЙ контрол
+// поставлен и что на нём написано, — а ломается это молча.
+describe('правая часть условия', () => {
+  const cmp = (blockId: string): LogicCondition => ({ blockId, op: 'is' })
+
+  it('сравнимых вопросов нет — остаётся строка ввода', () => {
+    // Один вопрос на форме: сравнивать его ответ не с чьим.
+    const blocks = [src('a')]
+    render(
+      <ConditionEditor
+        blocks={blocks}
+        sources={blocks}
+        value={{ all: [cmp('a')] }}
+        onChange={vi.fn()}
+      />,
+    )
+    expect(screen.getByLabelText('Значение').tagName).toBe('INPUT')
+  })
+
+  it('есть сравнимый вопрос — контрол становится списком с разделами', () => {
+    setup({ all: [cmp('a')] })
+    const control = screen.getByLabelText('Значение')
+    expect(control.tagName).toBe('BUTTON')
+    expect(control.getAttribute('role')).toBe('combobox')
+  })
+
+  it('на контроле со ссылкой написано имя вопроса, а не пустота', () => {
+    setup({ all: [{ blockId: 'a', op: 'is', valueRef: 'b' }] })
+    expect(screen.getByLabelText('Значение').textContent).toContain('Короткий ответ 2')
+  })
+
+  it('удалённая ссылка называется словами', () => {
+    setup({ all: [{ blockId: 'a', op: 'is', valueRef: 'призрак' }] })
+    expect(screen.getByLabelText('Значение').textContent).toContain('Удалённый вопрос')
+  })
+})
+
 describe('меню строки', () => {
   it('стоит у каждого заполненного условия', () => {
     setup({ all: [leaf('a'), leaf('b')] })
