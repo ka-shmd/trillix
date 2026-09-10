@@ -931,3 +931,85 @@ func TestCleanupDeliveries_UsesRetentionBorder(t *testing.T) {
 		t.Fatalf("граница уборки = %s, ждали около %s", store.deletedBefore, want)
 	}
 }
+
+// Отказ ТОКЕН-ручки убивает подключение целиком, и пометка ложится на аккаунт,
+// а не только на связку, которая об этом узнала.
+//
+// Ради этого признак и заводился (задача владельца 2026-09-10): пока смерть
+// согласия жила только в статусе связки, мёртвый аккаунт выглядел рабочим везде,
+// кроме одной формы, где как раз упала доставка.
+func TestDeliver_AccessLostMarksAccount(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{refreshErr: integrations.ErrAccessLost}
+	svc := deliveryService(store, provider, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("окончательный отказ ушёл на ретрай: %v", err)
+	}
+	if store.accessLostAt.IsZero() {
+		t.Fatal("подключение не помечено мёртвым — в других формах оно останется зелёным")
+	}
+	if store.brokenWith == "" {
+		t.Error("связка не покраснела")
+	}
+}
+
+// ⚠ Беда ЛИСТА подключение не трогает. Автор переставил колонки — виновата одна
+// таблица; пометить аккаунт значило бы соврать про все остальные формы и
+// позвать человека переподключаться там, где переподключение ничего не лечит.
+func TestDeliver_SheetBreakLeavesAccountAlone(t *testing.T) {
+	link := linkedSheet()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	// Шапка с чужой колонкой посередине — раскладка, за которой следовать нельзя.
+	provider := &fakeProvider{sheetHeader: []string{"ID ответа", "Моя колонка", "Имя", "Почта"}}
+	svc := deliveryService(store, provider, &fakeSubmissions{
+		record: submissions.SheetRecord{Columns: link.Columns, Row: []string{"018f", "Аня", "a@b.c"}},
+	}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("окончательный отказ ушёл на ретрай: %v", err)
+	}
+	if store.brokenWith == "" {
+		t.Fatal("связка не покраснела — тест проверяет не тот случай")
+	}
+	if !store.accessLostAt.IsZero() {
+		t.Fatal("подключение помечено мёртвым из-за беды одной таблицы")
+	}
+}
+
+// Согласие вернули в самом Google — пометка гаснет на первом же удачном токене.
+// Иначе красный аккаунт остался бы в кабинете навсегда: переподключаться человеку
+// уже незачем, а больше пометку снимать некому.
+func TestDeliver_WorkingTokenClearsAccessLost(t *testing.T) {
+	conn := sealedConn(t)
+	conn.AccessLostAt = time.Now().Add(-time.Hour)
+	link := linkedSheet()
+	store := &fakeStore{link: link, conn: conn, accessLostAt: conn.AccessLostAt}
+	provider := &fakeProvider{header: headerOf(link)}
+	svc := deliveryService(store, provider, &fakeSubmissions{
+		record: submissions.SheetRecord{Columns: link.Columns, Row: []string{"018f", "Аня", "a@b.c"}},
+	}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("доставка: %v", err)
+	}
+	if !store.accessLostAt.IsZero() {
+		t.Fatal("пометка мёртвого подключения пережила удачную доставку")
+	}
+}
+
+// Экран узнаёт о смерти согласия из пометки, а не из статуса связки: аккаунт
+// требует переподключения ВЕЗДЕ, включая формы, где доставок ещё не было.
+func TestStatus_AccessLostAsksToReconnect(t *testing.T) {
+	conn := sealedConn(t)
+	conn.AccessLostAt = time.Now().Add(-time.Hour)
+	svc := deliveryService(&fakeStore{conn: conn}, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	st, err := svc.Status(context.Background(), testUser)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if len(st.Accounts) != 1 || !st.Accounts[0].NeedsReconnect {
+		t.Fatalf("аккаунты = %+v, ждали пометку «нужно переподключить»", st.Accounts)
+	}
+}

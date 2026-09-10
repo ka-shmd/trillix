@@ -32,6 +32,10 @@ type Connection struct {
 	RefreshSealed []byte
 	Scopes        string
 	ConnectedAt   time.Time
+	// AccessLostAt — момент, когда провайдер отказал в обновлении токена
+	// (`ErrAccessLost`, 0061). Нулевое время = согласие действует либо мы ещё не
+	// знаем: узнать это можно только походом к провайдеру, то есть при доставке.
+	AccessLostAt time.Time
 }
 
 // NewConnection — что нужно записать при подключении.
@@ -91,6 +95,7 @@ func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID, 
 			RefreshSealed: row.RefreshToken,
 			Scopes:        row.Scopes,
 			ConnectedAt:   row.ConnectedAt.Time,
+			AccessLostAt:  row.AccessLostAt.Time,
 		})
 	}
 	return out, nil
@@ -120,6 +125,27 @@ func (Repo) Delete(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID) 
 		return nil, err
 	}
 	return sealed, nil
+}
+
+// MarkAccessLost помечает подключение мёртвым: провайдер отказал в обновлении
+// токена. Первый момент отказа не перезаписывается (условие в самом SQL).
+func (Repo) MarkAccessLost(ctx context.Context, db postgres.DBTX, id uuid.UUID, at time.Time) error {
+	err := postgres.New(db).MarkIntegrationAccountAccessLost(ctx, postgres.MarkIntegrationAccountAccessLostParams{
+		ID:           id,
+		AccessLostAt: pgtype.Timestamptz{Time: at, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("mark integration account access lost: %w", err)
+	}
+	return nil
+}
+
+// ClearAccessLost снимает пометку: по нашему refresh-токену снова выдан access.
+func (Repo) ClearAccessLost(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).ClearIntegrationAccountAccessLost(ctx, id); err != nil {
+		return fmt.Errorf("clear integration account access lost: %w", err)
+	}
+	return nil
 }
 
 // FormLink — привязка формы к таблице (с полями аккаунта, нужными экрану и
@@ -274,6 +300,7 @@ func (Repo) GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) 
 		RefreshSealed: row.RefreshToken,
 		Scopes:        row.Scopes,
 		ConnectedAt:   row.ConnectedAt.Time,
+		AccessLostAt:  row.AccessLostAt.Time,
 	}, nil
 }
 

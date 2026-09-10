@@ -132,6 +132,7 @@ type IntegrationAccount struct {
 	Scopes            string
 	UserID            uuid.UUID
 	ConnectedAt       pgtype.Timestamptz
+	AccessLostAt      pgtype.Timestamptz
 }
 
 type IntegrationDelivery struct {

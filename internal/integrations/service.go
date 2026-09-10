@@ -51,6 +51,8 @@ type Store interface {
 	MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error
 	ClearError(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+	MarkAccessLost(ctx context.Context, db postgres.DBTX, id uuid.UUID, at time.Time) error
+	ClearAccessLost(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	InsertDelivery(ctx context.Context, db postgres.DBTX, d Delivery) error
 	ListDeliveries(ctx context.Context, db postgres.DBTX, linkID, cursor uuid.UUID, limit int32) ([]Delivery, error)
 	GetDelivery(ctx context.Context, db postgres.DBTX, id, linkID uuid.UUID) (Delivery, error)
@@ -137,13 +139,21 @@ func (s *Service) Enabled() bool { return s.google != nil }
 type ConnectedAccount struct {
 	ID    uuid.UUID
 	Email string
-	// NeedsReconnect — строка подключения есть, но refresh-токен ею больше не
-	// расшифровывается: ключ шифрования выведен из FORM_TOKEN_SECRET, и его
-	// ротация оставляет за собой шифротекст, которым нельзя пользоваться
-	// (secretbox.go). Лечение другое, чем у «нет аккаунта»: не «подключите», а
-	// «подключите ЗАНОВО», и до этого ни одна связка этого аккаунта работать не
-	// будет. Без этого поля экран показывал бы зелёное «подключено», а падало бы
-	// всё подряд — молча, до первого ответа респондента.
+	// NeedsReconnect — подключение есть, а пользоваться им нельзя. Лечение одно
+	// («подключите ЗАНОВО»), поэтому и признак один, а причин у него две:
+	//
+	//  1. refresh-токен не расшифровывается — ключ шифрования выведен из
+	//     FORM_TOKEN_SECRET, и его ротация оставляет за собой негодный
+	//     шифротекст (secretbox.go). Видно без сети, на каждом показе таба.
+	//  2. провайдер отказал в обновлении токена (`ErrAccessLost`): человек
+	//     отозвал доступ в своём Google либо refresh протух — у приложения в
+	//     статусе Testing это неделя. Шифротекст при этом ЦЕЛ, и без походов к
+	//     провайдеру беда невидима: узнаём о ней при доставке и запоминаем
+	//     моментом в access_lost_at (0061).
+	//
+	// ⚠ Вторая причина и есть та, из-за которой поле вообще расширяли: пока она
+	// жила только в статусе СВЯЗКИ, мёртвый аккаунт выглядел рабочим везде,
+	// кроме одной формы, где как раз упала доставка.
 	NeedsReconnect bool
 	ConnectedAt    time.Time
 }
@@ -183,7 +193,7 @@ func (s *Service) Status(ctx context.Context, userID uuid.UUID) (Status, error) 
 		out.Accounts = append(out.Accounts, ConnectedAccount{
 			ID:             c.ID,
 			Email:          c.Email,
-			NeedsReconnect: tokenErr != nil,
+			NeedsReconnect: tokenErr != nil || !c.AccessLostAt.IsZero(),
 			ConnectedAt:    c.ConnectedAt,
 		})
 	}
@@ -1137,6 +1147,16 @@ func (s *Service) accessToken(ctx context.Context, conn Connection) (string, err
 	tokens, err := s.google.Refresh(ctx, refresh)
 	if err != nil {
 		return "", err
+	}
+	// Согласие вернули (или мы ошиблись, пометив) — гасим пометку здесь, а не
+	// только при переподключении: доступ возвращают и в самом Google, и тогда
+	// чинить человеку нечего, а красный аккаунт в кабинете остался бы навсегда.
+	if !conn.AccessLostAt.IsZero() {
+		if err := s.repo.ClearAccessLost(ctx, s.db, conn.ID); err != nil {
+			httpserver.LoggerFrom(ctx).Warn("access-lost mark not cleared",
+				slog.String("account_id", conn.ID.String()),
+				slog.String("error", err.Error()))
+		}
 	}
 	s.keepRotatedToken(ctx, conn, refresh, tokens.Refresh)
 	return tokens.Access, nil

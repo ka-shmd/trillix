@@ -1564,3 +1564,66 @@ func dispatchAll(t *testing.T) {
 		}
 	}
 }
+
+// Смерть согласия помечает ПОДКЛЮЧЕНИЕ, и экран узнаёт об этом во ВСЕХ формах,
+// а не только в той, где упала доставка. Переподключение пометку снимает — той
+// же строкой аккаунта, без второй привязки формы.
+//
+// Это тот самый случай владельца (2026-09-10): аккаунт отвалился, а кабинет
+// показывал его рабочим, потому что признак жил в статусе одной связки.
+func TestIntegrations_AccessLostSurfacesEverywhere(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	accountID := connectAccount(t, owner, srv)
+
+	// Две формы одним аккаунтом: доставка упадёт только в первой.
+	withDelivery := newForm(t, wsID, "f-dead-1")
+	versionID := publishVersion(t, withDelivery)
+	closeBody(t, linkForm(t, owner, srv, withDelivery, accountID))
+	quiet := newForm(t, wsID, "f-dead-2")
+	publishVersion(t, quiet)
+	closeBody(t, linkForm(t, owner, srv, quiet, accountID))
+
+	provider.refreshErr = integrations.ErrAccessLost
+	enqueueDelivery(t, srv, withDelivery, newSubmission(t, withDelivery, versionID, `{"b1":"Ирина"}`))
+	dispatchAll(t)
+
+	// Форма, в которой доставок не было вовсе, обязана сказать правду.
+	if !needsReconnect(t, owner, srv, quiet, accountID) {
+		t.Fatal("в тихой форме аккаунт всё ещё выглядит рабочим — ровно тот дефект, ради которого заводилась пометка")
+	}
+
+	// Переподключение: тот же аккаунт, та же строка, пометки больше нет.
+	provider.refreshErr = nil
+	if again := connectAccount(t, owner, srv); again != accountID {
+		t.Fatalf("переподключение завело новую строку %s вместо %s", again, accountID)
+	}
+	if needsReconnect(t, owner, srv, quiet, accountID) {
+		t.Fatal("после переподключения аккаунт всё ещё просит переподключиться")
+	}
+}
+
+// needsReconnect — что экран формы говорит про названный аккаунт.
+func needsReconnect(t *testing.T, c *http.Client, srv *httptest.Server, formID, accountID string) bool {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms/"+formID+"/integrations")
+	var status struct {
+		Account struct {
+			Accounts []struct {
+				ID             string `json:"id"`
+				NeedsReconnect bool   `json:"needsReconnect"`
+			} `json:"accounts"`
+		} `json:"account"`
+	}
+	decode(t, r, &status)
+	for _, a := range status.Account.Accounts {
+		if a.ID == accountID {
+			return a.NeedsReconnect
+		}
+	}
+	t.Fatalf("аккаунт %s пропал из состояния формы", accountID)
+	return false
+}

@@ -99,6 +99,10 @@ type fakeStore struct {
 	deliveryLogErr error
 	// deletedBefore — граница уборки журнала, с которой её позвали.
 	deletedBefore time.Time
+
+	// accessLostAt — подключение помечено мёртвым (провайдер отказал в обновлении
+	// токена). Нулевое = пометки нет; тесты проверяют и постановку, и снятие.
+	accessLostAt time.Time
 }
 
 func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) (uuid.UUID, error) {
@@ -264,6 +268,10 @@ type fakeProvider struct {
 	appendCalls  int
 	cleared      string
 	appendErr    error
+	// refreshErr — провайдер отказал в обновлении токена. Отдельно от appendErr:
+	// отказ ТОКЕН-ручки означает смерть подключения, отказ ручки данных — беду
+	// одной таблицы, и путать их дорого.
+	refreshErr   error
 	firstRowBusy bool
 	// rotated — refresh-токен, который провайдер отдаёт взамен использованного.
 	// Пусто — как у Google: тот старый токен не меняет.
@@ -300,6 +308,9 @@ func (f *fakeProvider) Exchange(_ context.Context, _, _ string) (integrations.To
 }
 
 func (f *fakeProvider) Refresh(_ context.Context, _ string) (integrations.Tokens, error) {
+	if f.refreshErr != nil {
+		return integrations.Tokens{}, f.refreshErr
+	}
 	return integrations.Tokens{Access: testAccessToken, Refresh: f.rotated}, nil
 }
 
@@ -1362,4 +1373,17 @@ func (f *fakeStore) DeleteOldDeliveries(_ context.Context, _ postgres.DBTX, befo
 	}
 	f.deliveries = kept
 	return n, nil
+}
+
+func (f *fakeStore) MarkAccessLost(_ context.Context, _ postgres.DBTX, _ uuid.UUID, at time.Time) error {
+	// Первый момент отказа не перезаписывается — то же условие, что в SQL.
+	if f.accessLostAt.IsZero() {
+		f.accessLostAt = at
+	}
+	return nil
+}
+
+func (f *fakeStore) ClearAccessLost(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.accessLostAt = time.Time{}
+	return nil
 }

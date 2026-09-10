@@ -17,7 +17,12 @@ ON CONFLICT (user_id, provider, external_account_id) DO UPDATE SET
     external_email = EXCLUDED.external_email,
     refresh_token  = EXCLUDED.refresh_token,
     scopes         = EXCLUDED.scopes,
-    connected_at   = now()
+    connected_at   = now(),
+    -- Переподключение и есть лечение отозванного согласия: свежий refresh-токен
+    -- получен, значит пометка мёртвого подключения (0061) снимается тем же
+    -- оператором. Отдельным запросом её гасить нельзя — между ними подключение
+    -- выглядело бы рабочим и мёртвым одновременно.
+    access_lost_at = NULL
 RETURNING id;
 
 -- name: ListIntegrationAccountsByUser :many
@@ -27,7 +32,7 @@ RETURNING id;
 --
 -- Порядок по connected_at: подключённый первым стоит первым и не прыгает при
 -- перерисовке, а свежеподключённый оказывается внизу — там, где его ищут.
-SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
 WHERE user_id = $1 AND provider = $2
 ORDER BY connected_at, id;
@@ -48,6 +53,22 @@ UPDATE integration_accounts SET refresh_token = $2 WHERE id = $1;
 DELETE FROM integration_accounts
 WHERE id = $1 AND user_id = $2
 RETURNING refresh_token;
+
+-- name: MarkIntegrationAccountAccessLost :exec
+-- Провайдер отказал в обновлении токена: согласия на этот аккаунт больше нет
+-- (0061). Помечается ПОДКЛЮЧЕНИЕ, а не связка, которая об этом узнала: не
+-- работает ни одна связка этого аккаунта, во всех формах и пространствах.
+--
+-- Условие access_lost_at IS NULL держит ПЕРВЫЙ момент отказа: у аккаунта с
+-- десятком форм каждая доставка приносила бы свежий now(), и «когда именно
+-- перестало работать» стало бы «когда мы в последний раз попробовали».
+UPDATE integration_accounts SET access_lost_at = $2 WHERE id = $1 AND access_lost_at IS NULL;
+
+-- name: ClearIntegrationAccountAccessLost :exec
+-- Токен снова работает: провайдер отдал access по нашему refresh. Пометка
+-- гаснет здесь, а не только при переподключении, — согласие могли вернуть в
+-- самом Google, и тогда чинить человеку нечего.
+UPDATE integration_accounts SET access_lost_at = NULL WHERE id = $1;
 
 -- name: InsertFormIntegration :exec
 -- Привязка формы к созданной таблице. Уникальный индекс по form_id держит рамку
@@ -123,7 +144,7 @@ WHERE fi.id = $1;
 -- name: GetIntegrationAccountByID :one
 -- Аккаунт по своему id — путь доставки (связка несёт account_id) и путь проверки
 -- «аккаунт мой» перед выдачей токена или списка файлов.
-SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
 WHERE id = $1;
 

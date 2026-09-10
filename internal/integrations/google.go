@@ -58,11 +58,26 @@ var ErrNoRefreshToken = errors.New("integrations: провайдер не отд
 // поэтому под общее правило «401/403/404 — окончательные» не подпадает.
 const errInvalidGrant = "invalid_grant"
 
+// errRefusedGrant — этот код пришёл от токен-ручки. Сентинел, а не разбор текста
+// ошибки: значение кода зависит от ГРАНТА, и разбирать его обязан вызывающий.
+// У обмена кода (Exchange) это негодный код авторизации — одноразовый, минутной
+// свежести, подключение при нём цело; у обновления (Refresh) — смерть самого
+// подключения.
+var errRefusedGrant = fmt.Errorf("%w: %s", ErrPermanent, errInvalidGrant)
+
 // ErrPermanent — провайдер отказал так, что ретраить бессмысленно: доступ
 // отозван, таблица удалена, аккаунт закрыт. Отличать это от «полежал и встал»
 // обязательно: у outbox нет dead-letter, и безнадёжная строка иначе дёргала бы
 // чужой API до конца времён.
 var ErrPermanent = errors.New("integrations: провайдер отказал окончательно")
+
+// ErrAccessLost — согласия на этот аккаунт больше нет: человек отозвал доступ у
+// себя в Google либо refresh-токен протух (у приложения в статусе Testing это
+// неделя). Вложен в ErrPermanent, потому что ретраить нечего, но отличается от
+// прочих окончательных отказов ПРЕДМЕТОМ: тут умер аккаунт целиком, а не одна
+// таблица, — значит, не работает ни одна связка этого подключения, во всех
+// формах и пространствах. По нему подключение и помечается мёртвым (0061).
+var ErrAccessLost = fmt.Errorf("%w: согласие на аккаунт отозвано или истекло", ErrPermanent)
 
 // ErrScopeDenied — человек снял на экране согласия галочку доступа к Диску.
 // Обычный исход, а не сбой: ему нужен человеческий текст, а не «ошибка 500».
@@ -197,6 +212,12 @@ func (g *Google) Refresh(ctx context.Context, refresh string) (Tokens, error) {
 	}
 	t, err := g.token(ctx, form)
 	if err != nil {
+		// invalid_grant ИМЕННО ЗДЕСЬ означает смерть подключения: у обмена кода
+		// (Exchange) тот же код значит всего лишь негодный код авторизации —
+		// одноразовый, минутной свежести, — и подключение при нём цело.
+		if errors.Is(err, errRefusedGrant) {
+			return Tokens{}, fmt.Errorf("integrations google: refresh token: %w", ErrAccessLost)
+		}
 		return Tokens{}, fmt.Errorf("integrations google: refresh token: %w", err)
 	}
 	return t, nil
@@ -264,7 +285,7 @@ func (g *Google) token(ctx context.Context, form url.Values) (Tokens, error) {
 	}
 	if err := g.do(req, &body); err != nil {
 		if body.Error == errInvalidGrant {
-			return Tokens{}, fmt.Errorf("%w: %s", ErrPermanent, errInvalidGrant)
+			return Tokens{}, errRefusedGrant
 		}
 		return Tokens{}, err
 	}

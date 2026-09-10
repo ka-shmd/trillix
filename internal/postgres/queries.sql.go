@@ -302,6 +302,18 @@ func (q *Queries) ClearFormIntegrationError(ctx context.Context, id uuid.UUID) e
 	return err
 }
 
+const clearIntegrationAccountAccessLost = `-- name: ClearIntegrationAccountAccessLost :exec
+UPDATE integration_accounts SET access_lost_at = NULL WHERE id = $1
+`
+
+// Токен снова работает: провайдер отдал access по нашему refresh. Пометка
+// гаснет здесь, а не только при переподключении, — согласие могли вернуть в
+// самом Google, и тогда чинить человеку нечего.
+func (q *Queries) ClearIntegrationAccountAccessLost(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearIntegrationAccountAccessLost, id)
+	return err
+}
+
 const confirmBooking = `-- name: ConfirmBooking :execrows
 UPDATE bookings
 SET status = 'confirmed', submission_id = $2, hold_expires_at = NULL
@@ -2640,7 +2652,7 @@ func (q *Queries) GetFormTemplate(ctx context.Context, id uuid.UUID) (FormTempla
 }
 
 const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one
-SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
 WHERE id = $1
 `
@@ -2654,6 +2666,7 @@ type GetIntegrationAccountByIDRow struct {
 	RefreshToken      []byte
 	Scopes            string
 	ConnectedAt       pgtype.Timestamptz
+	AccessLostAt      pgtype.Timestamptz
 }
 
 // Аккаунт по своему id — путь доставки (связка несёт account_id) и путь проверки
@@ -2670,6 +2683,7 @@ func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (
 		&i.RefreshToken,
 		&i.Scopes,
 		&i.ConnectedAt,
+		&i.AccessLostAt,
 	)
 	return i, err
 }
@@ -4302,7 +4316,7 @@ func (q *Queries) ListIdentities(ctx context.Context, userID uuid.UUID) ([]ListI
 }
 
 const listIntegrationAccountsByUser = `-- name: ListIntegrationAccountsByUser :many
-SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
 WHERE user_id = $1 AND provider = $2
 ORDER BY connected_at, id
@@ -4322,6 +4336,7 @@ type ListIntegrationAccountsByUserRow struct {
 	RefreshToken      []byte
 	Scopes            string
 	ConnectedAt       pgtype.Timestamptz
+	AccessLostAt      pgtype.Timestamptz
 }
 
 // Аккаунты человека — то, из чего он выбирает в окне связки. refresh_token едет
@@ -4348,6 +4363,7 @@ func (q *Queries) ListIntegrationAccountsByUser(ctx context.Context, arg ListInt
 			&i.RefreshToken,
 			&i.Scopes,
 			&i.ConnectedAt,
+			&i.AccessLostAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5410,6 +5426,27 @@ WHERE id = $1
 // интеграция, которая заработала, обязана перестать краснеть в кабинете.
 func (q *Queries) MarkFormIntegrationDelivered(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markFormIntegrationDelivered, id)
+	return err
+}
+
+const markIntegrationAccountAccessLost = `-- name: MarkIntegrationAccountAccessLost :exec
+UPDATE integration_accounts SET access_lost_at = $2 WHERE id = $1 AND access_lost_at IS NULL
+`
+
+type MarkIntegrationAccountAccessLostParams struct {
+	ID           uuid.UUID
+	AccessLostAt pgtype.Timestamptz
+}
+
+// Провайдер отказал в обновлении токена: согласия на этот аккаунт больше нет
+// (0061). Помечается ПОДКЛЮЧЕНИЕ, а не связка, которая об этом узнала: не
+// работает ни одна связка этого аккаунта, во всех формах и пространствах.
+//
+// Условие access_lost_at IS NULL держит ПЕРВЫЙ момент отказа: у аккаунта с
+// десятком форм каждая доставка приносила бы свежий now(), и «когда именно
+// перестало работать» стало бы «когда мы в последний раз попробовали».
+func (q *Queries) MarkIntegrationAccountAccessLost(ctx context.Context, arg MarkIntegrationAccountAccessLostParams) error {
+	_, err := q.db.Exec(ctx, markIntegrationAccountAccessLost, arg.ID, arg.AccessLostAt)
 	return err
 }
 
@@ -7146,7 +7183,12 @@ ON CONFLICT (user_id, provider, external_account_id) DO UPDATE SET
     external_email = EXCLUDED.external_email,
     refresh_token  = EXCLUDED.refresh_token,
     scopes         = EXCLUDED.scopes,
-    connected_at   = now()
+    connected_at   = now(),
+    -- Переподключение и есть лечение отозванного согласия: свежий refresh-токен
+    -- получен, значит пометка мёртвого подключения (0061) снимается тем же
+    -- оператором. Отдельным запросом её гасить нельзя — между ними подключение
+    -- выглядело бы рабочим и мёртвым одновременно.
+    access_lost_at = NULL
 RETURNING id
 `
 

@@ -353,6 +353,21 @@ func (s *Service) deliveryFailed(ctx context.Context, link FormLink, ref deliver
 		return cause
 	}
 	s.logDelivery(ctx, link.ID, ref, OutcomeFailed, brokenReason(cause), 0)
+	// Умер не лист, а ПОДКЛЮЧЕНИЕ: провайдер отказал в обновлении токена. Пометка
+	// ложится на аккаунт, потому что не работает ни одна его связка — во всех
+	// формах и пространствах, а не только в той, где как раз пришёл ответ. Без
+	// неё мёртвый аккаунт выглядел бы рабочим везде, кроме этой одной формы
+	// (задача владельца 2026-09-10).
+	//
+	// Неудача пометки не роняет разбор отказа: связку всё равно надо покраснить,
+	// а пометка догонит следующей доставкой.
+	if errors.Is(cause, ErrAccessLost) {
+		if err := s.repo.MarkAccessLost(ctx, s.db, link.AccountID, time.Now()); err != nil {
+			httpserver.LoggerFrom(ctx).Warn("access-lost mark not stored",
+				slog.String("account_id", link.AccountID.String()),
+				slog.String("error", err.Error()))
+		}
+	}
 	httpserver.LoggerFrom(ctx).Warn("integration marked broken",
 		slog.String("form_id", link.FormID.String()),
 		slog.String("error", cause.Error()))
