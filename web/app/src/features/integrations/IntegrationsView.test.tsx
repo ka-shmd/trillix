@@ -960,6 +960,31 @@ describe('оверлей настройки Google Таблиц', () => {
   })
 })
 
+// Значки строки — группа обслуживания связки: стоят вплотную и каждый называет
+// себя подсказкой. Раньше подпись жила только в aria-label, то есть была видна
+// скринридеру и не видна глазу.
+describe('значки в строке связки', () => {
+  it('у значка есть подсказка с той же подписью, что и доступное имя', async () => {
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+
+    fireEvent.focus(screen.getByRole('button', { name: 'Журнал доставок' }))
+
+    // getAllByText: Radix рисует к подсказке ещё и скрытую копию для чтения вслух.
+    await waitFor(() => expect(screen.getAllByText('Журнал доставок').length).toBeGreaterThan(0))
+  })
+
+  it('значки лежат одной коробкой, тумблер в неё не входит', () => {
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+
+    const journal = screen.getByRole('button', { name: 'Журнал доставок' })
+    const box = journal.parentElement
+    if (!box) throw new Error('у значка нет коробки')
+    // Три значка рядом и ничего кроме: тумблер про состояние, а не про действие.
+    expect(box.querySelectorAll('button')).toHaveLength(3)
+    expect(within(box).queryByRole('switch')).toBeNull()
+  })
+})
+
 // Журнал доставок — вход из строки связки. Проверяется то, ради чего он заведён:
 // человек видит, что стало с КАЖДЫМ ответом, а не только причину последней беды.
 describe('журнал доставок', () => {

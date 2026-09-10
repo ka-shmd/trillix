@@ -130,8 +130,9 @@ export function IntegrationsView({ formId }: { formId: string }) {
 // границу там, где различать нечего, — список читается как список, а не как стопка
 // карточек.
 //
-// Действия стоят прямо в строке (тумблер, настройка, удаление), а не в меню «⋯»:
-// их три, они частые, и лишний клик по каждому дороже, чем компактность строки.
+// Действия стоят прямо в строке (тумблер, журнал, настройка, удаление), а не в
+// меню «⋯»: они частые, и лишний клик по каждому дороже, чем компактность строки.
+// Три значка собраны в одну группу и подписаны подсказками — см. ниже.
 function ConnectionRow({
   formId,
   connection,
@@ -207,35 +208,30 @@ function ConnectionRow({
       {/* Журнал стоит ПЕРЕД настройкой и удалением: он про чтение, а соседи про
           правку, и деструктивное остаётся крайним справа. Действий в строке
           стало четыре — это всё ещё частые действия, а не повод прятать их в
-          меню «⋯»: journal открывают ровно тогда, когда ответ не нашёлся в
-          таблице, то есть в тот же заход, что и настройки. */}
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="text-muted-foreground"
-        aria-label="Журнал доставок"
-        onClick={() => setLog(true)}
-      >
-        <History className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="text-muted-foreground"
-        aria-label="Настроить подключение"
-        onClick={onEdit}
-      >
-        <Pencil className="size-4" />
-      </Button>
-      <Button
-        variant="ghost"
-        size="icon-sm"
-        className="text-muted-foreground"
-        aria-label="Удалить подключение"
-        onClick={() => setConfirming(true)}
-      >
-        <Trash2 className="size-4" />
-      </Button>
+          меню «⋯»: журнал открывают ровно тогда, когда ответ не нашёлся в
+          таблице, то есть в тот же заход, что и настройки.
+
+          Значки стоят ВПЛОТНУЮ, своей коробкой без gap (образец — строка ответа
+          в SubmissionsTable), и это не экономия места: у ghost-кнопки граница —
+          сам значок, а не край заливки, поэтому её собственные поля уже дают
+          16 пикселей воздуха между соседями. Общий с текстом gap-3 добавлялся к
+          ним сверху, и три значка читались как три отдельных действия вместо
+          одной группы обслуживания связки. Тумблер в коробку не входит: он про
+          состояние, а не про действие.
+
+          Корзина отбита от соседей и краснеет на наведении: деструктивное
+          отделяется даже в плотном ряду (DESIGN-SYSTEM, «действия строки»), а
+          зазора для этого после уплотнения уже не хватает. */}
+      <div className="flex items-center">
+        <RowAction icon={History} label="Журнал доставок" onClick={() => setLog(true)} />
+        <RowAction icon={Pencil} label="Настроить подключение" onClick={onEdit} />
+        <RowAction
+          icon={Trash2}
+          label="Удалить подключение"
+          className="ml-1 hover:text-destructive"
+          onClick={() => setConfirming(true)}
+        />
+      </div>
 
       <DeliveriesDialog open={log} onOpenChange={setLog} formId={formId} connection={connection} />
 
@@ -261,6 +257,46 @@ function ConnectionRow({
         </AlertDialogContent>
       </AlertDialog>
     </div>
+  )
+}
+
+// RowAction — значок-действие в строке связки: кнопка плюс подсказка.
+//
+// Подпись живёт в ОДНОМ месте и работает дважды — доступным именем кнопки и
+// текстом подсказки. Два литерала на одну надпись расходятся ровно тогда, когда
+// правят один из них, и расхождение невидимо: скринридер читает одно, глаз
+// видит другое.
+//
+// Подсказка радиксовая, а не нативный title: она красится токенами темы,
+// открывается с клавиатуры и не ждёт секунду системной задержки. Цена —
+// провайдер выше по дереву (в кабинете его даёт SidebarProvider, в тестах —
+// TooltipProvider вокруг экрана); без него строка роняет рендер.
+function RowAction({
+  icon: Icon,
+  label,
+  className,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  className?: string
+  onClick: () => void
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          variant="ghost"
+          size="icon-sm"
+          className={`text-muted-foreground ${className ?? ''}`}
+          aria-label={label}
+          onClick={onClick}
+        >
+          <Icon className="size-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }
 
