@@ -62,6 +62,8 @@ type integrationsService interface {
 	StartURL(ctx context.Context, userID, reconnect uuid.UUID, state, verifier string) (string, error)
 	Connect(ctx context.Context, userID uuid.UUID, code, verifier string) (uuid.UUID, error)
 	Disconnect(ctx context.Context, userID, accountID uuid.UUID) error
+	Deliveries(ctx context.Context, userID, formID, linkID, cursor uuid.UUID) ([]Delivery, error)
+	RetryDelivery(ctx context.Context, userID, formID, linkID, deliveryID uuid.UUID) error
 }
 
 // Handler — приватный транспорт интеграций.
@@ -113,6 +115,14 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// не дожидаясь следующего ответа респондента.
 	mux.Handle("POST /api/v1/forms/{id}/integrations/{connectionId}/recheck",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.recheckForm))))
+	// Журнал доставок связки: что уехало, что не уехало и почему. Страница
+	// курсором — лента длиной в поток ответов целиком не отдаётся.
+	mux.Handle("GET /api/v1/forms/{id}/integrations/{connectionId}/deliveries",
+		h.requireAuth(http.HandlerFunc(h.deliveries)))
+	// Повтор одной доставки. Отдельным адресом от связки: предмет действия —
+	// попытка, а не связка, и права у них разные быть не должны.
+	mux.Handle("POST /api/v1/forms/{id}/integrations/{connectionId}/deliveries/{deliveryId}/retry",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.retryDelivery))))
 	mux.Handle("DELETE /api/v1/forms/{id}/integrations/{connectionId}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnectForm))))
 
@@ -433,6 +443,83 @@ func (h *Handler) userFormConnection(w http.ResponseWriter, r *http.Request) (au
 		return auth.User{}, uuid.Nil, uuid.Nil, false
 	}
 	return user, formID, linkID, true
+}
+
+// deliveryResponse — одна попытка доставки глазами экрана.
+//
+// submissionId уезжает наружу, потому что лента ссылается на ответ: из журнала
+// человек уходит смотреть, что именно не доехало. У пачки переноса его нет.
+type deliveryResponse struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	SubmissionID string `json:"submissionId,omitempty"`
+	Outcome      string `json:"outcome"`
+	Detail       string `json:"detail,omitempty"`
+	Rows         int32  `json:"rows"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+// deliveriesResponse — страница ленты. nextCursor пуст, когда страница
+// последняя: клиенту не нужно знать про размер страницы, чтобы это понять.
+type deliveriesResponse struct {
+	Deliveries []deliveryResponse `json:"deliveries"`
+	NextCursor string             `json:"nextCursor,omitempty"`
+}
+
+func (h *Handler) deliveries(w http.ResponseWriter, r *http.Request) {
+	user, formID, linkID, ok := h.userFormConnection(w, r)
+	if !ok {
+		return
+	}
+	// Кривой курсор — не ошибка клиента, а первая страница: ленту открывают по
+	// ссылке, и 422 вместо списка здесь никому не помогает.
+	cursor, _ := uuid.Parse(r.URL.Query().Get("cursor"))
+
+	list, err := h.svc.Deliveries(r.Context(), user.ID, formID, linkID, cursor)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	resp := deliveriesResponse{Deliveries: make([]deliveryResponse, 0, len(list))}
+	for _, d := range list {
+		item := deliveryResponse{
+			ID:        d.ID.String(),
+			Kind:      d.Kind,
+			Outcome:   d.Outcome,
+			Detail:    d.Detail,
+			Rows:      d.RowCount,
+			CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
+		}
+		if d.SubmissionID != uuid.Nil {
+			item.SubmissionID = d.SubmissionID.String()
+		}
+		resp.Deliveries = append(resp.Deliveries, item)
+	}
+	// Полная страница означает «возможно, есть ещё»; курсор — id последней.
+	// Лишний пустой запрос дешевле пропущенного хвоста ленты.
+	if len(list) == DeliveryPageSize {
+		resp.NextCursor = list[len(list)-1].ID.String()
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// retryDelivery ставит доставку заново. 202, а не 204: событие поставлено в
+// очередь, а не доставлено — исход появится в той же ленте отдельной строкой.
+func (h *Handler) retryDelivery(w http.ResponseWriter, r *http.Request) {
+	user, formID, linkID, ok := h.userFormConnection(w, r)
+	if !ok {
+		return
+	}
+	deliveryID, err := uuid.Parse(r.PathValue("deliveryId"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	if err := h.svc.RetryDelivery(r.Context(), user.ID, formID, linkID, deliveryID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
 }
 
 // refillForm перезаливает лист заново. 202, а не 204: работа начата, а не

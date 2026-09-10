@@ -11,6 +11,7 @@ package integrations_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -1376,4 +1377,190 @@ func patchWithCSRF(t *testing.T, c *http.Client, srv *httptest.Server, path, bod
 		t.Fatalf("%s %s: %v", http.MethodPatch, path, err)
 	}
 	return resp
+}
+
+// Журнал доставок против настоящей БД: успех оставляет строку, отказ оставляет
+// строку с причиной, а повтор доставляет ответ заново — обычным событием
+// очереди, через те же проверки.
+func TestIntegrations_DeliveryLogAndRetry(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	accountID := connectAccount(t, owner, srv)
+
+	formID := newForm(t, wsID, "f-log")
+	versionID := publishVersion(t, formID)
+	closeBody(t, linkForm(t, owner, srv, formID, accountID))
+
+	// 1. Обычная доставка: в журнале появляется успех.
+	subID := newSubmission(t, formID, versionID, `{"b1":"Ирина"}`)
+	enqueueDelivery(t, srv, formID, subID)
+	dispatchAll(t)
+
+	linkID := onlyLinkID(t, owner, srv, formID)
+	page := deliveriesPage(t, owner, srv, formID, linkID, "")
+	if len(page.Deliveries) != 1 {
+		t.Fatalf("записей в журнале %d, ждали одну: %+v", len(page.Deliveries), page.Deliveries)
+	}
+	if got := page.Deliveries[0]; got.Outcome != integrations.OutcomeDelivered || got.SubmissionID != subID {
+		t.Fatalf("первая запись = %+v", got)
+	}
+
+	// 2. Временный отказ: строка в журнале с причиной, связка НЕ красная.
+	provider.appendErr = errors.New("статус 503")
+	failed := newSubmission(t, formID, versionID, `{"b1":"Пётр"}`)
+	enqueueDelivery(t, srv, formID, failed)
+	dispatchAll(t)
+
+	page = deliveriesPage(t, owner, srv, formID, linkID, "")
+	if len(page.Deliveries) != 2 {
+		t.Fatalf("записей в журнале %d, ждали две: %+v", len(page.Deliveries), page.Deliveries)
+	}
+	top := page.Deliveries[0]
+	if top.Outcome != integrations.OutcomeFailed || top.SubmissionID != failed {
+		t.Fatalf("верхняя запись = %+v, ждали неудачу по второму ответу", top)
+	}
+	if top.Detail == "" {
+		t.Error("неудача без текста: автору формы нечего прочитать")
+	}
+
+	// 3. Повтор: причина устранена, кнопка ставит событие заново, ответ уезжает.
+	provider.appendErr = nil
+	before := len(provider.appended)
+	r := postWithCSRF(t, owner, srv,
+		"/api/v1/forms/"+formID+"/integrations/"+linkID+"/deliveries/"+top.ID+"/retry")
+	if r.StatusCode != http.StatusAccepted {
+		t.Fatalf("повтор: статус %d, ожидалось 202", r.StatusCode)
+	}
+	closeBody(t, r)
+	dispatchAll(t)
+
+	if len(provider.appended) != before+1 {
+		t.Fatalf("строк в листе %d, ждали +1 после повтора", len(provider.appended))
+	}
+	page = deliveriesPage(t, owner, srv, formID, linkID, "")
+	if len(page.Deliveries) != 3 {
+		t.Fatalf("записей в журнале %d, ждали три: %+v", len(page.Deliveries), page.Deliveries)
+	}
+	if got := page.Deliveries[0]; got.Outcome != integrations.OutcomeDelivered || got.SubmissionID != failed {
+		t.Fatalf("верхняя запись после повтора = %+v", got)
+	}
+}
+
+// Журнал — не публичное чтение: чужой формы для постороннего не существует
+// (инвариант 5), а повтор чужой доставки не заводится и подавно.
+func TestIntegrations_DeliveryLogHiddenFromStranger(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	accountID := connectAccount(t, owner, srv)
+	formID := newForm(t, wsID, "f-log-private")
+	publishVersion(t, formID)
+	closeBody(t, linkForm(t, owner, srv, formID, accountID))
+	linkID := onlyLinkID(t, owner, srv, formID)
+
+	stranger := registerUser(t, srv, "stranger@example.com")
+	r := do(t, stranger, http.MethodGet,
+		srv.URL+"/api/v1/forms/"+formID+"/integrations/"+linkID+"/deliveries")
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("посторонний читает журнал: статус %d, ожидалось 404", r.StatusCode)
+	}
+}
+
+// Повтор у СЛОМАННОЙ связки отказывает, а не ставит событие: Deliver гасит
+// события такой связки первой же проверкой, и кнопка молча ничего не делала бы.
+func TestIntegrations_RetryRefusedWhileBroken(t *testing.T) {
+	resetDB(t)
+	provider := &fakeProvider{}
+	srv := newStack(t, provider)
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	accountID := connectAccount(t, owner, srv)
+	formID := newForm(t, wsID, "f-log-broken")
+	versionID := publishVersion(t, formID)
+	closeBody(t, linkForm(t, owner, srv, formID, accountID))
+	linkID := onlyLinkID(t, owner, srv, formID)
+
+	provider.appendErr = integrations.ErrPermanent
+	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
+	dispatchAll(t)
+
+	page := deliveriesPage(t, owner, srv, formID, linkID, "")
+	if len(page.Deliveries) != 1 || page.Deliveries[0].Outcome != integrations.OutcomeFailed {
+		t.Fatalf("журнал = %+v, ждали одну неудачу", page.Deliveries)
+	}
+	r := postWithCSRF(t, owner, srv,
+		"/api/v1/forms/"+formID+"/integrations/"+linkID+"/deliveries/"+page.Deliveries[0].ID+"/retry")
+	defer closeBody(t, r)
+	if r.StatusCode != http.StatusConflict {
+		t.Fatalf("повтор на сломанной связке: статус %d, ожидалось 409", r.StatusCode)
+	}
+}
+
+// deliveryItem — строка ленты, как её видит кабинет.
+type deliveryItem struct {
+	ID           string `json:"id"`
+	Kind         string `json:"kind"`
+	SubmissionID string `json:"submissionId"`
+	Outcome      string `json:"outcome"`
+	Detail       string `json:"detail"`
+	Rows         int32  `json:"rows"`
+	CreatedAt    string `json:"createdAt"`
+}
+
+type deliveryPage struct {
+	Deliveries []deliveryItem `json:"deliveries"`
+	NextCursor string         `json:"nextCursor"`
+}
+
+func deliveriesPage(t *testing.T, c *http.Client, srv *httptest.Server, formID, linkID, cursor string) deliveryPage {
+	t.Helper()
+	u := srv.URL + "/api/v1/forms/" + formID + "/integrations/" + linkID + "/deliveries"
+	if cursor != "" {
+		u += "?cursor=" + cursor
+	}
+	r := do(t, c, http.MethodGet, u)
+	if r.StatusCode != http.StatusOK {
+		closeBody(t, r)
+		t.Fatalf("журнал доставок: статус %d, ожидалось 200", r.StatusCode)
+	}
+	var page deliveryPage
+	decode(t, r, &page)
+	return page
+}
+
+// onlyLinkID — id единственной связки формы. Тесты журнала не про список, а id
+// связки нужен им в адресе.
+func onlyLinkID(t *testing.T, c *http.Client, srv *httptest.Server, formID string) string {
+	t.Helper()
+	r := do(t, c, http.MethodGet, srv.URL+"/api/v1/forms/"+formID+"/integrations")
+	var status struct {
+		Connections []struct {
+			ID string `json:"id"`
+		} `json:"connections"`
+	}
+	decode(t, r, &status)
+	if len(status.Connections) != 1 {
+		t.Fatalf("связок у формы %d, ждали одну", len(status.Connections))
+	}
+	return status.Connections[0].ID
+}
+
+// dispatchAll крутит диспетчер, пока он разбирает очередь: одно событие =
+// один проход, а перенос накопленных ставит следующую пачку сам.
+func dispatchAll(t *testing.T) {
+	t.Helper()
+	for range 10 {
+		n, err := testOutbox.Dispatch(context.Background())
+		if err != nil {
+			t.Fatalf("dispatch: %v", err)
+		}
+		if n == 0 {
+			return
+		}
+	}
 }

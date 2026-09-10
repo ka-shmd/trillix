@@ -916,3 +916,18 @@ func disabledLink() integrations.FormLink {
 	l.Enabled = false
 	return l
 }
+
+// Уборка журнала зовётся с границей «сейчас минус срок хранения»: перепутанный
+// знак вычистил бы вместо старых записей все, кроме них.
+func TestCleanupDeliveries_UsesRetentionBorder(t *testing.T) {
+	store := &fakeStore{}
+	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if _, err := svc.CleanupDeliveries(context.Background()); err != nil {
+		t.Fatalf("уборка: %v", err)
+	}
+	want := time.Now().UTC().Add(-integrations.DeliveryTTL)
+	if diff := store.deletedBefore.Sub(want); diff > time.Minute || diff < -time.Minute {
+		t.Fatalf("граница уборки = %s, ждали около %s", store.deletedBefore, want)
+	}
+}

@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -776,6 +777,92 @@ func (s *Service) RefillForm(ctx context.Context, userID, formID, linkID uuid.UU
 		return err
 	}
 	return s.startBackfill(ctx, s.db, link.ID)
+}
+
+// DeliveryPageSize — сколько попыток отдаётся одной страницей ленты. Потолок,
+// а не настройка: страница длиннее экрана всё равно читается прокруткой, а
+// курсор у ленты уже есть.
+const DeliveryPageSize = 50
+
+// Deliveries — страница журнала доставок связки, новые сверху. Пустой курсор =
+// первая страница.
+//
+// Право — form.write, как у правки связки: журнал раскрывает причины отказов
+// провайдера и адреса чужих таблиц, и это не то, что показывают всякому, кто
+// умеет открыть форму.
+func (s *Service) Deliveries(ctx context.Context, userID, formID, linkID, cursor uuid.UUID) ([]Delivery, error) {
+	if !s.Enabled() {
+		return nil, domain.ErrNotFound
+	}
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return nil, err
+	}
+	link, err := s.linkOfForm(ctx, formID, linkID)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.ListDeliveries(ctx, s.db, link.ID, cursor, DeliveryPageSize)
+}
+
+// RetryDelivery ставит доставку ЗАНОВО по тому же ответу — обычным событием
+// очереди, через те же проверки членства, тумблера и колонок.
+//
+// ⚠ Повтор возможен только у неуспешной попытки живого ответа. Успешную не
+// повторяют потому, что у values.append нет идемпотентности: строка легла бы в
+// лист вторым разом. Пачку переноса — потому что её предмет не строка, а
+// диапазон, и лечится он перезаливом целиком.
+//
+// ⚠ У СЛОМАННОЙ связки повтор отказывает, а не ставит событие: Deliver гасит
+// события такой связки первой же проверкой, и кнопка молча ничего не делала бы.
+// Сначала лечение (вернуть шапку, сменить цель, перезалить), потом повтор.
+func (s *Service) RetryDelivery(ctx context.Context, userID, formID, linkID, deliveryID uuid.UUID) error {
+	if !s.Enabled() {
+		return domain.ErrNotFound
+	}
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return err
+	}
+	link, err := s.linkOfForm(ctx, formID, linkID)
+	if err != nil {
+		return err
+	}
+	d, err := s.repo.GetDelivery(ctx, s.db, deliveryID, link.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if d.Kind != DeliveryKindSubmission || d.SubmissionID == uuid.Nil {
+		return fmt.Errorf("%w: повторить можно только доставку одного ответа", domain.ErrValidation)
+	}
+	if d.Outcome == OutcomeDelivered {
+		return fmt.Errorf("%w: этот ответ уже в таблице", domain.ErrValidation)
+	}
+	if link.Status == StatusBroken {
+		return fmt.Errorf("%w: сначала устраните причину поломки связки", domain.ErrConflict)
+	}
+	if s.outbox == nil {
+		return domain.ErrNotFound
+	}
+	payload, err := json.Marshal(sheetsPayload{LinkID: link.ID, SubmissionID: d.SubmissionID})
+	if err != nil {
+		return fmt.Errorf("marshal sheets payload: %w", err)
+	}
+	return s.outbox.Enqueue(ctx, s.db, ChannelSheets, payload)
+}
+
+// DeliveryTTL — сколько живёт запись журнала. Константа, а не переменная
+// окружения (тот же довод, что у submissions.PartialTTL): журнал
+// диагностический, месяца хватает на вопрос «почему вчера не уехало», а ещё
+// одна строка конфига дороже пользы.
+const DeliveryTTL = 30 * 24 * time.Hour
+
+// CleanupDeliveries убирает записи журнала старше срока хранения и отдаёт их
+// число. Зовётся периодической задачей: без срока таблица растёт со скоростью
+// потока ответов и не останавливается никогда.
+func (s *Service) CleanupDeliveries(ctx context.Context) (int64, error) {
+	return s.repo.DeleteOldDeliveries(ctx, s.db, time.Now().UTC().Add(-DeliveryTTL))
 }
 
 // mergeColumns дописывает к колонкам листа те, которых в нём ещё нет. Порядок
