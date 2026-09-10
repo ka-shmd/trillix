@@ -179,3 +179,39 @@ WHERE id = $1;
 UPDATE form_integrations
 SET status = 'live'
 WHERE id = $1;
+
+-- name: InsertIntegrationDelivery :exec
+-- Одна попытка доставки в журнал (схема — migrations/0060). Пишется ПОСЛЕ
+-- исхода, отдельным запросом: доставка идёт в чужой API, транзакции вокруг неё
+-- нет и быть не может.
+INSERT INTO integration_deliveries (
+    id, link_id, kind, submission_id, outcome, detail, row_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: ListIntegrationDeliveries :many
+-- Лента журнала: новые сверху, страница за страницей курсором.
+--
+-- Курсор — id, а не created_at: UUIDv7 монотонен по времени, а у пачек переноса
+-- соседние попытки ложатся в одну миллисекунду, и порядок по времени между ними
+-- не определён. Пустой курсор ($2 = uuid nil) означает первую страницу — сравнение
+-- с ним истинно для любого id, потому что нулевой UUID меньше всякого другого.
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+FROM integration_deliveries
+WHERE link_id = sqlc.arg(link_id)
+  AND (sqlc.arg(cursor)::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR id < sqlc.arg(cursor))
+ORDER BY id DESC
+LIMIT sqlc.arg(page_size);
+
+-- name: GetIntegrationDelivery :one
+-- Одна запись журнала — предмет повтора. link_id в условии не украшение: id
+-- записи приезжает из адреса и правом доступа не является (инвариант 1), а
+-- право проверено по СВЯЗКЕ.
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+FROM integration_deliveries
+WHERE id = $1 AND link_id = $2;
+
+-- name: DeleteOldIntegrationDeliveries :execrows
+-- Уборка журнала по возрасту (задача integration-delivery-cleanup). Это уборка
+-- места, а не защита: диагностика месячной давности никому не отвечает на
+-- вопрос «почему вчера не уехало», а таблица растёт со скоростью потока ответов.
+DELETE FROM integration_deliveries WHERE created_at < $1;

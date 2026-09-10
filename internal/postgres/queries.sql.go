@@ -1360,6 +1360,21 @@ func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int
 	return result.RowsAffected(), nil
 }
 
+const deleteOldIntegrationDeliveries = `-- name: DeleteOldIntegrationDeliveries :execrows
+DELETE FROM integration_deliveries WHERE created_at < $1
+`
+
+// Уборка журнала по возрасту (задача integration-delivery-cleanup). Это уборка
+// места, а не защита: диагностика месячной давности никому не отвечает на
+// вопрос «почему вчера не уехало», а таблица растёт со скоростью потока ответов.
+func (q *Queries) DeleteOldIntegrationDeliveries(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldIntegrationDeliveries, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteOldPartials = `-- name: DeleteOldPartials :execrows
 DELETE FROM partial_submissions WHERE updated_at < $1
 `
@@ -2659,6 +2674,36 @@ func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (
 	return i, err
 }
 
+const getIntegrationDelivery = `-- name: GetIntegrationDelivery :one
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+FROM integration_deliveries
+WHERE id = $1 AND link_id = $2
+`
+
+type GetIntegrationDeliveryParams struct {
+	ID     uuid.UUID
+	LinkID uuid.UUID
+}
+
+// Одна запись журнала — предмет повтора. link_id в условии не украшение: id
+// записи приезжает из адреса и правом доступа не является (инвариант 1), а
+// право проверено по СВЯЗКЕ.
+func (q *Queries) GetIntegrationDelivery(ctx context.Context, arg GetIntegrationDeliveryParams) (IntegrationDelivery, error) {
+	row := q.db.QueryRow(ctx, getIntegrationDelivery, arg.ID, arg.LinkID)
+	var i IntegrationDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.LinkID,
+		&i.Kind,
+		&i.SubmissionID,
+		&i.Outcome,
+		&i.Detail,
+		&i.RowCount,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getJoinLinkByToken = `-- name: GetJoinLinkByToken :one
 SELECT l.token, l.workspace_id, l.role, l.expires_at, w.name AS workspace_name
 FROM workspace_join_links l
@@ -3476,6 +3521,38 @@ func (q *Queries) InsertFormVersion(ctx context.Context, arg InsertFormVersionPa
 	return i, err
 }
 
+const insertIntegrationDelivery = `-- name: InsertIntegrationDelivery :exec
+INSERT INTO integration_deliveries (
+    id, link_id, kind, submission_id, outcome, detail, row_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertIntegrationDeliveryParams struct {
+	ID           uuid.UUID
+	LinkID       uuid.UUID
+	Kind         string
+	SubmissionID pgtype.UUID
+	Outcome      string
+	Detail       string
+	RowCount     int32
+}
+
+// Одна попытка доставки в журнал (схема — migrations/0060). Пишется ПОСЛЕ
+// исхода, отдельным запросом: доставка идёт в чужой API, транзакции вокруг неё
+// нет и быть не может.
+func (q *Queries) InsertIntegrationDelivery(ctx context.Context, arg InsertIntegrationDeliveryParams) error {
+	_, err := q.db.Exec(ctx, insertIntegrationDelivery,
+		arg.ID,
+		arg.LinkID,
+		arg.Kind,
+		arg.SubmissionID,
+		arg.Outcome,
+		arg.Detail,
+		arg.RowCount,
+	)
+	return err
+}
+
 const insertSubmission = `-- name: InsertSubmission :execrows
 
 WITH ins AS (
@@ -4271,6 +4348,56 @@ func (q *Queries) ListIntegrationAccountsByUser(ctx context.Context, arg ListInt
 			&i.RefreshToken,
 			&i.Scopes,
 			&i.ConnectedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIntegrationDeliveries = `-- name: ListIntegrationDeliveries :many
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+FROM integration_deliveries
+WHERE link_id = $1
+  AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR id < $2)
+ORDER BY id DESC
+LIMIT $3
+`
+
+type ListIntegrationDeliveriesParams struct {
+	LinkID   uuid.UUID
+	Cursor   uuid.UUID
+	PageSize int32
+}
+
+// Лента журнала: новые сверху, страница за страницей курсором.
+//
+// Курсор — id, а не created_at: UUIDv7 монотонен по времени, а у пачек переноса
+// соседние попытки ложатся в одну миллисекунду, и порядок по времени между ними
+// не определён. Пустой курсор ($2 = uuid nil) означает первую страницу — сравнение
+// с ним истинно для любого id, потому что нулевой UUID меньше всякого другого.
+func (q *Queries) ListIntegrationDeliveries(ctx context.Context, arg ListIntegrationDeliveriesParams) ([]IntegrationDelivery, error) {
+	rows, err := q.db.Query(ctx, listIntegrationDeliveries, arg.LinkID, arg.Cursor, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IntegrationDelivery
+	for rows.Next() {
+		var i IntegrationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.LinkID,
+			&i.Kind,
+			&i.SubmissionID,
+			&i.Outcome,
+			&i.Detail,
+			&i.RowCount,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}

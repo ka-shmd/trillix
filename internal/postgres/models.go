@@ -134,6 +134,17 @@ type IntegrationAccount struct {
 	ConnectedAt       pgtype.Timestamptz
 }
 
+type IntegrationDelivery struct {
+	ID           uuid.UUID
+	LinkID       uuid.UUID
+	Kind         string
+	SubmissionID pgtype.UUID
+	Outcome      string
+	Detail       string
+	RowCount     int32
+	CreatedAt    pgtype.Timestamptz
+}
+
 type KnownDevice struct {
 	ID         uuid.UUID
 	UserID     uuid.UUID
