@@ -2,10 +2,12 @@ import { z } from 'zod'
 
 import { apiRequest } from '../../shared/api/client'
 import {
+  deliveryPageSchema,
   formIntegrationsSchema,
   formSheetSchema,
   sheetListSchema,
   spreadsheetListSchema,
+  type DeliveryPage,
   type FormIntegrations,
   type FormSheet,
   type SheetRef,
@@ -108,6 +110,36 @@ export function refillSheet(formId: string, connectionId: string): Promise<void>
 // и экран показывает его текстом.
 export function recheckSheet(formId: string, connectionId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/integrations/${connectionId}/recheck`, { method: 'POST' })
+}
+
+// Журнал доставок связки: что уехало, что не уехало и почему. Страница курсором
+// (новые сверху) — лента длиной в поток ответов целиком не отдаётся.
+export function listDeliveries(
+  formId: string,
+  connectionId: string,
+  cursor?: string,
+): Promise<DeliveryPage> {
+  const params = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  return apiRequest(`/forms/${formId}/integrations/${connectionId}/deliveries${params}`, {
+    schema: deliveryPageSchema,
+  })
+}
+
+// Повторить одну доставку: сервер ставит событие заново, и оно проходит те же
+// проверки, что обычное. 202 — поставлено, а не доставлено: исход появится в той
+// же ленте отдельной строкой, когда диспетчер до него дойдёт.
+//
+// 409 — связка сломана: её события гасятся первой же проверкой доставки, и
+// повтор до починки молча ничего не дал бы.
+export function retryDelivery(
+  formId: string,
+  connectionId: string,
+  deliveryId: string,
+): Promise<void> {
+  return apiRequest(
+    `/forms/${formId}/integrations/${connectionId}/deliveries/${deliveryId}/retry`,
+    { method: 'POST' },
+  )
 }
 
 // Операции над ОДНОЙ связкой адресуются её id: связок у формы сколько угодно.

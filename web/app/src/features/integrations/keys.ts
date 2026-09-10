@@ -18,4 +18,9 @@ export const integrationKeys = {
     ['integrations', formId, 'spreadsheets', accountId] as const,
   sheets: (formId: string, accountId: string, spreadsheetId: string) =>
     ['integrations', formId, 'sheets', accountId, spreadsheetId] as const,
+  // Журнал доставок одной связки. Тоже под form(): любая мутация экрана
+  // инвалидирует ключ формы, и лента переспрашивается вместе с состоянием —
+  // повтор доставки виден в ней сам, без второй инвалидации.
+  deliveries: (formId: string, connectionId: string) =>
+    ['integrations', formId, 'deliveries', connectionId] as const,
 }

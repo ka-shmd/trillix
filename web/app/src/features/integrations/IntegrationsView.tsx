@@ -1,8 +1,9 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
-import { Pencil, Trash2 } from 'lucide-react'
+import { History, Pencil, Trash2 } from 'lucide-react'
 
 import type { FormSheet } from '../../entities/integration'
+import { DeliveriesDialog } from './DeliveriesDialog'
 import { GoogleSheetsOverlay } from './GoogleSheetsOverlay'
 import { GoogleSheetsIcon } from './ServiceIcon'
 import { formIntegrationsQueryOptions, useUnlinkSheet, useUpdateConnection } from './queries'
@@ -149,6 +150,7 @@ function ConnectionRow({
   const update = useUpdateConnection(formId)
   const unlink = useUnlinkSheet(formId)
   const [confirming, setConfirming] = useState(false)
+  const [log, setLog] = useState(false)
   const name = connection.name || 'Google Таблицы'
 
   return (
@@ -202,6 +204,20 @@ function ConnectionRow({
           update.mutate({ id: connection.id, name: connection.name ?? '', enabled })
         }
       />
+      {/* Журнал стоит ПЕРЕД настройкой и удалением: он про чтение, а соседи про
+          правку, и деструктивное остаётся крайним справа. Действий в строке
+          стало четыре — это всё ещё частые действия, а не повод прятать их в
+          меню «⋯»: journal открывают ровно тогда, когда ответ не нашёлся в
+          таблице, то есть в тот же заход, что и настройки. */}
+      <Button
+        variant="ghost"
+        size="icon-sm"
+        className="text-muted-foreground"
+        aria-label="Журнал доставок"
+        onClick={() => setLog(true)}
+      >
+        <History className="size-4" />
+      </Button>
       <Button
         variant="ghost"
         size="icon-sm"
@@ -220,6 +236,8 @@ function ConnectionRow({
       >
         <Trash2 className="size-4" />
       </Button>
+
+      <DeliveriesDialog open={log} onOpenChange={setLog} formId={formId} connection={connection} />
 
       {/* Удаление спрашивает: связка уносит с собой настройки и историю
           доставок, а восстановить её можно только подключением заново. Сама

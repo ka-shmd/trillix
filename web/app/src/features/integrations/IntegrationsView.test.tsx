@@ -934,3 +934,82 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.getByRole('button', { name: 'Сохранить' })).toBeTruthy()
   })
 })
+
+// Журнал доставок — вход из строки связки. Проверяется то, ради чего он заведён:
+// человек видит, что стало с КАЖДЫМ ответом, а не только причину последней беды.
+describe('журнал доставок', () => {
+  // seedLog кладёт готовую ленту в кеш: окно проверяется по содержимому, а не по
+  // транспорту (живой fetch в happy-dom падает на ECONNREFUSED).
+  function seedLog(qc: ReturnType<typeof renderView>, deliveries: unknown[]) {
+    qc.setQueryData(integrationKeys.deliveries(FORM_ID, 'conn-1'), {
+      pages: [{ deliveries, nextCursor: undefined }],
+      pageParams: [undefined],
+    })
+  }
+
+  function openLog() {
+    fireEvent.click(screen.getByRole('button', { name: 'Журнал доставок' }))
+  }
+
+  const delivered = {
+    id: 'd-1',
+    kind: 'submission',
+    submissionId: 's-1',
+    outcome: 'delivered',
+    rows: 1,
+    createdAt: '2026-09-09T10:00:00Z',
+  }
+  const failed = {
+    id: 'd-2',
+    kind: 'submission',
+    submissionId: 's-2',
+    outcome: 'failed',
+    detail: 'Записать в таблицу не удалось, попробуем ещё раз позже.',
+    rows: 0,
+    createdAt: '2026-09-09T11:00:00Z',
+  }
+
+  it('лента показывает исход каждой попытки и причину неудачи', () => {
+    const qc = renderView(state({ account: CONNECTED, connections: [conn()] }))
+    seedLog(qc, [failed, delivered])
+    openLog()
+
+    expect(screen.getByText('Журнал доставок')).toBeTruthy()
+    expect(screen.getByText('Ответ записан в таблицу')).toBeTruthy()
+    expect(screen.getByText('Ответ не записан')).toBeTruthy()
+    // Причина стоит текстом, а не прячется в тултип: за ней журнал и открывают.
+    expect(screen.getByText(/попробуем ещё раз позже/i)).toBeTruthy()
+  })
+
+  it('«Повторить» стоит у неудачи и не стоит у успеха', () => {
+    const qc = renderView(state({ account: CONNECTED, connections: [conn()] }))
+    seedLog(qc, [failed, delivered])
+    openLog()
+
+    // Ровно одна кнопка на две строки — у той, где есть что повторять: запись в
+    // лист не идемпотентна, и повтор успеха положил бы ответ вторым разом.
+    expect(screen.getAllByRole('button', { name: /Повторить/ })).toHaveLength(1)
+  })
+
+  it('у сломанной связки повтора нет: сначала починка', () => {
+    const qc = renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'нет доступа' })],
+      }),
+    )
+    seedLog(qc, [failed])
+    openLog()
+
+    expect(screen.getByText('Ответ не записан')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Повторить/ })).toBeNull()
+  })
+
+  it('доставок не было — окно говорит об этом, а не показывает пустоту', () => {
+    const qc = renderView(state({ account: CONNECTED, connections: [conn()] }))
+    seedLog(qc, [])
+    openLog()
+
+    expect(screen.getByText('Доставок пока не было')).toBeTruthy()
+  })
+})
