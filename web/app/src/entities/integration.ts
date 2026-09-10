@@ -68,6 +68,30 @@ export const formIntegrationsSchema = z.object({
   connections: z.array(formSheetSchema),
 })
 
+// Одна попытка доставки в журнале связки (INTEGRATIONS.md §12). Зеркалит
+// deliveryResponse в internal/integrations/handler.go.
+export const deliveryOutcomeSchema = z.enum(['delivered', 'failed', 'skipped'])
+
+export const deliverySchema = z.object({
+  id: z.string(),
+  // kind — что везли: один ответ или пачку переноса накопленных.
+  kind: z.enum(['submission', 'backfill']),
+  // submissionId — какой ответ. У пачки переноса его нет: она про диапазон.
+  submissionId: z.string().optional(),
+  outcome: deliveryOutcomeSchema,
+  // detail — готовый русский текст причины с сервера. Пусто у успеха.
+  detail: z.string().optional(),
+  // rows — сколько строк легло в лист: 1 у ответа, до 200 у пачки переноса.
+  rows: z.number().int().default(0),
+  createdAt: z.string(),
+})
+
+// Страница ленты. Пустой nextCursor — страница последняя.
+export const deliveryPageSchema = z.object({
+  deliveries: z.array(deliverySchema).default([]),
+  nextCursor: z.string().optional(),
+})
+
 // Таблица, куда можно положить ответы: под scope drive.file это ТОЛЬКО файлы,
 // созданные нами, — чужих документов Диска в списке нет и быть не может.
 export const spreadsheetRefSchema = z.object({
@@ -98,3 +122,6 @@ export type IntegrationAccount = z.infer<typeof integrationAccountSchema>
 export type FormSheet = z.infer<typeof formSheetSchema>
 export type SheetStatus = z.infer<typeof sheetStatusSchema>
 export type FormIntegrations = z.infer<typeof formIntegrationsSchema>
+export type Delivery = z.infer<typeof deliverySchema>
+export type DeliveryOutcome = z.infer<typeof deliveryOutcomeSchema>
+export type DeliveryPage = z.infer<typeof deliveryPageSchema>

@@ -302,6 +302,18 @@ func (q *Queries) ClearFormIntegrationError(ctx context.Context, id uuid.UUID) e
 	return err
 }
 
+const clearIntegrationAccountAccessLost = `-- name: ClearIntegrationAccountAccessLost :exec
+UPDATE integration_accounts SET access_lost_at = NULL WHERE id = $1
+`
+
+// Токен снова работает: провайдер отдал access по нашему refresh. Пометка
+// гаснет здесь, а не только при переподключении, — согласие могли вернуть в
+// самом Google, и тогда чинить человеку нечего.
+func (q *Queries) ClearIntegrationAccountAccessLost(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearIntegrationAccountAccessLost, id)
+	return err
+}
+
 const confirmBooking = `-- name: ConfirmBooking :execrows
 UPDATE bookings
 SET status = 'confirmed', submission_id = $2, hold_expires_at = NULL
@@ -1354,6 +1366,21 @@ type DeleteMemberParams struct {
 // на уровне запроса: владельца не удаляют вовсе, ни своей рукой, ни чужой.
 func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteMember, arg.WorkspaceID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteOldIntegrationDeliveries = `-- name: DeleteOldIntegrationDeliveries :execrows
+DELETE FROM integration_deliveries WHERE created_at < $1
+`
+
+// Уборка журнала по возрасту (задача integration-delivery-cleanup). Это уборка
+// места, а не защита: диагностика месячной давности никому не отвечает на
+// вопрос «почему вчера не уехало», а таблица растёт со скоростью потока ответов.
+func (q *Queries) DeleteOldIntegrationDeliveries(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteOldIntegrationDeliveries, createdAt)
 	if err != nil {
 		return 0, err
 	}
@@ -2625,7 +2652,7 @@ func (q *Queries) GetFormTemplate(ctx context.Context, id uuid.UUID) (FormTempla
 }
 
 const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one
-SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
 WHERE id = $1
 `
@@ -2639,6 +2666,7 @@ type GetIntegrationAccountByIDRow struct {
 	RefreshToken      []byte
 	Scopes            string
 	ConnectedAt       pgtype.Timestamptz
+	AccessLostAt      pgtype.Timestamptz
 }
 
 // Аккаунт по своему id — путь доставки (связка несёт account_id) и путь проверки
@@ -2655,6 +2683,37 @@ func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (
 		&i.RefreshToken,
 		&i.Scopes,
 		&i.ConnectedAt,
+		&i.AccessLostAt,
+	)
+	return i, err
+}
+
+const getIntegrationDelivery = `-- name: GetIntegrationDelivery :one
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+FROM integration_deliveries
+WHERE id = $1 AND link_id = $2
+`
+
+type GetIntegrationDeliveryParams struct {
+	ID     uuid.UUID
+	LinkID uuid.UUID
+}
+
+// Одна запись журнала — предмет повтора. link_id в условии не украшение: id
+// записи приезжает из адреса и правом доступа не является (инвариант 1), а
+// право проверено по СВЯЗКЕ.
+func (q *Queries) GetIntegrationDelivery(ctx context.Context, arg GetIntegrationDeliveryParams) (IntegrationDelivery, error) {
+	row := q.db.QueryRow(ctx, getIntegrationDelivery, arg.ID, arg.LinkID)
+	var i IntegrationDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.LinkID,
+		&i.Kind,
+		&i.SubmissionID,
+		&i.Outcome,
+		&i.Detail,
+		&i.RowCount,
+		&i.CreatedAt,
 	)
 	return i, err
 }
@@ -3476,6 +3535,38 @@ func (q *Queries) InsertFormVersion(ctx context.Context, arg InsertFormVersionPa
 	return i, err
 }
 
+const insertIntegrationDelivery = `-- name: InsertIntegrationDelivery :exec
+INSERT INTO integration_deliveries (
+    id, link_id, kind, submission_id, outcome, detail, row_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+
+type InsertIntegrationDeliveryParams struct {
+	ID           uuid.UUID
+	LinkID       uuid.UUID
+	Kind         string
+	SubmissionID pgtype.UUID
+	Outcome      string
+	Detail       string
+	RowCount     int32
+}
+
+// Одна попытка доставки в журнал (схема — migrations/0060). Пишется ПОСЛЕ
+// исхода, отдельным запросом: доставка идёт в чужой API, транзакции вокруг неё
+// нет и быть не может.
+func (q *Queries) InsertIntegrationDelivery(ctx context.Context, arg InsertIntegrationDeliveryParams) error {
+	_, err := q.db.Exec(ctx, insertIntegrationDelivery,
+		arg.ID,
+		arg.LinkID,
+		arg.Kind,
+		arg.SubmissionID,
+		arg.Outcome,
+		arg.Detail,
+		arg.RowCount,
+	)
+	return err
+}
+
 const insertSubmission = `-- name: InsertSubmission :execrows
 
 WITH ins AS (
@@ -4225,7 +4316,7 @@ func (q *Queries) ListIdentities(ctx context.Context, userID uuid.UUID) ([]ListI
 }
 
 const listIntegrationAccountsByUser = `-- name: ListIntegrationAccountsByUser :many
-SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
 WHERE user_id = $1 AND provider = $2
 ORDER BY connected_at, id
@@ -4245,6 +4336,7 @@ type ListIntegrationAccountsByUserRow struct {
 	RefreshToken      []byte
 	Scopes            string
 	ConnectedAt       pgtype.Timestamptz
+	AccessLostAt      pgtype.Timestamptz
 }
 
 // Аккаунты человека — то, из чего он выбирает в окне связки. refresh_token едет
@@ -4271,6 +4363,57 @@ func (q *Queries) ListIntegrationAccountsByUser(ctx context.Context, arg ListInt
 			&i.RefreshToken,
 			&i.Scopes,
 			&i.ConnectedAt,
+			&i.AccessLostAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listIntegrationDeliveries = `-- name: ListIntegrationDeliveries :many
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+FROM integration_deliveries
+WHERE link_id = $1
+  AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR id < $2)
+ORDER BY id DESC
+LIMIT $3
+`
+
+type ListIntegrationDeliveriesParams struct {
+	LinkID   uuid.UUID
+	Cursor   uuid.UUID
+	PageSize int32
+}
+
+// Лента журнала: новые сверху, страница за страницей курсором.
+//
+// Курсор — id, а не created_at: UUIDv7 монотонен по времени, а у пачек переноса
+// соседние попытки ложатся в одну миллисекунду, и порядок по времени между ними
+// не определён. Пустой курсор ($2 = uuid nil) означает первую страницу — сравнение
+// с ним истинно для любого id, потому что нулевой UUID меньше всякого другого.
+func (q *Queries) ListIntegrationDeliveries(ctx context.Context, arg ListIntegrationDeliveriesParams) ([]IntegrationDelivery, error) {
+	rows, err := q.db.Query(ctx, listIntegrationDeliveries, arg.LinkID, arg.Cursor, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IntegrationDelivery
+	for rows.Next() {
+		var i IntegrationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.LinkID,
+			&i.Kind,
+			&i.SubmissionID,
+			&i.Outcome,
+			&i.Detail,
+			&i.RowCount,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5286,6 +5429,27 @@ func (q *Queries) MarkFormIntegrationDelivered(ctx context.Context, id uuid.UUID
 	return err
 }
 
+const markIntegrationAccountAccessLost = `-- name: MarkIntegrationAccountAccessLost :exec
+UPDATE integration_accounts SET access_lost_at = $2 WHERE id = $1 AND access_lost_at IS NULL
+`
+
+type MarkIntegrationAccountAccessLostParams struct {
+	ID           uuid.UUID
+	AccessLostAt pgtype.Timestamptz
+}
+
+// Провайдер отказал в обновлении токена: согласия на этот аккаунт больше нет
+// (0061). Помечается ПОДКЛЮЧЕНИЕ, а не связка, которая об этом узнала: не
+// работает ни одна связка этого аккаунта, во всех формах и пространствах.
+//
+// Условие access_lost_at IS NULL держит ПЕРВЫЙ момент отказа: у аккаунта с
+// десятком форм каждая доставка приносила бы свежий now(), и «когда именно
+// перестало работать» стало бы «когда мы в последний раз попробовали».
+func (q *Queries) MarkIntegrationAccountAccessLost(ctx context.Context, arg MarkIntegrationAccountAccessLostParams) error {
+	_, err := q.db.Exec(ctx, markIntegrationAccountAccessLost, arg.ID, arg.AccessLostAt)
+	return err
+}
+
 const markOutboxFailed = `-- name: MarkOutboxFailed :exec
 UPDATE outbox
 SET attempts = $2, next_attempt_at = $3, last_error = $4
@@ -5906,6 +6070,30 @@ type StartFormIntegrationBackfillParams struct {
 func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFormIntegrationBackfillParams) error {
 	_, err := q.db.Exec(ctx, startFormIntegrationBackfill, arg.ID, arg.BackfillBefore)
 	return err
+}
+
+const submissionAlreadyDelivered = `-- name: SubmissionAlreadyDelivered :one
+SELECT EXISTS (
+    SELECT 1 FROM integration_deliveries
+    WHERE link_id = $1 AND submission_id = $2 AND outcome = 'delivered'
+)
+`
+
+type SubmissionAlreadyDeliveredParams struct {
+	LinkID       uuid.UUID
+	SubmissionID pgtype.UUID
+}
+
+// Доехал ли ЭТОТ ответ в лист этой связки хоть раз. Спрашивается перед
+// повтором, и вопрос именно такой, а не «чем кончилась вот эта попытка»:
+// строка журнала = одна попытка, и у ответа, доехавшего со второго раза, первая
+// навсегда остаётся неудачной. Гейт по её исходу разрешал бы класть в чужую
+// таблицу второй экземпляр ответа, который там уже лежит.
+func (q *Queries) SubmissionAlreadyDelivered(ctx context.Context, arg SubmissionAlreadyDeliveredParams) (bool, error) {
+	row := q.db.QueryRow(ctx, submissionAlreadyDelivered, arg.LinkID, arg.SubmissionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }
 
 const takenSeatsAt = `-- name: TakenSeatsAt :one
@@ -7019,7 +7207,12 @@ ON CONFLICT (user_id, provider, external_account_id) DO UPDATE SET
     external_email = EXCLUDED.external_email,
     refresh_token  = EXCLUDED.refresh_token,
     scopes         = EXCLUDED.scopes,
-    connected_at   = now()
+    connected_at   = now(),
+    -- Переподключение и есть лечение отозванного согласия: свежий refresh-токен
+    -- получен, значит пометка мёртвого подключения (0061) снимается тем же
+    -- оператором. Отдельным запросом её гасить нельзя — между ними подключение
+    -- выглядело бы рабочим и мёртвым одновременно.
+    access_lost_at = NULL
 RETURNING id
 `
 

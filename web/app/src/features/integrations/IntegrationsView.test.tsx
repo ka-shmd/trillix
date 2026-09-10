@@ -359,11 +359,12 @@ describe('оверлей настройки Google Таблиц', () => {
     )
     openSetup()
 
-    // У живого аккаунта действие ровно одно. «Переподключить» — лечение, и вне
-    // беды оно предлагало бы чинить работающее; функционально оно к соседней
-    // ссылке ничего не добавляет (тот же адрес, вся разница — в подсказке).
+    // Действий под списком два, и «Переподключить» стоит ПОСТОЯННО (решение
+    // владельца 2026-09-10): знание о смерти согласия всегда запаздывает — её
+    // видно только в момент доставки, — и кнопка «по признаку поломки» не
+    // появлялась ровно тогда, когда была нужна.
     expect(screen.getByRole('button', { name: /подключить другой аккаунт/i })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /^переподключить$/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /^переподключить$/i })).toBeTruthy()
     // Отключения здесь нет и быть не должно: оно рвёт аккаунт целиком и уносит
     // каскадом связки других форм и пространств, а окно — про одну связку.
     expect(screen.queryByRole('button', { name: /отключить/i })).toBeNull()
@@ -403,6 +404,56 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.getByText(/персональные данные/i)).toBeTruthy()
     const go = screen.getByRole('link', { name: /^подключить заново$/i })
     expect(go.getAttribute('href')).toContain(`accountId=${ACCOUNT_ID}`)
+  })
+
+  // Мёртвое подключение обязано быть видно В СПИСКЕ, а не только в предупреждении
+  // под ним: аккаунт выбирают раньше, чем читают текст, и выбрать мёртвый рядом с
+  // живым — это потерянные ответы.
+  it('аккаунт с потерянным доступом помечен в самом списке', () => {
+    renderView(
+      state({
+        account: {
+          ...CONNECTED,
+          accounts: [
+            account({ needsReconnect: true }),
+            account({ id: 'acc-2', email: 'work@gmail.com' }),
+          ],
+        },
+      }),
+    )
+    openSetup()
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
+
+    expect(
+      screen.getByRole('option', { name: /author@gmail.com — нужно переподключить/i }),
+    ).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'work@gmail.com' })).toBeTruthy()
+  })
+
+  // ⚠ Поломка ЛИСТА про переподключение не говорит: связка краснеет и от правки
+  // шапки автором, а переподключение аккаунта её не лечит — совет был бы враньём.
+  // У беды листа свой блок с «Вариантами исправления».
+  it('сломанная раскладка листа не советует переподключать аккаунт', () => {
+    renderView(
+      state({
+        account: CONNECTED,
+        connections: [
+          conn({
+            status: 'broken',
+            lastError: 'Колонки листа больше не совпадают с вопросами формы.',
+          }),
+        ],
+      }),
+    )
+    openConnection()
+
+    expect(screen.queryByText(/доступ к этому аккаунту потерян/i)).toBeNull()
+    // Причина при этом названа — молчать окно не стало.
+    expect(
+      screen
+        .getAllByRole('alert')
+        .some((el) => /не совпадают с вопросами/i.test(el.textContent ?? '')),
+    ).toBe(true)
   })
 
   // Шаг — не тупик: с него можно вернуться к настройкам, не закрывая окно.
@@ -932,5 +983,109 @@ describe('оверлей настройки Google Таблиц', () => {
     ).toBe(true)
     // Экран правки при этом остаётся формой: сохранить исправленное можно.
     expect(screen.getByRole('button', { name: 'Сохранить' })).toBeTruthy()
+  })
+})
+
+// Значки строки — группа обслуживания связки: стоят вплотную и каждый называет
+// себя подсказкой. Подпись одна на кнопку и подсказку: живи она только в
+// aria-label, её читал бы скринридер и не видел глаз.
+describe('значки в строке связки', () => {
+  it('у значка есть подсказка с той же подписью, что и доступное имя', async () => {
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+
+    fireEvent.focus(screen.getByRole('button', { name: 'Журнал доставок' }))
+
+    // getAllByText: Radix рисует к подсказке ещё и скрытую копию для чтения вслух.
+    await waitFor(() => expect(screen.getAllByText('Журнал доставок').length).toBeGreaterThan(0))
+  })
+
+  it('значки лежат одной коробкой, тумблер в неё не входит', () => {
+    renderView(state({ account: CONNECTED, connections: [conn()] }))
+
+    const journal = screen.getByRole('button', { name: 'Журнал доставок' })
+    const box = journal.parentElement
+    if (!box) throw new Error('у значка нет коробки')
+    // Три значка рядом и ничего кроме: тумблер про состояние, а не про действие.
+    expect(box.querySelectorAll('button')).toHaveLength(3)
+    expect(within(box).queryByRole('switch')).toBeNull()
+  })
+})
+
+// Журнал доставок — вход из строки связки. Проверяется то, ради чего он заведён:
+// человек видит, что стало с КАЖДЫМ ответом, а не только причину последней беды.
+describe('журнал доставок', () => {
+  // seedLog кладёт готовую ленту в кеш: окно проверяется по содержимому, а не по
+  // транспорту (живой fetch в happy-dom падает на ECONNREFUSED).
+  function seedLog(qc: ReturnType<typeof renderView>, deliveries: unknown[]) {
+    qc.setQueryData(integrationKeys.deliveries(FORM_ID, 'conn-1'), {
+      pages: [{ deliveries, nextCursor: undefined }],
+      pageParams: [undefined],
+    })
+  }
+
+  function openLog() {
+    fireEvent.click(screen.getByRole('button', { name: 'Журнал доставок' }))
+  }
+
+  const delivered = {
+    id: 'd-1',
+    kind: 'submission',
+    submissionId: 's-1',
+    outcome: 'delivered',
+    rows: 1,
+    createdAt: '2026-09-09T10:00:00Z',
+  }
+  const failed = {
+    id: 'd-2',
+    kind: 'submission',
+    submissionId: 's-2',
+    outcome: 'failed',
+    detail: 'Записать в таблицу не удалось, попробуем ещё раз позже.',
+    rows: 0,
+    createdAt: '2026-09-09T11:00:00Z',
+  }
+
+  it('лента показывает исход каждой попытки и причину неудачи', () => {
+    const qc = renderView(state({ account: CONNECTED, connections: [conn()] }))
+    seedLog(qc, [failed, delivered])
+    openLog()
+
+    expect(screen.getByText('Журнал доставок')).toBeTruthy()
+    expect(screen.getByText('Ответ записан в таблицу')).toBeTruthy()
+    expect(screen.getByText('Ответ не записан')).toBeTruthy()
+    // Причина стоит текстом, а не прячется в тултип: за ней журнал и открывают.
+    expect(screen.getByText(/попробуем ещё раз позже/i)).toBeTruthy()
+  })
+
+  it('«Повторить» стоит у неудачи и не стоит у успеха', () => {
+    const qc = renderView(state({ account: CONNECTED, connections: [conn()] }))
+    seedLog(qc, [failed, delivered])
+    openLog()
+
+    // Ровно одна кнопка на две строки — у той, где есть что повторять: запись в
+    // лист не идемпотентна, и повтор успеха положил бы ответ вторым разом.
+    expect(screen.getAllByRole('button', { name: /Повторить/ })).toHaveLength(1)
+  })
+
+  it('у сломанной связки повтора нет: сначала починка', () => {
+    const qc = renderView(
+      state({
+        account: CONNECTED,
+        connections: [conn({ status: 'broken', lastError: 'нет доступа' })],
+      }),
+    )
+    seedLog(qc, [failed])
+    openLog()
+
+    expect(screen.getByText('Ответ не записан')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: /Повторить/ })).toBeNull()
+  })
+
+  it('доставок не было — окно говорит об этом, а не показывает пустоту', () => {
+    const qc = renderView(state({ account: CONNECTED, connections: [conn()] }))
+    seedLog(qc, [])
+    openLog()
+
+    expect(screen.getByText('Доставок пока не было')).toBeTruthy()
   })
 })

@@ -1,13 +1,20 @@
-import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
+import {
+  infiniteQueryOptions,
+  queryOptions,
+  useMutation,
+  useQueryClient,
+} from '@tanstack/react-query'
 
 import { integrationKeys } from './keys'
 import {
   createSheet,
   getFormIntegrations,
+  listDeliveries,
   listSheets,
   listSpreadsheets,
   recheckSheet,
   refillSheet,
+  retryDelivery,
   unlinkSheet,
   updateConnection,
   type ConnectOptions,
@@ -43,6 +50,32 @@ export function sheetsQueryOptions(formId: string, accountId: string, spreadshee
     queryKey: integrationKeys.sheets(formId, accountId, spreadsheetId),
     queryFn: () => listSheets(accountId, spreadsheetId),
     staleTime: 30_000,
+  })
+}
+
+// Журнал доставок связки — курсорная лента, новые сверху (как ответы формы).
+//
+// Опрашивается, пока окно открыто: диспетчер очереди просыпается раз в 15
+// секунд, и исход повторённой доставки появляется в ленте не сразу. Опрос
+// останавливается сам, когда вкладка уходит из фокуса (умолчание React Query).
+export function deliveriesQueryOptions(formId: string, connectionId: string) {
+  return infiniteQueryOptions({
+    queryKey: integrationKeys.deliveries(formId, connectionId),
+    queryFn: ({ pageParam }) => listDeliveries(formId, connectionId, pageParam),
+    initialPageParam: undefined as string | undefined,
+    getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
+    refetchInterval: 5000,
+  })
+}
+
+// Повтор доставки: 202 означает «событие поставлено», а не «ответ уехал».
+// Инвалидируем ключ формы целиком — под ним лежит и лента, и состояние связки,
+// а исход приедет следующим опросом.
+export function useRetryDelivery(formId: string, connectionId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (deliveryId: string) => retryDelivery(formId, connectionId, deliveryId),
+    onSettled: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
 

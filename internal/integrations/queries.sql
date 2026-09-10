@@ -17,7 +17,12 @@ ON CONFLICT (user_id, provider, external_account_id) DO UPDATE SET
     external_email = EXCLUDED.external_email,
     refresh_token  = EXCLUDED.refresh_token,
     scopes         = EXCLUDED.scopes,
-    connected_at   = now()
+    connected_at   = now(),
+    -- Переподключение и есть лечение отозванного согласия: свежий refresh-токен
+    -- получен, значит пометка мёртвого подключения (0061) снимается тем же
+    -- оператором. Отдельным запросом её гасить нельзя — между ними подключение
+    -- выглядело бы рабочим и мёртвым одновременно.
+    access_lost_at = NULL
 RETURNING id;
 
 -- name: ListIntegrationAccountsByUser :many
@@ -27,7 +32,7 @@ RETURNING id;
 --
 -- Порядок по connected_at: подключённый первым стоит первым и не прыгает при
 -- перерисовке, а свежеподключённый оказывается внизу — там, где его ищут.
-SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
 WHERE user_id = $1 AND provider = $2
 ORDER BY connected_at, id;
@@ -48,6 +53,22 @@ UPDATE integration_accounts SET refresh_token = $2 WHERE id = $1;
 DELETE FROM integration_accounts
 WHERE id = $1 AND user_id = $2
 RETURNING refresh_token;
+
+-- name: MarkIntegrationAccountAccessLost :exec
+-- Провайдер отказал в обновлении токена: согласия на этот аккаунт больше нет
+-- (0061). Помечается ПОДКЛЮЧЕНИЕ, а не связка, которая об этом узнала: не
+-- работает ни одна связка этого аккаунта, во всех формах и пространствах.
+--
+-- Условие access_lost_at IS NULL держит ПЕРВЫЙ момент отказа: у аккаунта с
+-- десятком форм каждая доставка приносила бы свежий now(), и «когда именно
+-- перестало работать» стало бы «когда мы в последний раз попробовали».
+UPDATE integration_accounts SET access_lost_at = $2 WHERE id = $1 AND access_lost_at IS NULL;
+
+-- name: ClearIntegrationAccountAccessLost :exec
+-- Токен снова работает: провайдер отдал access по нашему refresh. Пометка
+-- гаснет здесь, а не только при переподключении, — согласие могли вернуть в
+-- самом Google, и тогда чинить человеку нечего.
+UPDATE integration_accounts SET access_lost_at = NULL WHERE id = $1;
 
 -- name: InsertFormIntegration :exec
 -- Привязка формы к созданной таблице. Уникальный индекс по form_id держит рамку
@@ -123,7 +144,7 @@ WHERE fi.id = $1;
 -- name: GetIntegrationAccountByID :one
 -- Аккаунт по своему id — путь доставки (связка несёт account_id) и путь проверки
 -- «аккаунт мой» перед выдачей токена или списка файлов.
-SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at
+SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
 WHERE id = $1;
 
@@ -179,3 +200,50 @@ WHERE id = $1;
 UPDATE form_integrations
 SET status = 'live'
 WHERE id = $1;
+
+-- name: InsertIntegrationDelivery :exec
+-- Одна попытка доставки в журнал (схема — migrations/0060). Пишется ПОСЛЕ
+-- исхода, отдельным запросом: доставка идёт в чужой API, транзакции вокруг неё
+-- нет и быть не может.
+INSERT INTO integration_deliveries (
+    id, link_id, kind, submission_id, outcome, detail, row_count
+) VALUES ($1, $2, $3, $4, $5, $6, $7);
+
+-- name: ListIntegrationDeliveries :many
+-- Лента журнала: новые сверху, страница за страницей курсором.
+--
+-- Курсор — id, а не created_at: UUIDv7 монотонен по времени, а у пачек переноса
+-- соседние попытки ложатся в одну миллисекунду, и порядок по времени между ними
+-- не определён. Пустой курсор ($2 = uuid nil) означает первую страницу — сравнение
+-- с ним истинно для любого id, потому что нулевой UUID меньше всякого другого.
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+FROM integration_deliveries
+WHERE link_id = sqlc.arg(link_id)
+  AND (sqlc.arg(cursor)::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR id < sqlc.arg(cursor))
+ORDER BY id DESC
+LIMIT sqlc.arg(page_size);
+
+-- name: GetIntegrationDelivery :one
+-- Одна запись журнала — предмет повтора. link_id в условии не украшение: id
+-- записи приезжает из адреса и правом доступа не является (инвариант 1), а
+-- право проверено по СВЯЗКЕ.
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+FROM integration_deliveries
+WHERE id = $1 AND link_id = $2;
+
+-- name: SubmissionAlreadyDelivered :one
+-- Доехал ли ЭТОТ ответ в лист этой связки хоть раз. Спрашивается перед
+-- повтором, и вопрос именно такой, а не «чем кончилась вот эта попытка»:
+-- строка журнала = одна попытка, и у ответа, доехавшего со второго раза, первая
+-- навсегда остаётся неудачной. Гейт по её исходу разрешал бы класть в чужую
+-- таблицу второй экземпляр ответа, который там уже лежит.
+SELECT EXISTS (
+    SELECT 1 FROM integration_deliveries
+    WHERE link_id = $1 AND submission_id = $2 AND outcome = 'delivered'
+);
+
+-- name: DeleteOldIntegrationDeliveries :execrows
+-- Уборка журнала по возрасту (задача integration-delivery-cleanup). Это уборка
+-- места, а не защита: диагностика месячной давности никому не отвечает на
+-- вопрос «почему вчера не уехало», а таблица растёт со скоростью потока ответов.
+DELETE FROM integration_deliveries WHERE created_at < $1;

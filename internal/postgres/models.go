@@ -132,6 +132,18 @@ type IntegrationAccount struct {
 	Scopes            string
 	UserID            uuid.UUID
 	ConnectedAt       pgtype.Timestamptz
+	AccessLostAt      pgtype.Timestamptz
+}
+
+type IntegrationDelivery struct {
+	ID           uuid.UUID
+	LinkID       uuid.UUID
+	Kind         string
+	SubmissionID pgtype.UUID
+	Outcome      string
+	Detail       string
+	RowCount     int32
+	CreatedAt    pgtype.Timestamptz
 }
 
 type KnownDevice struct {

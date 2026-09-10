@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -90,6 +91,19 @@ type fakeStore struct {
 	backfillFrom    *time.Time
 	backfillDone    bool
 	sheetCleared    bool
+
+	// deliveries — журнал попыток доставки, как его видит связка. Порядок
+	// вставки: тесты проверяют исход последней попытки и их число.
+	deliveries []integrations.Delivery
+	// deliveryLogErr — журнал не пишется. Проверка мины: отказ записи не имеет
+	// права уронить саму доставку.
+	deliveryLogErr error
+	// deletedBefore — граница уборки журнала, с которой её позвали.
+	deletedBefore time.Time
+
+	// accessLostAt — подключение помечено мёртвым (провайдер отказал в обновлении
+	// токена). Нулевое = пометки нет; тесты проверяют и постановку, и снятие.
+	accessLostAt time.Time
 }
 
 func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) (uuid.UUID, error) {
@@ -250,11 +264,15 @@ type fakeProvider struct {
 	// sheetHeader — шапка, которая СЕЙЧАС в листе. Отдельно от header (что мы в
 	// него записали): лист принадлежит автору, и он вправе переставить колонки —
 	// ровно это и проверяется. nil = лист без шапки.
-	sheetHeader  []string
-	appended     [][]string
-	appendCalls  int
-	cleared      string
-	appendErr    error
+	sheetHeader []string
+	appended    [][]string
+	appendCalls int
+	cleared     string
+	appendErr   error
+	// refreshErr — провайдер отказал в обновлении токена. Отдельно от appendErr:
+	// отказ ТОКЕН-ручки означает смерть подключения, отказ ручки данных — беду
+	// одной таблицы, и путать их дорого.
+	refreshErr   error
 	firstRowBusy bool
 	// rotated — refresh-токен, который провайдер отдаёт взамен использованного.
 	// Пусто — как у Google: тот старый токен не меняет.
@@ -291,6 +309,9 @@ func (f *fakeProvider) Exchange(_ context.Context, _, _ string) (integrations.To
 }
 
 func (f *fakeProvider) Refresh(_ context.Context, _ string) (integrations.Tokens, error) {
+	if f.refreshErr != nil {
+		return integrations.Tokens{}, f.refreshErr
+	}
 	return integrations.Tokens{Access: testAccessToken, Refresh: f.rotated}, nil
 }
 
@@ -1302,4 +1323,85 @@ func sealedRefreshToken(t *testing.T) []byte {
 		t.Fatalf("connect: %v", err)
 	}
 	return store.upserted.RefreshSealed
+}
+
+func (f *fakeStore) InsertDelivery(_ context.Context, _ postgres.DBTX, d integrations.Delivery) error {
+	if f.deliveryLogErr != nil {
+		return f.deliveryLogErr
+	}
+	// Фейк повторяет CHECK integration_deliveries_subject: вид события и его
+	// предмет — один факт. Без этого зеркала запись с чужим предметом проходит в
+	// юнитах и молча отвергается настоящей базой, а отказ журнала намеренно не
+	// роняет доставку — то есть в ленте просто не появлялось бы строки.
+	subject := (d.Kind == integrations.DeliveryKindSubmission) == (d.SubmissionID != uuid.Nil)
+	if !subject {
+		return fmt.Errorf("нарушен инвариант «вид ↔ предмет»: %s / %s", d.Kind, d.SubmissionID)
+	}
+	f.deliveries = append(f.deliveries, d)
+	return nil
+}
+
+func (f *fakeStore) SubmissionDelivered(_ context.Context, _ postgres.DBTX, linkID, submissionID uuid.UUID) (bool, error) {
+	for _, d := range f.deliveries {
+		if d.LinkID == linkID && d.SubmissionID == submissionID && d.Outcome == integrations.OutcomeDelivered {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func (f *fakeStore) ListDeliveries(_ context.Context, _ postgres.DBTX, linkID, cursor uuid.UUID, limit int32) ([]integrations.Delivery, error) {
+	out := make([]integrations.Delivery, 0, len(f.deliveries))
+	// Лента отдаётся новыми сверху, как в SQL: обходим с конца.
+	for i := len(f.deliveries) - 1; i >= 0; i-- {
+		d := f.deliveries[i]
+		if d.LinkID != linkID {
+			continue
+		}
+		if cursor != uuid.Nil && d.ID.String() >= cursor.String() {
+			continue
+		}
+		out = append(out, d)
+		if int32(len(out)) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetDelivery(_ context.Context, _ postgres.DBTX, id, linkID uuid.UUID) (integrations.Delivery, error) {
+	for _, d := range f.deliveries {
+		if d.ID == id && d.LinkID == linkID {
+			return d, nil
+		}
+	}
+	return integrations.Delivery{}, pgx.ErrNoRows
+}
+
+func (f *fakeStore) DeleteOldDeliveries(_ context.Context, _ postgres.DBTX, before time.Time) (int64, error) {
+	f.deletedBefore = before
+	kept := f.deliveries[:0]
+	var n int64
+	for _, d := range f.deliveries {
+		if d.CreatedAt.Before(before) {
+			n++
+			continue
+		}
+		kept = append(kept, d)
+	}
+	f.deliveries = kept
+	return n, nil
+}
+
+func (f *fakeStore) MarkAccessLost(_ context.Context, _ postgres.DBTX, _ uuid.UUID, at time.Time) error {
+	// Первый момент отказа не перезаписывается — то же условие, что в SQL.
+	if f.accessLostAt.IsZero() {
+		f.accessLostAt = at
+	}
+	return nil
+}
+
+func (f *fakeStore) ClearAccessLost(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.accessLostAt = time.Time{}
+	return nil
 }

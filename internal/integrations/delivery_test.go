@@ -729,3 +729,377 @@ func TestDeliver_DeliversSubmissionAfterBackfill(t *testing.T) {
 		t.Fatalf("свежий ответ не доставлен: %v", provider.appended)
 	}
 }
+
+// Журнал доставок: у каждой попытки свой исход, и он попадает в ленту связки.
+//
+// Проверяется исход, а не текст: тексты правятся, а вопрос «что стало с этим
+// ответом» — нет.
+func TestDeliver_WritesDeliveryLog(t *testing.T) {
+	cases := []struct {
+		name    string
+		store   func() *fakeStore
+		subs    *fakeSubmissions
+		provide func() *fakeProvider
+		outcome string
+	}{
+		{
+			name:    "доставлено",
+			store:   func() *fakeStore { return &fakeStore{link: linkedSheet(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{record: submissions.SheetRecord{Columns: linkedSheet().Columns, Row: []string{"018f", "Аня", "a@b.c"}}},
+			provide: func() *fakeProvider { return &fakeProvider{header: headerOf(linkedSheet())} },
+			outcome: integrations.OutcomeDelivered,
+		},
+		{
+			name:    "окончательный отказ",
+			store:   func() *fakeStore { return &fakeStore{link: linkedSheet(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{},
+			provide: func() *fakeProvider { return &fakeProvider{appendErr: integrations.ErrPermanent} },
+			outcome: integrations.OutcomeFailed,
+		},
+		{
+			name:    "временный отказ",
+			store:   func() *fakeStore { return &fakeStore{link: linkedSheet(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{},
+			provide: func() *fakeProvider { return &fakeProvider{appendErr: errors.New("статус 503")} },
+			outcome: integrations.OutcomeFailed,
+		},
+		{
+			name:    "связка выключена",
+			store:   func() *fakeStore { return &fakeStore{link: disabledLink(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{},
+			provide: func() *fakeProvider { return &fakeProvider{} },
+			outcome: integrations.OutcomeSkipped,
+		},
+		{
+			name:    "ответа больше нет",
+			store:   func() *fakeStore { return &fakeStore{link: linkedSheet(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{err: pgx.ErrNoRows},
+			provide: func() *fakeProvider { return &fakeProvider{} },
+			outcome: integrations.OutcomeSkipped,
+		},
+		{
+			name:    "связка сломана",
+			store:   func() *fakeStore { return &fakeStore{link: brokenLink(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{},
+			provide: func() *fakeProvider { return &fakeProvider{} },
+			outcome: integrations.OutcomeSkipped,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			store := c.store()
+			svc := deliveryService(store, c.provide(), c.subs, &fakeOutbox{})
+
+			_ = svc.Deliver(context.Background(), payload(t, store.link.ID))
+
+			if len(store.deliveries) != 1 {
+				t.Fatalf("записей в журнале %d, ждали одну: %+v", len(store.deliveries), store.deliveries)
+			}
+			got := store.deliveries[0]
+			if got.Outcome != c.outcome {
+				t.Errorf("исход = %q, ждали %q (текст: %q)", got.Outcome, c.outcome, got.Detail)
+			}
+			if got.LinkID != store.link.ID {
+				t.Errorf("запись адресована связке %s вместо %s", got.LinkID, store.link.ID)
+			}
+			if got.Kind != integrations.DeliveryKindSubmission || got.SubmissionID != testSubmission {
+				t.Errorf("предмет попытки = %q/%s", got.Kind, got.SubmissionID)
+			}
+			if got.Outcome != integrations.OutcomeDelivered && got.Detail == "" {
+				t.Error("неуспех без текста: автору формы нечего прочитать")
+			}
+		})
+	}
+}
+
+// Отвязанная связка следа не оставляет: писать некуда (строки журнала висят на
+// её id), да и незачем.
+func TestDeliver_UnlinkedFormWritesNothing(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows}
+	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, uuid.New())); err != nil {
+		t.Fatalf("событие ушло на ретрай: %v", err)
+	}
+	if len(store.deliveries) != 0 {
+		t.Fatalf("в журнал что-то записано: %+v", store.deliveries)
+	}
+}
+
+// ⚠ Мина: отказ ЗАПИСИ В ЖУРНАЛ не имеет права уронить доставку. Уронит — и
+// успешно уехавшая строка вернётся по бэкоффу и ляжет в чужой лист вторым разом
+// (у values.append нет идемпотентности).
+func TestDeliver_LogFailureDoesNotBreakDelivery(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t), deliveryLogErr: errors.New("база недоступна")}
+	provider := &fakeProvider{header: headerOf(linkedSheet())}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{Columns: linkedSheet().Columns, Row: []string{"018f", "Аня", "a@b.c"}}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("доставка упала из-за журнала: %v", err)
+	}
+	if len(provider.appended) != 1 {
+		t.Fatalf("строк в листе %d, ждали одну", len(provider.appended))
+	}
+	if !store.delivered {
+		t.Error("доставка не помечена успешной")
+	}
+}
+
+// Перенос пишется своим видом и числом строк: «уехало 200 ответов» — это одна
+// строка ленты, а не двести.
+func TestDeliverBackfill_WritesBatchToLog(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBackfilling
+	link.BackfillBefore = time.Now()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{header: headerOf(link)}
+	subs := &fakeSubmissions{page: submissions.SheetPage{
+		Columns: link.Columns,
+		Rows: []submissions.SheetRow{
+			{ID: uuid.New(), Values: []string{"018a", "Аня", "a@b.c"}},
+			{ID: uuid.New(), Values: []string{"018b", "Боря", "b@b.c"}},
+		},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("перенос упал: %v", err)
+	}
+	if len(store.deliveries) != 1 {
+		t.Fatalf("записей в журнале %d, ждали одну: %+v", len(store.deliveries), store.deliveries)
+	}
+	got := store.deliveries[0]
+	if got.Kind != integrations.DeliveryKindBackfill || got.SubmissionID != uuid.Nil {
+		t.Errorf("предмет попытки = %q/%s, ждали пачку без id ответа", got.Kind, got.SubmissionID)
+	}
+	if got.RowCount != 2 {
+		t.Errorf("строк в записи = %d, ждали 2", got.RowCount)
+	}
+}
+
+// Пустая пачка следа не оставляет: переносить было нечего, а строка «0 ответов»
+// в ленте — шум на каждой смене цели.
+func TestDeliverBackfill_EmptyPageWritesNothing(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBackfilling
+	link.BackfillBefore = time.Now()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	svc := deliveryService(store, &fakeProvider{header: headerOf(link)}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("перенос упал: %v", err)
+	}
+	if len(store.deliveries) != 0 {
+		t.Fatalf("в журнал что-то записано: %+v", store.deliveries)
+	}
+}
+
+// Живое событие во время переноса в журнал НЕ пишется: это состояние очереди, а
+// не исход. Иначе лента заполнилась бы одной строкой на каждом ретрае бэкоффа.
+func TestDeliver_WaitingForBackfillWritesNothing(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBackfilling
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err == nil {
+		t.Fatal("живое событие не ушло на ретрай во время переноса")
+	}
+	if len(store.deliveries) != 0 {
+		t.Fatalf("в журнал что-то записано: %+v", store.deliveries)
+	}
+}
+
+func disabledLink() integrations.FormLink {
+	l := linkedSheet()
+	l.Enabled = false
+	return l
+}
+
+// Уборка журнала зовётся с границей «сейчас минус срок хранения»: перепутанный
+// знак вычистил бы вместо старых записей все, кроме них.
+func TestCleanupDeliveries_UsesRetentionBorder(t *testing.T) {
+	store := &fakeStore{}
+	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if _, err := svc.CleanupDeliveries(context.Background()); err != nil {
+		t.Fatalf("уборка: %v", err)
+	}
+	want := time.Now().UTC().Add(-integrations.DeliveryTTL)
+	if diff := store.deletedBefore.Sub(want); diff > time.Minute || diff < -time.Minute {
+		t.Fatalf("граница уборки = %s, ждали около %s", store.deletedBefore, want)
+	}
+}
+
+// Отказ ТОКЕН-ручки убивает подключение целиком, и пометка ложится на аккаунт,
+// а не только на связку, которая об этом узнала.
+//
+// Ради этого признак и заводился (задача владельца 2026-09-10): пока смерть
+// согласия жила только в статусе связки, мёртвый аккаунт выглядел рабочим везде,
+// кроме одной формы, где как раз упала доставка.
+func TestDeliver_AccessLostMarksAccount(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t)}
+	provider := &fakeProvider{refreshErr: integrations.ErrAccessLost}
+	svc := deliveryService(store, provider, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("окончательный отказ ушёл на ретрай: %v", err)
+	}
+	if store.accessLostAt.IsZero() {
+		t.Fatal("подключение не помечено мёртвым — в других формах оно останется зелёным")
+	}
+	if store.brokenWith == "" {
+		t.Error("связка не покраснела")
+	}
+}
+
+// ⚠ Беда ЛИСТА подключение не трогает. Автор переставил колонки — виновата одна
+// таблица; пометить аккаунт значило бы соврать про все остальные формы и
+// позвать человека переподключаться там, где переподключение ничего не лечит.
+func TestDeliver_SheetBreakLeavesAccountAlone(t *testing.T) {
+	link := linkedSheet()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	// Шапка с чужой колонкой посередине — раскладка, за которой следовать нельзя.
+	provider := &fakeProvider{sheetHeader: []string{"ID ответа", "Моя колонка", "Имя", "Почта"}}
+	svc := deliveryService(store, provider, &fakeSubmissions{
+		record: submissions.SheetRecord{Columns: link.Columns, Row: []string{"018f", "Аня", "a@b.c"}},
+	}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("окончательный отказ ушёл на ретрай: %v", err)
+	}
+	if store.brokenWith == "" {
+		t.Fatal("связка не покраснела — тест проверяет не тот случай")
+	}
+	if !store.accessLostAt.IsZero() {
+		t.Fatal("подключение помечено мёртвым из-за беды одной таблицы")
+	}
+}
+
+// Согласие вернули в самом Google — пометка гаснет на первом же удачном токене.
+// Иначе красный аккаунт остался бы в кабинете навсегда: переподключаться человеку
+// уже незачем, а больше пометку снимать некому.
+func TestDeliver_WorkingTokenClearsAccessLost(t *testing.T) {
+	conn := sealedConn(t)
+	conn.AccessLostAt = time.Now().Add(-time.Hour)
+	link := linkedSheet()
+	store := &fakeStore{link: link, conn: conn, accessLostAt: conn.AccessLostAt}
+	provider := &fakeProvider{header: headerOf(link)}
+	svc := deliveryService(store, provider, &fakeSubmissions{
+		record: submissions.SheetRecord{Columns: link.Columns, Row: []string{"018f", "Аня", "a@b.c"}},
+	}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err != nil {
+		t.Fatalf("доставка: %v", err)
+	}
+	if !store.accessLostAt.IsZero() {
+		t.Fatal("пометка мёртвого подключения пережила удачную доставку")
+	}
+}
+
+// Экран узнаёт о смерти согласия из пометки, а не из статуса связки: аккаунт
+// требует переподключения ВЕЗДЕ, включая формы, где доставок ещё не было.
+func TestStatus_AccessLostAsksToReconnect(t *testing.T) {
+	conn := sealedConn(t)
+	conn.AccessLostAt = time.Now().Add(-time.Hour)
+	svc := deliveryService(&fakeStore{conn: conn}, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	st, err := svc.Status(context.Background(), testUser)
+	if err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	if len(st.Accounts) != 1 || !st.Accounts[0].NeedsReconnect {
+		t.Fatalf("аккаунты = %+v, ждали пометку «нужно переподключить»", st.Accounts)
+	}
+}
+
+// ⚠ Повтор спрашивает судьбу ОТВЕТА, а не исход строки, по которой нажали.
+//
+// Строка журнала = одна попытка, и у ответа, доехавшего со второго раза
+// (503 → бэкофф → успех), первая навсегда остаётся неудачной. Гейт по её исходу
+// держал бы живую кнопку «Повторить» под ответом, который в таблице уже лежит.
+func TestRetryDelivery_RefusesWhenAnswerAlreadyInSheet(t *testing.T) {
+	link := linkedSheet()
+	failed := integrations.Delivery{
+		ID: uuid.New(), LinkID: link.ID, Kind: integrations.DeliveryKindSubmission,
+		SubmissionID: testSubmission, Outcome: integrations.OutcomeFailed,
+		Detail: "Записать в таблицу не удалось, попробуем ещё раз позже.",
+	}
+	// Та же строка ответа доехала следующей попыткой.
+	ok := integrations.Delivery{
+		ID: uuid.New(), LinkID: link.ID, Kind: integrations.DeliveryKindSubmission,
+		SubmissionID: testSubmission, Outcome: integrations.OutcomeDelivered, RowCount: 1,
+	}
+	store := &fakeStore{link: link, conn: sealedConn(t), deliveries: []integrations.Delivery{failed, ok}}
+	out := &fakeOutbox{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{}).
+		WithDelivery(out, &fakeSubmissions{})
+
+	err := svc.RetryDelivery(context.Background(), testUser, testForm, link.ID, failed.ID)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидался отказ: ответ уже в таблице", err)
+	}
+	if out.channel != "" {
+		t.Fatal("событие поставлено — ответ ляжет в чужой лист вторым разом")
+	}
+}
+
+// Повтор неудачи, которая ничем не кончилась, по-прежнему работает: гейт про
+// доехавший ответ, а не про наличие неудачных строк.
+func TestRetryDelivery_RepeatsWhenAnswerNeverArrived(t *testing.T) {
+	link := linkedSheet()
+	failed := integrations.Delivery{
+		ID: uuid.New(), LinkID: link.ID, Kind: integrations.DeliveryKindSubmission,
+		SubmissionID: testSubmission, Outcome: integrations.OutcomeFailed,
+	}
+	store := &fakeStore{link: link, conn: sealedConn(t), deliveries: []integrations.Delivery{failed}}
+	out := &fakeOutbox{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{}).
+		WithDelivery(out, &fakeSubmissions{})
+
+	if err := svc.RetryDelivery(context.Background(), testUser, testForm, link.ID, failed.ID); err != nil {
+		t.Fatalf("повтор: %v", err)
+	}
+	if out.channel != integrations.ChannelSheets {
+		t.Fatal("событие не поставлено")
+	}
+}
+
+// ⚠ У события ПЕРЕНОСА свой предмет: диапазон, а не строка. Запись с видом
+// «ответ» и нулевым id отвергается схемой, а отказ журнала намеренно не роняет
+// доставку — значит, строки в ленте просто не было бы, и молча.
+func TestDeliverBackfill_SkippedEventKeepsItsKind(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBroken
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("событие ушло на ретрай: %v", err)
+	}
+	if len(store.deliveries) != 1 {
+		t.Fatalf("записей в журнале %d, ждали одну: %+v", len(store.deliveries), store.deliveries)
+	}
+	got := store.deliveries[0]
+	if got.Kind != integrations.DeliveryKindBackfill || got.SubmissionID != uuid.Nil {
+		t.Fatalf("предмет записи = %q/%s, ждали пачку переноса", got.Kind, got.SubmissionID)
+	}
+}
+
+// Смерть подключения замечает ЛЮБОЙ поход к провайдеру, а не только доставка:
+// перезалив, перепроверка, список таблиц идут тем же путём за токеном. Иначе
+// знание об отзыве согласия зависело бы от того, каким путём мы за ним пошли.
+func TestRefillForm_AccessLostMarksAccount(t *testing.T) {
+	link := linkedSheet()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{refreshErr: integrations.ErrAccessLost}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
+
+	if err := svc.RefillForm(context.Background(), testUser, testForm, link.ID); err == nil {
+		t.Fatal("перезалив мёртвым аккаунтом прошёл успешно")
+	}
+	if store.accessLostAt.IsZero() {
+		t.Fatal("подключение не помечено мёртвым — экран продолжит показывать его рабочим")
+	}
+}

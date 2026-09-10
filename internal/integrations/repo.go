@@ -32,6 +32,10 @@ type Connection struct {
 	RefreshSealed []byte
 	Scopes        string
 	ConnectedAt   time.Time
+	// AccessLostAt — момент, когда провайдер отказал в обновлении токена
+	// (`ErrAccessLost`, 0061). Нулевое время = согласие действует либо мы ещё не
+	// знаем: узнать это можно только походом к провайдеру, то есть при доставке.
+	AccessLostAt time.Time
 }
 
 // NewConnection — что нужно записать при подключении.
@@ -91,6 +95,7 @@ func (Repo) ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID, 
 			RefreshSealed: row.RefreshToken,
 			Scopes:        row.Scopes,
 			ConnectedAt:   row.ConnectedAt.Time,
+			AccessLostAt:  row.AccessLostAt.Time,
 		})
 	}
 	return out, nil
@@ -120,6 +125,27 @@ func (Repo) Delete(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID) 
 		return nil, err
 	}
 	return sealed, nil
+}
+
+// MarkAccessLost помечает подключение мёртвым: провайдер отказал в обновлении
+// токена. Первый момент отказа не перезаписывается (условие в самом SQL).
+func (Repo) MarkAccessLost(ctx context.Context, db postgres.DBTX, id uuid.UUID, at time.Time) error {
+	err := postgres.New(db).MarkIntegrationAccountAccessLost(ctx, postgres.MarkIntegrationAccountAccessLostParams{
+		ID:           id,
+		AccessLostAt: pgtype.Timestamptz{Time: at, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("mark integration account access lost: %w", err)
+	}
+	return nil
+}
+
+// ClearAccessLost снимает пометку: по нашему refresh-токену снова выдан access.
+func (Repo) ClearAccessLost(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).ClearIntegrationAccountAccessLost(ctx, id); err != nil {
+		return fmt.Errorf("clear integration account access lost: %w", err)
+	}
+	return nil
 }
 
 // FormLink — привязка формы к таблице (с полями аккаунта, нужными экрану и
@@ -274,6 +300,7 @@ func (Repo) GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) 
 		RefreshSealed: row.RefreshToken,
 		Scopes:        row.Scopes,
 		ConnectedAt:   row.ConnectedAt.Time,
+		AccessLostAt:  row.AccessLostAt.Time,
 	}, nil
 }
 
@@ -401,4 +428,120 @@ func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, 
 		return 0, fmt.Errorf("update form integration target: %w", err)
 	}
 	return n, nil
+}
+
+// Исходы попытки доставки. Итог связки (status, last_error) отвечает на вопрос
+// «работает ли она сейчас», исход — на вопрос «что стало с ЭТИМ ответом».
+const (
+	OutcomeDelivered = "delivered"
+	OutcomeFailed    = "failed"
+	OutcomeSkipped   = "skipped"
+)
+
+// Вид события журнала: живой ответ или пачка переноса накопленных.
+const (
+	DeliveryKindSubmission = "submission"
+	DeliveryKindBackfill   = "backfill"
+)
+
+// Delivery — одна попытка доставки, как она лежит в журнале. Строка на попытку,
+// включая ретраи бэкоффа: журнал показывает историю, а не итог.
+//
+// Detail — НАШ русский текст для экрана, а не ошибка провайдера: её читать
+// будет автор формы, а она на английском и про HTTP (полная уходит в лог).
+type Delivery struct {
+	ID           uuid.UUID
+	LinkID       uuid.UUID
+	Kind         string
+	SubmissionID uuid.UUID // нулевой у пачки переноса: она про диапазон, а не про строку
+	Outcome      string
+	Detail       string
+	RowCount     int32
+	CreatedAt    time.Time
+}
+
+// InsertDelivery пишет попытку в журнал.
+func (Repo) InsertDelivery(ctx context.Context, db postgres.DBTX, d Delivery) error {
+	err := postgres.New(db).InsertIntegrationDelivery(ctx, postgres.InsertIntegrationDeliveryParams{
+		ID:           d.ID,
+		LinkID:       d.LinkID,
+		Kind:         d.Kind,
+		SubmissionID: pgtype.UUID{Bytes: d.SubmissionID, Valid: d.SubmissionID != uuid.Nil},
+		Outcome:      d.Outcome,
+		Detail:       d.Detail,
+		RowCount:     d.RowCount,
+	})
+	if err != nil {
+		return fmt.Errorf("insert integration delivery: %w", err)
+	}
+	return nil
+}
+
+// ListDeliveries — страница ленты, новые сверху. Нулевой курсор означает первую
+// страницу.
+func (Repo) ListDeliveries(ctx context.Context, db postgres.DBTX, linkID, cursor uuid.UUID, limit int32) ([]Delivery, error) {
+	rows, err := postgres.New(db).ListIntegrationDeliveries(ctx, postgres.ListIntegrationDeliveriesParams{
+		LinkID:   linkID,
+		Cursor:   cursor,
+		PageSize: limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list integration deliveries: %w", err)
+	}
+	out := make([]Delivery, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toDelivery(row))
+	}
+	return out, nil
+}
+
+// GetDelivery — одна запись журнала. linkID в условии обязателен: id приезжает
+// из адреса и правом доступа не является (инвариант 1).
+func (Repo) GetDelivery(ctx context.Context, db postgres.DBTX, id, linkID uuid.UUID) (Delivery, error) {
+	row, err := postgres.New(db).GetIntegrationDelivery(ctx, postgres.GetIntegrationDeliveryParams{
+		ID:     id,
+		LinkID: linkID,
+	})
+	if err != nil {
+		return Delivery{}, err
+	}
+	return toDelivery(row), nil
+}
+
+// SubmissionDelivered — доезжал ли этот ответ в лист связки хоть раз.
+func (Repo) SubmissionDelivered(ctx context.Context, db postgres.DBTX, linkID, submissionID uuid.UUID) (bool, error) {
+	ok, err := postgres.New(db).SubmissionAlreadyDelivered(ctx, postgres.SubmissionAlreadyDeliveredParams{
+		LinkID:       linkID,
+		SubmissionID: pgtype.UUID{Bytes: submissionID, Valid: submissionID != uuid.Nil},
+	})
+	if err != nil {
+		return false, fmt.Errorf("submission already delivered: %w", err)
+	}
+	return ok, nil
+}
+
+// DeleteOldDeliveries убирает записи старше границы и отдаёт их число — задаче
+// уборки есть что написать в лог.
+func (Repo) DeleteOldDeliveries(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error) {
+	n, err := postgres.New(db).DeleteOldIntegrationDeliveries(ctx, pgtype.Timestamptz{Time: before, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("delete old integration deliveries: %w", err)
+	}
+	return n, nil
+}
+
+func toDelivery(row postgres.IntegrationDelivery) Delivery {
+	d := Delivery{
+		ID:        row.ID,
+		LinkID:    row.LinkID,
+		Kind:      row.Kind,
+		Outcome:   row.Outcome,
+		Detail:    row.Detail,
+		RowCount:  row.RowCount,
+		CreatedAt: row.CreatedAt.Time,
+	}
+	if row.SubmissionID.Valid {
+		d.SubmissionID = row.SubmissionID.Bytes
+	}
+	return d
 }

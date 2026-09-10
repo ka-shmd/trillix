@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -50,6 +51,13 @@ type Store interface {
 	MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error
 	ClearError(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+	MarkAccessLost(ctx context.Context, db postgres.DBTX, id uuid.UUID, at time.Time) error
+	ClearAccessLost(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+	InsertDelivery(ctx context.Context, db postgres.DBTX, d Delivery) error
+	ListDeliveries(ctx context.Context, db postgres.DBTX, linkID, cursor uuid.UUID, limit int32) ([]Delivery, error)
+	GetDelivery(ctx context.Context, db postgres.DBTX, id, linkID uuid.UUID) (Delivery, error)
+	SubmissionDelivered(ctx context.Context, db postgres.DBTX, linkID, submissionID uuid.UUID) (bool, error)
+	DeleteOldDeliveries(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error)
 }
 
 var _ Store = Repo{}
@@ -132,13 +140,21 @@ func (s *Service) Enabled() bool { return s.google != nil }
 type ConnectedAccount struct {
 	ID    uuid.UUID
 	Email string
-	// NeedsReconnect — строка подключения есть, но refresh-токен ею больше не
-	// расшифровывается: ключ шифрования выведен из FORM_TOKEN_SECRET, и его
-	// ротация оставляет за собой шифротекст, которым нельзя пользоваться
-	// (secretbox.go). Лечение другое, чем у «нет аккаунта»: не «подключите», а
-	// «подключите ЗАНОВО», и до этого ни одна связка этого аккаунта работать не
-	// будет. Без этого поля экран показывал бы зелёное «подключено», а падало бы
-	// всё подряд — молча, до первого ответа респондента.
+	// NeedsReconnect — подключение есть, а пользоваться им нельзя. Лечение одно
+	// («подключите ЗАНОВО»), поэтому и признак один, а причин у него две:
+	//
+	//  1. refresh-токен не расшифровывается — ключ шифрования выведен из
+	//     FORM_TOKEN_SECRET, и его ротация оставляет за собой негодный
+	//     шифротекст (secretbox.go). Видно без сети, на каждом показе таба.
+	//  2. провайдер отказал в обновлении токена (`ErrAccessLost`): человек
+	//     отозвал доступ в своём Google либо refresh протух — у приложения в
+	//     статусе Testing это неделя. Шифротекст при этом ЦЕЛ, и без походов к
+	//     провайдеру беда невидима: узнаём о ней при доставке и запоминаем
+	//     моментом в access_lost_at (0061).
+	//
+	// ⚠ Вторая причина и есть та, из-за которой поле вообще расширяли: пока она
+	// жила только в статусе СВЯЗКИ, мёртвый аккаунт выглядел рабочим везде,
+	// кроме одной формы, где как раз упала доставка.
 	NeedsReconnect bool
 	ConnectedAt    time.Time
 }
@@ -178,7 +194,7 @@ func (s *Service) Status(ctx context.Context, userID uuid.UUID) (Status, error) 
 		out.Accounts = append(out.Accounts, ConnectedAccount{
 			ID:             c.ID,
 			Email:          c.Email,
-			NeedsReconnect: tokenErr != nil,
+			NeedsReconnect: tokenErr != nil || !c.AccessLostAt.IsZero(),
 			ConnectedAt:    c.ConnectedAt,
 		})
 	}
@@ -774,6 +790,101 @@ func (s *Service) RefillForm(ctx context.Context, userID, formID, linkID uuid.UU
 	return s.startBackfill(ctx, s.db, link.ID)
 }
 
+// DeliveryPageSize — сколько попыток отдаётся одной страницей ленты. Потолок,
+// а не настройка: страница длиннее экрана всё равно читается прокруткой, а
+// курсор у ленты уже есть.
+const DeliveryPageSize = 50
+
+// Deliveries — страница журнала доставок связки, новые сверху. Пустой курсор =
+// первая страница.
+//
+// Право — form.write, как у правки связки: журнал раскрывает причины отказов
+// провайдера и адреса чужих таблиц, и это не то, что показывают всякому, кто
+// умеет открыть форму.
+func (s *Service) Deliveries(ctx context.Context, userID, formID, linkID, cursor uuid.UUID) ([]Delivery, error) {
+	if !s.Enabled() {
+		return nil, domain.ErrNotFound
+	}
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return nil, err
+	}
+	link, err := s.linkOfForm(ctx, formID, linkID)
+	if err != nil {
+		return nil, err
+	}
+	return s.repo.ListDeliveries(ctx, s.db, link.ID, cursor, DeliveryPageSize)
+}
+
+// RetryDelivery ставит доставку ЗАНОВО по тому же ответу — обычным событием
+// очереди, через те же проверки членства, тумблера и колонок.
+//
+// ⚠ Повтор возможен только у неуспешной попытки живого ответа. Успешную не
+// повторяют потому, что у values.append нет идемпотентности: строка легла бы в
+// лист вторым разом. Пачку переноса — потому что её предмет не строка, а
+// диапазон, и лечится он перезаливом целиком.
+//
+// ⚠ У СЛОМАННОЙ связки повтор отказывает, а не ставит событие: Deliver гасит
+// события такой связки первой же проверкой, и кнопка молча ничего не делала бы.
+// Сначала лечение (вернуть шапку, сменить цель, перезалить), потом повтор.
+func (s *Service) RetryDelivery(ctx context.Context, userID, formID, linkID, deliveryID uuid.UUID) error {
+	if !s.Enabled() {
+		return domain.ErrNotFound
+	}
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return err
+	}
+	link, err := s.linkOfForm(ctx, formID, linkID)
+	if err != nil {
+		return err
+	}
+	d, err := s.repo.GetDelivery(ctx, s.db, deliveryID, link.ID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if d.Kind != DeliveryKindSubmission || d.SubmissionID == uuid.Nil {
+		return fmt.Errorf("%w: повторить можно только доставку одного ответа", domain.ErrValidation)
+	}
+	// ⚠ Спрашивается судьба ОТВЕТА, а не исход этой записи. Строка журнала = одна
+	// попытка, и у ответа, доехавшего со второго раза (503 → бэкофф → успех),
+	// первая навсегда остаётся неудачной: гейт по её исходу держал бы живую
+	// кнопку «Повторить» под ответом, который в таблице уже лежит, — и клик клал
+	// бы туда второй экземпляр. У `values.append` идемпотентности нет.
+	delivered, err := s.repo.SubmissionDelivered(ctx, s.db, link.ID, d.SubmissionID)
+	if err != nil {
+		return err
+	}
+	if delivered {
+		return fmt.Errorf("%w: этот ответ уже в таблице", domain.ErrValidation)
+	}
+	if link.Status == StatusBroken {
+		return fmt.Errorf("%w: сначала устраните причину поломки связки", domain.ErrConflict)
+	}
+	if s.outbox == nil {
+		return domain.ErrNotFound
+	}
+	payload, err := json.Marshal(sheetsPayload{LinkID: link.ID, SubmissionID: d.SubmissionID})
+	if err != nil {
+		return fmt.Errorf("marshal sheets payload: %w", err)
+	}
+	return s.outbox.Enqueue(ctx, s.db, ChannelSheets, payload)
+}
+
+// DeliveryTTL — сколько живёт запись журнала. Константа, а не переменная
+// окружения (тот же довод, что у submissions.PartialTTL): журнал
+// диагностический, месяца хватает на вопрос «почему вчера не уехало», а ещё
+// одна строка конфига дороже пользы.
+const DeliveryTTL = 30 * 24 * time.Hour
+
+// CleanupDeliveries убирает записи журнала старше срока хранения и отдаёт их
+// число. Зовётся периодической задачей: без срока таблица растёт со скоростью
+// потока ответов и не останавливается никогда.
+func (s *Service) CleanupDeliveries(ctx context.Context) (int64, error) {
+	return s.repo.DeleteOldDeliveries(ctx, s.db, time.Now().UTC().Add(-DeliveryTTL))
+}
+
 // mergeColumns дописывает к колонкам листа те, которых в нём ещё нет. Порядок
 // прежних не меняется: автор мог свести их формулами справа, и перестановка
 // сломала бы его таблицу молча.
@@ -1045,7 +1156,34 @@ func (s *Service) accessToken(ctx context.Context, conn Connection) (string, err
 	}
 	tokens, err := s.google.Refresh(ctx, refresh)
 	if err != nil {
+		// Умер не лист, а ПОДКЛЮЧЕНИЕ: не работает ни одна его связка, во всех
+		// формах и пространствах. Пометка стоит ЗДЕСЬ, а не на разборе отказа
+		// доставки, потому что сюда сходятся ВСЕ походы к провайдеру: перезалив,
+		// перепроверка, список таблиц, окно выбора файла. Знание о смерти
+		// аккаунта не должно зависеть от того, каким путём мы за ним пошли, —
+		// тем более что снимается пометка тоже здесь (ниже), и односторонняя
+		// симметрия однажды оставила бы аккаунт красным навсегда.
+		//
+		// Неудача пометки не роняет операцию: у вызывающего своя беда, а пометка
+		// догонит следующим походом (запись идемпотентна — держит ПЕРВЫЙ момент).
+		if errors.Is(err, ErrAccessLost) {
+			if markErr := s.repo.MarkAccessLost(ctx, s.db, conn.ID, time.Now()); markErr != nil {
+				httpserver.LoggerFrom(ctx).Warn("access-lost mark not stored",
+					slog.String("account_id", conn.ID.String()),
+					slog.String("error", markErr.Error()))
+			}
+		}
 		return "", err
+	}
+	// Согласие вернули (или мы ошиблись, пометив) — гасим пометку здесь, а не
+	// только при переподключении: доступ возвращают и в самом Google, и тогда
+	// чинить человеку нечего, а красный аккаунт в кабинете остался бы навсегда.
+	if !conn.AccessLostAt.IsZero() {
+		if err := s.repo.ClearAccessLost(ctx, s.db, conn.ID); err != nil {
+			httpserver.LoggerFrom(ctx).Warn("access-lost mark not cleared",
+				slog.String("account_id", conn.ID.String()),
+				slog.String("error", err.Error()))
+		}
 	}
 	s.keepRotatedToken(ctx, conn, refresh, tokens.Refresh)
 	return tokens.Access, nil

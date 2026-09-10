@@ -848,6 +848,23 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			return nil
 		},
 	})
+	// Журнал доставок интеграции старше срока хранения (INTEGRATIONS.md §12):
+	// диагностика месячной давности не отвечает на вопрос «почему вчера не
+	// уехало», а таблица растёт со скоростью потока ответов.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "integration-delivery-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			n, err := integrationsSvc.CleanupDeliveries(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("integration deliveries purged", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
 	tasks.Start(ctx, periodic.Task{
 		Name:     "verification-token-cleanup",
 		Interval: sessionCleanupInterval,
