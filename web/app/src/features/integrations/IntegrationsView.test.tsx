@@ -359,11 +359,12 @@ describe('оверлей настройки Google Таблиц', () => {
     )
     openSetup()
 
-    // У живого аккаунта действие ровно одно. «Переподключить» — лечение, и вне
-    // беды оно предлагало бы чинить работающее; функционально оно к соседней
-    // ссылке ничего не добавляет (тот же адрес, вся разница — в подсказке).
+    // Действий под списком два, и «Переподключить» стоит ПОСТОЯННО (решение
+    // владельца 2026-09-10): знание о смерти согласия всегда запаздывает — её
+    // видно только в момент доставки, — и кнопка «по признаку поломки» не
+    // появлялась ровно тогда, когда была нужна.
     expect(screen.getByRole('button', { name: /подключить другой аккаунт/i })).toBeTruthy()
-    expect(screen.queryByRole('button', { name: /^переподключить$/i })).toBeNull()
+    expect(screen.getByRole('button', { name: /^переподключить$/i })).toBeTruthy()
     // Отключения здесь нет и быть не должно: оно рвёт аккаунт целиком и уносит
     // каскадом связки других форм и пространств, а окно — про одну связку.
     expect(screen.queryByRole('button', { name: /отключить/i })).toBeNull()
@@ -403,6 +404,30 @@ describe('оверлей настройки Google Таблиц', () => {
     expect(screen.getByText(/персональные данные/i)).toBeTruthy()
     const go = screen.getByRole('link', { name: /^подключить заново$/i })
     expect(go.getAttribute('href')).toContain(`accountId=${ACCOUNT_ID}`)
+  })
+
+  // Мёртвое подключение обязано быть видно В СПИСКЕ, а не только в предупреждении
+  // под ним: аккаунт выбирают раньше, чем читают текст, и выбрать мёртвый рядом с
+  // живым — это потерянные ответы.
+  it('аккаунт с потерянным доступом помечен в самом списке', () => {
+    renderView(
+      state({
+        account: {
+          ...CONNECTED,
+          accounts: [
+            account({ needsReconnect: true }),
+            account({ id: 'acc-2', email: 'work@gmail.com' }),
+          ],
+        },
+      }),
+    )
+    openSetup()
+    fireEvent.click(screen.getByLabelText('Аккаунт Google'))
+
+    expect(
+      screen.getByRole('option', { name: /author@gmail.com — нужно переподключить/i }),
+    ).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'work@gmail.com' })).toBeTruthy()
   })
 
   // Шаг — не тупик: с него можно вернуться к настройкам, не закрывая окно.
