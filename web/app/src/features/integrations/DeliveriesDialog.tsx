@@ -65,9 +65,7 @@ export function DeliveriesDialog({
       <DialogContent className="sm:max-w-2xl">
         <DialogHeader>
           <DialogTitle>Журнал доставок</DialogTitle>
-          <DialogDescription>
-            Что уезжало в таблицу за последний месяц. Записи старше месяца удаляются.
-          </DialogDescription>
+          <DialogDescription>События за последний месяц</DialogDescription>
         </DialogHeader>
 
         {log.isPending ? (
