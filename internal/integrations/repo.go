@@ -508,6 +508,18 @@ func (Repo) GetDelivery(ctx context.Context, db postgres.DBTX, id, linkID uuid.U
 	return toDelivery(row), nil
 }
 
+// SubmissionDelivered — доезжал ли этот ответ в лист связки хоть раз.
+func (Repo) SubmissionDelivered(ctx context.Context, db postgres.DBTX, linkID, submissionID uuid.UUID) (bool, error) {
+	ok, err := postgres.New(db).SubmissionAlreadyDelivered(ctx, postgres.SubmissionAlreadyDeliveredParams{
+		LinkID:       linkID,
+		SubmissionID: pgtype.UUID{Bytes: submissionID, Valid: submissionID != uuid.Nil},
+	})
+	if err != nil {
+		return false, fmt.Errorf("submission already delivered: %w", err)
+	}
+	return ok, nil
+}
+
 // DeleteOldDeliveries убирает записи старше границы и отдаёт их число — задаче
 // уборки есть что написать в лог.
 func (Repo) DeleteOldDeliveries(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error) {

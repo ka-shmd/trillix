@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Check, RotateCw, SkipForward, TriangleAlert } from 'lucide-react'
 
@@ -49,6 +50,14 @@ export function DeliveriesDialog({
     enabled: open,
   })
   const retry = useRetryDelivery(formId, connection.id)
+  // queued — строки, повтор которых УЖЕ поставлен в очередь в этом окне.
+  //
+  // ⚠ Без этого второй клик кладёт в чужую таблицу второй экземпляр ответа:
+  // сервер отвечает 202 сразу (событие поставлено, а не доставлено), кнопка
+  // разблокируется, а диспетчер просыпается только через 15 секунд — и оба
+  // события доезжают. Серверный гейт от этого не спасает: он смотрит, доехал ли
+  // ответ, а на момент второго клика не доехал ещё ни разу.
+  const [queued, setQueued] = useState<string[]>([])
   const rows = log.data?.pages.flatMap((p) => p.deliveries) ?? []
 
   return (
@@ -82,9 +91,13 @@ export function DeliveriesDialog({
                          гасятся первой же проверкой доставки, и кнопка молча
                          ничего не дала бы. Сервер такой повтор и отвергает —
                          здесь мы просто не предлагаем тупик. */
-                      canRetry={connection.status !== 'broken'}
+                      canRetry={connection.status !== 'broken' && !queued.includes(d.id)}
                       retrying={retry.isPending && retry.variables === d.id}
-                      onRetry={() => retry.mutate(d.id)}
+                      onRetry={() =>
+                        retry.mutate(d.id, {
+                          onSuccess: () => setQueued((ids) => [...ids, d.id]),
+                        })
+                      }
                     />
                   </li>
                 ))}

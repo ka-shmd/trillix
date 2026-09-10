@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -1328,8 +1329,25 @@ func (f *fakeStore) InsertDelivery(_ context.Context, _ postgres.DBTX, d integra
 	if f.deliveryLogErr != nil {
 		return f.deliveryLogErr
 	}
+	// Фейк повторяет CHECK integration_deliveries_subject: вид события и его
+	// предмет — один факт. Без этого зеркала запись с чужим предметом проходит в
+	// юнитах и молча отвергается настоящей базой, а отказ журнала намеренно не
+	// роняет доставку — то есть в ленте просто не появлялось бы строки.
+	subject := (d.Kind == integrations.DeliveryKindSubmission) == (d.SubmissionID != uuid.Nil)
+	if !subject {
+		return fmt.Errorf("нарушен инвариант «вид ↔ предмет»: %s / %s", d.Kind, d.SubmissionID)
+	}
 	f.deliveries = append(f.deliveries, d)
 	return nil
+}
+
+func (f *fakeStore) SubmissionDelivered(_ context.Context, _ postgres.DBTX, linkID, submissionID uuid.UUID) (bool, error) {
+	for _, d := range f.deliveries {
+		if d.LinkID == linkID && d.SubmissionID == submissionID && d.Outcome == integrations.OutcomeDelivered {
+			return true, nil
+		}
+	}
+	return false, nil
 }
 
 func (f *fakeStore) ListDeliveries(_ context.Context, _ postgres.DBTX, linkID, cursor uuid.UUID, limit int32) ([]integrations.Delivery, error) {

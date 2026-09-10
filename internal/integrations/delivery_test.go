@@ -1013,3 +1013,93 @@ func TestStatus_AccessLostAsksToReconnect(t *testing.T) {
 		t.Fatalf("аккаунты = %+v, ждали пометку «нужно переподключить»", st.Accounts)
 	}
 }
+
+// ⚠ Повтор спрашивает судьбу ОТВЕТА, а не исход строки, по которой нажали.
+//
+// Строка журнала = одна попытка, и у ответа, доехавшего со второго раза
+// (503 → бэкофф → успех), первая навсегда остаётся неудачной. Гейт по её исходу
+// держал бы живую кнопку «Повторить» под ответом, который в таблице уже лежит.
+func TestRetryDelivery_RefusesWhenAnswerAlreadyInSheet(t *testing.T) {
+	link := linkedSheet()
+	failed := integrations.Delivery{
+		ID: uuid.New(), LinkID: link.ID, Kind: integrations.DeliveryKindSubmission,
+		SubmissionID: testSubmission, Outcome: integrations.OutcomeFailed,
+		Detail: "Записать в таблицу не удалось, попробуем ещё раз позже.",
+	}
+	// Та же строка ответа доехала следующей попыткой.
+	ok := integrations.Delivery{
+		ID: uuid.New(), LinkID: link.ID, Kind: integrations.DeliveryKindSubmission,
+		SubmissionID: testSubmission, Outcome: integrations.OutcomeDelivered, RowCount: 1,
+	}
+	store := &fakeStore{link: link, conn: sealedConn(t), deliveries: []integrations.Delivery{failed, ok}}
+	out := &fakeOutbox{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{}).
+		WithDelivery(out, &fakeSubmissions{})
+
+	err := svc.RetryDelivery(context.Background(), testUser, testForm, link.ID, failed.ID)
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("ошибка = %v, ожидался отказ: ответ уже в таблице", err)
+	}
+	if out.channel != "" {
+		t.Fatal("событие поставлено — ответ ляжет в чужой лист вторым разом")
+	}
+}
+
+// Повтор неудачи, которая ничем не кончилась, по-прежнему работает: гейт про
+// доехавший ответ, а не про наличие неудачных строк.
+func TestRetryDelivery_RepeatsWhenAnswerNeverArrived(t *testing.T) {
+	link := linkedSheet()
+	failed := integrations.Delivery{
+		ID: uuid.New(), LinkID: link.ID, Kind: integrations.DeliveryKindSubmission,
+		SubmissionID: testSubmission, Outcome: integrations.OutcomeFailed,
+	}
+	store := &fakeStore{link: link, conn: sealedConn(t), deliveries: []integrations.Delivery{failed}}
+	out := &fakeOutbox{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, &fakeProvider{}).
+		WithDelivery(out, &fakeSubmissions{})
+
+	if err := svc.RetryDelivery(context.Background(), testUser, testForm, link.ID, failed.ID); err != nil {
+		t.Fatalf("повтор: %v", err)
+	}
+	if out.channel != integrations.ChannelSheets {
+		t.Fatal("событие не поставлено")
+	}
+}
+
+// ⚠ У события ПЕРЕНОСА свой предмет: диапазон, а не строка. Запись с видом
+// «ответ» и нулевым id отвергается схемой, а отказ журнала намеренно не роняет
+// доставку — значит, строки в ленте просто не было бы, и молча.
+func TestDeliverBackfill_SkippedEventKeepsItsKind(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBroken
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("событие ушло на ретрай: %v", err)
+	}
+	if len(store.deliveries) != 1 {
+		t.Fatalf("записей в журнале %d, ждали одну: %+v", len(store.deliveries), store.deliveries)
+	}
+	got := store.deliveries[0]
+	if got.Kind != integrations.DeliveryKindBackfill || got.SubmissionID != uuid.Nil {
+		t.Fatalf("предмет записи = %q/%s, ждали пачку переноса", got.Kind, got.SubmissionID)
+	}
+}
+
+// Смерть подключения замечает ЛЮБОЙ поход к провайдеру, а не только доставка:
+// перезалив, перепроверка, список таблиц идут тем же путём за токеном. Иначе
+// знание об отзыве согласия зависело бы от того, каким путём мы за ним пошли.
+func TestRefillForm_AccessLostMarksAccount(t *testing.T) {
+	link := linkedSheet()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{refreshErr: integrations.ErrAccessLost}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
+
+	if err := svc.RefillForm(context.Background(), testUser, testForm, link.ID); err == nil {
+		t.Fatal("перезалив мёртвым аккаунтом прошёл успешно")
+	}
+	if store.accessLostAt.IsZero() {
+		t.Fatal("подключение не помечено мёртвым — экран продолжит показывать его рабочим")
+	}
+}

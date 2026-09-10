@@ -311,7 +311,18 @@ type deliveryRef struct {
 	submissionID uuid.UUID
 }
 
+// refOf читает предмет из САМОГО события, а не подразумевает живой ответ.
+//
+// ⚠ Мина: у пачки переноса `SubmissionID` нулевой, и запись с видом
+// `submission` отвергается схемой (CHECK `integration_deliveries_subject`).
+// Отказ записи доставку не роняет (см. `logDelivery`) — значит, ошибка была бы
+// тихой: у переноса, погасшего на сломанной связке или на ушедшем из
+// пространства владельце, в ленте просто не появлялось бы строки. Ровно той,
+// ради которой журнал и открывают.
 func refOf(p sheetsPayload) deliveryRef {
+	if p.Backfill {
+		return deliveryRef{kind: DeliveryKindBackfill}
+	}
 	return deliveryRef{kind: DeliveryKindSubmission, submissionID: p.SubmissionID}
 }
 
@@ -353,21 +364,6 @@ func (s *Service) deliveryFailed(ctx context.Context, link FormLink, ref deliver
 		return cause
 	}
 	s.logDelivery(ctx, link.ID, ref, OutcomeFailed, brokenReason(cause), 0)
-	// Умер не лист, а ПОДКЛЮЧЕНИЕ: провайдер отказал в обновлении токена. Пометка
-	// ложится на аккаунт, потому что не работает ни одна его связка — во всех
-	// формах и пространствах, а не только в той, где как раз пришёл ответ. Без
-	// неё мёртвый аккаунт выглядел бы рабочим везде, кроме этой одной формы
-	// (задача владельца 2026-09-10).
-	//
-	// Неудача пометки не роняет разбор отказа: связку всё равно надо покраснить,
-	// а пометка догонит следующей доставкой.
-	if errors.Is(cause, ErrAccessLost) {
-		if err := s.repo.MarkAccessLost(ctx, s.db, link.AccountID, time.Now()); err != nil {
-			httpserver.LoggerFrom(ctx).Warn("access-lost mark not stored",
-				slog.String("account_id", link.AccountID.String()),
-				slog.String("error", err.Error()))
-		}
-	}
 	httpserver.LoggerFrom(ctx).Warn("integration marked broken",
 		slog.String("form_id", link.FormID.String()),
 		slog.String("error", cause.Error()))

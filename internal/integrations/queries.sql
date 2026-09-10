@@ -231,6 +231,17 @@ SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
 FROM integration_deliveries
 WHERE id = $1 AND link_id = $2;
 
+-- name: SubmissionAlreadyDelivered :one
+-- Доехал ли ЭТОТ ответ в лист этой связки хоть раз. Спрашивается перед
+-- повтором, и вопрос именно такой, а не «чем кончилась вот эта попытка»:
+-- строка журнала = одна попытка, и у ответа, доехавшего со второго раза, первая
+-- навсегда остаётся неудачной. Гейт по её исходу разрешал бы класть в чужую
+-- таблицу второй экземпляр ответа, который там уже лежит.
+SELECT EXISTS (
+    SELECT 1 FROM integration_deliveries
+    WHERE link_id = $1 AND submission_id = $2 AND outcome = 'delivered'
+);
+
 -- name: DeleteOldIntegrationDeliveries :execrows
 -- Уборка журнала по возрасту (задача integration-delivery-cleanup). Это уборка
 -- места, а не защита: диагностика месячной давности никому не отвечает на

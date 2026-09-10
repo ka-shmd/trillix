@@ -6072,6 +6072,30 @@ func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFor
 	return err
 }
 
+const submissionAlreadyDelivered = `-- name: SubmissionAlreadyDelivered :one
+SELECT EXISTS (
+    SELECT 1 FROM integration_deliveries
+    WHERE link_id = $1 AND submission_id = $2 AND outcome = 'delivered'
+)
+`
+
+type SubmissionAlreadyDeliveredParams struct {
+	LinkID       uuid.UUID
+	SubmissionID pgtype.UUID
+}
+
+// Доехал ли ЭТОТ ответ в лист этой связки хоть раз. Спрашивается перед
+// повтором, и вопрос именно такой, а не «чем кончилась вот эта попытка»:
+// строка журнала = одна попытка, и у ответа, доехавшего со второго раза, первая
+// навсегда остаётся неудачной. Гейт по её исходу разрешал бы класть в чужую
+// таблицу второй экземпляр ответа, который там уже лежит.
+func (q *Queries) SubmissionAlreadyDelivered(ctx context.Context, arg SubmissionAlreadyDeliveredParams) (bool, error) {
+	row := q.db.QueryRow(ctx, submissionAlreadyDelivered, arg.LinkID, arg.SubmissionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
+}
+
 const takenSeatsAt = `-- name: TakenSeatsAt :one
 SELECT coalesce(sum(seats), 0)::bigint
 FROM bookings

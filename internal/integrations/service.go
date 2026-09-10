@@ -56,6 +56,7 @@ type Store interface {
 	InsertDelivery(ctx context.Context, db postgres.DBTX, d Delivery) error
 	ListDeliveries(ctx context.Context, db postgres.DBTX, linkID, cursor uuid.UUID, limit int32) ([]Delivery, error)
 	GetDelivery(ctx context.Context, db postgres.DBTX, id, linkID uuid.UUID) (Delivery, error)
+	SubmissionDelivered(ctx context.Context, db postgres.DBTX, linkID, submissionID uuid.UUID) (bool, error)
 	DeleteOldDeliveries(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error)
 }
 
@@ -846,7 +847,16 @@ func (s *Service) RetryDelivery(ctx context.Context, userID, formID, linkID, del
 	if d.Kind != DeliveryKindSubmission || d.SubmissionID == uuid.Nil {
 		return fmt.Errorf("%w: повторить можно только доставку одного ответа", domain.ErrValidation)
 	}
-	if d.Outcome == OutcomeDelivered {
+	// ⚠ Спрашивается судьба ОТВЕТА, а не исход этой записи. Строка журнала = одна
+	// попытка, и у ответа, доехавшего со второго раза (503 → бэкофф → успех),
+	// первая навсегда остаётся неудачной: гейт по её исходу держал бы живую
+	// кнопку «Повторить» под ответом, который в таблице уже лежит, — и клик клал
+	// бы туда второй экземпляр. У `values.append` идемпотентности нет.
+	delivered, err := s.repo.SubmissionDelivered(ctx, s.db, link.ID, d.SubmissionID)
+	if err != nil {
+		return err
+	}
+	if delivered {
 		return fmt.Errorf("%w: этот ответ уже в таблице", domain.ErrValidation)
 	}
 	if link.Status == StatusBroken {
@@ -1146,6 +1156,23 @@ func (s *Service) accessToken(ctx context.Context, conn Connection) (string, err
 	}
 	tokens, err := s.google.Refresh(ctx, refresh)
 	if err != nil {
+		// Умер не лист, а ПОДКЛЮЧЕНИЕ: не работает ни одна его связка, во всех
+		// формах и пространствах. Пометка стоит ЗДЕСЬ, а не на разборе отказа
+		// доставки, потому что сюда сходятся ВСЕ походы к провайдеру: перезалив,
+		// перепроверка, список таблиц, окно выбора файла. Знание о смерти
+		// аккаунта не должно зависеть от того, каким путём мы за ним пошли, —
+		// тем более что снимается пометка тоже здесь (ниже), и односторонняя
+		// симметрия однажды оставила бы аккаунт красным навсегда.
+		//
+		// Неудача пометки не роняет операцию: у вызывающего своя беда, а пометка
+		// догонит следующим походом (запись идемпотентна — держит ПЕРВЫЙ момент).
+		if errors.Is(err, ErrAccessLost) {
+			if markErr := s.repo.MarkAccessLost(ctx, s.db, conn.ID, time.Now()); markErr != nil {
+				httpserver.LoggerFrom(ctx).Warn("access-lost mark not stored",
+					slog.String("account_id", conn.ID.String()),
+					slog.String("error", markErr.Error()))
+			}
+		}
 		return "", err
 	}
 	// Согласие вернули (или мы ошиблись, пометив) — гасим пометку здесь, а не
