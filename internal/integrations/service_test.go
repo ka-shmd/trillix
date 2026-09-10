@@ -263,11 +263,11 @@ type fakeProvider struct {
 	// sheetHeader — шапка, которая СЕЙЧАС в листе. Отдельно от header (что мы в
 	// него записали): лист принадлежит автору, и он вправе переставить колонки —
 	// ровно это и проверяется. nil = лист без шапки.
-	sheetHeader  []string
-	appended     [][]string
-	appendCalls  int
-	cleared      string
-	appendErr    error
+	sheetHeader []string
+	appended    [][]string
+	appendCalls int
+	cleared     string
+	appendErr   error
 	// refreshErr — провайдер отказал в обновлении токена. Отдельно от appendErr:
 	// отказ ТОКЕН-ручки означает смерть подключения, отказ ручки данных — беду
 	// одной таблицы, и путать их дорого.
