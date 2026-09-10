@@ -90,6 +90,15 @@ type fakeStore struct {
 	backfillFrom    *time.Time
 	backfillDone    bool
 	sheetCleared    bool
+
+	// deliveries — журнал попыток доставки, как его видит связка. Порядок
+	// вставки: тесты проверяют исход последней попытки и их число.
+	deliveries []integrations.Delivery
+	// deliveryLogErr — журнал не пишется. Проверка мины: отказ записи не имеет
+	// права уронить саму доставку.
+	deliveryLogErr error
+	// deletedBefore — граница уборки журнала, с которой её позвали.
+	deletedBefore time.Time
 }
 
 func (f *fakeStore) Upsert(_ context.Context, _ postgres.DBTX, c integrations.NewConnection) (uuid.UUID, error) {
@@ -1302,4 +1311,55 @@ func sealedRefreshToken(t *testing.T) []byte {
 		t.Fatalf("connect: %v", err)
 	}
 	return store.upserted.RefreshSealed
+}
+
+func (f *fakeStore) InsertDelivery(_ context.Context, _ postgres.DBTX, d integrations.Delivery) error {
+	if f.deliveryLogErr != nil {
+		return f.deliveryLogErr
+	}
+	f.deliveries = append(f.deliveries, d)
+	return nil
+}
+
+func (f *fakeStore) ListDeliveries(_ context.Context, _ postgres.DBTX, linkID, cursor uuid.UUID, limit int32) ([]integrations.Delivery, error) {
+	out := make([]integrations.Delivery, 0, len(f.deliveries))
+	// Лента отдаётся новыми сверху, как в SQL: обходим с конца.
+	for i := len(f.deliveries) - 1; i >= 0; i-- {
+		d := f.deliveries[i]
+		if d.LinkID != linkID {
+			continue
+		}
+		if cursor != uuid.Nil && d.ID.String() >= cursor.String() {
+			continue
+		}
+		out = append(out, d)
+		if int32(len(out)) == limit {
+			break
+		}
+	}
+	return out, nil
+}
+
+func (f *fakeStore) GetDelivery(_ context.Context, _ postgres.DBTX, id, linkID uuid.UUID) (integrations.Delivery, error) {
+	for _, d := range f.deliveries {
+		if d.ID == id && d.LinkID == linkID {
+			return d, nil
+		}
+	}
+	return integrations.Delivery{}, pgx.ErrNoRows
+}
+
+func (f *fakeStore) DeleteOldDeliveries(_ context.Context, _ postgres.DBTX, before time.Time) (int64, error) {
+	f.deletedBefore = before
+	kept := f.deliveries[:0]
+	var n int64
+	for _, d := range f.deliveries {
+		if d.CreatedAt.Before(before) {
+			n++
+			continue
+		}
+		kept = append(kept, d)
+	}
+	f.deliveries = kept
+	return n, nil
 }

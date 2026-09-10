@@ -126,6 +126,8 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 	if link.Status == StatusBroken {
 		// Интеграция уже помечена сломанной: причина показана человеку, лечение —
 		// переподключение и перезалив. Копить события до тех пор незачем.
+		s.logDelivery(ctx, link.ID, refOf(p), OutcomeSkipped,
+			"Связка сломана, поэтому ответ в таблицу не отправлен. Исправьте причину и повторите отправку.", 0)
 		return nil
 	}
 	// Человек, чьим аккаунтом едет связка, всё ещё в пространстве формы?
@@ -147,6 +149,8 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 		httpserver.LoggerFrom(ctx).Warn("integration owner left the workspace",
 			slog.String("link_id", link.ID.String()),
 			slog.String("workspace_id", link.WorkspaceID.String()))
+		s.logDelivery(ctx, link.ID, refOf(p), OutcomeSkipped,
+			"Владелец подключения Google больше не участник пространства — ответ в таблицу не отправлен.", 0)
 		return s.repo.MarkBroken(ctx, s.db, link.ID,
 			"Доступ к пространству у владельца этого подключения Google снят — ответы в таблицу больше не уезжают. "+
 				"Заведите связку заново своим аккаунтом.")
@@ -164,15 +168,23 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 		// Связку выключили, пока событие ждало. Тумблер — это «не доставлять»,
 		// а не «доставить позже»: копить события до его возврата значит однажды
 		// вывалить в таблицу всё разом.
+		s.logDelivery(ctx, link.ID, refOf(p), OutcomeSkipped,
+			"Связка была выключена, когда пришёл этот ответ, — в таблицу он не уехал.", 0)
 		return nil
 	}
 	if link.Status == StatusBackfilling {
+		// В журнал НЕ пишется: это состояние очереди, а не исход попытки. Живых
+		// событий во время переноса накапливается сколько угодно, каждое ретраится
+		// по бэкоффу, и лента заполнилась бы одной и той же строкой — при том что
+		// идущий перенос виден статусом связки.
 		return errBackfillPending
 	}
 
 	record, err := s.submissions.SheetRow(ctx, link.FormID, p.SubmissionID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Ответ удалён автором или скрыт тарифом (over_quota) — доставлять нечего.
+		s.logDelivery(ctx, link.ID, refOf(p), OutcomeSkipped,
+			"Ответ удалён или скрыт лимитом тарифа — отправлять было нечего.", 0)
 		return nil
 	}
 	if err != nil {
@@ -186,6 +198,8 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 	// конца: без этой проверки та же строка легла бы в лист дважды, а лечение —
 	// перезалив — из интерфейса сейчас недоступно.
 	if !link.BackfillBefore.IsZero() && record.CreatedAt.Before(link.BackfillBefore) {
+		s.logDelivery(ctx, link.ID, refOf(p), OutcomeSkipped,
+			"Этот ответ уже лежит в таблице — его положил перенос накопленных.", 0)
 		return nil
 	}
 
@@ -195,19 +209,20 @@ func (s *Service) Deliver(ctx context.Context, payload []byte) error {
 	}
 	token, err := s.accessToken(ctx, conn)
 	if err != nil {
-		return s.deliveryFailed(ctx, link, err)
+		return s.deliveryFailed(ctx, link, refOf(p), err)
 	}
 
 	// Колонки листа могли отстать от формы: в ней появился новый вопрос.
 	columns, err := s.reconcileColumns(ctx, token, link, record.Columns)
 	if err != nil {
-		return s.deliveryFailed(ctx, link, err)
+		return s.deliveryFailed(ctx, link, refOf(p), err)
 	}
 
 	row := alignRow(columns, record)
 	if err := s.google.AppendRow(ctx, token, spreadsheetOf(link), row); err != nil {
-		return s.deliveryFailed(ctx, link, err)
+		return s.deliveryFailed(ctx, link, refOf(p), err)
 	}
+	s.logDelivery(ctx, link.ID, refOf(p), OutcomeDelivered, "", 1)
 	return s.repo.MarkDelivered(ctx, s.db, link.ID)
 }
 
@@ -253,14 +268,15 @@ func (s *Service) deliverBackfill(ctx context.Context, link FormLink, after uuid
 	if err != nil {
 		return err
 	}
+	ref := deliveryRef{kind: DeliveryKindBackfill}
 	token, err := s.accessToken(ctx, conn)
 	if err != nil {
-		return s.deliveryFailed(ctx, link, err)
+		return s.deliveryFailed(ctx, link, ref, err)
 	}
 
 	columns, err := s.reconcileColumns(ctx, token, link, page.Columns)
 	if err != nil {
-		return s.deliveryFailed(ctx, link, err)
+		return s.deliveryFailed(ctx, link, ref, err)
 	}
 
 	if len(page.Rows) > 0 {
@@ -269,8 +285,11 @@ func (s *Service) deliverBackfill(ctx context.Context, link FormLink, after uuid
 			rows = append(rows, alignRow(columns, submissions.SheetRecord{Columns: page.Columns, Row: r.Values}))
 		}
 		if err := s.google.AppendRows(ctx, token, spreadsheetOf(link), rows); err != nil {
-			return s.deliveryFailed(ctx, link, err)
+			return s.deliveryFailed(ctx, link, ref, err)
 		}
+		// Пустая пачка следа не оставляет: переносить было нечего, и строка
+		// «0 ответов» в ленте — не история, а шум на каждой смене цели.
+		s.logDelivery(ctx, link.ID, ref, OutcomeDelivered, "", int32(len(page.Rows)))
 		if err := s.repo.MarkDelivered(ctx, s.db, link.ID); err != nil {
 			return err
 		}
@@ -284,12 +303,56 @@ func (s *Service) deliverBackfill(ctx context.Context, link FormLink, after uuid
 	return s.enqueueBackfill(ctx, s.db, link.ID, page.Rows[len(page.Rows)-1].ID)
 }
 
+// deliveryRef — предмет попытки: что именно везли. Журналу он нужен (лента
+// показывает, за каким ответом ходили), доставке — нет, поэтому он ездит рядом с
+// link, а не внутри неё.
+type deliveryRef struct {
+	kind         string
+	submissionID uuid.UUID
+}
+
+func refOf(p sheetsPayload) deliveryRef {
+	return deliveryRef{kind: DeliveryKindSubmission, submissionID: p.SubmissionID}
+}
+
+// logDelivery пишет попытку в журнал (docs/INTEGRATIONS.md §12).
+//
+// ⚠ Мина: отказ ЗАПИСИ В ЖУРНАЛ не имеет права уронить доставку — поэтому у
+// метода нет возвращаемой ошибки. Верните её наверх, и успешно уехавшая строка
+// отправится на ретрай по общему бэкоффу, а `values.append` идемпотентности не
+// знает: тот же ответ ляжет в чужой лист вторым разом ради записи в наш журнал.
+//
+// Ошибки нашей же БД на пути доставки (аккаунт не читается, строка ответа не
+// собирается) сюда не попадают вовсе: это отказ не доставки, а нас самих, и его
+// место в логе процесса, а не в ленте у автора формы.
+func (s *Service) logDelivery(ctx context.Context, linkID uuid.UUID, ref deliveryRef, outcome, detail string, rows int32) {
+	err := s.repo.InsertDelivery(ctx, s.db, Delivery{
+		ID:           domain.NewID(),
+		LinkID:       linkID,
+		Kind:         ref.kind,
+		SubmissionID: ref.submissionID,
+		Outcome:      outcome,
+		Detail:       detail,
+		RowCount:     rows,
+	})
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Error("integration delivery log write failed",
+			slog.String("link_id", linkID.String()),
+			slog.String("error", err.Error()))
+	}
+}
+
 // deliveryFailed разбирает отказ: окончательный помечает интеграцию сломанной и
-// ГАСИТ событие (nil), временный уходит на ретрай.
-func (s *Service) deliveryFailed(ctx context.Context, link FormLink, cause error) error {
+// ГАСИТ событие (nil), временный уходит на ретрай. Оба пишутся в журнал: для
+// автора формы разница между «больше не поедет» и «поедет позже» — это разница
+// между «идти чинить» и «ждать».
+func (s *Service) deliveryFailed(ctx context.Context, link FormLink, ref deliveryRef, cause error) error {
 	if !errors.Is(cause, ErrPermanent) {
+		s.logDelivery(ctx, link.ID, ref, OutcomeFailed,
+			"Записать в таблицу не удалось, попробуем ещё раз позже.", 0)
 		return cause
 	}
+	s.logDelivery(ctx, link.ID, ref, OutcomeFailed, brokenReason(cause), 0)
 	httpserver.LoggerFrom(ctx).Warn("integration marked broken",
 		slog.String("form_id", link.FormID.String()),
 		slog.String("error", cause.Error()))

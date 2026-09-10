@@ -50,6 +50,10 @@ type Store interface {
 	MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error
 	ClearError(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+	InsertDelivery(ctx context.Context, db postgres.DBTX, d Delivery) error
+	ListDeliveries(ctx context.Context, db postgres.DBTX, linkID, cursor uuid.UUID, limit int32) ([]Delivery, error)
+	GetDelivery(ctx context.Context, db postgres.DBTX, id, linkID uuid.UUID) (Delivery, error)
+	DeleteOldDeliveries(ctx context.Context, db postgres.DBTX, before time.Time) (int64, error)
 }
 
 var _ Store = Repo{}

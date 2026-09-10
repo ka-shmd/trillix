@@ -729,3 +729,190 @@ func TestDeliver_DeliversSubmissionAfterBackfill(t *testing.T) {
 		t.Fatalf("свежий ответ не доставлен: %v", provider.appended)
 	}
 }
+
+// Журнал доставок: у каждой попытки свой исход, и он попадает в ленту связки.
+//
+// Проверяется исход, а не текст: тексты правятся, а вопрос «что стало с этим
+// ответом» — нет.
+func TestDeliver_WritesDeliveryLog(t *testing.T) {
+	cases := []struct {
+		name    string
+		store   func() *fakeStore
+		subs    *fakeSubmissions
+		provide func() *fakeProvider
+		outcome string
+	}{
+		{
+			name:    "доставлено",
+			store:   func() *fakeStore { return &fakeStore{link: linkedSheet(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{record: submissions.SheetRecord{Columns: linkedSheet().Columns, Row: []string{"018f", "Аня", "a@b.c"}}},
+			provide: func() *fakeProvider { return &fakeProvider{header: headerOf(linkedSheet())} },
+			outcome: integrations.OutcomeDelivered,
+		},
+		{
+			name:    "окончательный отказ",
+			store:   func() *fakeStore { return &fakeStore{link: linkedSheet(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{},
+			provide: func() *fakeProvider { return &fakeProvider{appendErr: integrations.ErrPermanent} },
+			outcome: integrations.OutcomeFailed,
+		},
+		{
+			name:    "временный отказ",
+			store:   func() *fakeStore { return &fakeStore{link: linkedSheet(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{},
+			provide: func() *fakeProvider { return &fakeProvider{appendErr: errors.New("статус 503")} },
+			outcome: integrations.OutcomeFailed,
+		},
+		{
+			name:    "связка выключена",
+			store:   func() *fakeStore { return &fakeStore{link: disabledLink(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{},
+			provide: func() *fakeProvider { return &fakeProvider{} },
+			outcome: integrations.OutcomeSkipped,
+		},
+		{
+			name:    "ответа больше нет",
+			store:   func() *fakeStore { return &fakeStore{link: linkedSheet(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{err: pgx.ErrNoRows},
+			provide: func() *fakeProvider { return &fakeProvider{} },
+			outcome: integrations.OutcomeSkipped,
+		},
+		{
+			name:    "связка сломана",
+			store:   func() *fakeStore { return &fakeStore{link: brokenLink(), conn: sealedConn(t)} },
+			subs:    &fakeSubmissions{},
+			provide: func() *fakeProvider { return &fakeProvider{} },
+			outcome: integrations.OutcomeSkipped,
+		},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			store := c.store()
+			svc := deliveryService(store, c.provide(), c.subs, &fakeOutbox{})
+
+			_ = svc.Deliver(context.Background(), payload(t, store.link.ID))
+
+			if len(store.deliveries) != 1 {
+				t.Fatalf("записей в журнале %d, ждали одну: %+v", len(store.deliveries), store.deliveries)
+			}
+			got := store.deliveries[0]
+			if got.Outcome != c.outcome {
+				t.Errorf("исход = %q, ждали %q (текст: %q)", got.Outcome, c.outcome, got.Detail)
+			}
+			if got.LinkID != store.link.ID {
+				t.Errorf("запись адресована связке %s вместо %s", got.LinkID, store.link.ID)
+			}
+			if got.Kind != integrations.DeliveryKindSubmission || got.SubmissionID != testSubmission {
+				t.Errorf("предмет попытки = %q/%s", got.Kind, got.SubmissionID)
+			}
+			if got.Outcome != integrations.OutcomeDelivered && got.Detail == "" {
+				t.Error("неуспех без текста: автору формы нечего прочитать")
+			}
+		})
+	}
+}
+
+// Отвязанная связка следа не оставляет: писать некуда (строки журнала висят на
+// её id), да и незачем.
+func TestDeliver_UnlinkedFormWritesNothing(t *testing.T) {
+	store := &fakeStore{linkErr: pgx.ErrNoRows}
+	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, uuid.New())); err != nil {
+		t.Fatalf("событие ушло на ретрай: %v", err)
+	}
+	if len(store.deliveries) != 0 {
+		t.Fatalf("в журнал что-то записано: %+v", store.deliveries)
+	}
+}
+
+// ⚠ Мина: отказ ЗАПИСИ В ЖУРНАЛ не имеет права уронить доставку. Уронит — и
+// успешно уехавшая строка вернётся по бэкоффу и ляжет в чужой лист вторым разом
+// (у values.append нет идемпотентности).
+func TestDeliver_LogFailureDoesNotBreakDelivery(t *testing.T) {
+	store := &fakeStore{link: linkedSheet(), conn: sealedConn(t), deliveryLogErr: errors.New("база недоступна")}
+	provider := &fakeProvider{header: headerOf(linkedSheet())}
+	subs := &fakeSubmissions{record: submissions.SheetRecord{Columns: linkedSheet().Columns, Row: []string{"018f", "Аня", "a@b.c"}}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, store.link.ID)); err != nil {
+		t.Fatalf("доставка упала из-за журнала: %v", err)
+	}
+	if len(provider.appended) != 1 {
+		t.Fatalf("строк в листе %d, ждали одну", len(provider.appended))
+	}
+	if !store.delivered {
+		t.Error("доставка не помечена успешной")
+	}
+}
+
+// Перенос пишется своим видом и числом строк: «уехало 200 ответов» — это одна
+// строка ленты, а не двести.
+func TestDeliverBackfill_WritesBatchToLog(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBackfilling
+	link.BackfillBefore = time.Now()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{header: headerOf(link)}
+	subs := &fakeSubmissions{page: submissions.SheetPage{
+		Columns: link.Columns,
+		Rows: []submissions.SheetRow{
+			{ID: uuid.New(), Values: []string{"018a", "Аня", "a@b.c"}},
+			{ID: uuid.New(), Values: []string{"018b", "Боря", "b@b.c"}},
+		},
+	}}
+	svc := deliveryService(store, provider, subs, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("перенос упал: %v", err)
+	}
+	if len(store.deliveries) != 1 {
+		t.Fatalf("записей в журнале %d, ждали одну: %+v", len(store.deliveries), store.deliveries)
+	}
+	got := store.deliveries[0]
+	if got.Kind != integrations.DeliveryKindBackfill || got.SubmissionID != uuid.Nil {
+		t.Errorf("предмет попытки = %q/%s, ждали пачку без id ответа", got.Kind, got.SubmissionID)
+	}
+	if got.RowCount != 2 {
+		t.Errorf("строк в записи = %d, ждали 2", got.RowCount)
+	}
+}
+
+// Пустая пачка следа не оставляет: переносить было нечего, а строка «0 ответов»
+// в ленте — шум на каждой смене цели.
+func TestDeliverBackfill_EmptyPageWritesNothing(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBackfilling
+	link.BackfillBefore = time.Now()
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	svc := deliveryService(store, &fakeProvider{header: headerOf(link)}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), backfillPayload(t, link.ID, uuid.Nil)); err != nil {
+		t.Fatalf("перенос упал: %v", err)
+	}
+	if len(store.deliveries) != 0 {
+		t.Fatalf("в журнал что-то записано: %+v", store.deliveries)
+	}
+}
+
+// Живое событие во время переноса в журнал НЕ пишется: это состояние очереди, а
+// не исход. Иначе лента заполнилась бы одной строкой на каждом ретрае бэкоффа.
+func TestDeliver_WaitingForBackfillWritesNothing(t *testing.T) {
+	link := linkedSheet()
+	link.Status = integrations.StatusBackfilling
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{}, &fakeOutbox{})
+
+	if err := svc.Deliver(context.Background(), payload(t, link.ID)); err == nil {
+		t.Fatal("живое событие не ушло на ретрай во время переноса")
+	}
+	if len(store.deliveries) != 0 {
+		t.Fatalf("в журнал что-то записано: %+v", store.deliveries)
+	}
+}
+
+func disabledLink() integrations.FormLink {
+	l := linkedSheet()
+	l.Enabled = false
+	return l
+}
