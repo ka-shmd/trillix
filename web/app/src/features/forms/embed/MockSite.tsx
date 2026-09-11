@@ -31,33 +31,35 @@ import { type EmbedMode } from '../embedSnippet'
 // прямоугольником поверх него. Отсюда же требование к заглушкам: они темнее полотна
 // страницы, иначе на сером фоне их нет вовсе.
 //
-// ЦВЕТА — ЛИТЕРАЛЫ ТОКЕНОВ КАБИНЕТА В oklch, а не «какой-то серый»: макет живёт в
-// СВОЁМ документе, наших переменных там нет (взять `var(--muted)` неоткуда), а
-// подобранный на глаз холодный серый рядом с тёплой нейтралью кабинета читался
-// чужим. Значения повторяют `--muted` (полотно страницы), `--border` и `--foreground`
-// из `index.css` — расходятся они только вместе с правкой темы, поэтому сверяться
-// стоит именно с теми строками.
+// ЦВЕТА — ЛИТЕРАЛЫ, СНЯТЫЕ С НЕЙТРАЛЬНОЙ ОСИ КАБИНЕТА: макет живёт в СВОЁМ документе
+// (`srcdoc` фрейма), наших переменных там нет — взять `var(--muted)` неоткуда.
+// Тон и хрома здесь обязаны совпадать с осью `index.css` (сейчас холодная, тон 250,
+// хрома 0.004–0.007), светлоты свои: полотно страницы темнее `--muted`, а заглушки
+// темнее полотна, иначе на сером фоне их не видно.
+//
+// МИНА: машина это НЕ сверяет. Поворот оси в `index.css` сюда не доезжает, и макет
+// молча остаётся прежнего тона — ровно так он и остался тёплым, когда ось ушла в холод.
 const MOCK_STYLES = `
   :root { color-scheme: light }
   body {
     margin: 0;
-    background: oklch(0.945 0.006 80);
-    color: oklch(0.32 0.012 70);
+    background: oklch(0.945 0.004 250);
+    color: oklch(0.32 0.007 250);
     font-family: system-ui, sans-serif;
   }
   .wrap { margin: 20px 130px }
   .nav { display: flex; align-items: center; justify-content: space-between; height: 56px }
-  .logo { width: 132px; height: 40px; background: oklch(0.895 0.007 80); border-radius: 4px }
+  .logo { width: 132px; height: 40px; background: oklch(0.895 0.004 250); border-radius: 4px }
   .menu { display: flex; gap: 20px }
-  .pill { width: 88px; height: 16px; background: oklch(0.895 0.007 80); border-radius: 4px }
+  .pill { width: 88px; height: 16px; background: oklch(0.895 0.004 250); border-radius: 4px }
   .title { margin: 20px 0 0; font-size: 34px; line-height: 1.15; letter-spacing: -0.02em }
   .lead { margin-top: 14px; max-width: 720px }
-  .line { height: 16px; background: oklch(0.885 0.007 80); border-radius: 4px; margin-top: 10px }
+  .line { height: 16px; background: oklch(0.885 0.004 250); border-radius: 4px; margin-top: 10px }
   .line-short { width: 42% }
-  .hero { height: 380px; background: oklch(0.895 0.007 80); border-radius: 4px; margin-top: 40px }
+  .hero { height: 380px; background: oklch(0.895 0.004 250); border-radius: 4px; margin-top: 40px }
   .cards { display: flex; gap: 24px; margin-top: 24px }
   .card { flex: 1; background: oklch(1 0 0); border-radius: 4px; padding: 20px }
-  .thumb { height: 180px; background: oklch(0.925 0.006 80); border-radius: 4px }
+  .thumb { height: 180px; background: oklch(0.925 0.004 250); border-radius: 4px }
   .slot { margin: 32px 0 }
   /* Слот «страницы»: полей нет — фрейм всё равно ложится фиксированным слоем. */
   .slot-bare { margin: 0 }
