@@ -1,10 +1,8 @@
-import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Link } from '@tanstack/react-router'
+import { toast } from 'sonner'
 
-import { formKeys } from '../../keys'
-import { setFormSchedule } from '../../api'
-import { schedulesQueryOptions } from '../../../../shared/schedules/queries'
-import { useFormFacts } from '../formFacts'
+import { humanError } from '../../../../shared/api/errors'
+import { useScheduleChoice } from './scheduleChoice'
 import { SETTING_SELECT, SETTING_SELECT_ITEM, SettingRow } from './settings'
 import {
   Select,
@@ -15,43 +13,28 @@ import {
 } from '@/components/ui/select'
 
 // Расписание вопроса о записи — раздел попапа (этап 16.3): респондент этого выбора не
-// видит, он видит его последствие — свободное время.
-//
-// ⚠ ВЫБОР ХРАНИТСЯ НЕ В СХЕМЕ, А ЖИВОЙ КОЛОНКОЙ forms.schedule_id (ADR §10). Схема
-// замерзает при публикации, и ссылка в ней потребовала бы перепубликации на смену
-// расписания — а живая форма до неё продолжала бы писать в старое. Автор разницы не
-// видит: он кликает блок и выбирает расписание.
-//
-// Отсюда же устройство раздела: он не зовёт updateBlock, как остальные настройки, а
-// патчит саму форму и инвалидирует её деталь.
+// видит, он видит его последствие — свободное время. Вторая точка входа — плашка на
+// полотне, пока расписание не выбрано (SlotControl); выбор у них общий (scheduleChoice.ts).
 export function SlotSettings() {
-  const facts = useFormFacts()
-  const qc = useQueryClient()
-  const schedules = useQuery({
-    ...schedulesQueryOptions(facts?.workspaceId ?? ''),
-    enabled: Boolean(facts?.workspaceId),
-  })
+  const { facts, schedules, choose } = useScheduleChoice()
 
   if (!facts) return null
-  const form = facts
 
-  async function choose(next: string) {
-    // Формы может ещё не быть: расписание автор вправе выбрать первым действием, и
-    // тогда черновик заводит оно само (FormFacts.id — обещание).
-    const formId = typeof form.id === 'string' && form.id !== '' ? form.id : await resolve(form.id)
-    await setFormSchedule(formId, next === NONE ? null : next)
-    // Деталь формы несёт scheduleId — без инвалидации попап показывал бы прежний
-    // выбор до перезагрузки страницы.
-    await qc.invalidateQueries({ queryKey: formKeys.detailAll() })
-  }
-
-  const value = form.scheduleId ?? NONE
+  const value = facts.scheduleId ?? NONE
   const empty = schedules.data?.length === 0
 
   return (
     <>
       <SettingRow label="Расписание">
-        <Select value={value} onValueChange={(next) => void choose(next)} disabled={empty}>
+        <Select
+          value={value}
+          onValueChange={(next) =>
+            choose(next === NONE ? null : next).catch((err: unknown) =>
+              toast.error(humanError(err, 'Не удалось выбрать расписание')),
+            )
+          }
+          disabled={empty}
+        >
           <SelectTrigger size="sm" className={`w-56 ${SETTING_SELECT}`}>
             <SelectValue placeholder="Не выбрано" />
           </SelectTrigger>
@@ -81,7 +64,7 @@ export function SlotSettings() {
           В этом пространстве ещё нет расписаний.{' '}
           <Link
             to="/w/$workspaceSlug/schedules"
-            params={{ workspaceSlug: form.workspaceSlug }}
+            params={{ workspaceSlug: facts.workspaceSlug }}
             className="underline"
           >
             Завести расписание
@@ -95,6 +78,3 @@ export function SlotSettings() {
 // NONE — «расписание не выбрано». Отдельное значение, а не пустая строка: Radix
 // трактует пустую строку как «выбора нет» и рисует плейсхолдер вместо пункта.
 const NONE = 'none'
-
-const resolve = (source: Exclude<ReturnType<typeof useFormFacts>, null>['id']) =>
-  typeof source === 'string' ? Promise.resolve(source) : source()

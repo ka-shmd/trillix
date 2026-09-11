@@ -85,6 +85,7 @@ import { chords } from './shortcuts'
 import { handleRowKeys, type ArrowDir } from './rowKeys'
 import { useActiveRow, useRowFocus } from './activeRow'
 import { CaptionChip } from './CaptionChip'
+import { useClusterAim } from './clusterAim'
 
 export interface BlockRowProps {
   block: Block
@@ -195,6 +196,9 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
   // Точка нажатия на грип: по ней клик-настройки отличается от хвостового click'а
   // после перетаскивания (см. обработчик грипа ниже).
   const gripDownRef = useRef<{ x: number; y: number } | null>(null)
+  // Курсор, ушедший со строки к её кластеру, кластер не гасит (clusterAim.ts).
+  const { clusterRef: aimCluster, onPointerEnter: aimEnter, onPointerLeave: aimLeave } =
+    useClusterAim()
 
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({
     id: block.id,
@@ -300,6 +304,8 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // плейсхолдера, объектная остановка, инпуты вариантов. Событие всплывает от
       // любой из них, и ни одна этот аккорд не перехватывает.
       onKeyDown={onRowKeyDown}
+      onPointerEnter={aimEnter}
+      onPointerLeave={aimLeave}
       // pointer-events-auto возвращает наведение ТОЛЬКО перетаскиваемой строке: её
       // группа во время чужого жеста погашена (GroupRow), иначе грип под курсором
       // перестал бы быть целью попадания и курсор потерял бы вид «grabbing».
@@ -356,7 +362,10 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           // отбирает жёлоб у ручки ширины: 72px кластера шире 12px жёлоба.
           // Показанный — снова ловит события: иначе по его кнопкам нельзя нажать, а
           // hover, ушедший со строки на кластер, гасил бы его под курсором.
-          className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100`}
+          // data-aim на строке — курсор ушёл с неё К кластеру (clusterAim.ts): держит
+          // кластер так же, как hover.
+          ref={aimCluster}
+          className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-data-[aim]:pointer-events-auto group-data-[aim]:opacity-100`}
         >
           <button
             type="button"
@@ -2125,6 +2134,10 @@ function OptionCard({
   const updateOption = useBuilderStore((s) => s.updateOption)
   const [menuOpen, setMenuOpen] = useState(false)
   const gripDownRef = useRef<{ x: number; y: number } | null>(null)
+  // Та же диагональ к значкам, что у строки: длинный вариант переносится, и карточка
+  // выше своего кластера (clusterAim.ts).
+  const { clusterRef: aimCluster, onPointerEnter: aimEnter, onPointerLeave: aimLeave } =
+    useClusterAim()
   // Своя ссылка на инпут вдобавок к колбэку списка: закрытие попапа обязано вернуть
   // каретку СЮДА (§12), а список знает своих детей только по карте id → элемент.
   const inputEl = useRef<HTMLInputElement | null>(null)
@@ -2156,6 +2169,8 @@ function OptionCard({
       // Перетаскиваемая карточка — ТЕНЬ, а не карточка (dnd.ts, там же довод): тусклее
       // покоя, книзу растворяется маской, у инпута внутри гаснут фон и тень. Наведение на
       // время жеста гасится у всех, кроме неё.
+      onPointerEnter={aimEnter}
+      onPointerLeave={aimLeave}
       className={`group/opt ${GAP_BRIDGE} relative flex items-center ${
         isDragging
           ? `z-10 pointer-events-auto ${DRAGGED_LOOK}`
@@ -2182,8 +2197,10 @@ function OptionCard({
         // текст: у короткого варианта это 120px, и дорога к значкам идёт снаружи неё.
         // Пока каретка в варианте — а она там всегда, когда автор собрался его удалить
         // или утащить, — кластер стоит независимо от курсора, и вести к нему можно как
-        // угодно. Просвет (GAP_BRIDGE на карточке) остаётся для случая без каретки.
-        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100 group-focus-within/opt:pointer-events-auto group-focus-within/opt:opacity-100`}
+        // угодно. Просвет (GAP_BRIDGE на карточке) и диагональ к значкам (data-aim)
+        // остаются для случая без каретки.
+        ref={aimCluster}
+        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100 group-focus-within/opt:pointer-events-auto group-focus-within/opt:opacity-100 group-data-[aim]/opt:pointer-events-auto group-data-[aim]/opt:opacity-100`}
       >
         <button
           type="button"

@@ -970,7 +970,7 @@ func (s *Service) Publish(ctx context.Context, userID, formID uuid.UUID) (Form, 
 	// имеет его. Обратный перекос (расписание выбрано, блока нет) публикацию не
 	// держит: это законное состояние, о нём предупреждает экран настроек.
 	if form.ScheduleID == nil && domain.HasSlot(parsed) {
-		return Form{}, fmt.Errorf("%w: в форме есть вопрос о записи, но расписание не выбрано — выберите его в блоке «Запись»",
+		return Form{}, fmt.Errorf("%w: в форме есть вопрос о записи, но расписание не выбрано — выберите его в блоке «Онлайн-запись»",
 			domain.ErrValidation)
 	}
 

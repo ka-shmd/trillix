@@ -1014,9 +1014,13 @@ export function SlashEditor({
           вниз (поля и подписи берут font-family: inherit). Полотно холста-класса не
           носит — метрики оно держит своим Tailwind, — поэтому обе строки нужны ему
           отдельно, иначе смена шрифта и выравнивания видна автору только в превью. */}
+            {/* group/canvas + data-dragging — идёт жест полотна (любой слой). По нему гаснет
+          рейл объекта в жёлобе (kinds/slotControl.tsx) — и в строке, и в госте источника:
+          во время жеста в жёлобе не рисует никто (EDITOR.md §5). */}
             <div
               ref={canvasRef}
-              className={`relative mx-auto max-w-[calc(var(--rf-column)+10rem)] px-5 pb-16 [font-family:var(--rf-font-family)] [text-align:var(--rf-align)] sm:px-20 sm:pb-24 ${
+              data-dragging={drag ? '' : undefined}
+              className={`group/canvas relative mx-auto max-w-[calc(var(--rf-column)+10rem)] px-5 pb-16 [font-family:var(--rf-font-family)] [text-align:var(--rf-align)] sm:px-20 sm:pb-24 ${
                 cover ? 'pt-15 sm:pt-17' : 'pt-10 sm:pt-36'
               }`}
             >

@@ -146,6 +146,16 @@ func TestQuestionOrder_GeneratedFromTypeAndOrdinal(t *testing.T) {
 	}
 }
 
+// У каждого отвечаемого типа есть человеческое имя: забытый тип получает в «Тип N»
+// своё имя из схемы латиницей («slot 3») — в заголовке колонки CSV и шаге воронки.
+func TestBlockTypeNames_CoverAnswerableTypes(t *testing.T) {
+	for _, bt := range blockTypes {
+		if bt.isAnswerable() && blockTypeNames[bt] == "" {
+			t.Errorf("у отвечаемого типа %s нет имени в blockTypeNames", bt)
+		}
+	}
+}
+
 // consent несёт собственный текст согласия — он и становится подписью, отдельного
 // title не нужно.
 func TestQuestionOrder_ConsentOwnTextAsCaption(t *testing.T) {
