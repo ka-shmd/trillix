@@ -108,6 +108,10 @@ type Service struct {
 	// WithDelivery; nil означает «сборка без доставки» (её нет в тестах привязки).
 	outbox      Outbox
 	submissions Submissions
+	// webhooks и egress — вебхуки (фаза 28). Подключаются сеттером WithWebhooks;
+	// nil означает «сборка без вебхуков» (её нет в тестах связок Таблиц).
+	webhooks WebhookStore
+	egress   Egress
 	// pickerKey — браузерный ключ для окна выбора файла (см. WithPicker).
 	pickerKey string
 	google    Provider
@@ -385,6 +389,9 @@ type FormStatus struct {
 	// угодно, в том числе в одну и ту же книгу: интеграция это правило доставки,
 	// а не состояние формы.
 	Connections []FormLink
+	// Webhooks — вебхуки формы в порядке заведения; без адреса у того, кто не
+	// вправе править форму (listWebhooks).
+	Webhooks []Webhook
 }
 
 // FormStatus читает состояние интеграций формы. Право — ActionFormRead внутри
@@ -403,8 +410,31 @@ func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (For
 	if err != nil {
 		return FormStatus{}, fmt.Errorf("form integration status: %w", err)
 	}
-	// Пустой список — штатное состояние экрана: у формы просто нет связок.
-	return FormStatus{WorkspaceID: form.WorkspaceID, Account: account, Connections: links}, nil
+	canEdit, err := s.canEdit(ctx, form.WorkspaceID, userID)
+	if err != nil {
+		return FormStatus{}, err
+	}
+	webhooks, err := s.listWebhooks(ctx, formID, canEdit)
+	if err != nil {
+		return FormStatus{}, fmt.Errorf("form webhooks: %w", err)
+	}
+	// Пустые списки — штатное состояние экрана: у формы просто нет интеграций.
+	return FormStatus{
+		WorkspaceID: form.WorkspaceID,
+		Account:     account,
+		Connections: links,
+		Webhooks:    webhooks,
+	}, nil
+}
+
+// canEdit — вопрос «вправе ли править», а не охрана: отказ по праву — это
+// false, а не ошибка; всё прочее (сбой базы) — ошибка.
+func (s *Service) canEdit(ctx context.Context, workspaceID, userID uuid.UUID) (bool, error) {
+	err := s.access.Can(ctx, workspaceID, userID, domain.ActionFormWrite)
+	if errors.Is(err, domain.ErrForbidden) {
+		return false, nil
+	}
+	return err == nil, err
 }
 
 // ConnectOptions — то, что человек назвал в окне подключения. Настройки

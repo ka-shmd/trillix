@@ -314,6 +314,17 @@ func (q *Queries) ClearIntegrationAccountAccessLost(ctx context.Context, id uuid
 	return err
 }
 
+const clearWebhookQueue = `-- name: ClearWebhookQueue :exec
+DELETE FROM webhook_queue WHERE webhook_id = $1
+`
+
+// Тумблер «выключить» — это «не доставлять», а не «доставить позже»: ждущие
+// ответы снимаются тем же движением, иначе включение вывалило бы их разом.
+func (q *Queries) ClearWebhookQueue(ctx context.Context, webhookID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearWebhookQueue, webhookID)
+	return err
+}
+
 const confirmBooking = `-- name: ConfirmBooking :execrows
 UPDATE bookings
 SET status = 'confirmed', submission_id = $2, hold_expires_at = NULL
@@ -1267,6 +1278,24 @@ type DeleteFormIntegrationParams struct {
 // более не удаляет их за человека.
 func (q *Queries) DeleteFormIntegration(ctx context.Context, arg DeleteFormIntegrationParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteFormIntegration, arg.ID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteFormWebhook = `-- name: DeleteFormWebhook :execrows
+DELETE FROM form_webhooks WHERE id = $1 AND form_id = $2
+`
+
+type DeleteFormWebhookParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+// Удаление вебхука; очередь и журнал уходят каскадом.
+func (q *Queries) DeleteFormWebhook(ctx context.Context, arg DeleteFormWebhookParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFormWebhook, arg.ID, arg.FormID)
 	if err != nil {
 		return 0, err
 	}
@@ -2651,6 +2680,56 @@ func (q *Queries) GetFormTemplate(ctx context.Context, id uuid.UUID) (FormTempla
 	return i, err
 }
 
+const getFormWebhook = `-- name: GetFormWebhook :one
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+       w.last_error, w.last_delivered_at, w.created_at,
+       (SELECT count(*) FROM webhook_queue q WHERE q.webhook_id = w.id) AS queued
+FROM form_webhooks w
+WHERE w.id = $1 AND w.form_id = $2
+`
+
+type GetFormWebhookParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+type GetFormWebhookRow struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	Name            string
+	Url             string
+	Secret          []byte
+	SetBy           pgtype.UUID
+	Enabled         bool
+	Status          string
+	LastError       pgtype.Text
+	LastDeliveredAt pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	Queued          int64
+}
+
+// Один вебхук формы. form_id в условии не украшение: id вебхука приезжает из
+// адреса и правом доступа не является (инвариант 1).
+func (q *Queries) GetFormWebhook(ctx context.Context, arg GetFormWebhookParams) (GetFormWebhookRow, error) {
+	row := q.db.QueryRow(ctx, getFormWebhook, arg.ID, arg.FormID)
+	var i GetFormWebhookRow
+	err := row.Scan(
+		&i.ID,
+		&i.FormID,
+		&i.Name,
+		&i.Url,
+		&i.Secret,
+		&i.SetBy,
+		&i.Enabled,
+		&i.Status,
+		&i.LastError,
+		&i.LastDeliveredAt,
+		&i.CreatedAt,
+		&i.Queued,
+	)
+	return i, err
+}
+
 const getIntegrationAccountByID = `-- name: GetIntegrationAccountByID :one
 SELECT id, user_id, provider, external_account_id, external_email, refresh_token, scopes, connected_at, access_lost_at
 FROM integration_accounts
@@ -2689,9 +2768,9 @@ func (q *Queries) GetIntegrationAccountByID(ctx context.Context, id uuid.UUID) (
 }
 
 const getIntegrationDelivery = `-- name: GetIntegrationDelivery :one
-SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at, webhook_id, http_status
 FROM integration_deliveries
-WHERE id = $1 AND link_id = $2
+WHERE id = $1 AND link_id = $2::uuid
 `
 
 type GetIntegrationDeliveryParams struct {
@@ -2714,6 +2793,8 @@ func (q *Queries) GetIntegrationDelivery(ctx context.Context, arg GetIntegration
 		&i.Detail,
 		&i.RowCount,
 		&i.CreatedAt,
+		&i.WebhookID,
+		&i.HttpStatus,
 	)
 	return i, err
 }
@@ -3535,10 +3616,52 @@ func (q *Queries) InsertFormVersion(ctx context.Context, arg InsertFormVersionPa
 	return i, err
 }
 
+const insertFormWebhook = `-- name: InsertFormWebhook :execrows
+
+INSERT INTO form_webhooks (id, form_id, name, url, secret, set_by)
+SELECT $1::uuid, $2::uuid, $3::text,
+       $4::text, $5::bytea, $6::uuid
+WHERE (SELECT count(*) FROM form_webhooks WHERE form_id = $2::uuid) < $7::int
+`
+
+type InsertFormWebhookParams struct {
+	ID         uuid.UUID
+	FormID     uuid.UUID
+	Name       string
+	Url        string
+	Secret     []byte
+	SetBy      uuid.UUID
+	MaxPerForm int32
+}
+
+// ВЕБХУКИ (фаза 28 DEV-PLAN, миграция 0062, спека docs/design/webhooks.md).
+// Новый вебхук формы. Потолок на форму проверяется ТЕМ ЖЕ утверждением: ноль
+// строк — потолок достигнут. Гонка двух одновременных сохранений даёт ±1 —
+// потолок гасит усиление «одна отправка формы → N запросов», а не держит
+// инвариант, и advisory-lock ради точности здесь не окупается.
+func (q *Queries) InsertFormWebhook(ctx context.Context, arg InsertFormWebhookParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertFormWebhook,
+		arg.ID,
+		arg.FormID,
+		arg.Name,
+		arg.Url,
+		arg.Secret,
+		arg.SetBy,
+		arg.MaxPerForm,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const insertIntegrationDelivery = `-- name: InsertIntegrationDelivery :exec
 INSERT INTO integration_deliveries (
     id, link_id, kind, submission_id, outcome, detail, row_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7)
+) VALUES (
+    $1, $2::uuid, $3, $4,
+    $5, $6, $7
+)
 `
 
 type InsertIntegrationDeliveryParams struct {
@@ -3554,6 +3677,9 @@ type InsertIntegrationDeliveryParams struct {
 // Одна попытка доставки в журнал (схема — migrations/0060). Пишется ПОСЛЕ
 // исхода, отдельным запросом: доставка идёт в чужой API, транзакции вокруг неё
 // нет и быть не может.
+//
+// link_id приводится к uuid явно: с 0062 колонка допускает NULL (запись может
+// висеть на вебхуке), а связка Таблиц пишет сюда всегда непустой id.
 func (q *Queries) InsertIntegrationDelivery(ctx context.Context, arg InsertIntegrationDeliveryParams) error {
 	_, err := q.db.Exec(ctx, insertIntegrationDelivery,
 		arg.ID,
@@ -4130,6 +4256,66 @@ func (q *Queries) ListFormVersions(ctx context.Context, formID uuid.UUID) ([]Lis
 	return items, nil
 }
 
+const listFormWebhooks = `-- name: ListFormWebhooks :many
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+       w.last_error, w.last_delivered_at, w.created_at,
+       (SELECT count(*) FROM webhook_queue q WHERE q.webhook_id = w.id) AS queued
+FROM form_webhooks w
+WHERE w.form_id = $1
+ORDER BY w.id
+`
+
+type ListFormWebhooksRow struct {
+	ID              uuid.UUID
+	FormID          uuid.UUID
+	Name            string
+	Url             string
+	Secret          []byte
+	SetBy           pgtype.UUID
+	Enabled         bool
+	Status          string
+	LastError       pgtype.Text
+	LastDeliveredAt pgtype.Timestamptz
+	CreatedAt       pgtype.Timestamptz
+	Queued          int64
+}
+
+// Вебхуки формы в порядке заведения (UUIDv7 монотонен по времени). queued —
+// сколько ответов ждут доставки: экран показывает «в очереди N», и отдельный
+// запрос на каждую строку списка был бы лишним.
+func (q *Queries) ListFormWebhooks(ctx context.Context, formID uuid.UUID) ([]ListFormWebhooksRow, error) {
+	rows, err := q.db.Query(ctx, listFormWebhooks, formID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListFormWebhooksRow
+	for rows.Next() {
+		var i ListFormWebhooksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FormID,
+			&i.Name,
+			&i.Url,
+			&i.Secret,
+			&i.SetBy,
+			&i.Enabled,
+			&i.Status,
+			&i.LastError,
+			&i.LastDeliveredAt,
+			&i.CreatedAt,
+			&i.Queued,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFormsPage = `-- name: ListFormsPage :many
 SELECT id, workspace_id, name, title, slug, status, published_version_id, published_version, has_unpublished_changes, submission_count, last_submission_at, visit_count, visit_submitted_count, created_at, updated_at, sort_key FROM (
     SELECT f.id, f.workspace_id, f.name, f.title, f.slug, f.status, f.published_version_id,
@@ -4376,9 +4562,9 @@ func (q *Queries) ListIntegrationAccountsByUser(ctx context.Context, arg ListInt
 }
 
 const listIntegrationDeliveries = `-- name: ListIntegrationDeliveries :many
-SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at, webhook_id, http_status
 FROM integration_deliveries
-WHERE link_id = $1
+WHERE link_id = $1::uuid
   AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR id < $2)
 ORDER BY id DESC
 LIMIT $3
@@ -4414,6 +4600,8 @@ func (q *Queries) ListIntegrationDeliveries(ctx context.Context, arg ListIntegra
 			&i.Detail,
 			&i.RowCount,
 			&i.CreatedAt,
+			&i.WebhookID,
+			&i.HttpStatus,
 		); err != nil {
 			return nil, err
 		}
@@ -6075,7 +6263,7 @@ func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFor
 const submissionAlreadyDelivered = `-- name: SubmissionAlreadyDelivered :one
 SELECT EXISTS (
     SELECT 1 FROM integration_deliveries
-    WHERE link_id = $1 AND submission_id = $2 AND outcome = 'delivered'
+    WHERE link_id = $1::uuid AND submission_id = $2 AND outcome = 'delivered'
 )
 `
 
@@ -7010,6 +7198,82 @@ func (q *Queries) UpdateFormSchedule(ctx context.Context, arg UpdateFormSchedule
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateFormWebhookSecret = `-- name: UpdateFormWebhookSecret :execrows
+UPDATE form_webhooks SET secret = $3 WHERE id = $1 AND form_id = $2
+`
+
+type UpdateFormWebhookSecretParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+	Secret []byte
+}
+
+// Перевыпуск секрета. Действует сразу, переходного окна со старым нет. Статус
+// не трогается: вернуть вебхук в работу может только проверка или новый адрес.
+func (q *Queries) UpdateFormWebhookSecret(ctx context.Context, arg UpdateFormWebhookSecretParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateFormWebhookSecret, arg.ID, arg.FormID, arg.Secret)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateFormWebhookSettings = `-- name: UpdateFormWebhookSettings :execrows
+UPDATE form_webhooks SET name = $3, enabled = $4 WHERE id = $1 AND form_id = $2
+`
+
+type UpdateFormWebhookSettingsParams struct {
+	ID      uuid.UUID
+	FormID  uuid.UUID
+	Name    string
+	Enabled bool
+}
+
+// Подпись и тумблер.
+func (q *Queries) UpdateFormWebhookSettings(ctx context.Context, arg UpdateFormWebhookSettingsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateFormWebhookSettings,
+		arg.ID,
+		arg.FormID,
+		arg.Name,
+		arg.Enabled,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const updateFormWebhookURL = `-- name: UpdateFormWebhookURL :execrows
+UPDATE form_webhooks
+SET url = $3, set_by = $4, status = 'live', last_error = NULL, failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
+WHERE id = $1 AND form_id = $2
+`
+
+type UpdateFormWebhookURLParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+	Url    string
+	SetBy  pgtype.UUID
+}
+
+// Адрес, переданный в правке (даже тот же), — новая ответственность и новая
+// попытка: правящий становится тем, чьё членство сторожит доставку, поломка
+// снимается, расписание цели начинается заново. Так пересохранение адреса
+// оставшимся участником возвращает в работу вебхук ушедшего (спека §9).
+func (q *Queries) UpdateFormWebhookURL(ctx context.Context, arg UpdateFormWebhookURLParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateFormWebhookURL,
+		arg.ID,
+		arg.FormID,
+		arg.Url,
+		arg.SetBy,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateIntegrationAccountToken = `-- name: UpdateIntegrationAccountToken :exec

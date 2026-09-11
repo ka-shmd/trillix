@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	netmail "net/mail"
+	"net/url"
 	"os"
 	"os/signal"
 	"syscall"
@@ -42,6 +43,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/printer"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/safehttp"
 	"github.com/ka-shmd/trillix/internal/submissions"
 	"github.com/ka-shmd/trillix/internal/templates"
 	"github.com/ka-shmd/trillix/internal/visits"
@@ -301,6 +303,16 @@ func formGenerator(cfg config.Config, log *slog.Logger) forms.Generator {
 	})
 }
 
+// hostOf — хост адреса из конфига. Адреса проверены при старте (config), так что
+// неразборчивый здесь не встретится; пустой хост safehttp просто не запретит.
+func hostOf(raw string) string {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return ""
+	}
+	return u.Hostname()
+}
+
 func senderAddress(from string) string {
 	addr, err := netmail.ParseAddress(from)
 	if err != nil {
@@ -493,8 +505,15 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			cfg.AppOrigin+"/api/v1/integrations/google/callback",
 		)
 	}
+	// Вебхуки (фаза 28): запрос по адресу пользователя идёт только через safehttp
+	// с боевым Guard (ADR §10). Свои хосты запрещены отдельно: они публичные, и
+	// Guard их пропустил бы.
+	webhookEgress := safehttp.New(safehttp.PublicOnly{}, safehttp.Options{
+		OwnHosts: []string{hostOf(cfg.AppOrigin), hostOf(cfg.PublicRendererBaseURL)},
+	})
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
-		WithPicker(cfg.GooglePickerAPIKey)
+		WithPicker(cfg.GooglePickerAPIKey).
+		WithWebhooks(integrations.Repo{}, webhookEgress)
 	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
 	// числа расписаний — у entitlements. Транзакция нужна одному действию — переносу
 	// записи: лок слота, счёт мест и правка обязаны быть одной.

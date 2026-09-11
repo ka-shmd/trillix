@@ -205,9 +205,15 @@ WHERE id = $1;
 -- Одна попытка доставки в журнал (схема — migrations/0060). Пишется ПОСЛЕ
 -- исхода, отдельным запросом: доставка идёт в чужой API, транзакции вокруг неё
 -- нет и быть не может.
+--
+-- link_id приводится к uuid явно: с 0062 колонка допускает NULL (запись может
+-- висеть на вебхуке), а связка Таблиц пишет сюда всегда непустой id.
 INSERT INTO integration_deliveries (
     id, link_id, kind, submission_id, outcome, detail, row_count
-) VALUES ($1, $2, $3, $4, $5, $6, $7);
+) VALUES (
+    sqlc.arg(id), sqlc.arg(link_id)::uuid, sqlc.arg(kind), sqlc.arg(submission_id),
+    sqlc.arg(outcome), sqlc.arg(detail), sqlc.arg(row_count)
+);
 
 -- name: ListIntegrationDeliveries :many
 -- Лента журнала: новые сверху, страница за страницей курсором.
@@ -216,9 +222,9 @@ INSERT INTO integration_deliveries (
 -- соседние попытки ложатся в одну миллисекунду, и порядок по времени между ними
 -- не определён. Пустой курсор ($2 = uuid nil) означает первую страницу — сравнение
 -- с ним истинно для любого id, потому что нулевой UUID меньше всякого другого.
-SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at, webhook_id, http_status
 FROM integration_deliveries
-WHERE link_id = sqlc.arg(link_id)
+WHERE link_id = sqlc.arg(link_id)::uuid
   AND (sqlc.arg(cursor)::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR id < sqlc.arg(cursor))
 ORDER BY id DESC
 LIMIT sqlc.arg(page_size);
@@ -227,9 +233,9 @@ LIMIT sqlc.arg(page_size);
 -- Одна запись журнала — предмет повтора. link_id в условии не украшение: id
 -- записи приезжает из адреса и правом доступа не является (инвариант 1), а
 -- право проверено по СВЯЗКЕ.
-SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at, webhook_id, http_status
 FROM integration_deliveries
-WHERE id = $1 AND link_id = $2;
+WHERE id = sqlc.arg(id) AND link_id = sqlc.arg(link_id)::uuid;
 
 -- name: SubmissionAlreadyDelivered :one
 -- Доехал ли ЭТОТ ответ в лист этой связки хоть раз. Спрашивается перед
@@ -239,7 +245,7 @@ WHERE id = $1 AND link_id = $2;
 -- таблицу второй экземпляр ответа, который там уже лежит.
 SELECT EXISTS (
     SELECT 1 FROM integration_deliveries
-    WHERE link_id = $1 AND submission_id = $2 AND outcome = 'delivered'
+    WHERE link_id = sqlc.arg(link_id)::uuid AND submission_id = sqlc.arg(submission_id) AND outcome = 'delivered'
 );
 
 -- name: DeleteOldIntegrationDeliveries :execrows
@@ -247,3 +253,63 @@ SELECT EXISTS (
 -- места, а не защита: диагностика месячной давности никому не отвечает на
 -- вопрос «почему вчера не уехало», а таблица растёт со скоростью потока ответов.
 DELETE FROM integration_deliveries WHERE created_at < $1;
+
+-- ВЕБХУКИ (фаза 28 DEV-PLAN, миграция 0062, спека docs/design/webhooks.md).
+
+-- name: InsertFormWebhook :execrows
+-- Новый вебхук формы. Потолок на форму проверяется ТЕМ ЖЕ утверждением: ноль
+-- строк — потолок достигнут. Гонка двух одновременных сохранений даёт ±1 —
+-- потолок гасит усиление «одна отправка формы → N запросов», а не держит
+-- инвариант, и advisory-lock ради точности здесь не окупается.
+INSERT INTO form_webhooks (id, form_id, name, url, secret, set_by)
+SELECT sqlc.arg(id)::uuid, sqlc.arg(form_id)::uuid, sqlc.arg(name)::text,
+       sqlc.arg(url)::text, sqlc.arg(secret)::bytea, sqlc.arg(set_by)::uuid
+WHERE (SELECT count(*) FROM form_webhooks WHERE form_id = sqlc.arg(form_id)::uuid) < sqlc.arg(max_per_form)::int;
+
+-- name: ListFormWebhooks :many
+-- Вебхуки формы в порядке заведения (UUIDv7 монотонен по времени). queued —
+-- сколько ответов ждут доставки: экран показывает «в очереди N», и отдельный
+-- запрос на каждую строку списка был бы лишним.
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+       w.last_error, w.last_delivered_at, w.created_at,
+       (SELECT count(*) FROM webhook_queue q WHERE q.webhook_id = w.id) AS queued
+FROM form_webhooks w
+WHERE w.form_id = $1
+ORDER BY w.id;
+
+-- name: GetFormWebhook :one
+-- Один вебхук формы. form_id в условии не украшение: id вебхука приезжает из
+-- адреса и правом доступа не является (инвариант 1).
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+       w.last_error, w.last_delivered_at, w.created_at,
+       (SELECT count(*) FROM webhook_queue q WHERE q.webhook_id = w.id) AS queued
+FROM form_webhooks w
+WHERE w.id = $1 AND w.form_id = $2;
+
+-- name: UpdateFormWebhookSettings :execrows
+-- Подпись и тумблер.
+UPDATE form_webhooks SET name = $3, enabled = $4 WHERE id = $1 AND form_id = $2;
+
+-- name: UpdateFormWebhookURL :execrows
+-- Адрес, переданный в правке (даже тот же), — новая ответственность и новая
+-- попытка: правящий становится тем, чьё членство сторожит доставку, поломка
+-- снимается, расписание цели начинается заново. Так пересохранение адреса
+-- оставшимся участником возвращает в работу вебхук ушедшего (спека §9).
+UPDATE form_webhooks
+SET url = $3, set_by = $4, status = 'live', last_error = NULL, failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
+WHERE id = $1 AND form_id = $2;
+
+-- name: UpdateFormWebhookSecret :execrows
+-- Перевыпуск секрета. Действует сразу, переходного окна со старым нет. Статус
+-- не трогается: вернуть вебхук в работу может только проверка или новый адрес.
+UPDATE form_webhooks SET secret = $3 WHERE id = $1 AND form_id = $2;
+
+-- name: DeleteFormWebhook :execrows
+-- Удаление вебхука; очередь и журнал уходят каскадом.
+DELETE FROM form_webhooks WHERE id = $1 AND form_id = $2;
+
+-- name: ClearWebhookQueue :exec
+-- Тумблер «выключить» — это «не доставлять», а не «доставить позже»: ждущие
+-- ответы снимаются тем же движением, иначе включение вывалило бы их разом.
+DELETE FROM webhook_queue WHERE webhook_id = $1;

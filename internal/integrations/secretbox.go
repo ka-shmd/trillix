@@ -20,8 +20,26 @@ import (
 // следствием для второго фактора.
 const secretLabel = "trillix-integration-refresh-v1"
 
-func sealToken(key []byte, token string) ([]byte, error) {
-	gcm, err := tokenGCM(key)
+// webhookSecretLabel — метка ключа секретов подписи вебхуков (0062). Своя, а не
+// общая с refresh-токенами: без разных меток шифротекст одного назначения
+// открывался бы ключом другого. Ротация FORM_TOKEN_SECRET рвёт и эти секреты —
+// вебхуки встают с причиной «перевыпустите секрет».
+const webhookSecretLabel = "trillix-webhook-secret-v1"
+
+func sealToken(key []byte, token string) ([]byte, error) { return seal(key, secretLabel, token) }
+
+func openToken(key, sealed []byte) (string, error) { return openSealed(key, secretLabel, sealed) }
+
+func sealWebhookSecret(key []byte, secret string) ([]byte, error) {
+	return seal(key, webhookSecretLabel, secret)
+}
+
+func openWebhookSecret(key, sealed []byte) (string, error) {
+	return openSealed(key, webhookSecretLabel, sealed)
+}
+
+func seal(key []byte, label, plaintext string) ([]byte, error) {
+	gcm, err := gcmFor(key, label)
 	if err != nil {
 		return nil, err
 	}
@@ -30,27 +48,27 @@ func sealToken(key []byte, token string) ([]byte, error) {
 		return nil, fmt.Errorf("integrations: random nonce: %w", err)
 	}
 	// Nonce едет впереди шифротекста: он не секрет, но обязан быть уникальным.
-	return gcm.Seal(nonce, nonce, []byte(token), nil), nil
+	return gcm.Seal(nonce, nonce, []byte(plaintext), nil), nil
 }
 
-func openToken(key, sealed []byte) (string, error) {
-	gcm, err := tokenGCM(key)
+func openSealed(key []byte, label string, sealed []byte) (string, error) {
+	gcm, err := gcmFor(key, label)
 	if err != nil {
 		return "", err
 	}
 	if len(sealed) < gcm.NonceSize() {
-		return "", fmt.Errorf("integrations: sealed token too short")
+		return "", fmt.Errorf("integrations: sealed value too short")
 	}
 	nonce, ct := sealed[:gcm.NonceSize()], sealed[gcm.NonceSize():]
-	token, err := gcm.Open(nil, nonce, ct, nil)
+	plain, err := gcm.Open(nil, nonce, ct, nil)
 	if err != nil {
-		return "", fmt.Errorf("integrations: open token: %w", err)
+		return "", fmt.Errorf("integrations: open sealed value: %w", err)
 	}
-	return string(token), nil
+	return string(plain), nil
 }
 
-func tokenGCM(key []byte) (cipher.AEAD, error) {
-	derived, err := hkdf.Key(sha256.New, key, nil, secretLabel, 32)
+func gcmFor(key []byte, label string) (cipher.AEAD, error) {
+	derived, err := hkdf.Key(sha256.New, key, nil, label, 32)
 	if err != nil {
 		return nil, fmt.Errorf("integrations: derive key: %w", err)
 	}

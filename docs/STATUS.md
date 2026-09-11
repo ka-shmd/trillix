@@ -50,7 +50,7 @@
   `forms`, `geo`, `httpserver`, `integrations`, `mail`, `media`, `oauth`, `periodic`,
   `pgtest`, `postgres`, `printer`, `ratelimit`, `safehttp`, `submissions`, `templates`,
   `token`, `visits`, `workspaces`).
-- **PostgreSQL 16** — 61 миграция (`0001`…`0061_integration_account_access_lost`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
+- **PostgreSQL 16** — 62 миграции (`0001`…`0062_webhooks`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui; графики аналитики —
   recharts за ленивой загрузкой, в общий чанк не входят.
 - **web/renderer** — публичный рендерер: preact/compat + zod, **бюджет 60 КиБ gzip** (сейчас
@@ -80,9 +80,10 @@
 
 **MVP-план (фазы 0–10) закрыт; фазы 11–27 закрыты кодом.** **Идёт фаза 28 `DEV-PLAN` —
 вебхуки** (ветка `phase28/webhooks`): спека [`design/webhooks.md`](design/webhooks.md) и
-пять строк ADR согласованы 2026-09-12; закрыты слайсы 0 (документы) и A (`internal/safehttp`,
-подпись). Главное решение фазы — доставка интеграций уходит из `outbox` в свою очередь,
-разобранную по целям; Google Таблицы переезжают на неё отдельной задачей сразу после фазы.
+пять строк ADR согласованы 2026-09-12; закрыты слайсы 0 (документы), A (`internal/safehttp`,
+подпись) и B (схема `0062`, ручки управления вебхуком). Доставки ещё нет — слайс C. Главное
+решение фазы — доставка интеграций уходит из `outbox` в свою очередь, разобранную по целям;
+Google Таблицы переезжают на неё отдельной задачей сразу после фазы.
 
 Вне фазы задачи берутся из источников `PROCESS.md` §1.0 — очередь [`BACKLOG.md`](BACKLOG.md)
 (верхний пункт — письмо автору о поломке интеграции), фазы [`POST-MVP.md`](POST-MVP.md)

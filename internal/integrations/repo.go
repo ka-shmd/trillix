@@ -532,8 +532,10 @@ func (Repo) DeleteOldDeliveries(ctx context.Context, db postgres.DBTX, before ti
 
 func toDelivery(row postgres.IntegrationDelivery) Delivery {
 	d := Delivery{
-		ID:        row.ID,
-		LinkID:    row.LinkID,
+		ID: row.ID,
+		// С 0062 колонка допускает NULL (запись вебхука), но ленту связки читают
+		// условием по link_id — здесь он непуст всегда.
+		LinkID:    uuid.UUID(row.LinkID.Bytes),
 		Kind:      row.Kind,
 		Outcome:   row.Outcome,
 		Detail:    row.Detail,
@@ -544,4 +546,116 @@ func toDelivery(row postgres.IntegrationDelivery) Delivery {
 		d.SubmissionID = row.SubmissionID.Bytes
 	}
 	return d
+}
+
+// InsertWebhook заводит вебхук, если у формы их меньше maxPerForm: потолок
+// проверяется тем же утверждением (0 строк — потолок достигнут).
+func (Repo) InsertWebhook(ctx context.Context, db postgres.DBTX, w NewWebhook, maxPerForm int32) (bool, error) {
+	n, err := postgres.New(db).InsertFormWebhook(ctx, postgres.InsertFormWebhookParams{
+		ID:         w.ID,
+		FormID:     w.FormID,
+		Name:       w.Name,
+		Url:        w.URL,
+		Secret:     w.SecretSealed,
+		SetBy:      w.SetBy,
+		MaxPerForm: maxPerForm,
+	})
+	if err != nil {
+		return false, fmt.Errorf("insert form webhook: %w", err)
+	}
+	return n > 0, nil
+}
+
+// ListWebhooks — вебхуки формы в порядке заведения.
+func (Repo) ListWebhooks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Webhook, error) {
+	rows, err := postgres.New(db).ListFormWebhooks(ctx, formID)
+	if err != nil {
+		return nil, fmt.Errorf("list form webhooks: %w", err)
+	}
+	out := make([]Webhook, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, toWebhook(postgres.GetFormWebhookRow(r)))
+	}
+	return out, nil
+}
+
+// GetWebhook — вебхук формы; pgx.ErrNoRows, если его нет или он чужой формы.
+func (Repo) GetWebhook(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (Webhook, error) {
+	row, err := postgres.New(db).GetFormWebhook(ctx, postgres.GetFormWebhookParams{ID: id, FormID: formID})
+	if err != nil {
+		return Webhook{}, err
+	}
+	return toWebhook(row), nil
+}
+
+// UpdateWebhookSettings — подпись и тумблер.
+func (Repo) UpdateWebhookSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error) {
+	n, err := postgres.New(db).UpdateFormWebhookSettings(ctx, postgres.UpdateFormWebhookSettingsParams{
+		ID: id, FormID: formID, Name: name, Enabled: enabled,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update form webhook settings: %w", err)
+	}
+	return n, nil
+}
+
+// UpdateWebhookURL — новый адрес, новый ответственный и расписание с нуля.
+func (Repo) UpdateWebhookURL(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, rawURL string, setBy uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).UpdateFormWebhookURL(ctx, postgres.UpdateFormWebhookURLParams{
+		ID: id, FormID: formID, Url: rawURL,
+		SetBy: pgtype.UUID{Bytes: setBy, Valid: setBy != uuid.Nil},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update form webhook url: %w", err)
+	}
+	return n, nil
+}
+
+// UpdateWebhookSecret перезаписывает шифротекст секрета подписи.
+func (Repo) UpdateWebhookSecret(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sealed []byte) (int64, error) {
+	n, err := postgres.New(db).UpdateFormWebhookSecret(ctx, postgres.UpdateFormWebhookSecretParams{
+		ID: id, FormID: formID, Secret: sealed,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update form webhook secret: %w", err)
+	}
+	return n, nil
+}
+
+// DeleteWebhook удаляет вебхук формы и отдаёт число строк.
+func (Repo) DeleteWebhook(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeleteFormWebhook(ctx, postgres.DeleteFormWebhookParams{ID: id, FormID: formID})
+	if err != nil {
+		return 0, fmt.Errorf("delete form webhook: %w", err)
+	}
+	return n, nil
+}
+
+// ClearWebhookQueue снимает с вебхука все ждущие ответы.
+func (Repo) ClearWebhookQueue(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).ClearWebhookQueue(ctx, id); err != nil {
+		return fmt.Errorf("clear webhook queue: %w", err)
+	}
+	return nil
+}
+
+func toWebhook(r postgres.GetFormWebhookRow) Webhook {
+	w := Webhook{
+		ID:              r.ID,
+		FormID:          r.FormID,
+		Name:            r.Name,
+		URL:             r.Url,
+		Host:            webhookHost(r.Url),
+		SecretSealed:    r.Secret,
+		Enabled:         r.Enabled,
+		Status:          r.Status,
+		LastError:       r.LastError.String,
+		LastDeliveredAt: r.LastDeliveredAt.Time,
+		Queued:          r.Queued,
+		CreatedAt:       r.CreatedAt.Time,
+	}
+	if r.SetBy.Valid {
+		w.SetBy = r.SetBy.Bytes
+	}
+	return w
 }

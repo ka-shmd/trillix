@@ -69,3 +69,28 @@ func TestOpenToken_RejectsTampered(t *testing.T) {
 		t.Fatalf("ошибка не про длину: %v", err)
 	}
 }
+
+// Секрет вебхука и refresh-токен запечатаны разными метками ключа: шифротекст
+// одного назначения не открывается как другое. Иначе значение из колонки
+// form_webhooks.secret, подложенное в integration_accounts, прочиталось бы.
+func TestSealWebhookSecret_SeparateLabel(t *testing.T) {
+	const secret = "whsec_example"
+	sealed, err := sealWebhookSecret(testKey, secret)
+	if err != nil {
+		t.Fatalf("seal: %v", err)
+	}
+	got, err := openWebhookSecret(testKey, sealed)
+	if err != nil || got != secret {
+		t.Fatalf("open = %q, %v; ожидалось %q", got, err, secret)
+	}
+	if _, err := openToken(testKey, sealed); err == nil {
+		t.Fatal("секрет вебхука открылся ключом refresh-токенов")
+	}
+	token, err := sealToken(testKey, "refresh")
+	if err != nil {
+		t.Fatalf("seal token: %v", err)
+	}
+	if _, err := openWebhookSecret(testKey, token); err == nil {
+		t.Fatal("refresh-токен открылся ключом секретов вебхуков")
+	}
+}
