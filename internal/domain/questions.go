@@ -111,6 +111,7 @@ var blockTypeNames = map[BlockType]string{
 	BlockDate:         "Дата",
 	BlockConsent:      "Согласие",
 	BlockFile:         "Файл",
+	BlockSlot:         "Онлайн-запись",
 }
 
 // questionLabel — подпись вопроса по убыванию приоритета: ЯВНОЕ ИМЯ → подпись группы

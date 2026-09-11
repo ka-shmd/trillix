@@ -17,7 +17,7 @@ export function publishBlockers(blocks: Block[], scheduleId: string | null): Pub
   if (!blocks.some((b) => b.type === 'slot')) return []
   const out: PublishBlocker[] = []
   if (!scheduleId) {
-    out.push({ id: 'schedule', text: 'В блоке «Запись» не выбрано расписание' })
+    out.push({ id: 'schedule', text: 'В блоке «Онлайн-запись» не выбрано расписание' })
   }
   // Вопрос о почте обязан быть ОБЯЗАТЕЛЬНЫМ: письмо о записи — единственный носитель
   // ссылки отмены, а необязательный вопрос респондент пропускает, и место остаётся
