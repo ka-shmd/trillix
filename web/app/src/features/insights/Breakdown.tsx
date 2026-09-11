@@ -29,7 +29,7 @@ export function BarRows({ rows, className }: { rows: BarRow[]; className?: strin
     <ul className={cn('flex flex-col gap-1', className)}>
       {rows.map((row) => (
         <li key={row.key} className="relative overflow-hidden rounded-md">
-          {/* Заливка цветом ДАННЫХ (--chart-1), а не акцентом: синий акцент в
+          {/* Заливка цветом ДАННЫХ (--chart-1), а не акцентом: акцент действия в
               кабинете значит «сюда можно нажать», а полоска — величина
               (docs/DESIGN-SYSTEM.md, роли цвета). */}
           <div

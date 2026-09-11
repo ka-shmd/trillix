@@ -56,13 +56,13 @@ describe('метка платной возможности', () => {
 
   it('несёт свои вес и разрядку, а базовые классы бейджа их не перебивают', async () => {
     // ГРАБЛИ, ради которых тест и написан: `font-medium` из базы `Badge` и
-    // `font-semibold` метки — взаимоисключающие утилиты одинаковой специфичности,
+    // `font-extrabold` метки — взаимоисключающие утилиты одинаковой специфичности,
     // и разрулить их обязан tailwind-merge внутри `cn`. Подменят `cn` на `clsx` —
     // в строке окажутся оба класса, и победит порядок в сгенерированном CSS, а не
     // в разметке. Разрядка тут же: без неё три заглавные буквы слипаются под
     // унаследованным `tracking-tight` заголовка.
     const cls = (await renderTag()).className
-    expect(cls).toContain('font-semibold')
+    expect(cls).toContain('font-extrabold')
     expect(cls).not.toContain('font-medium')
     expect(cls).toContain('tracking-wide')
   })
