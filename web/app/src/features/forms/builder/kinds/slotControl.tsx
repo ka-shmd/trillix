@@ -32,7 +32,7 @@ import {
 // по-прежнему живёт в попапе (SlotSettings), клавиатурный путь — через него.
 //
 // РЕЙЛ — граница объекта, виден при наведении на строку и когда на ней каретка (`group`
-// строки, BlockRow — тот же, что зажигает кластер значков). Пикер состоит из четырёх
+// строки, BlockRow — тот же, что зажигает кластер значков, включая `data-aim`). Пикер состоит из четырёх
 // частей (подпись месяца, лента, подпись дня, сетка), и без рейла на полотне читается
 // четырьмя строками. Стоит в поле полотна, а не в форме: absolute, на вылете и в цвете
 // рейла логики (`--border`, 3px) — вид формы не меняется ни на пиксель, в превью и у
@@ -56,7 +56,7 @@ export function SlotControl() {
     <div className="relative">
       <span
         aria-hidden="true"
-        className="bg-border pointer-events-none absolute top-0 bottom-0 -left-2 w-[3px] rounded-full opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 group-data-[dragging]/canvas:hidden"
+        className="bg-border pointer-events-none absolute top-0 bottom-0 -left-2 w-[3px] rounded-full opacity-0 transition-opacity group-focus-within:opacity-100 group-hover:opacity-100 group-data-[aim]:opacity-100 group-data-[dragging]/canvas:hidden"
       />
       {/* Серое, а не просто бледное: grayscale снимает зелень выбранного дня — иначе
           блок читался бы «настроенным, но тусклым». Размытие уводит заглушку в фон, и

@@ -131,6 +131,8 @@ describe('кластер значков строки', () => {
     expect(cluster.className).toContain('pointer-events-none')
     expect(cluster.className).toContain('group-hover:pointer-events-auto')
     expect(cluster.className).toContain('group-focus-within:pointer-events-auto')
+    // Курсор, ушедший со строки к значкам, держит их меткой строки (clusterAim.ts).
+    expect(cluster.className).toContain('group-data-[aim]:pointer-events-auto')
   })
 
   it('у строки ответа в вопросе значки есть — её можно унести отдельно (фаза 15)', () => {
