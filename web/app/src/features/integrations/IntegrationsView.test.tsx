@@ -1202,7 +1202,10 @@ describe('вебхуки на экране интеграций', () => {
     expect(screen.queryByRole('switch', { name: 'Подписывать запросы' })).toBeNull()
     fireEvent.click(screen.getByRole('button', { name: 'Подписывать запросы' }))
 
-    expect(screen.getByLabelText('Секрет подписи')).toBeTruthy()
+    // Поле приезжает УЖЕ ЗАПОЛНЕННЫМ: придумывать строку человеку незачем, ему
+    // нужно, чтобы подпись работала. Кто хочет свой секрет — стирает и вписывает.
+    const field = screen.getByLabelText('Секрет подписи') as HTMLInputElement
+    expect(field.value.length).toBeGreaterThanOrEqual(16)
     expect(screen.getByText(/Trillix-Signature/)).toBeTruthy()
     // Передумал — поле уходит, предложение возвращается.
     fireEvent.click(screen.getByRole('button', { name: 'Убрать подпись' }))
