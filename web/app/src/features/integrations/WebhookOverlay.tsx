@@ -375,14 +375,14 @@ function HeadersField({
         <div key={row.id} className="flex items-center gap-2">
           <Input
             aria-label={`Имя заголовка ${i + 1}`}
-            placeholder="Authorization"
+            placeholder="Имя"
             className="h-10 w-2/5 font-mono md:text-base"
             value={row.name}
             onChange={(e) => patch(row.id, { name: e.target.value })}
           />
           <Input
             aria-label={`Значение заголовка ${i + 1}`}
-            placeholder="Bearer …"
+            placeholder="Значение"
             className="h-10 flex-1 font-mono md:text-base"
             value={row.value}
             onChange={(e) => patch(row.id, { value: e.target.value })}
@@ -406,8 +406,10 @@ function HeadersField({
         </div>
       )}
       <p className="text-sm text-muted-foreground">
-        Имя — латиницей, значение уедет получателю как есть. Наши собственные
-        заголовки (<span className="font-mono">Content-Type</span>, подпись) задать нельзя.
+        Имя — латиницей: чаще всего это <span className="font-mono">Authorization</span> со
+        значением <span className="font-mono">Bearer …</span>. Значение уедет получателю как
+        есть; наши собственные заголовки (<span className="font-mono">Content-Type</span>,
+        подпись) задать нельзя.
       </p>
     </div>
   )

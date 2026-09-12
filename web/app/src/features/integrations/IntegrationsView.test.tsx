@@ -1385,8 +1385,12 @@ describe('вебхуки на экране интеграций', () => {
     expect(screen.queryByLabelText('Имя заголовка 1')).toBeNull()
 
     fireEvent.click(screen.getByRole('button', { name: 'Свои заголовки' }))
-    expect(screen.getByLabelText('Имя заголовка 1')).toBeTruthy()
-    expect(screen.getByLabelText('Значение заголовка 1')).toBeTruthy()
+    // Плейсхолдер называет КОЛОНКУ, а не показывает пример: подписи над строками
+    // нет, и пример в этой роли читается как уже подставленное значение.
+    expect((screen.getByLabelText('Имя заголовка 1') as HTMLInputElement).placeholder).toBe('Имя')
+    expect((screen.getByLabelText('Значение заголовка 1') as HTMLInputElement).placeholder).toBe(
+      'Значение',
+    )
 
     // Передумал — строки уходят, предложение возвращается.
     fireEvent.click(screen.getByRole('button', { name: 'Без заголовков' }))
