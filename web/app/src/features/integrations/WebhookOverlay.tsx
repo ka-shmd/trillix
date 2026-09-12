@@ -10,6 +10,7 @@ import {
   useTestWebhook,
   useUpdateWebhook,
 } from './queries'
+import { CompactAction } from './CompactAction'
 import { WebhookIcon } from './ServiceIcon'
 import { humanError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
@@ -246,19 +247,14 @@ export function WebhookOverlay({
 // Тумблер обещает мгновенное действие («включил — включилось»), а включение
 // подписи требует ввести секрет: нажатие открывает поле, и решение считается
 // принятым, только когда окно сохранено. Кнопка это и означает.
+//
+// Облик — общий CompactAction, тот же, что у действий над аккаунтом Google:
+// предложение это не вопрос анкеты наравне с адресом, и объяснять его до нажатия
+// нечем — за объяснением человек нажимает (решение владельца).
 function SignatureOffer({ onOn }: { onOn: () => void }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div>
-        <Button variant="outline" onClick={onOn}>
-          <KeyRound className="size-4" aria-hidden />
-          Подписывать запросы
-        </Button>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Получатель сможет убедиться, что запрос пришёл от нас. Нужно, только если вы
-        собираетесь проверять подпись у себя.
-      </p>
+    <div>
+      <CompactAction icon={KeyRound} label="Подписывать запросы" onClick={onOn} />
     </div>
   )
 }
@@ -327,21 +323,12 @@ interface HeaderRow extends WebhookHeader {
 }
 
 // HeadersOffer — предложение задать свои заголовки. Кнопка, а не поля сразу: их
-// не нужно большинству, а нужны они тем, у кого получатель требует ключ.
+// не нужно большинству, а нужны они тем, у кого получатель требует ключ. Облик и
+// довод про отсутствие подписи под кнопкой — те же, что у SignatureOffer.
 function HeadersOffer({ onOn }: { onOn: () => void }) {
   return (
-    <div className="flex flex-col gap-2">
-      <div>
-        <Button variant="outline" onClick={onOn}>
-          <ListPlus className="size-4" aria-hidden />
-          Свои заголовки
-        </Button>
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Уедут с каждым запросом. Так получателю передают ключ: обычно это{' '}
-        <span className="font-mono">Authorization</span> со значением{' '}
-        <span className="font-mono">Bearer …</span>.
-      </p>
+    <div>
+      <CompactAction icon={ListPlus} label="Свои заголовки" onClick={onOn} />
     </div>
   )
 }
