@@ -61,9 +61,8 @@ type EmailMessage struct {
 // KindSubmissionPDF — единственный вид вложения: печатный лист одного ответа формы.
 const KindSubmissionPDF = "submission_pdf"
 
-// AttachmentRef — чем письмо называет своё вложение, пока оно ещё не добыто. Тот же
-// приём, что у канала gsheets: payload несёт идентификаторы, а данные читает тот,
-// кто умеет их читать.
+// AttachmentRef — чем письмо называет своё вложение, пока оно ещё не добыто:
+// payload несёт идентификаторы, а данные читает тот, кто умеет их читать.
 type AttachmentRef struct {
 	Kind         string `json:"kind"`
 	FormID       string `json:"formId"`

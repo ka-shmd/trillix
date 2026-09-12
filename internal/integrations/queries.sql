@@ -87,18 +87,14 @@ INSERT INTO form_integrations (
 -- пространству формы, а user_id аккаунта едет рядом — по нему сторож доставки
 -- проверяет, что владелец аккаунта всё ещё участник этого пространства.
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
-       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
+       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email,
+       (SELECT count(*) FROM sheet_queue q WHERE q.link_id = fi.id) AS queued
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
 JOIN forms f ON f.id = fi.form_id
 WHERE fi.form_id = $1
 ORDER BY fi.id;
-
--- name: ListEnabledFormIntegrations :many
--- Кому доставлять принятый ответ. Выключенные связки пропускаются здесь, а не
--- в диспетчере: событие, которое некому доставить, лучше не заводить вовсе.
-SELECT id FROM form_integrations WHERE form_id = $1 AND enabled;
 
 -- name: DeleteFormIntegration :execrows
 -- Удаление ОДНОЙ связки. form_id в условии не украшение: id связки приезжает из
@@ -121,7 +117,8 @@ DELETE FROM form_integrations WHERE id = $1 AND form_id = $2;
 -- связка. Одно поле без другого здесь означает сломанную интеграцию.
 UPDATE form_integrations
 SET account_id = $3, spreadsheet_id = $4, spreadsheet_url = $5, sheet_id = $6,
-    sheet_title = $7, columns = $8, status = $9, backfill_before = NULL, last_error = NULL
+    sheet_title = $7, columns = $8, status = 'live', last_error = NULL,
+    failing_since = NULL, consecutive_failures = 0, next_attempt_at = now()
 WHERE id = $1 AND form_id = $2;
 
 -- name: UpdateFormIntegrationSettings :execrows
@@ -134,8 +131,9 @@ UPDATE form_integrations SET name = $3, enabled = $4 WHERE id = $1 AND form_id =
 -- формы, поэтому отвязка и повторная привязка не заставят старое событие писать
 -- в новую таблицу.
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
-       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
+       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email,
+       (SELECT count(*) FROM sheet_queue q WHERE q.link_id = fi.id) AS queued
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
 JOIN forms f ON f.id = fi.form_id
@@ -155,15 +153,15 @@ WHERE id = $1;
 UPDATE form_integrations SET columns = $2 WHERE id = $1;
 
 -- name: MarkFormIntegrationDelivered :exec
--- Успешная доставка: гасим прошлую ошибку и возвращаем статус в live — сломанная
--- интеграция, которая заработала, обязана перестать краснеть в кабинете.
+-- Успех: гасим неудачи и время следующей попытки — очередь этой связки поедет
+-- дальше тем же тиком.
+--
+-- Статус не трогается вовсе: доставщик сломанную связку не берёт (DueSheetLinks),
+-- поэтому успешная доставка при status = 'broken' невозможна, а лечит поломку
+-- человек — правкой цели, перезаливом или проверкой связи.
 UPDATE form_integrations
-SET last_delivered_at = now(), last_error = NULL,
-    -- Статус возвращается в live только из broken: сломанная интеграция, которая
-    -- заработала, обязана перестать краснеть в кабинете. Идущий ПЕРЕНОС этой
-    -- пометкой не сбивается — иначе первая же доставленная пачка объявила бы
-    -- догрузку законченной, и остальные ответы не доехали бы никогда.
-    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
+SET last_delivered_at = now(), last_error = NULL, failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
 WHERE id = $1;
 
 -- name: ClearFormIntegrationError :exec
@@ -171,11 +169,10 @@ WHERE id = $1;
 --
 -- last_delivered_at НЕ трогаем, хотя MarkFormIntegrationDelivered делает ровно
 -- то же самое плюс его: доставки здесь не было, и ставить её время значит врать
--- про ответ, которого не приезжало. Идущий ПЕРЕНОС этой пометкой не сбивается —
--- из backfilling статус не двигается.
+-- про ответ, которого не приезжало.
 UPDATE form_integrations
-SET last_error = NULL,
-    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
+SET last_error = NULL, status = 'live', failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
 WHERE id = $1;
 
 -- name: MarkFormIntegrationBroken :exec
@@ -183,23 +180,105 @@ WHERE id = $1;
 -- показывается в кабинете; ретраить такое до конца времён смысла нет.
 UPDATE form_integrations SET status = 'broken', last_error = $2 WHERE id = $1;
 
--- name: StartFormIntegrationBackfill :exec
--- Начало догрузки: статус backfilling и отсечка. Всё, что пришло ДО неё, кладёт
--- догрузка; всё, что после, — живая очередь. Границы не пересекаются.
+-- name: MarkFormIntegrationFailed :exec
+-- Неудача усыпляет СВЯЗКУ, а не строку очереди: лежащий лист получает одну
+-- попытку за окно бэкоффа, сколько бы ответов ни ждало. В общем outbox
+-- расписание жило у СОБЫТИЯ, и тысяча накопленных ответов давала тысячу
+-- запросов в час в одну и ту же мёртвую таблицу.
+--
+-- failing_since держит ПЕРВЫЙ отказ подряд (COALESCE): по нему считаются сутки
+-- до поломки, и каждая следующая неудача не должна сдвигать отсчёт.
 UPDATE form_integrations
-SET status = 'backfilling', backfill_before = $2, last_error = NULL
+SET last_error = $2, consecutive_failures = consecutive_failures + 1,
+    failing_since = COALESCE(failing_since, sqlc.arg(failing_since)),
+    next_attempt_at = sqlc.arg(next_attempt_at)
 WHERE id = $1;
 
--- name: FinishFormIntegrationBackfill :exec
--- Догрузка кончилась: доставка становится живой.
+-- name: DueSheetLinks :many
+-- Связки, которым есть что везти и чьё время наступило. Сломанные не берутся
+-- вовсе: их ответы копятся до починки, но в Google мы не ходим. Порядок — по
+-- next_attempt_at: дольше всех ждущая связка едет первой.
 --
--- Отсечка НЕ гасится и остаётся границей переноса навсегда. Она нужна и после:
--- живое событие, поставленное до старта переноса и доехавшее после его конца,
--- относится к ответу, который перенос уже положил в лист, — без границы он лёг
--- бы туда вторым разом.
-UPDATE form_integrations
-SET status = 'live'
-WHERE id = $1;
+-- workspace_id приезжает джойном из ФОРМЫ, user_id — из аккаунта: по этой паре
+-- сторож доставки проверяет, что владелец подключения всё ещё участник
+-- пространства формы.
+SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
+       fi.last_error, fi.last_delivered_at, fi.next_attempt_at, fi.failing_since,
+       fi.consecutive_failures, f.workspace_id, ia.user_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+JOIN forms f ON f.id = fi.form_id
+WHERE fi.enabled AND fi.status = 'live' AND fi.next_attempt_at <= now()
+  AND EXISTS (SELECT 1 FROM sheet_queue q WHERE q.link_id = fi.id)
+ORDER BY fi.next_attempt_at
+LIMIT $1;
+
+-- name: PendingSheetSubmissions :many
+-- Что связка везёт следующим — в порядке постановки. submission_id вторым
+-- ключом сортировки не украшение: перенос ставит всю пачку ОДНИМ утверждением,
+-- enqueued_at у её строк одинаков, и хронологию в листе держит только он.
+--
+-- backfill едет рядом: от него зависит гранулярность журнала (одна запись на
+-- пачку переноса против записи на каждый живой ответ), но ни порядок, ни
+-- расписание он не трогает. enqueued_at — метка версии строки, см. соседний
+-- DeleteSheetQueued.
+SELECT submission_id, backfill, enqueued_at FROM sheet_queue
+WHERE link_id = $1
+ORDER BY enqueued_at, submission_id
+LIMIT $2;
+
+-- name: DeleteSheetQueued :exec
+-- Ответы доставлены (или доставлять их больше не надо): строки очереди уходят,
+-- история остаётся в журнале. Пачкой, потому что пачкой и доставляются: у
+-- Таблиц один append увозит все строки тика разом.
+--
+-- ⚠ Мина: `enqueued_at <= $3` снимает ТУ ЖЕ строку, которую доставщик читал, а
+-- не её тёзку. Между чтением очереди и этим удалением лежат два-три похода в
+-- Google, и перезалив (или переезд на другую цель), успевший в это окно, уже
+-- поставил те же ответы ЗАНОВО — под новый лист и с более поздним enqueued_at.
+-- Без границы удаление сняло бы их: строки уехали бы в старый лист, а в новый
+-- не попали бы вовсе — человек нажал «перезалить», получил 202 и недосчитался
+-- ответов молча.
+DELETE FROM sheet_queue
+WHERE link_id = $1 AND submission_id = ANY(sqlc.arg(submission_ids)::uuid[])
+  AND enqueued_at <= sqlc.arg(enqueued_before);
+
+-- name: InsertSheetQueued :exec
+-- Повтор одной доставки из журнала. Ключ-пара делает двойное нажатие безвредным.
+INSERT INTO sheet_queue (link_id, submission_id) VALUES ($1, $2)
+ON CONFLICT DO NOTHING;
+
+-- name: ClearSheetQueue :exec
+-- Тумблер «выключить» — это «не доставлять», а не «доставить позже»: ждущие
+-- ответы снимаются тем же движением, иначе включение вывалило бы их разом.
+-- Второй вызывающий — перезалив: он чистит лист целиком и ставит очередь заново.
+DELETE FROM sheet_queue WHERE link_id = $1;
+
+-- name: EnqueueSheetBackfill :execrows
+-- Перенос накопленных: ВСЕ ответы формы ложатся в очередь связки одним
+-- утверждением. Цепочки событий-пачек с курсором больше нет — прогресс переноса
+-- и есть сама очередь, поэтому перезапуск процесса его не теряет, а порядок
+-- «сначала накопленные, потом живые» держится enqueued_at по построению.
+--
+-- NOT over_quota — тот же фильтр, что у доставки: ответ, скрытый от владельца до
+-- оплаты, не должен всплыть у него же в Таблице.
+--
+-- ⚠ DO UPDATE, а не DO NOTHING: живой ответ, принятый за секунду до переноса,
+-- уже стоит в очереди со СВОИМ enqueued_at — более ранним, чем у всей пачки. Без
+-- перештамповки он лёг бы в лист ПЕРЕД ответами, которые старше его на месяцы.
+INSERT INTO sheet_queue (link_id, submission_id, backfill)
+SELECT $1, s.id, true FROM submissions s
+WHERE s.form_id = $2 AND NOT s.over_quota
+ON CONFLICT (link_id, submission_id)
+DO UPDATE SET backfill = true, enqueued_at = now();
+
+-- name: ExpiredSheetQueued :many
+-- Ответы, ждущие дольше срока хранения: их снимают с очереди и пишут в журнал.
+SELECT link_id, submission_id FROM sheet_queue
+WHERE enqueued_at < $1
+ORDER BY enqueued_at
+LIMIT $2;
 
 -- name: InsertIntegrationDelivery :exec
 -- Одна попытка доставки в журнал (схема — migrations/0060). Пишется ПОСЛЕ

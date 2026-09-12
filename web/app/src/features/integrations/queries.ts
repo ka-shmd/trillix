@@ -40,12 +40,12 @@ export function formIntegrationsQueryOptions(formId: string) {
     refetchInterval: (query) => {
       const data = query.state.data
       if (!data) return false
-      // Опрашиваем, пока идёт работа, которую человек ждёт глазами: перенос
-      // накопленных в таблицу и очередь вебхука. Обе идут в фоне пачками, и без
-      // опроса экран висел бы на «переносим» и «в очереди 3» до F5.
+      // Опрашиваем, пока идёт работа, которую человек ждёт глазами: непустая
+      // очередь связки (перенос накопленных или ответы, ждущие Google) и очередь
+      // вебхука. Обе идут в фоне пачками, и без опроса экран висел бы на
+      // «ответы ждут отправки: 3» до F5.
       const busy =
-        data.connections.some((c) => c.status === 'backfilling') ||
-        data.webhooks.some((w) => w.queued > 0)
+        data.connections.some((c) => c.queued > 0) || data.webhooks.some((w) => w.queued > 0)
       return busy ? 3000 : false
     },
   })

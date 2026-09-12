@@ -32,8 +32,10 @@ export const integrationAccountSchema = z.object({
   accounts: z.array(connectedAccountSchema).default([]),
 })
 
-// Статус привязки формы к таблице.
-export const sheetStatusSchema = z.enum(['backfilling', 'live', 'broken'])
+// Статус привязки формы к таблице. Отдельного состояния «идёт перенос» у неё
+// больше нет (0065): порядок «сначала накопленные, потом живые» держит очередь
+// связки, а видно её полем queued — так же, как у вебхука.
+export const sheetStatusSchema = z.enum(['live', 'broken'])
 
 export const formSheetSchema = z.object({
   // id связки: операции над ней адресуются им, а не формой — связок у формы
@@ -59,6 +61,9 @@ export const formSheetSchema = z.object({
   status: sheetStatusSchema,
   lastError: z.string().optional(),
   lastDeliveredAt: z.string().optional(),
+  // queued — сколько ответов ждут доставки в лист. Растёт, пока Google не
+  // принимает, и им же виден идущий перенос накопленных.
+  queued: z.number().int().default(0),
 })
 
 // Вебхук формы (фаза 28). Второй вид цели доставки рядом со связкой Таблиц:

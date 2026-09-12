@@ -100,6 +100,7 @@ function conn(patch: Partial<FormSheet> = {}): FormSheet {
     sheetId: 0,
     enabled: true,
     status: 'live',
+    queued: 0,
     ...patch,
   }
 }
@@ -224,11 +225,11 @@ describe('два блока экрана', () => {
   })
 
   it('состояние связки видно кружком, подробности — в тултипе', () => {
-    renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
+    renderView(state({ account: CONNECTED, connections: [conn({ queued: 3 })] }))
 
-    const dot = screen.getByRole('button', { name: 'Переносим ответы' })
+    const dot = screen.getByRole('button', { name: 'Ответы ждут отправки' })
     fireEvent.focus(dot)
-    expect(screen.getByRole('tooltip').textContent).toMatch(/переносим ответы, которые уже пришли/i)
+    expect(screen.getByRole('tooltip').textContent).toMatch(/ответы ждут отправки: 3/i)
   })
 
   // Точка пульсирует, пока состояние требует внимания или работы. У покоя
@@ -698,13 +699,13 @@ describe('оверлей настройки Google Таблиц', () => {
 
   // Перезалив — часть предупреждения, а не самостоятельная кнопка: там, где
   // предупреждения нет, нет и его.
-  it('у работающей и переносящей связки перезалива на экране нет', () => {
+  it('у работающей и занятой очередью связки перезалива на экране нет', () => {
     renderView(state({ account: CONNECTED, connections: [conn()] }))
     openConnection()
     expect(screen.queryByRole('button', { name: /перезаписать лист/i })).toBeNull()
     cleanup()
 
-    renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
+    renderView(state({ account: CONNECTED, connections: [conn({ queued: 2 })] }))
     openConnection()
     expect(screen.queryByRole('button', { name: /перезаписать лист/i })).toBeNull()
   })
@@ -903,11 +904,11 @@ describe('оверлей настройки Google Таблиц', () => {
   // нет вовсе. Состояние живёт на точке в списке — там оно видно, не открывая
   // окна, и держать его в двух местах значило бы однажды их рассинхронизировать.
   it('о процессе окно правки не рассказывает', () => {
-    renderView(state({ account: CONNECTED, connections: [conn({ status: 'backfilling' })] }))
+    renderView(state({ account: CONNECTED, connections: [conn({ queued: 2 })] }))
     openConnection()
 
     const dialog = within(screen.getByRole('dialog'))
-    expect(dialog.queryByText(/переносим ответы/i)).toBeNull()
+    expect(dialog.queryByText(/ждут отправки/i)).toBeNull()
     // Поломка — исключение: это не отчёт о процессе, а препятствие плюс выход.
     cleanup()
     renderView(

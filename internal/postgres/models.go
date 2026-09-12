@@ -70,21 +70,23 @@ type Form struct {
 }
 
 type FormIntegration struct {
-	ID              uuid.UUID
-	FormID          uuid.UUID
-	AccountID       uuid.UUID
-	Name            string
-	SpreadsheetID   string
-	SpreadsheetUrl  string
-	SheetID         int32
-	SheetTitle      string
-	Columns         []byte
-	Enabled         bool
-	Status          string
-	BackfillBefore  pgtype.Timestamptz
-	LastError       pgtype.Text
-	LastDeliveredAt pgtype.Timestamptz
-	CreatedAt       pgtype.Timestamptz
+	ID                  uuid.UUID
+	FormID              uuid.UUID
+	AccountID           uuid.UUID
+	Name                string
+	SpreadsheetID       string
+	SpreadsheetUrl      string
+	SheetID             int32
+	SheetTitle          string
+	Columns             []byte
+	Enabled             bool
+	Status              string
+	LastError           pgtype.Text
+	LastDeliveredAt     pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	NextAttemptAt       pgtype.Timestamptz
+	FailingSince        pgtype.Timestamptz
+	ConsecutiveFailures int32
 }
 
 type FormTemplate struct {
@@ -254,6 +256,13 @@ type Session struct {
 	UserID    uuid.UUID
 	ExpiresAt pgtype.Timestamptz
 	CreatedAt pgtype.Timestamptz
+}
+
+type SheetQueue struct {
+	LinkID       uuid.UUID
+	SubmissionID uuid.UUID
+	Backfill     bool
+	EnqueuedAt   pgtype.Timestamptz
 }
 
 type Submission struct {

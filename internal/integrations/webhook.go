@@ -149,10 +149,10 @@ type WebhookStore interface {
 
 	// Доставка (webhook_delivery.go).
 	DueWebhooks(ctx context.Context, db postgres.DBTX, limit int32) ([]Webhook, error)
-	PendingSubmissions(ctx context.Context, db postgres.DBTX, webhookID uuid.UUID, limit int32) ([]uuid.UUID, error)
-	Dequeue(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error
-	Enqueue(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error
-	ExpiredQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]QueuedRef, error)
+	PendingWebhookSubmissions(ctx context.Context, db postgres.DBTX, webhookID uuid.UUID, limit int32) ([]uuid.UUID, error)
+	DequeueWebhook(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error
+	EnqueueWebhook(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error
+	ExpiredWebhookQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]QueuedRef, error)
 	MarkWebhookDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkWebhookFailed(ctx context.Context, db postgres.DBTX, id uuid.UUID, reason string, failingSince, nextAttemptAt time.Time) error
 	MarkWebhookBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, reason string) error
@@ -184,8 +184,15 @@ type Egress interface {
 // now — часы доставки (бэкофф цели и сутки до поломки). Параметром, как у
 // entitlements: тест с подменёнными часами не должен ждать реальных суток.
 // nil = time.Now.
-func (s *Service) WithWebhooks(store WebhookStore, egress Egress, now func() time.Time) *Service {
+func (s *Service) WithWebhooks(store WebhookStore, egress Egress) *Service {
 	s.webhooks, s.egress = store, egress
+	return s
+}
+
+// WithClock подменяет часы доставки — обеих, и вебхуков, и Таблиц: расписание у
+// них считается одинаково, и двое часов в одном сервисе означали бы, что в
+// тестах можно подкрутить одни и забыть другие.
+func (s *Service) WithClock(now func() time.Time) *Service {
 	if now != nil {
 		s.now = now
 	}

@@ -40,6 +40,15 @@ WITH ins AS (
     SELECT w.id, $1 FROM form_webhooks w, ins
     WHERE w.form_id = $2 AND w.enabled
     RETURNING 1 AS one
+), sheets_queued AS (
+    -- Доставка в связки Google Таблиц — тем же утверждением и по тем же
+    -- основаниям (0065). До переезда событие ставилось ПОСЛЕ коммита ответа, и
+    -- краш в этом окне стоил строки в чужой таблице: у Таблиц окно лечилось
+    -- кнопкой «Перезалить всё», но лечил его человек, который о потере не знал.
+    INSERT INTO sheet_queue (link_id, submission_id)
+    SELECT fi.id, $1 FROM form_integrations fi, ins
+    WHERE fi.form_id = $2 AND fi.enabled
+    RETURNING 1 AS one
 )
 SELECT one FROM ins;
 
@@ -171,23 +180,20 @@ FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota;
 
--- name: ListSubmissionsForBackfill :many
--- Пачка накопленных ответов для догрузки во внешнюю таблицу (фаза 25).
+-- name: ListSubmissionsForDelivery :many
+-- Пачка ответов для доставки во внешнюю таблицу (0065). Пачкой, потому что
+-- пачкой и уезжает: у Таблиц один values.append увозит все строки тика разом, а
+-- лимит Google считает запросы, не строки.
 --
--- Порядок ВОЗРАСТАЮЩИЙ, в отличие от листинга кабинета: в таблицу строки
--- ложатся дописыванием, и «новые сверху» дали бы там перевёрнутую хронологию.
--- Курсор — тот же id (UUIDv7 монотонен по времени), только «больше якоря».
---
--- created_at < $2 — отсечка догрузки: всё, что пришло после неё, доставляет
--- живая очередь, и границы не пересекаются (ни дублей, ни пропусков).
+-- Порядок ЗДЕСЬ не важен и не задаётся: очередь связки уже назвала его, и
+-- доставщик раскладывает ответ этой выборки по своему списку id. Кто из
+-- запрошенных не вернулся — удалён автором либо скрыт тарифом (NOT over_quota,
+-- тот же фильтр, что у соседнего GetSubmissionForDelivery): доставлять нечего.
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
-  AND s.created_at < $2
-  AND s.id > sqlc.arg(after)::uuid
-ORDER BY s.id
-LIMIT $3;
+  AND s.id = ANY(sqlc.arg(ids)::uuid[]);
 
 -- name: UpsertPartialSubmission :exec
 -- Автосохранение черновика (спека design/analytics-tally.md §10.2). Ключ — id

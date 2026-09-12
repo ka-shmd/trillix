@@ -286,8 +286,8 @@ func (q *Queries) ClaimSubmissionFile(ctx context.Context, arg ClaimSubmissionFi
 
 const clearFormIntegrationError = `-- name: ClearFormIntegrationError :exec
 UPDATE form_integrations
-SET last_error = NULL,
-    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
+SET last_error = NULL, status = 'live', failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
 WHERE id = $1
 `
 
@@ -295,8 +295,7 @@ WHERE id = $1
 //
 // last_delivered_at НЕ трогаем, хотя MarkFormIntegrationDelivered делает ровно
 // то же самое плюс его: доставки здесь не было, и ставить её время значит врать
-// про ответ, которого не приезжало. Идущий ПЕРЕНОС этой пометкой не сбивается —
-// из backfilling статус не двигается.
+// про ответ, которого не приезжало.
 func (q *Queries) ClearFormIntegrationError(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, clearFormIntegrationError, id)
 	return err
@@ -329,6 +328,18 @@ UPDATE integration_accounts SET access_lost_at = NULL WHERE id = $1
 // самом Google, и тогда чинить человеку нечего.
 func (q *Queries) ClearIntegrationAccountAccessLost(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, clearIntegrationAccountAccessLost, id)
+	return err
+}
+
+const clearSheetQueue = `-- name: ClearSheetQueue :exec
+DELETE FROM sheet_queue WHERE link_id = $1
+`
+
+// Тумблер «выключить» — это «не доставлять», а не «доставить позже»: ждущие
+// ответы снимаются тем же движением, иначе включение вывалило бы их разом.
+// Второй вызывающий — перезалив: он чистит лист целиком и ставит очередь заново.
+func (q *Queries) ClearSheetQueue(ctx context.Context, linkID uuid.UUID) error {
+	_, err := q.db.Exec(ctx, clearSheetQueue, linkID)
 	return err
 }
 
@@ -1575,6 +1586,34 @@ func (q *Queries) DeleteSessionsByUserExcept(ctx context.Context, arg DeleteSess
 	return err
 }
 
+const deleteSheetQueued = `-- name: DeleteSheetQueued :exec
+DELETE FROM sheet_queue
+WHERE link_id = $1 AND submission_id = ANY($2::uuid[])
+  AND enqueued_at <= $3
+`
+
+type DeleteSheetQueuedParams struct {
+	LinkID         uuid.UUID
+	SubmissionIds  []uuid.UUID
+	EnqueuedBefore pgtype.Timestamptz
+}
+
+// Ответы доставлены (или доставлять их больше не надо): строки очереди уходят,
+// история остаётся в журнале. Пачкой, потому что пачкой и доставляются: у
+// Таблиц один append увозит все строки тика разом.
+//
+// ⚠ Мина: `enqueued_at <= $3` снимает ТУ ЖЕ строку, которую доставщик читал, а
+// не её тёзку. Между чтением очереди и этим удалением лежат два-три похода в
+// Google, и перезалив (или переезд на другую цель), успевший в это окно, уже
+// поставил те же ответы ЗАНОВО — под новый лист и с более поздним enqueued_at.
+// Без границы удаление сняло бы их: строки уехали бы в старый лист, а в новый
+// не попали бы вовсе — человек нажал «перезалить», получил 202 и недосчитался
+// ответов молча.
+func (q *Queries) DeleteSheetQueued(ctx context.Context, arg DeleteSheetQueuedParams) error {
+	_, err := q.db.Exec(ctx, deleteSheetQueued, arg.LinkID, arg.SubmissionIds, arg.EnqueuedBefore)
+	return err
+}
+
 const deleteSubmission = `-- name: DeleteSubmission :execrows
 DELETE FROM submissions
 WHERE id = $1 AND form_id = $2
@@ -1687,6 +1726,89 @@ func (q *Queries) DemoteOwner(ctx context.Context, arg DemoteOwnerParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const dueSheetLinks = `-- name: DueSheetLinks :many
+SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
+       fi.last_error, fi.last_delivered_at, fi.next_attempt_at, fi.failing_since,
+       fi.consecutive_failures, f.workspace_id, ia.user_id, ia.external_email
+FROM form_integrations fi
+JOIN integration_accounts ia ON ia.id = fi.account_id
+JOIN forms f ON f.id = fi.form_id
+WHERE fi.enabled AND fi.status = 'live' AND fi.next_attempt_at <= now()
+  AND EXISTS (SELECT 1 FROM sheet_queue q WHERE q.link_id = fi.id)
+ORDER BY fi.next_attempt_at
+LIMIT $1
+`
+
+type DueSheetLinksRow struct {
+	ID                  uuid.UUID
+	FormID              uuid.UUID
+	AccountID           uuid.UUID
+	Name                string
+	SpreadsheetID       string
+	SpreadsheetUrl      string
+	SheetID             int32
+	SheetTitle          string
+	Columns             []byte
+	Enabled             bool
+	Status              string
+	LastError           pgtype.Text
+	LastDeliveredAt     pgtype.Timestamptz
+	NextAttemptAt       pgtype.Timestamptz
+	FailingSince        pgtype.Timestamptz
+	ConsecutiveFailures int32
+	WorkspaceID         uuid.UUID
+	UserID              uuid.UUID
+	ExternalEmail       string
+}
+
+// Связки, которым есть что везти и чьё время наступило. Сломанные не берутся
+// вовсе: их ответы копятся до починки, но в Google мы не ходим. Порядок — по
+// next_attempt_at: дольше всех ждущая связка едет первой.
+//
+// workspace_id приезжает джойном из ФОРМЫ, user_id — из аккаунта: по этой паре
+// сторож доставки проверяет, что владелец подключения всё ещё участник
+// пространства формы.
+func (q *Queries) DueSheetLinks(ctx context.Context, limit int32) ([]DueSheetLinksRow, error) {
+	rows, err := q.db.Query(ctx, dueSheetLinks, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueSheetLinksRow
+	for rows.Next() {
+		var i DueSheetLinksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FormID,
+			&i.AccountID,
+			&i.Name,
+			&i.SpreadsheetID,
+			&i.SpreadsheetUrl,
+			&i.SheetID,
+			&i.SheetTitle,
+			&i.Columns,
+			&i.Enabled,
+			&i.Status,
+			&i.LastError,
+			&i.LastDeliveredAt,
+			&i.NextAttemptAt,
+			&i.FailingSince,
+			&i.ConsecutiveFailures,
+			&i.WorkspaceID,
+			&i.UserID,
+			&i.ExternalEmail,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const dueWebhooks = `-- name: DueWebhooks :many
@@ -1834,6 +1956,76 @@ func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) er
 	return err
 }
 
+const enqueueSheetBackfill = `-- name: EnqueueSheetBackfill :execrows
+INSERT INTO sheet_queue (link_id, submission_id, backfill)
+SELECT $1, s.id, true FROM submissions s
+WHERE s.form_id = $2 AND NOT s.over_quota
+ON CONFLICT (link_id, submission_id)
+DO UPDATE SET backfill = true, enqueued_at = now()
+`
+
+type EnqueueSheetBackfillParams struct {
+	LinkID uuid.UUID
+	FormID uuid.UUID
+}
+
+// Перенос накопленных: ВСЕ ответы формы ложатся в очередь связки одним
+// утверждением. Цепочки событий-пачек с курсором больше нет — прогресс переноса
+// и есть сама очередь, поэтому перезапуск процесса его не теряет, а порядок
+// «сначала накопленные, потом живые» держится enqueued_at по построению.
+//
+// NOT over_quota — тот же фильтр, что у доставки: ответ, скрытый от владельца до
+// оплаты, не должен всплыть у него же в Таблице.
+//
+// ⚠ DO UPDATE, а не DO NOTHING: живой ответ, принятый за секунду до переноса,
+// уже стоит в очереди со СВОИМ enqueued_at — более ранним, чем у всей пачки. Без
+// перештамповки он лёг бы в лист ПЕРЕД ответами, которые старше его на месяцы.
+func (q *Queries) EnqueueSheetBackfill(ctx context.Context, arg EnqueueSheetBackfillParams) (int64, error) {
+	result, err := q.db.Exec(ctx, enqueueSheetBackfill, arg.LinkID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const expiredSheetQueued = `-- name: ExpiredSheetQueued :many
+SELECT link_id, submission_id FROM sheet_queue
+WHERE enqueued_at < $1
+ORDER BY enqueued_at
+LIMIT $2
+`
+
+type ExpiredSheetQueuedParams struct {
+	EnqueuedAt pgtype.Timestamptz
+	Limit      int32
+}
+
+type ExpiredSheetQueuedRow struct {
+	LinkID       uuid.UUID
+	SubmissionID uuid.UUID
+}
+
+// Ответы, ждущие дольше срока хранения: их снимают с очереди и пишут в журнал.
+func (q *Queries) ExpiredSheetQueued(ctx context.Context, arg ExpiredSheetQueuedParams) ([]ExpiredSheetQueuedRow, error) {
+	rows, err := q.db.Query(ctx, expiredSheetQueued, arg.EnqueuedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ExpiredSheetQueuedRow
+	for rows.Next() {
+		var i ExpiredSheetQueuedRow
+		if err := rows.Scan(&i.LinkID, &i.SubmissionID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const expiredWebhookQueued = `-- name: ExpiredWebhookQueued :many
 SELECT webhook_id, submission_id FROM webhook_queue
 WHERE enqueued_at < $1
@@ -1907,23 +2099,6 @@ func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfilePara
 		&i.IsAdmin,
 	)
 	return i, err
-}
-
-const finishFormIntegrationBackfill = `-- name: FinishFormIntegrationBackfill :exec
-UPDATE form_integrations
-SET status = 'live'
-WHERE id = $1
-`
-
-// Догрузка кончилась: доставка становится живой.
-//
-// Отсечка НЕ гасится и остаётся границей переноса навсегда. Она нужна и после:
-// живое событие, поставленное до старта переноса и доехавшее после его конца,
-// относится к ответу, который перенос уже положил в лист, — без границы он лёг
-// бы туда вторым разом.
-func (q *Queries) FinishFormIntegrationBackfill(ctx context.Context, id uuid.UUID) error {
-	_, err := q.db.Exec(ctx, finishFormIntegrationBackfill, id)
-	return err
 }
 
 const getAccessContext = `-- name: GetAccessContext :one
@@ -2700,8 +2875,9 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 
 const getFormIntegrationByID = `-- name: GetFormIntegrationByID :one
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
-       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
+       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email,
+       (SELECT count(*) FROM sheet_queue q WHERE q.link_id = fi.id) AS queued
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
 JOIN forms f ON f.id = fi.form_id
@@ -2720,12 +2896,12 @@ type GetFormIntegrationByIDRow struct {
 	Columns         []byte
 	Enabled         bool
 	Status          string
-	BackfillBefore  pgtype.Timestamptz
 	LastError       pgtype.Text
 	LastDeliveredAt pgtype.Timestamptz
 	WorkspaceID     uuid.UUID
 	UserID          uuid.UUID
 	ExternalEmail   string
+	Queued          int64
 }
 
 // Привязка по своему id — путь фоновой доставки: событие несёт id привязки, а не
@@ -2746,12 +2922,12 @@ func (q *Queries) GetFormIntegrationByID(ctx context.Context, id uuid.UUID) (Get
 		&i.Columns,
 		&i.Enabled,
 		&i.Status,
-		&i.BackfillBefore,
 		&i.LastError,
 		&i.LastDeliveredAt,
 		&i.WorkspaceID,
 		&i.UserID,
 		&i.ExternalEmail,
+		&i.Queued,
 	)
 	return i, err
 }
@@ -3883,6 +4059,22 @@ func (q *Queries) InsertIntegrationDelivery(ctx context.Context, arg InsertInteg
 	return err
 }
 
+const insertSheetQueued = `-- name: InsertSheetQueued :exec
+INSERT INTO sheet_queue (link_id, submission_id) VALUES ($1, $2)
+ON CONFLICT DO NOTHING
+`
+
+type InsertSheetQueuedParams struct {
+	LinkID       uuid.UUID
+	SubmissionID uuid.UUID
+}
+
+// Повтор одной доставки из журнала. Ключ-пара делает двойное нажатие безвредным.
+func (q *Queries) InsertSheetQueued(ctx context.Context, arg InsertSheetQueuedParams) error {
+	_, err := q.db.Exec(ctx, insertSheetQueued, arg.LinkID, arg.SubmissionID)
+	return err
+}
+
 const insertSubmission = `-- name: InsertSubmission :execrows
 
 WITH ins AS (
@@ -3909,6 +4101,15 @@ WITH ins AS (
     INSERT INTO webhook_queue (webhook_id, submission_id)
     SELECT w.id, $1 FROM form_webhooks w, ins
     WHERE w.form_id = $2 AND w.enabled
+    RETURNING 1 AS one
+), sheets_queued AS (
+    -- Доставка в связки Google Таблиц — тем же утверждением и по тем же
+    -- основаниям (0065). До переезда событие ставилось ПОСЛЕ коммита ответа, и
+    -- краш в этом окне стоил строки в чужой таблице: у Таблиц окно лечилось
+    -- кнопкой «Перезалить всё», но лечил его человек, который о потере не знал.
+    INSERT INTO sheet_queue (link_id, submission_id)
+    SELECT fi.id, $1 FROM form_integrations fi, ins
+    WHERE fi.form_id = $2 AND fi.enabled
     RETURNING 1 AS one
 )
 SELECT one FROM ins
@@ -4052,32 +4253,6 @@ func (q *Queries) IsUserAdmin(ctx context.Context, id uuid.UUID) (bool, error) {
 	var is_admin bool
 	err := row.Scan(&is_admin)
 	return is_admin, err
-}
-
-const listEnabledFormIntegrations = `-- name: ListEnabledFormIntegrations :many
-SELECT id FROM form_integrations WHERE form_id = $1 AND enabled
-`
-
-// Кому доставлять принятый ответ. Выключенные связки пропускаются здесь, а не
-// в диспетчере: событие, которое некому доставить, лучше не заводить вовсе.
-func (q *Queries) ListEnabledFormIntegrations(ctx context.Context, formID uuid.UUID) ([]uuid.UUID, error) {
-	rows, err := q.db.Query(ctx, listEnabledFormIntegrations, formID)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-	var items []uuid.UUID
-	for rows.Next() {
-		var id uuid.UUID
-		if err := rows.Scan(&id); err != nil {
-			return nil, err
-		}
-		items = append(items, id)
-	}
-	if err := rows.Err(); err != nil {
-		return nil, err
-	}
-	return items, nil
 }
 
 const listFeedAfter = `-- name: ListFeedAfter :many
@@ -4322,8 +4497,9 @@ func (q *Queries) ListFormFiles(ctx context.Context, formID uuid.UUID) ([]ListFo
 
 const listFormIntegrations = `-- name: ListFormIntegrations :many
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
-       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status, fi.backfill_before,
-       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email
+       fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
+       fi.last_error, fi.last_delivered_at, f.workspace_id, ia.user_id, ia.external_email,
+       (SELECT count(*) FROM sheet_queue q WHERE q.link_id = fi.id) AS queued
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
 JOIN forms f ON f.id = fi.form_id
@@ -4343,12 +4519,12 @@ type ListFormIntegrationsRow struct {
 	Columns         []byte
 	Enabled         bool
 	Status          string
-	BackfillBefore  pgtype.Timestamptz
 	LastError       pgtype.Text
 	LastDeliveredAt pgtype.Timestamptz
 	WorkspaceID     uuid.UUID
 	UserID          uuid.UUID
 	ExternalEmail   string
+	Queued          int64
 }
 
 // Связки формы — их сколько угодно (интеграция это правило доставки, а не
@@ -4380,12 +4556,12 @@ func (q *Queries) ListFormIntegrations(ctx context.Context, formID uuid.UUID) ([
 			&i.Columns,
 			&i.Enabled,
 			&i.Status,
-			&i.BackfillBefore,
 			&i.LastError,
 			&i.LastDeliveredAt,
 			&i.WorkspaceID,
 			&i.UserID,
 			&i.ExternalEmail,
+			&i.Queued,
 		); err != nil {
 			return nil, err
 		}
@@ -5401,53 +5577,43 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 	return items, nil
 }
 
-const listSubmissionsForBackfill = `-- name: ListSubmissionsForBackfill :many
+const listSubmissionsForDelivery = `-- name: ListSubmissionsForDelivery :many
 SELECT s.id, s.answers, s.created_at, fv.version AS form_version
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
 WHERE s.form_id = $1 AND NOT s.over_quota
-  AND s.created_at < $2
-  AND s.id > $4::uuid
-ORDER BY s.id
-LIMIT $3
+  AND s.id = ANY($2::uuid[])
 `
 
-type ListSubmissionsForBackfillParams struct {
-	FormID    uuid.UUID
-	CreatedAt pgtype.Timestamptz
-	Limit     int32
-	After     uuid.UUID
+type ListSubmissionsForDeliveryParams struct {
+	FormID uuid.UUID
+	Ids    []uuid.UUID
 }
 
-type ListSubmissionsForBackfillRow struct {
+type ListSubmissionsForDeliveryRow struct {
 	ID          uuid.UUID
 	Answers     []byte
 	CreatedAt   pgtype.Timestamptz
 	FormVersion int32
 }
 
-// Пачка накопленных ответов для догрузки во внешнюю таблицу (фаза 25).
+// Пачка ответов для доставки во внешнюю таблицу (0065). Пачкой, потому что
+// пачкой и уезжает: у Таблиц один values.append увозит все строки тика разом, а
+// лимит Google считает запросы, не строки.
 //
-// Порядок ВОЗРАСТАЮЩИЙ, в отличие от листинга кабинета: в таблицу строки
-// ложатся дописыванием, и «новые сверху» дали бы там перевёрнутую хронологию.
-// Курсор — тот же id (UUIDv7 монотонен по времени), только «больше якоря».
-//
-// created_at < $2 — отсечка догрузки: всё, что пришло после неё, доставляет
-// живая очередь, и границы не пересекаются (ни дублей, ни пропусков).
-func (q *Queries) ListSubmissionsForBackfill(ctx context.Context, arg ListSubmissionsForBackfillParams) ([]ListSubmissionsForBackfillRow, error) {
-	rows, err := q.db.Query(ctx, listSubmissionsForBackfill,
-		arg.FormID,
-		arg.CreatedAt,
-		arg.Limit,
-		arg.After,
-	)
+// Порядок ЗДЕСЬ не важен и не задаётся: очередь связки уже назвала его, и
+// доставщик раскладывает ответ этой выборки по своему списку id. Кто из
+// запрошенных не вернулся — удалён автором либо скрыт тарифом (NOT over_quota,
+// тот же фильтр, что у соседнего GetSubmissionForDelivery): доставлять нечего.
+func (q *Queries) ListSubmissionsForDelivery(ctx context.Context, arg ListSubmissionsForDeliveryParams) ([]ListSubmissionsForDeliveryRow, error) {
+	rows, err := q.db.Query(ctx, listSubmissionsForDelivery, arg.FormID, arg.Ids)
 	if err != nil {
 		return nil, err
 	}
 	defer rows.Close()
-	var items []ListSubmissionsForBackfillRow
+	var items []ListSubmissionsForDeliveryRow
 	for rows.Next() {
-		var i ListSubmissionsForBackfillRow
+		var i ListSubmissionsForDeliveryRow
 		if err := rows.Scan(
 			&i.ID,
 			&i.Answers,
@@ -5900,19 +6066,51 @@ func (q *Queries) MarkFormIntegrationBroken(ctx context.Context, arg MarkFormInt
 
 const markFormIntegrationDelivered = `-- name: MarkFormIntegrationDelivered :exec
 UPDATE form_integrations
-SET last_delivered_at = now(), last_error = NULL,
-    -- Статус возвращается в live только из broken: сломанная интеграция, которая
-    -- заработала, обязана перестать краснеть в кабинете. Идущий ПЕРЕНОС этой
-    -- пометкой не сбивается — иначе первая же доставленная пачка объявила бы
-    -- догрузку законченной, и остальные ответы не доехали бы никогда.
-    status = CASE WHEN status = 'broken' THEN 'live' ELSE status END
+SET last_delivered_at = now(), last_error = NULL, failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
 WHERE id = $1
 `
 
-// Успешная доставка: гасим прошлую ошибку и возвращаем статус в live — сломанная
-// интеграция, которая заработала, обязана перестать краснеть в кабинете.
+// Успех: гасим неудачи и время следующей попытки — очередь этой связки поедет
+// дальше тем же тиком.
+//
+// Статус не трогается вовсе: доставщик сломанную связку не берёт (DueSheetLinks),
+// поэтому успешная доставка при status = 'broken' невозможна, а лечит поломку
+// человек — правкой цели, перезаливом или проверкой связи.
 func (q *Queries) MarkFormIntegrationDelivered(ctx context.Context, id uuid.UUID) error {
 	_, err := q.db.Exec(ctx, markFormIntegrationDelivered, id)
+	return err
+}
+
+const markFormIntegrationFailed = `-- name: MarkFormIntegrationFailed :exec
+UPDATE form_integrations
+SET last_error = $2, consecutive_failures = consecutive_failures + 1,
+    failing_since = COALESCE(failing_since, $3),
+    next_attempt_at = $4
+WHERE id = $1
+`
+
+type MarkFormIntegrationFailedParams struct {
+	ID            uuid.UUID
+	LastError     pgtype.Text
+	FailingSince  pgtype.Timestamptz
+	NextAttemptAt pgtype.Timestamptz
+}
+
+// Неудача усыпляет СВЯЗКУ, а не строку очереди: лежащий лист получает одну
+// попытку за окно бэкоффа, сколько бы ответов ни ждало. В общем outbox
+// расписание жило у СОБЫТИЯ, и тысяча накопленных ответов давала тысячу
+// запросов в час в одну и ту же мёртвую таблицу.
+//
+// failing_since держит ПЕРВЫЙ отказ подряд (COALESCE): по нему считаются сутки
+// до поломки, и каждая следующая неудача не должна сдвигать отсчёт.
+func (q *Queries) MarkFormIntegrationFailed(ctx context.Context, arg MarkFormIntegrationFailedParams) error {
+	_, err := q.db.Exec(ctx, markFormIntegrationFailed,
+		arg.ID,
+		arg.LastError,
+		arg.FailingSince,
+		arg.NextAttemptAt,
+	)
 	return err
 }
 
@@ -6115,6 +6313,52 @@ func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32,
 	var next_version int32
 	err := row.Scan(&next_version)
 	return next_version, err
+}
+
+const pendingSheetSubmissions = `-- name: PendingSheetSubmissions :many
+SELECT submission_id, backfill, enqueued_at FROM sheet_queue
+WHERE link_id = $1
+ORDER BY enqueued_at, submission_id
+LIMIT $2
+`
+
+type PendingSheetSubmissionsParams struct {
+	LinkID uuid.UUID
+	Limit  int32
+}
+
+type PendingSheetSubmissionsRow struct {
+	SubmissionID uuid.UUID
+	Backfill     bool
+	EnqueuedAt   pgtype.Timestamptz
+}
+
+// Что связка везёт следующим — в порядке постановки. submission_id вторым
+// ключом сортировки не украшение: перенос ставит всю пачку ОДНИМ утверждением,
+// enqueued_at у её строк одинаков, и хронологию в листе держит только он.
+//
+// backfill едет рядом: от него зависит гранулярность журнала (одна запись на
+// пачку переноса против записи на каждый живой ответ), но ни порядок, ни
+// расписание он не трогает. enqueued_at — метка версии строки, см. соседний
+// DeleteSheetQueued.
+func (q *Queries) PendingSheetSubmissions(ctx context.Context, arg PendingSheetSubmissionsParams) ([]PendingSheetSubmissionsRow, error) {
+	rows, err := q.db.Query(ctx, pendingSheetSubmissions, arg.LinkID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []PendingSheetSubmissionsRow
+	for rows.Next() {
+		var i PendingSheetSubmissionsRow
+		if err := rows.Scan(&i.SubmissionID, &i.Backfill, &i.EnqueuedAt); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const pendingWebhookSubmissions = `-- name: PendingWebhookSubmissions :many
@@ -6649,24 +6893,6 @@ func (q *Queries) SetUserPassword(ctx context.Context, arg SetUserPasswordParams
 	return err
 }
 
-const startFormIntegrationBackfill = `-- name: StartFormIntegrationBackfill :exec
-UPDATE form_integrations
-SET status = 'backfilling', backfill_before = $2, last_error = NULL
-WHERE id = $1
-`
-
-type StartFormIntegrationBackfillParams struct {
-	ID             uuid.UUID
-	BackfillBefore pgtype.Timestamptz
-}
-
-// Начало догрузки: статус backfilling и отсечка. Всё, что пришло ДО неё, кладёт
-// догрузка; всё, что после, — живая очередь. Границы не пересекаются.
-func (q *Queries) StartFormIntegrationBackfill(ctx context.Context, arg StartFormIntegrationBackfillParams) error {
-	_, err := q.db.Exec(ctx, startFormIntegrationBackfill, arg.ID, arg.BackfillBefore)
-	return err
-}
-
 const submissionAlreadyDelivered = `-- name: SubmissionAlreadyDelivered :one
 SELECT EXISTS (
     SELECT 1 FROM integration_deliveries
@@ -7147,7 +7373,8 @@ func (q *Queries) UpdateFormIntegrationSettings(ctx context.Context, arg UpdateF
 const updateFormIntegrationTarget = `-- name: UpdateFormIntegrationTarget :execrows
 UPDATE form_integrations
 SET account_id = $3, spreadsheet_id = $4, spreadsheet_url = $5, sheet_id = $6,
-    sheet_title = $7, columns = $8, status = $9, backfill_before = NULL, last_error = NULL
+    sheet_title = $7, columns = $8, status = 'live', last_error = NULL,
+    failing_since = NULL, consecutive_failures = 0, next_attempt_at = now()
 WHERE id = $1 AND form_id = $2
 `
 
@@ -7160,7 +7387,6 @@ type UpdateFormIntegrationTargetParams struct {
 	SheetID        int32
 	SheetTitle     string
 	Columns        []byte
-	Status         string
 }
 
 // Связка переезжает в другой лист (правка на том же экране, что и подключение).
@@ -7182,7 +7408,6 @@ func (q *Queries) UpdateFormIntegrationTarget(ctx context.Context, arg UpdateFor
 		arg.SheetID,
 		arg.SheetTitle,
 		arg.Columns,
-		arg.Status,
 	)
 	if err != nil {
 		return 0, err

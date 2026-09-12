@@ -280,6 +280,17 @@ const (
 	// Уборка очереди вебхуков: ответы, прождавшие дольше срока хранения.
 	webhookQueueCleanupInterval = time.Hour
 	webhookQueueCleanupTimeout  = 30 * time.Second
+	// Доставка в Google Таблицы (0065) — второй такой же проход, со своим
+	// расписанием у каждой связки. Тик тот же, что у вебхуков: ответ обязан
+	// уезжать «через секунды», а пустой проход стоит одного запроса.
+	sheetDispatchInterval = 5 * time.Second
+	// Таймаут прохода: связка везёт до 200 ответов ОДНИМ запросом к Google,
+	// плюс чтение шапки листа перед ним; недоделанное уедет следующим проходом,
+	// строки очереди на месте.
+	sheetDispatchTimeout = 2 * time.Minute
+	// Уборка очереди Таблиц — тот же срок и тот же час, что у вебхуков.
+	sheetQueueCleanupInterval = time.Hour
+	sheetQueueCleanupTimeout  = 30 * time.Second
 	// Ведро кнопки «Проверить»: шесть проверок в минуту на человека. Кнопка
 	// ходит по адресу, который человек только что ввёл, и без ведра ею можно
 	// было бы стучать в чужой сервер с нашего IP.
@@ -533,7 +544,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	})
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey).
-		WithWebhooks(integrations.Repo{}, webhookEgress, time.Now)
+		WithWebhooks(integrations.Repo{}, webhookEgress)
 	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
 	// числа расписаний — у entitlements. Транзакция нужна одному действию — переносу
 	// записи: лок слота, счёт мест и правка обязаны быть одной.
@@ -656,19 +667,16 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		// Адрес публичного рендерера нужен подвалу письма респонденту: в нём стоит
 		// ссылка на саму форму, а собрать её из origin кабинета нельзя.
 		WithRespondentMail(cfg.PublicRendererBaseURL, respondentMailLimiter)
-	// Доставка ответов в таблицы (слайс C): пара «submissions ↔ integrations»
-	// собирается сеттерами — каждый нужен другому, и в конструкторе такую пару
-	// не собрать. Транспорт канала подключается к диспетчеру outbox ДО старта
-	// периодической задачи, иначе канал без транспорта копил бы ретраи.
+	// Доставка ответов в таблицы: строки ответа читает модуль submissions, и
+	// сеттером, а не аргументом конструктора, — тот собран выше и ему самому
+	// интеграции уже не нужны (ответ встаёт в очередь связки веткой CTE приёма).
 	// Письмо об отмене записи: адрес получателя живёт в ОТВЕТЕ формы, поэтому его
 	// ставит модуль ответов, а зовёт — тот, кто отменяет (ссылка из письма и кабинет).
 	// Сеттеры мутируют сам сервис и возвращают его же: хендлеры, собранные выше,
 	// держат тот же указатель, поэтому присваивать результат не надо.
 	bookingCancelSvc.WithNotifier(submissionsSvc)
 	bookingSvc.WithNotifier(submissionsSvc)
-	submissionsSvc = submissionsSvc.WithIntegrations(integrationsSvc)
-	integrationsSvc = integrationsSvc.WithDelivery(mailSvc, submissionsSvc)
-	mailSvc = mailSvc.WithTransport(integrations.ChannelSheets, integrationsSvc)
+	integrationsSvc = integrationsSvc.WithDelivery(submissionsSvc)
 
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
 	submissionsHandler := submissions.NewHandler(submissionsSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
@@ -949,6 +957,38 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("webhook deliveries sent", slog.Int("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "sheet-delivery",
+		Interval: sheetDispatchInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, sheetDispatchTimeout)
+			defer cancel()
+			n, err := integrationsSvc.DeliverSheets(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("sheet rows delivered", slog.Int("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "sheet-queue-cleanup",
+		Interval: sheetQueueCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, sheetQueueCleanupTimeout)
+			defer cancel()
+			n, err := integrationsSvc.CleanupSheetQueue(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("sheet queue rows expired", slog.Int64("count", n))
 			}
 			return nil
 		},

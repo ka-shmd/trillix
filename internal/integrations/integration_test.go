@@ -30,7 +30,6 @@ import (
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/integrations"
-	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
@@ -40,12 +39,8 @@ import (
 
 var testPool *pgxpool.Pool
 
-// testOutbox — диспетчер очереди последней собранной вертикали: тест доставки
-// гоняет его руками, как это делает periodic-задача в проде.
-var testOutbox *mail.Service
-
-// testIntegrations — сервис последней собранной вертикали: постановку события
-// делает он же, что и в проде (submissions зовёт его после коммита).
+// testIntegrations — сервис последней собранной вертикали: проход доставщика
+// тесты гоняют руками, как это делает periodic-задача в проде.
 var testIntegrations *integrations.Service
 
 func TestMain(m *testing.M) {
@@ -92,20 +87,18 @@ func newStackWithEgress(t *testing.T, provider integrations.Provider, egress int
 
 	svc := integrations.NewService(testPool, postgres.TxRunner{Pool: testPool}, integrations.Repo{},
 		wsSvc, formsSvc, provider, testKey).
-		WithWebhooks(integrations.Repo{}, egress, nil)
+		WithWebhooks(integrations.Repo{}, egress)
 	// Лимитер инжектируется пермиссивной реализацией, а не выключается (инвариант 6).
 	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey,
 		ratelimit.AllowAll{})
 
-	// Доставка: настоящий outbox (mail) как очередь, настоящий submissions как
-	// источник строки. Провайдер подставной — живой поход в Google означал бы
+	// Доставка: настоящая очередь связки в Postgres, настоящий submissions как
+	// источник строк. Провайдер подставной — живой поход в Google означал бы
 	// тест, зелёный только при интернете.
-	outbox := pgtest.MailService(testPool)
 	subsSvc := submissions.NewService(testPool, postgres.TxRunner{Pool: testPool}, formsSvc, nil,
-		outbox, plans, submissions.Repo{}, appOrigin)
-	svc = svc.WithDelivery(outbox, subsSvc)
-	outbox.WithTransport(integrations.ChannelSheets, svc)
-	testOutbox, testIntegrations = outbox, svc
+		pgtest.MailService(testPool), plans, submissions.Repo{}, appOrigin)
+	svc = svc.WithDelivery(subsSvc)
+	testIntegrations = svc
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
@@ -512,9 +505,7 @@ func TestIntegrations_LinkFormToSheet(t *testing.T) {
 	}
 	var sheet sheetDTO
 	decode(t, r, &sheet)
-	// Сразу после привязки идёт перенос накопленных ответов (у этой формы их
-	// нет — перенос закроется первой же пустой пачкой).
-	if sheet.URL == "" || sheet.Status != "backfilling" {
+	if sheet.URL == "" || sheet.Status != "live" {
 		t.Fatalf("привязка = %+v", sheet)
 	}
 
@@ -939,11 +930,7 @@ func TestIntegrations_DeliverSubmission(t *testing.T) {
 	subID := newSubmission(t, formID, versionID, `{"b1":"Ирина"}`)
 	enqueueDelivery(t, srv, formID, subID)
 
-	// В очереди рядом лежит письмо-подтверждение регистрации: диспетчер один на
-	// все каналы, и это ровно то, что проверяется, — таблицы и почта едут вместе.
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	deliver(t)
 	if len(provider.appended) != 1 {
 		t.Fatalf("в лист дописано %d строк", len(provider.appended))
 	}
@@ -952,14 +939,8 @@ func TestIntegrations_DeliverSubmission(t *testing.T) {
 		t.Fatalf("строка = %v", got)
 	}
 
-	var pending int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM outbox WHERE sent_at IS NULL AND channel = $1`,
-		integrations.ChannelSheets).Scan(&pending); err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if pending != 0 {
-		t.Fatalf("в очереди осталось %d недоставленных строк", pending)
+	if got := sheetQueueLen(t, formID); got != 0 {
+		t.Fatalf("в очереди осталось %d недоставленных строк", got)
 	}
 }
 
@@ -975,13 +956,8 @@ func TestIntegrations_NoEventForUnlinkedForm(t *testing.T) {
 
 	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{}`))
 
-	var queued int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM outbox WHERE channel = $1`, integrations.ChannelSheets).Scan(&queued); err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if queued != 0 {
-		t.Fatalf("в очереди %d строк для непривязанной формы", queued)
+	if got := sheetQueueLen(t, formID); got != 0 {
+		t.Fatalf("в очереди %d строк для непривязанной формы", got)
 	}
 }
 
@@ -1014,9 +990,7 @@ func TestIntegrations_DeliveryStopsAfterMemberRemoved(t *testing.T) {
 	removeMember(t, wsID, "editor@example.com")
 
 	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	deliver(t)
 
 	if len(provider.appended) != 0 {
 		t.Fatalf("ответ уехал в Диск бывшего участника: %v", provider.appended)
@@ -1026,16 +1000,11 @@ func TestIntegrations_DeliveryStopsAfterMemberRemoved(t *testing.T) {
 		t.Fatalf("связка = %+v, ожидался статус broken", conns)
 	}
 
-	// Событие ПОГАШЕНО, а не отложено: членство очередь не вернёт, и вечный
-	// ретрай означал бы стук в чужой API до конца времён.
-	var pending int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM outbox WHERE sent_at IS NULL AND channel = $1`,
-		integrations.ChannelSheets).Scan(&pending); err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if pending != 0 {
-		t.Fatalf("в очереди осталось %d событий — сторож отправил их на ретрай", pending)
+	// Ответ ОСТАЁТСЯ в очереди: сломанную связку доставщик не берёт вовсе, а
+	// заведённая заново своим аккаунтом увезёт накопленное. Погасить его, как
+	// событие outbox, значило бы потерять ответ навсегда.
+	if got := sheetQueueLen(t, formID); got != 1 {
+		t.Fatalf("в очереди %d строк, ожидалась одна", got)
 	}
 }
 
@@ -1052,12 +1021,42 @@ func removeMember(t *testing.T, wsID, email string) {
 	}
 }
 
+// enqueueDelivery ставит ответ в очередь связок формы ровно так, как это делает
+// ветка CTE приёма (internal/submissions/queries.sql): тесты ниже вставляют
+// ответы напрямую, минуя публичную ручку с антиспам-токеном, — они про доставку,
+// а не про приём. Саму ветку проверяет свой интеграционный тест в submissions.
 func enqueueDelivery(t *testing.T, _ *httptest.Server, formID, subID string) {
 	t.Helper()
-	if err := testIntegrations.EnqueueSubmission(context.Background(),
-		uuid.MustParse(formID), uuid.MustParse(subID)); err != nil {
+	_, err := testPool.Exec(context.Background(),
+		`INSERT INTO sheet_queue (link_id, submission_id)
+		 SELECT fi.id, $2 FROM form_integrations fi WHERE fi.form_id = $1 AND fi.enabled
+		 ON CONFLICT DO NOTHING`, formID, subID)
+	if err != nil {
 		t.Fatalf("enqueue: %v", err)
 	}
+}
+
+// deliver гоняет проход доставщика Таблиц — тот же, что крутит периодическая
+// задача sheet-delivery.
+func deliver(t *testing.T) {
+	t.Helper()
+	if _, err := testIntegrations.DeliverSheets(context.Background()); err != nil {
+		t.Fatalf("проход доставщика: %v", err)
+	}
+}
+
+// sheetQueueLen — длина очереди связок формы: ею тесты проверяют и «доставлено»,
+// и «копится до починки».
+func sheetQueueLen(t *testing.T, formID string) int {
+	t.Helper()
+	var n int
+	err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM sheet_queue q JOIN form_integrations fi ON fi.id = q.link_id
+		  WHERE fi.form_id = $1`, formID).Scan(&n)
+	if err != nil {
+		t.Fatalf("count sheet queue: %v", err)
+	}
+	return n
 }
 
 // publishVersion добавляет форме опубликованную версию с одним вопросом: без
@@ -1115,13 +1114,16 @@ func TestIntegrations_BackfillOnConnect(t *testing.T) {
 	}
 	var sheet sheetDTO
 	decode(t, r, &sheet)
-	if sheet.Status != "backfilling" {
-		t.Fatalf("статус сразу после привязки = %q, ожидался перенос", sheet.Status)
+	// Отдельного статуса у переноса больше нет (0065): он виден очередью, и
+	// пока она не разобрана, связка живая и просто занятая.
+	if sheet.Status != "live" {
+		t.Fatalf("статус сразу после привязки = %q", sheet.Status)
+	}
+	if got := sheetQueueLen(t, formID); got != 2 {
+		t.Fatalf("накопленных в очереди %d, ожидалось 2", got)
 	}
 
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	deliver(t)
 	if len(provider.appended) != 2 {
 		t.Fatalf("перенесено строк: %d, ожидалось 2", len(provider.appended))
 	}
@@ -1138,9 +1140,7 @@ func TestIntegrations_BackfillOnConnect(t *testing.T) {
 	// Дальше работает живая доставка — тем же листом и теми же колонками.
 	third := newSubmission(t, formID, versionID, `{"b1":"Третий"}`)
 	enqueueDelivery(t, srv, formID, third)
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	deliver(t)
 	if len(provider.appended) != 3 || provider.appended[2][0] != third {
 		t.Fatalf("живая доставка после переноса = %v", provider.appended)
 	}
@@ -1163,9 +1163,7 @@ func TestIntegrations_Refill(t *testing.T) {
 	r := linkForm(t, owner, srv, formID, accountID)
 	var sheet sheetDTO
 	decode(t, r, &sheet)
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	dispatchAll(t)
 	before := len(provider.appended)
 
 	r = postWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/integrations/"+sheet.ID+"/refill")
@@ -1177,9 +1175,7 @@ func TestIntegrations_Refill(t *testing.T) {
 		t.Error("лист не вычищен")
 	}
 
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	dispatchAll(t)
 	if len(provider.appended) != before+1 {
 		t.Fatalf("после перезалива строк дописано %d, ожидалась одна", len(provider.appended)-before)
 	}
@@ -1220,9 +1216,7 @@ func TestIntegrations_ConnectWithOptions(t *testing.T) {
 		t.Errorf("подпись связки = %q", name)
 	}
 
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	deliver(t)
 	if len(provider.appended) != 0 {
 		t.Fatalf("накопленные ответы уехали вопреки выключенному тумблеру: %v", provider.appended)
 	}
@@ -1299,18 +1293,11 @@ func TestIntegrations_ToggleConnection(t *testing.T) {
 	// не заводим вовсе: копить их до возврата тумблера значит однажды вывалить
 	// в таблицу всё разом.
 	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
-	var queued int
-	if err := testPool.QueryRow(context.Background(),
-		`SELECT count(*) FROM outbox WHERE channel = $1`, integrations.ChannelSheets).Scan(&queued); err != nil {
-		t.Fatalf("count: %v", err)
-	}
-	if queued != 0 {
-		t.Fatalf("выключенной связке заведено %d событий", queued)
+	if got := sheetQueueLen(t, formID); got != 0 {
+		t.Fatalf("выключенной связке заведено %d строк очереди", got)
 	}
 
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	deliver(t)
 	if len(provider.appended) != 0 {
 		t.Fatalf("выключенная связка получила ответ: %v", provider.appended)
 	}
@@ -1338,9 +1325,7 @@ func TestIntegrations_TwoConnectionsBothDeliver(t *testing.T) {
 	}
 
 	enqueueDelivery(t, srv, formID, newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
-	if _, err := testOutbox.Dispatch(context.Background()); err != nil {
-		t.Fatalf("dispatch: %v", err)
-	}
+	deliver(t)
 	if len(provider.appended) != 2 {
 		t.Fatalf("строк дописано %d, ожидалось две (по одной на связку)", len(provider.appended))
 	}
@@ -1561,14 +1546,14 @@ func onlyLinkID(t *testing.T, c *http.Client, srv *httptest.Server, formID strin
 	return status.Connections[0].ID
 }
 
-// dispatchAll крутит диспетчер, пока он разбирает очередь: одно событие =
-// один проход, а перенос накопленных ставит следующую пачку сам.
+// dispatchAll крутит доставщик, пока он разбирает очередь: за проход связка
+// увозит пачку, и длинная очередь требует нескольких.
 func dispatchAll(t *testing.T) {
 	t.Helper()
 	for range 10 {
-		n, err := testOutbox.Dispatch(context.Background())
+		n, err := testIntegrations.DeliverSheets(context.Background())
 		if err != nil {
-			t.Fatalf("dispatch: %v", err)
+			t.Fatalf("проход доставщика: %v", err)
 		}
 		if n == 0 {
 			return
@@ -1637,4 +1622,55 @@ func needsReconnect(t *testing.T, c *http.Client, srv *httptest.Server, formID, 
 	}
 	t.Fatalf("аккаунт %s пропал из состояния формы", accountID)
 	return false
+}
+
+// ⚠ Граница версии строки живёт в САМОМ запросе, а не в коде вокруг него:
+// снятие с очереди не имеет права трогать строку, поставленную ПОЗЖЕ той, что
+// читал доставщик. Между чтением очереди и снятием лежат два-три похода в
+// Google, и перезалив, успевший в это окно, ставит те же ответы заново — уже
+// под новый лист. Без границы они уехали бы в старый и пропали для нового.
+//
+// Проверяется против настоящего Postgres: в фейке это условие можно случайно
+// повторить неверно, а `<=` против `<` на равных метках виден только здесь.
+func TestIntegrations_QueueDropSpareRowsRequeuedLater(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	accountID := connectAccount(t, owner, srv)
+
+	formID := newForm(t, wsID, "f-requeue")
+	versionID := publishVersion(t, formID)
+	closeBody(t, linkForm(t, owner, srv, formID, accountID))
+	linkID := uuid.MustParse(onlyLinkID(t, owner, srv, formID))
+
+	subID := uuid.MustParse(newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
+	enqueueDelivery(t, srv, formID, subID.String())
+
+	var enqueued time.Time
+	err := testPool.QueryRow(context.Background(),
+		`SELECT enqueued_at FROM sheet_queue WHERE link_id = $1 AND submission_id = $2`,
+		linkID, subID).Scan(&enqueued)
+	if err != nil {
+		t.Fatalf("строка очереди не найдена: %v", err)
+	}
+
+	// Доставщик читал строку СЕКУНДОЙ РАНЬШЕ — значит, эта уже чужая.
+	repo := integrations.Repo{}
+	if err := repo.DropSheetQueued(context.Background(), testPool, linkID,
+		[]uuid.UUID{subID}, enqueued.Add(-time.Second)); err != nil {
+		t.Fatalf("снятие с очереди: %v", err)
+	}
+	if got := sheetQueueLen(t, formID); got != 1 {
+		t.Fatal("снята строка, поставленная позже прочитанной: перезалив потерял бы свою очередь")
+	}
+
+	// Та же строка, что читали, снимается как обычно.
+	if err := repo.DropSheetQueued(context.Background(), testPool, linkID,
+		[]uuid.UUID{subID}, enqueued); err != nil {
+		t.Fatalf("снятие с очереди: %v", err)
+	}
+	if got := sheetQueueLen(t, formID); got != 0 {
+		t.Fatalf("в очереди осталось %d строк — доставленное не снимается", got)
+	}
 }

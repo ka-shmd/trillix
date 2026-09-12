@@ -168,9 +168,22 @@ type FormLink struct {
 	Columns         []domain.SheetColumn
 	Enabled         bool
 	Status          string
-	BackfillBefore  time.Time
 	LastError       string
 	LastDeliveredAt time.Time
+	// Queued — сколько ответов ждут доставки в эту связку. Экран показывает
+	// «в очереди N» — им же виден идущий перенос накопленных.
+	Queued int64
+
+	// Дальше — то, что нужно ДОСТАВЩИКУ и не нужно экрану; у чтений для таба
+	// эти поля пусты.
+	//
+	// FailingSince — с какого момента связка подряд не принимает. Сутки —
+	// поломка; момент ПЕРВОГО отказа, а не последнего, иначе отсчёт не наступит
+	// никогда.
+	FailingSince time.Time
+	// ConsecutiveFailures — сколько неудач подряд: по нему считается бэкофф.
+	ConsecutiveFailures int32
+	NextAttemptAt       time.Time
 }
 
 // NewFormLink — что нужно записать при привязке.
@@ -224,8 +237,8 @@ func (Repo) ListLinks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (
 			UserID: row.UserID, ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled,
 			SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
 			SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
-			BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
-			LastDeliveredAt: row.LastDeliveredAt.Time,
+			LastError: row.LastError.String, LastDeliveredAt: row.LastDeliveredAt.Time,
+			Queued: row.Queued,
 		})
 		if err != nil {
 			return nil, err
@@ -233,16 +246,6 @@ func (Repo) ListLinks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (
 		out = append(out, link)
 	}
 	return out, nil
-}
-
-// EnabledLinkIDs — кому доставлять принятый ответ. Только id: на горячем пути
-// приёма ничего больше не нужно, а полные строки стоили бы джойна на каждый ответ.
-func (Repo) EnabledLinkIDs(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]uuid.UUID, error) {
-	ids, err := postgres.New(db).ListEnabledFormIntegrations(ctx, formID)
-	if err != nil {
-		return nil, fmt.Errorf("list enabled form integrations: %w", err)
-	}
-	return ids, nil
 }
 
 // DeleteLink удаляет ОДНУ связку формы. Ноль строк — связки нет либо она чужой
@@ -281,8 +284,8 @@ func (Repo) GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Fo
 		ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
 		UserID: row.UserID, ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled, SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
 		SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
-		BackfillBefore: row.BackfillBefore.Time, LastError: row.LastError.String,
-		LastDeliveredAt: row.LastDeliveredAt.Time,
+		LastError: row.LastError.String, LastDeliveredAt: row.LastDeliveredAt.Time,
+		Queued: row.Queued,
 	})
 }
 
@@ -356,7 +359,8 @@ type formIntegrationRow struct {
 	SheetID                            int32
 	SheetTitle, Status, LastError      string
 	Columns                            []byte
-	BackfillBefore, LastDeliveredAt    time.Time
+	LastDeliveredAt                    time.Time
+	Queued                             int64
 }
 
 func toFormLink(row formIntegrationRow) (FormLink, error) {
@@ -379,36 +383,160 @@ func toFormLink(row formIntegrationRow) (FormLink, error) {
 		Columns:         columns,
 		Enabled:         row.Enabled,
 		Status:          row.Status,
-		BackfillBefore:  row.BackfillBefore,
 		LastError:       row.LastError,
 		LastDeliveredAt: row.LastDeliveredAt,
+		Queued:          row.Queued,
 	}, nil
 }
 
-func (Repo) StartBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID, before time.Time) error {
-	err := postgres.New(db).StartFormIntegrationBackfill(ctx, postgres.StartFormIntegrationBackfillParams{
-		ID:             id,
-		BackfillBefore: pgtype.Timestamptz{Time: before, Valid: true},
+// MarkFailed усыпляет СВЯЗКУ до next: лежащий лист получает одну попытку за окно
+// бэкоффа, сколько бы ответов ни ждало в очереди.
+func (Repo) MarkFailed(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string, failingSince, next time.Time) error {
+	err := postgres.New(db).MarkFormIntegrationFailed(ctx, postgres.MarkFormIntegrationFailedParams{
+		ID:            id,
+		LastError:     pgtype.Text{String: cause, Valid: cause != ""},
+		FailingSince:  pgtype.Timestamptz{Time: failingSince, Valid: true},
+		NextAttemptAt: pgtype.Timestamptz{Time: next, Valid: true},
 	})
 	if err != nil {
-		return fmt.Errorf("start backfill: %w", err)
+		return fmt.Errorf("mark form integration failed: %w", err)
 	}
 	return nil
 }
 
-func (Repo) FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
-	if err := postgres.New(db).FinishFormIntegrationBackfill(ctx, id); err != nil {
-		return fmt.Errorf("finish backfill: %w", err)
+// DueLinks — связки, которым есть что везти и чьё время наступило.
+func (Repo) DueLinks(ctx context.Context, db postgres.DBTX, limit int32) ([]FormLink, error) {
+	rows, err := postgres.New(db).DueSheetLinks(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("due sheet links: %w", err)
+	}
+	out := make([]FormLink, 0, len(rows))
+	for _, row := range rows {
+		link, err := toFormLink(formIntegrationRow{
+			ID: row.ID, FormID: row.FormID, AccountID: row.AccountID, WorkspaceID: row.WorkspaceID,
+			UserID: row.UserID, ExternalEmail: row.ExternalEmail, Name: row.Name, Enabled: row.Enabled,
+			SpreadsheetID: row.SpreadsheetID, SpreadsheetUrl: row.SpreadsheetUrl,
+			SheetID: row.SheetID, SheetTitle: row.SheetTitle, Columns: row.Columns, Status: row.Status,
+			LastError: row.LastError.String, LastDeliveredAt: row.LastDeliveredAt.Time,
+		})
+		if err != nil {
+			return nil, err
+		}
+		link.FailingSince = row.FailingSince.Time
+		link.ConsecutiveFailures = row.ConsecutiveFailures
+		link.NextAttemptAt = row.NextAttemptAt.Time
+		out = append(out, link)
+	}
+	return out, nil
+}
+
+// QueuedSheetRow — строка очереди: что везти, приехала ли она переносом и когда
+// встала. EnqueuedAt — метка версии: по ней доставщик снимает ТУ ЖЕ строку, что
+// читал, а не её тёзку, поставленную перезаливом, пока он ходил в Google.
+type QueuedSheetRow struct {
+	SubmissionID uuid.UUID
+	Backfill     bool
+	EnqueuedAt   time.Time
+}
+
+// PendingSheetSubmissions — что связка везёт следующим, в порядке постановки.
+func (Repo) PendingSheetSubmissions(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, limit int32) ([]QueuedSheetRow, error) {
+	rows, err := postgres.New(db).PendingSheetSubmissions(ctx, postgres.PendingSheetSubmissionsParams{
+		LinkID: linkID,
+		Limit:  limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pending sheet submissions: %w", err)
+	}
+	out := make([]QueuedSheetRow, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, QueuedSheetRow{
+			SubmissionID: row.SubmissionID,
+			Backfill:     row.Backfill,
+			EnqueuedAt:   row.EnqueuedAt.Time,
+		})
+	}
+	return out, nil
+}
+
+// DropSheetQueued снимает с очереди пачку доставленных (или больше не нужных)
+// ответов — но только строки не новее прочитанных (before): строку,
+// поставленную заново, пока мы ходили в Google, снимать нельзя.
+func (Repo) DropSheetQueued(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, ids []uuid.UUID, before time.Time) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	err := postgres.New(db).DeleteSheetQueued(ctx, postgres.DeleteSheetQueuedParams{
+		LinkID:         linkID,
+		SubmissionIds:  ids,
+		EnqueuedBefore: pgtype.Timestamptz{Time: before, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("delete sheet queued: %w", err)
 	}
 	return nil
 }
 
-// UpdateLinkTarget переносит связку в другой лист: адрес, колонки и статус
-// меняются разом, прошлая ошибка гасится.
-// UpdateLinkTarget переносит связку на другую цель. accountID едет вместе с
+// EnqueueSheet ставит ОДИН ответ в очередь связки — повтор доставки из журнала.
+func (Repo) EnqueueSheet(ctx context.Context, db postgres.DBTX, linkID, submissionID uuid.UUID) error {
+	err := postgres.New(db).InsertSheetQueued(ctx, postgres.InsertSheetQueuedParams{
+		LinkID:       linkID,
+		SubmissionID: submissionID,
+	})
+	if err != nil {
+		return fmt.Errorf("insert sheet queued: %w", err)
+	}
+	return nil
+}
+
+// ClearSheetQueue снимает с очереди всё, что ждало: выключение тумблера и перезалив.
+func (Repo) ClearSheetQueue(ctx context.Context, db postgres.DBTX, linkID uuid.UUID) error {
+	if err := postgres.New(db).ClearSheetQueue(ctx, linkID); err != nil {
+		return fmt.Errorf("clear sheet queue: %w", err)
+	}
+	return nil
+}
+
+// EnqueueSheetBackfill ставит в очередь связки ВСЕ накопленные ответы формы.
+// Возвращает число строк — оно же «сколько ответов перенесём».
+func (Repo) EnqueueSheetBackfill(ctx context.Context, db postgres.DBTX, linkID, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).EnqueueSheetBackfill(ctx, postgres.EnqueueSheetBackfillParams{
+		LinkID: linkID,
+		FormID: formID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("enqueue sheet backfill: %w", err)
+	}
+	return n, nil
+}
+
+// ExpiredSheetQueued — ответы, прождавшие дольше срока хранения.
+func (Repo) ExpiredSheetQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]SheetQueueRef, error) {
+	rows, err := postgres.New(db).ExpiredSheetQueued(ctx, postgres.ExpiredSheetQueuedParams{
+		EnqueuedAt: pgtype.Timestamptz{Time: before, Valid: true},
+		Limit:      limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("expired sheet queued: %w", err)
+	}
+	out := make([]SheetQueueRef, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, SheetQueueRef{LinkID: row.LinkID, SubmissionID: row.SubmissionID})
+	}
+	return out, nil
+}
+
+// SheetQueueRef — просроченная строка очереди: её снимают и пишут в журнал.
+type SheetQueueRef struct {
+	LinkID       uuid.UUID
+	SubmissionID uuid.UUID
+}
+
+// UpdateLinkTarget переносит связку на другую цель. Новая цель — новая попытка:
+// поломка снимается, расписание начинается заново. accountID едет вместе с
 // листом, а не отдельным методом: разделить их значит позволить записать связку,
 // у которой аккаунт не видит своей же таблицы.
-func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, accountID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, accountID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn) (int64, error) {
 	raw, err := json.Marshal(columns)
 	if err != nil {
 		return 0, fmt.Errorf("marshal columns: %w", err)
@@ -422,7 +550,6 @@ func (Repo) UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, 
 		SheetID:        sheet.SheetID,
 		SheetTitle:     sheet.Title,
 		Columns:        raw,
-		Status:         status,
 	})
 	if err != nil {
 		return 0, fmt.Errorf("update form integration target: %w", err)
@@ -731,7 +858,7 @@ func (Repo) DueWebhooks(ctx context.Context, db postgres.DBTX, limit int32) ([]W
 }
 
 // PendingSubmissions — что цель везёт следующим, в порядке постановки.
-func (Repo) PendingSubmissions(ctx context.Context, db postgres.DBTX, webhookID uuid.UUID, limit int32) ([]uuid.UUID, error) {
+func (Repo) PendingWebhookSubmissions(ctx context.Context, db postgres.DBTX, webhookID uuid.UUID, limit int32) ([]uuid.UUID, error) {
 	ids, err := postgres.New(db).PendingWebhookSubmissions(ctx, postgres.PendingWebhookSubmissionsParams{
 		WebhookID: webhookID,
 		Limit:     limit,
@@ -743,7 +870,7 @@ func (Repo) PendingSubmissions(ctx context.Context, db postgres.DBTX, webhookID 
 }
 
 // Dequeue снимает ответ с очереди цели.
-func (Repo) Dequeue(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error {
+func (Repo) DequeueWebhook(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error {
 	err := postgres.New(db).DeleteWebhookQueued(ctx, postgres.DeleteWebhookQueuedParams{
 		WebhookID:    webhookID,
 		SubmissionID: submissionID,
@@ -755,7 +882,7 @@ func (Repo) Dequeue(ctx context.Context, db postgres.DBTX, webhookID, submission
 }
 
 // Enqueue ставит ответ в очередь цели (повтор из журнала).
-func (Repo) Enqueue(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error {
+func (Repo) EnqueueWebhook(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error {
 	err := postgres.New(db).InsertWebhookQueued(ctx, postgres.InsertWebhookQueuedParams{
 		WebhookID:    webhookID,
 		SubmissionID: submissionID,
@@ -767,7 +894,7 @@ func (Repo) Enqueue(ctx context.Context, db postgres.DBTX, webhookID, submission
 }
 
 // ExpiredQueued — ответы, ждущие дольше срока хранения.
-func (Repo) ExpiredQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]QueuedRef, error) {
+func (Repo) ExpiredWebhookQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]QueuedRef, error) {
 	rows, err := postgres.New(db).ExpiredWebhookQueued(ctx, postgres.ExpiredWebhookQueuedParams{
 		EnqueuedAt: pgtype.Timestamptz{Time: before, Valid: true},
 		Limit:      limit,

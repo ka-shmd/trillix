@@ -87,10 +87,28 @@ type fakeStore struct {
 	// retargetAccount — на чей аккаунт переехала связка. Отдельным полем: смена
 	// аккаунта и смена листа едут одной записью, и проверять надо обе.
 	retargetAccount uuid.UUID
-	retargetStatus  string
-	backfillFrom    *time.Time
-	backfillDone    bool
 	sheetCleared    bool
+
+	// queue — очередь связки: что ждёт доставки в её лист. Тесты сажают её
+	// руками (в бою её наполняет ветка CTE приёма ответа) и смотрят, что
+	// доставщик с ней сделал.
+	queue []integrations.QueuedSheetRow
+	// queueCleared и backfilledForm — следы двух действий человека: выключение
+	// тумблера снимает очередь, подключение с переносом и перезалив её
+	// наполняют.
+	queueCleared   bool
+	backfilledForm uuid.UUID
+	// dropped — что снято с очереди: доставленное и то, что везти было нечего.
+	dropped []uuid.UUID
+	// expired — просроченные строки для уборщика очереди.
+	expired []integrations.SheetQueueRef
+	// failedWith, failingSince, nextAttempt — расписание связки после неудачи.
+	failedWith   string
+	failingSince time.Time
+	nextAttempt  time.Time
+	// now — часы теста; nil означает «расписание не проверяем» (так живёт
+	// большинство тестов, которым бэкофф не интересен).
+	now func() time.Time
 
 	// deliveries — журнал попыток доставки, как его видит связка. Порядок
 	// вставки: тесты проверяют исход последней попытки и их число.
@@ -148,14 +166,86 @@ func (f *fakeStore) ListLinks(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (
 	return []integrations.FormLink{f.link}, nil
 }
 
-func (f *fakeStore) EnabledLinkIDs(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]uuid.UUID, error) {
+// DueLinks повторяет условие боевой выборки: связка берётся, только если она
+// включена, жива, ей есть что везти И ЕЁ ВРЕМЯ НАСТУПИЛО.
+//
+// ⚠ Последнее условие в фейке обязательно, хотя и выглядит лишним: бэкофф цели —
+// весь смысл переезда на очередь по целям («лежащий лист получает одну попытку
+// за окно, сколько бы ответов ни ждало»), и без него ни один тест пакета не
+// заметил бы, что доставщик ходит в спящую связку.
+func (f *fakeStore) DueLinks(_ context.Context, _ postgres.DBTX, _ int32) ([]integrations.FormLink, error) {
 	if f.linkErr != nil {
 		return nil, f.linkErr
 	}
-	if f.link.ID == uuid.Nil || !f.link.Enabled {
+	if f.link.ID == uuid.Nil || !f.link.Enabled || f.link.Status != integrations.StatusLive || len(f.queue) == 0 {
 		return nil, nil
 	}
-	return []uuid.UUID{f.link.ID}, nil
+	if f.now != nil && f.link.NextAttemptAt.After(f.now()) {
+		return nil, nil
+	}
+	return []integrations.FormLink{f.link}, nil
+}
+
+func (f *fakeStore) PendingSheetSubmissions(_ context.Context, _ postgres.DBTX, _ uuid.UUID, limit int32) ([]integrations.QueuedSheetRow, error) {
+	if int(limit) < len(f.queue) {
+		return f.queue[:limit], nil
+	}
+	return f.queue, nil
+}
+
+// DropSheetQueued повторяет и границу версии: строку, поставленную ПОЗЖЕ
+// прочитанной доставщиком, снимать нельзя — это перезалив успел в окно.
+func (f *fakeStore) DropSheetQueued(_ context.Context, _ postgres.DBTX, _ uuid.UUID, ids []uuid.UUID, before time.Time) error {
+	kept := f.queue[:0]
+	for _, q := range f.queue {
+		drop := false
+		for _, id := range ids {
+			if q.SubmissionID == id && !q.EnqueuedAt.After(before) {
+				drop = true
+				break
+			}
+		}
+		if drop {
+			f.dropped = append(f.dropped, q.SubmissionID)
+			continue
+		}
+		kept = append(kept, q)
+	}
+	f.queue = kept
+	return nil
+}
+
+func (f *fakeStore) EnqueueSheet(_ context.Context, _ postgres.DBTX, _, submissionID uuid.UUID) error {
+	f.queue = append(f.queue, integrations.QueuedSheetRow{SubmissionID: submissionID})
+	return nil
+}
+
+func (f *fakeStore) ClearSheetQueue(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	f.queueCleared = true
+	f.queue = nil
+	return nil
+}
+
+func (f *fakeStore) EnqueueSheetBackfill(_ context.Context, _ postgres.DBTX, _, formID uuid.UUID) (int64, error) {
+	f.backfilledForm = formID
+	return int64(len(f.queue)), nil
+}
+
+func (f *fakeStore) ExpiredSheetQueued(_ context.Context, _ postgres.DBTX, _ time.Time, _ int32) ([]integrations.SheetQueueRef, error) {
+	return f.expired, nil
+}
+
+// MarkFailed записывает расписание НАЗАД в связку, а не только в поля-следы:
+// иначе второй проход в том же тесте снова забрал бы уснувшую цель.
+func (f *fakeStore) MarkFailed(_ context.Context, _ postgres.DBTX, _ uuid.UUID, cause string, failingSince, next time.Time) error {
+	f.failedWith, f.failingSince, f.nextAttempt = cause, failingSince, next
+	f.link.LastError = cause
+	f.link.ConsecutiveFailures++
+	if f.link.FailingSince.IsZero() {
+		f.link.FailingSince = failingSince
+	}
+	f.link.NextAttemptAt = next
+	return nil
 }
 
 func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (int64, error) {
@@ -163,11 +253,10 @@ func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 	return 1, nil
 }
 
-func (f *fakeStore) UpdateLinkTarget(_ context.Context, _ postgres.DBTX, _, _, accountID uuid.UUID, sheet integrations.Spreadsheet, columns []domain.SheetColumn, status string) (int64, error) {
+func (f *fakeStore) UpdateLinkTarget(_ context.Context, _ postgres.DBTX, _, _, accountID uuid.UUID, sheet integrations.Spreadsheet, columns []domain.SheetColumn) (int64, error) {
 	f.retargetAccount = accountID
 	f.retargeted = &sheet
 	f.columnsSet = columns
-	f.retargetStatus = status
 	return 1, nil
 }
 
@@ -197,16 +286,6 @@ func (f *fakeStore) UpdateLinkColumns(_ context.Context, _ postgres.DBTX, _ uuid
 
 func (f *fakeStore) MarkDelivered(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
 	f.delivered = true
-	return nil
-}
-
-func (f *fakeStore) StartBackfill(_ context.Context, _ postgres.DBTX, _ uuid.UUID, before time.Time) error {
-	f.backfillFrom = &before
-	return nil
-}
-
-func (f *fakeStore) FinishBackfill(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
-	f.backfillDone = true
 	return nil
 }
 
@@ -267,8 +346,14 @@ type fakeProvider struct {
 	sheetHeader []string
 	appended    [][]string
 	appendCalls int
-	cleared     string
-	appendErr   error
+	// attempts — ВСЕ походы за записью, включая отказные: по нему видно, ходил ли
+	// доставщик в связку вообще (appendCalls считает только удавшиеся).
+	attempts int
+	// beforeAppend — что случилось, ПОКА мы ходили в Google. Тестам гонок нужно
+	// окно между чтением очереди и снятием доставленных, а оно ровно здесь.
+	beforeAppend func()
+	cleared      string
+	appendErr    error
 	// refreshErr — провайдер отказал в обновлении токена. Отдельно от appendErr:
 	// отказ ТОКЕН-ручки означает смерть подключения, отказ ручки данных — беду
 	// одной таблицы, и путать их дорого.
@@ -344,11 +429,11 @@ func (f *fakeProvider) WriteHeader(_ context.Context, _ string, _ integrations.S
 	return nil
 }
 
-func (f *fakeProvider) AppendRow(ctx context.Context, token string, s integrations.Spreadsheet, row []string) error {
-	return f.AppendRows(ctx, token, s, [][]string{row})
-}
-
 func (f *fakeProvider) AppendRows(_ context.Context, _ string, _ integrations.Spreadsheet, rows [][]string) error {
+	f.attempts++
+	if f.beforeAppend != nil {
+		f.beforeAppend()
+	}
 	if f.appendErr != nil {
 		return f.appendErr
 	}
@@ -590,13 +675,14 @@ func TestConnectForm_CreatesSheetAndStoresColumns(t *testing.T) {
 	if err != nil {
 		t.Fatalf("connect form: %v", err)
 	}
-	// Сразу после привязки идёт перенос накопленных ответов: таблица создана
-	// нами и пуста, а пустая таблица читается как «не заработало».
-	if link.SpreadsheetURL == "" || link.Status != integrations.StatusBackfilling {
-		t.Fatalf("привязка = %+v, ожидался статус переноса", link)
+	// Сразу после привязки накопленные ответы встают в очередь связки: таблица
+	// создана нами и пуста, а пустая таблица читается как «не заработало».
+	// Отдельного статуса у переноса больше нет (0065) — он виден очередью.
+	if link.SpreadsheetURL == "" || link.Status != integrations.StatusLive {
+		t.Fatalf("привязка = %+v", link)
 	}
-	if store.backfillFrom == nil {
-		t.Error("перенос не начат")
+	if store.backfilledForm != testForm {
+		t.Error("накопленные ответы не поставлены в очередь")
 	}
 	if provider.createdTitle != "Опрос — ответы" {
 		t.Errorf("имя таблицы = %q", provider.createdTitle)
@@ -767,8 +853,8 @@ func TestRefillForm(t *testing.T) {
 	if len(provider.header) == 0 {
 		t.Error("шапка не переписана")
 	}
-	if store.backfillFrom == nil {
-		t.Fatal("перенос не начат")
+	if !store.queueCleared || store.backfilledForm != testForm {
+		t.Fatal("очередь не пересобрана перезаливом")
 	}
 	// Колонка, которой в листе ещё не было, дописана; прежняя осталась первой —
 	// автор мог свести таблицу формулами справа.
@@ -804,7 +890,7 @@ func TestConnectForm_WithoutBackfill(t *testing.T) {
 	if link.Status != integrations.StatusLive {
 		t.Fatalf("статус = %q, ожидался живой", link.Status)
 	}
-	if store.backfillFrom != nil {
+	if store.backfilledForm != uuid.Nil {
 		t.Error("перенос начат вопреки выключенному тумблеру")
 	}
 }
@@ -1031,8 +1117,8 @@ func TestUpdateConnection_Retarget(t *testing.T) {
 	if len(provider.header) == 0 {
 		t.Error("шапка в новом листе не написана")
 	}
-	if store.retargetStatus != integrations.StatusBackfilling || store.backfillFrom == nil {
-		t.Errorf("перенос не начат: статус %q", store.retargetStatus)
+	if !store.queueCleared || store.backfilledForm != testForm {
+		t.Error("перенос в новый лист не начат")
 	}
 }
 
@@ -1180,7 +1266,7 @@ func TestRefillForm_StopsWhenAccountOwnerLeftWorkspace(t *testing.T) {
 	if provider.cleared != "" {
 		t.Fatalf("вычищена личная таблица бывшего участника: %q", provider.cleared)
 	}
-	if store.backfillFrom != nil {
+	if store.backfilledForm != uuid.Nil {
 		t.Error("перенос начат по аккаунту человека без доступа")
 	}
 }

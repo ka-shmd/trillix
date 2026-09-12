@@ -171,7 +171,7 @@ type Store interface {
 	SubmissionByID(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (Submission, error)
 	GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (Submission, error)
 	GetForPrint(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (PrintRow, error)
-	ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error)
+	ListForDelivery(ctx context.Context, db postgres.DBTX, formID uuid.UUID, ids []uuid.UUID) ([]Submission, error)
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
 	CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error)
 	// CountSubmissions — ВСЕ ответы формы (включая скрытые тарифом): нужен
@@ -262,7 +262,6 @@ type Service struct {
 	bookingOrganizer string
 	// integrations — доставка ответа во внешние системы (фаза 25). Тем же
 	// сеттером и по той же причине, что files; nil = интеграций в сборке нет.
-	integrations Integrations
 	// appBaseURL — origin кабинета, из которого строится ссылка в таблицу ответов в
 	// письме владельцу (${appBaseURL}/forms/{slug}/responses). Совпадает с cfg.AppOrigin.
 	appBaseURL string
@@ -288,26 +287,6 @@ func (s *Service) WithRespondentMail(formBaseURL string, limiter RespondentLimit
 
 func NewService(db postgres.DBTX, tx Transactor, forms Forms, visits Visits, mailer Mailer, plans Plans, repo Store, appBaseURL string) *Service {
 	return &Service{db: db, tx: tx, forms: forms, visits: visits, mail: mailer, plans: plans, repo: repo, appBaseURL: appBaseURL, now: time.Now}
-}
-
-// Integrations — доставка принятого ответа во внешние системы (фаза 25).
-// Интерфейс объявлен здесь и оперирует только id: модуль интеграций импортирует
-// submissions (ему нужна строка ответа), и обратный импорт замкнул бы цикл.
-//
-// Реализация может отсутствовать (nil): интеграции — не обязательная часть
-// приёма, и форма без них не платит за них ничем.
-type Integrations interface {
-	// EnqueueSubmission ставит доставку ответа, если форма привязана к таблице.
-	// Не привязана — не ошибка и не работа: метод молча ничего не делает.
-	EnqueueSubmission(ctx context.Context, formID, submissionID uuid.UUID) error
-}
-
-// WithIntegrations подключает доставку во внешние системы. Отдельным вызовом, а
-// не аргументом конструктора: интеграции читают строку ответа через этот же
-// сервис, и в конструктор его передать было бы нечем.
-func (s *Service) WithIntegrations(i Integrations) *Service {
-	s.integrations = i
-	return s
 }
 
 // Bookings — подтверждение брони внутри транзакции приёма (фаза 27). Реализация —
@@ -572,62 +551,7 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	if inserted && booking.BlockID != "" {
 		s.notifyBooking(ctx, pf.FormID, id, slug, schema, clean, booking)
 	}
-	if inserted {
-		s.enqueueIntegration(ctx, pf.FormID, id)
-	}
 	return nil
-}
-
-// enqueueIntegration ставит доставку ответа во внешнюю таблицу — ПОСЛЕ приёма и
-// best-effort, по тем же основаниям, что markVisitSubmitted и notifyOwner:
-// вторичный эффект не имеет права уронить уже принятый ответ.
-//
-// Цена названа вслух: краш в узком окне между коммитом ответа и постановкой
-// теряет ОДНУ строку в чужой таблице. Данные целы (ответ в базе и в выгрузке),
-// лечение — кнопка «Перезалить всё» в табе интеграций. Атомарность здесь стоила
-// бы транзакции на самом горячем пути продукта (ARCHITECTURE §4.7), а на пути
-// без лимита и файлов её сегодня нет вовсе — приём это одна вставка.
-func (s *Service) enqueueIntegration(ctx context.Context, formID, submissionID uuid.UUID) {
-	if s.integrations == nil {
-		return
-	}
-	if err := s.integrations.EnqueueSubmission(ctx, formID, submissionID); err != nil {
-		httpserver.LoggerFrom(ctx).Warn("submission delivery not enqueued",
-			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
-	}
-}
-
-// SheetRecord — ответ, приведённый к строке внешней таблицы: колонки (ключ +
-// подпись) и значения в их порядке.
-type SheetRecord struct {
-	Columns []domain.SheetColumn
-	Row     []string
-	// CreatedAt — когда ответ принят. Доставке нужно, чтобы отличить ответ,
-	// который уже положила догрузка, от того, что пришёл после неё.
-	CreatedAt time.Time
-}
-
-// SheetRow строит строку одного ответа для внешней таблицы — той же моделью
-// колонок, что выгрузка CSV и сводка (иначе у вопроса «какие у формы вопросы»
-// стало бы два ответа).
-//
-// ⚠ Прав НЕ проверяет: у фоновой доставки нет пользователя, чьё право можно
-// спросить. Безопасность держится на том, ОТКУДА приходят id: форма — из строки
-// form_integrations, которую завёл человек с правом на неё, ответ — из события,
-// которое поставили мы сами. Из обработчика приватного API этот метод не зовут.
-//
-// pgx.ErrNoRows означает «доставлять нечего»: ответ удалён автором или скрыт
-// тарифом. Вызывающий гасит событие, а не ретраит его вечно.
-func (s *Service) SheetRow(ctx context.Context, formID, submissionID uuid.UUID) (SheetRecord, error) {
-	builder, sub, answers, err := s.deliveryRecord(ctx, formID, submissionID)
-	if err != nil {
-		return SheetRecord{}, err
-	}
-	return SheetRecord{
-		Columns:   builder.SheetColumns(),
-		Row:       builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
-		CreatedAt: sub.CreatedAt,
-	}, nil
 }
 
 // WebhookRecord — ответ, приведённый к телу вебхука (контракт v1): поля с типами
@@ -699,8 +623,12 @@ func (s *Service) deliveryRecord(ctx context.Context, formID, submissionID uuid.
 	return builder, sub, answers, nil
 }
 
-// SheetPage — пачка накопленных ответов для догрузки: колонки один раз и строки
-// со своими id (id — курсор следующей пачки, а не украшение).
+// SheetPage — пачка ответов, приведённых к строкам внешней таблицы: колонки
+// один раз на всю пачку и строки со своими id.
+//
+// id не украшение: доставщик раскладывает пачку по СВОЕМУ списку — порядок
+// назвала очередь связки, — а ответ, которого в пачке не оказалось, удалён
+// автором или скрыт тарифом и снимается с очереди без записи в лист.
 type SheetPage struct {
 	Columns []domain.SheetColumn
 	Rows    []SheetRow
@@ -712,12 +640,20 @@ type SheetRow struct {
 	Values []string
 }
 
-// SheetRows отдаёт пачку ответов формы для догрузки во внешнюю таблицу: строго
-// до отсечки before, после курсора after (uuid.Nil — с начала), старые сверху.
+// SheetRows строит строки НАЗВАННЫХ ответов формы для внешней таблицы — той же
+// моделью колонок, что выгрузка CSV и сводка (иначе у вопроса «какие у формы
+// вопросы» стало бы два ответа).
 //
-// ⚠ Прав НЕ проверяет — по тем же основаниям, что SheetRow: у фоновой догрузки
-// нет пользователя, а форма приезжает из своей строки form_integrations.
-func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) (SheetPage, error) {
+// Пачкой, а не по ответу за раз: у Таблиц один values.append увозит все строки
+// тика разом, и собирать их поштучно значило бы читать версии формы и справочник
+// файлов заново на каждую строку переноса.
+//
+// ⚠ Прав НЕ проверяет: у фоновой доставки нет пользователя, чьё право можно
+// спросить. Безопасность держится на том, ОТКУДА приходят id: форма — из строки
+// form_integrations, которую завёл человек с правом на неё, ответы — из очереди
+// этой связки, которую заполнили мы сами. Из обработчика приватного API этот
+// метод не зовут.
+func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, ids []uuid.UUID) (SheetPage, error) {
 	versions, err := s.forms.PublishedVersions(ctx, formID)
 	if err != nil {
 		return SheetPage{}, err
@@ -727,7 +663,7 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, before time.T
 		return SheetPage{}, err
 	}
 
-	subs, err := s.repo.ListForBackfill(ctx, s.db, formID, before, after, limit)
+	subs, err := s.repo.ListForDelivery(ctx, s.db, formID, ids)
 	if err != nil {
 		return SheetPage{}, err
 	}
