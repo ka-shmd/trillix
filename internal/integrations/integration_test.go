@@ -93,7 +93,9 @@ func newStackWithEgress(t *testing.T, provider integrations.Provider, egress int
 	svc := integrations.NewService(testPool, postgres.TxRunner{Pool: testPool}, integrations.Repo{},
 		wsSvc, formsSvc, provider, testKey).
 		WithWebhooks(integrations.Repo{}, egress, nil)
-	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey)
+	// Лимитер инжектируется пермиссивной реализацией, а не выключается (инвариант 6).
+	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey,
+		ratelimit.AllowAll{})
 
 	// Доставка: настоящий outbox (mail) как очередь, настоящий submissions как
 	// источник строки. Провайдер подставной — живой поход в Google означал бы

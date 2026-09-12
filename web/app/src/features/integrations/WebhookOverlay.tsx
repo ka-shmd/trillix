@@ -219,7 +219,9 @@ export function WebhookOverlay({
 
             {/* Проверка — только у заведённого вебхука: до подключения адрес
                 ещё не сохранён, и проверять нечего. */}
-            {webhook && <TestField formId={formId} webhookId={webhook.id} />}
+            {webhook && (
+              <TestField formId={formId} webhookId={webhook.id} enabled={webhook.enabled} />
+            )}
 
             {error != null && (
               <p role="alert" className="flex gap-2 text-sm text-destructive">
@@ -427,7 +429,15 @@ const MIN_SECRET = 16
 //
 // Исход неуспеха — не красная ошибка экрана, а строка о получателе: «ответил
 // 500» это сведения о нём, а не сбой кабинета.
-function TestField({ formId, webhookId }: { formId: string; webhookId: string }) {
+function TestField({
+  formId,
+  webhookId,
+  enabled,
+}: {
+  formId: string
+  webhookId: string
+  enabled: boolean
+}) {
   const test = useTestWebhook(formId)
   const result = test.data as WebhookTest | undefined
 
@@ -445,9 +455,13 @@ function TestField({ formId, webhookId }: { formId: string; webhookId: string })
           </span>
         )}
       </div>
+      {/* У выключенного вебхука обещать доставку накопленного нельзя: доставщик
+          в него не пойдёт, пока не включат, и «ответил 200» под таким обещанием
+          читался бы как «поехало». */}
       <p className="text-sm text-muted-foreground">
-        Отправим образец с вопросами этой формы и пометкой «тестовый». Удачная проверка снимает
-        поломку и отправляет ответы, которые ждали очереди.
+        {enabled
+          ? 'Отправим образец с вопросами этой формы и пометкой «тестовый». Удачная проверка снимает поломку и отправляет ответы, которые ждали очереди.'
+          : 'Отправим образец с вопросами этой формы и пометкой «тестовый». Вебхук выключен — ответы не поедут, пока не включите его.'}
       </p>
       {result && !result.ok && (
         <p role="alert" className="text-sm text-destructive">

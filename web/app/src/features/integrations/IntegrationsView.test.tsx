@@ -1491,6 +1491,43 @@ describe('вебхуки на экране интеграций', () => {
     expect(calls[1]!.url).toContain('/webhooks/hook-1/secret')
     vi.unstubAllGlobals()
   })
+
+  it('у выключенного вебхука повтора в журнале нет: доставщик его не берёт', () => {
+    const qc = renderView(state({ webhooks: [hook({ enabled: false })] }))
+    qc.setQueryData(integrationKeys.webhookDeliveries(FORM_ID, 'hook-1'), {
+      pages: [
+        {
+          deliveries: [
+            {
+              id: 'd-1',
+              kind: 'submission',
+              submissionId: 's-1',
+              outcome: 'failed',
+              detail: 'Получатель ответил кодом 500, попробуем ещё раз позже.',
+              rows: 0,
+              createdAt: '2026-09-12T10:00:00Z',
+            },
+          ],
+          nextCursor: undefined,
+        },
+      ],
+      pageParams: [undefined],
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Журнал доставок' }))
+
+    expect(screen.getByText(/Получатель ответил кодом 500/)).toBeTruthy()
+    // Повтор в выключенный — тупик: доставщик такую цель не берёт, и ответ висел
+    // бы в очереди до включения. Сервер его и отвергает (409).
+    expect(screen.queryByRole('button', { name: /Повторить/ })).toBeNull()
+  })
+
+  it('у выключенного вебхука «Проверить» не обещает доставку накопленного', () => {
+    renderView(state({ webhooks: [hook({ enabled: false })] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
+
+    expect(screen.getByText(/ответы не поедут, пока не включите/)).toBeTruthy()
+    expect(screen.queryByText(/отправляет ответы, которые ждали очереди/)).toBeNull()
+  })
 })
 
 // mockWebhookCalls подменяет fetch: состояние таба отдаётся настоящим JSON (иначе

@@ -96,13 +96,11 @@ type Handler struct {
 	secret []byte
 }
 
-// WithTestLimiter подключает ведро кнопки «Проверить».
-func (h *Handler) WithTestLimiter(l RateLimiter) *Handler {
-	h.testLimiter = l
-	return h
-}
-
-func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, appOrigin string, cookieSecure bool, secret []byte) *Handler {
+// testLimiter — ОБЯЗАТЕЛЬНЫЙ параметр, а не сеттер: «лимита нет» не должно
+// получаться молча (инвариант 6). Пермиссивная реализация инжектируется в тестах
+// явно (ratelimit.AllowAll), а выпавший из сборки лимитер ловит компилятор.
+// история — JOURNAL, «Слайс G. Находки ревью»
+func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, appOrigin string, cookieSecure bool, secret []byte, testLimiter RateLimiter) *Handler {
 	return &Handler{
 		svc:          svc,
 		requireAuth:  requireAuth,
@@ -110,6 +108,7 @@ func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, ap
 		appOrigin:    appOrigin,
 		cookieSecure: cookieSecure,
 		secret:       secret,
+		testLimiter:  testLimiter,
 	}
 }
 
@@ -861,7 +860,7 @@ func (h *Handler) testWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Ведро на человека: кнопка ходит по адресу, который он только что ввёл.
-	if h.testLimiter != nil && !h.testLimiter.Allow(user.ID.String()) {
+	if !h.testLimiter.Allow(user.ID.String()) {
 		httpserver.WriteError(w, r, domain.ErrRateLimited)
 		return
 	}

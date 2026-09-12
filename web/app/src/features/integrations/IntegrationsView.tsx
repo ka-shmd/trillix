@@ -282,7 +282,12 @@ function ConnectionRow({
         open={log}
         onOpenChange={setLog}
         formId={formId}
-        target={{ id: connection.id, kind: 'sheet', broken: connection.status === 'broken' }}
+        target={{
+          id: connection.id,
+          kind: 'sheet',
+          broken: connection.status === 'broken',
+          enabled: connection.enabled,
+        }}
       />
 
       {/* Удаление спрашивает: связка уносит с собой настройки и историю
@@ -370,7 +375,12 @@ function WebhookRow({
         open={log}
         onOpenChange={setLog}
         formId={formId}
-        target={{ id: webhook.id, kind: 'webhook', broken: webhook.status === 'broken' }}
+        target={{
+          id: webhook.id,
+          kind: 'webhook',
+          broken: webhook.status === 'broken',
+          enabled: webhook.enabled,
+        }}
       />
 
       <AlertDialog open={confirming} onOpenChange={setConfirming}>

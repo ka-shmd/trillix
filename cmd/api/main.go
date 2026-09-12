@@ -564,8 +564,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	webhookTestLimiter := ratelimit.NewTokenBucket(webhookTestRatePerSec, webhookTestBurst)
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
-		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret).
-		WithTestLimiter(webhookTestLimiter)
+		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret, webhookTestLimiter)
 	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
 
 	formTokenLimiter := ratelimit.NewTokenBucket(formTokenRatePerSec, formTokenBurst)

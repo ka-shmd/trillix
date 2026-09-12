@@ -456,6 +456,13 @@ func (s *Service) RetryWebhookDelivery(ctx context.Context, userID, formID, webh
 	if delivered {
 		return fmt.Errorf("%w: этот ответ уже доставлен", domain.ErrValidation)
 	}
+	// Выключенный вебхук доставщик не берёт (DueWebhooks требует enabled), и
+	// поставленный ответ завис бы в очереди до следующей правки настроек или до
+	// уборщика через месяц — а экран всё это время показывал бы «в очереди 1» и
+	// опрашивал состояние каждые три секунды за данными, которые не изменятся.
+	if !w.Enabled {
+		return fmt.Errorf("%w: вебхук выключен — включите его, иначе ответ встанет в очередь и не поедет", domain.ErrConflict)
+	}
 	if w.Status == StatusBroken {
 		return fmt.Errorf("%w: сначала почините адрес — проверка вернёт вебхук в работу", domain.ErrConflict)
 	}

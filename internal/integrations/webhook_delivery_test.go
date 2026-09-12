@@ -604,6 +604,37 @@ func TestTestWebhook_FailureIsAnAnswer(t *testing.T) {
 
 // Повтор из журнала ставит ответ в очередь заново; на сломанной цели отказывает,
 // а уже доставленный ответ вторым разом не отправляет.
+// Повтор в ВЫКЛЮЧЕННЫЙ вебхук отказывает. Иначе ответ встал бы в очередь, из
+// которой доставщик его не возьмёт (DueWebhooks требует enabled), и висел бы там
+// до следующей правки настроек или до уборщика через месяц — а экран всё это
+// время показывал бы «в очереди 1» и опрашивал состояние каждые три секунды.
+func TestRetryWebhookDelivery_RefusesWhileDisabled(t *testing.T) {
+	h := newDeliveryHarness(t, http.StatusInternalServerError)
+	w, _ := h.hook(t, 1)
+	if _, err := h.svc.DeliverWebhooks(context.Background()); err != nil {
+		t.Fatalf("проход: %v", err)
+	}
+	entry := h.journal()[0]
+
+	off := false
+	if err := h.svc.UpdateWebhook(context.Background(), testUser, testForm, w.ID,
+		integrations.WebhookPatch{Enabled: &off}); err != nil {
+		t.Fatalf("выключение: %v", err)
+	}
+	// Выключение сняло очередь — это «не доставлять», а не «доставить позже».
+	if h.queueLen(w.ID) != 0 {
+		t.Fatalf("после выключения в очереди %d", h.queueLen(w.ID))
+	}
+
+	err := h.svc.RetryWebhookDelivery(context.Background(), testUser, testForm, w.ID, entry.ID)
+	if !errors.Is(err, domain.ErrConflict) {
+		t.Fatalf("повтор в выключенный = %v, ожидался ErrConflict", err)
+	}
+	if h.queueLen(w.ID) != 0 {
+		t.Fatal("отказ всё же поставил ответ в очередь")
+	}
+}
+
 func TestRetryWebhookDelivery(t *testing.T) {
 	h := newDeliveryHarness(t, http.StatusInternalServerError)
 	w, ids := h.hook(t, 1)
