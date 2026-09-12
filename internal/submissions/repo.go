@@ -23,6 +23,10 @@ type Submission struct {
 	FormVersion int32
 	Answers     json.RawMessage
 	CreatedAt   time.Time
+	// FormTitle — название формы на момент чтения. Нужно телу вебхука; у путей,
+	// которым оно не нужно, остаётся пустым не по случайности, а потому что его
+	// заполняет только запрос доставки.
+	FormTitle string
 }
 
 // Repo — доступ к данным submissions поверх sqlc. Методы принимают исполнителя
@@ -154,6 +158,7 @@ func (Repo) GetForDelivery(ctx context.Context, db postgres.DBTX, formID, id uui
 		FormVersion: row.FormVersion,
 		Answers:     json.RawMessage(row.Answers),
 		CreatedAt:   row.CreatedAt.Time,
+		FormTitle:   row.FormTitle,
 	}, nil
 }
 

@@ -35,6 +35,17 @@ type fakeSubmissions struct {
 	page      submissions.SheetPage
 	pageAfter uuid.UUID
 	pageCalls int
+	// webhook — тело ответа для вебхука; webhookErr перебивает его (удалённый
+	// ответ приходит как pgx.ErrNoRows).
+	webhook    submissions.WebhookRecord
+	webhookErr error
+}
+
+func (f *fakeSubmissions) WebhookRow(_ context.Context, _, _ uuid.UUID) (submissions.WebhookRecord, error) {
+	if f.webhookErr != nil {
+		return submissions.WebhookRecord{}, f.webhookErr
+	}
+	return f.webhook, nil
 }
 
 func (f *fakeSubmissions) SheetRow(_ context.Context, _, _ uuid.UUID) (submissions.SheetRecord, error) {

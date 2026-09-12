@@ -619,22 +619,70 @@ type SheetRecord struct {
 // pgx.ErrNoRows означает «доставлять нечего»: ответ удалён автором или скрыт
 // тарифом. Вызывающий гасит событие, а не ретраит его вечно.
 func (s *Service) SheetRow(ctx context.Context, formID, submissionID uuid.UUID) (SheetRecord, error) {
-	versions, err := s.forms.PublishedVersions(ctx, formID)
+	builder, sub, answers, err := s.deliveryRecord(ctx, formID, submissionID)
 	if err != nil {
 		return SheetRecord{}, err
 	}
+	return SheetRecord{
+		Columns:   builder.SheetColumns(),
+		Row:       builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
+		CreatedAt: sub.CreatedAt,
+	}, nil
+}
+
+// WebhookRecord — ответ, приведённый к телу вебхука (контракт v1): поля с типами
+// и метаданные. Название формы едет здесь же — спросить его у forms доставке
+// нечем: пользователя, чьё право можно проверить, на фоновом пути нет.
+type WebhookRecord struct {
+	FormTitle   string
+	Fields      []domain.WebhookField
+	FormVersion int
+	CreatedAt   time.Time
+}
+
+// WebhookRow строит поля ответа для тела вебхука — ТОЙ ЖЕ моделью колонок, что
+// выгрузка и таблица: иначе у вопроса «какие у формы поля» стало бы три ответа.
+//
+// ⚠ Прав НЕ проверяет по тем же основаниям, что SheetRow: у фоновой доставки нет
+// пользователя, а id формы и ответа приезжают из строки очереди, которую завели
+// мы сами. Из обработчика приватного API этот метод не зовут.
+//
+// pgx.ErrNoRows означает «доставлять нечего»: ответ удалён автором или скрыт
+// тарифом.
+func (s *Service) WebhookRow(ctx context.Context, formID, submissionID uuid.UUID) (WebhookRecord, error) {
+	builder, sub, answers, err := s.deliveryRecord(ctx, formID, submissionID)
+	if err != nil {
+		return WebhookRecord{}, err
+	}
+	return WebhookRecord{
+		FormTitle:   sub.FormTitle,
+		Fields:      builder.WebhookFields(int(sub.FormVersion), answers),
+		FormVersion: int(sub.FormVersion),
+		CreatedAt:   sub.CreatedAt,
+	}, nil
+}
+
+// deliveryRecord — общее начало обеих доставок: модель колонок по всем
+// опубликованным версиям, сам ответ и его разобранные ответы. Одна на два
+// вида цели: две копии этой сборки разъехались бы на первой же правке
+// (пояс расписания, имена файлов).
+func (s *Service) deliveryRecord(ctx context.Context, formID, submissionID uuid.UUID) (*domain.CSVBuilder, Submission, map[string]json.RawMessage, error) {
+	versions, err := s.forms.PublishedVersions(ctx, formID)
+	if err != nil {
+		return nil, Submission{}, nil, err
+	}
 	vs, err := parseVersions(formID, versions)
 	if err != nil {
-		return SheetRecord{}, err
+		return nil, Submission{}, nil, err
 	}
 
 	sub, err := s.repo.GetForDelivery(ctx, s.db, formID, submissionID)
 	if err != nil {
-		return SheetRecord{}, err
+		return nil, Submission{}, nil, err
 	}
 	var answers map[string]json.RawMessage
 	if err := json.Unmarshal(sub.Answers, &answers); err != nil {
-		return SheetRecord{}, fmt.Errorf("unmarshal answers of submission %s: %w", submissionID, err)
+		return nil, Submission{}, nil, fmt.Errorf("unmarshal answers of submission %s: %w", submissionID, err)
 	}
 
 	builder := domain.NewCSVBuilder(vs)
@@ -644,15 +692,11 @@ func (s *Service) SheetRow(ctx context.Context, formID, submissionID uuid.UUID) 
 	if s.files != nil && hasFileBlock(vs) {
 		files, err := s.files.InfoByForm(ctx, formID)
 		if err != nil {
-			return SheetRecord{}, err
+			return nil, Submission{}, nil, err
 		}
 		builder.WithFiles(files)
 	}
-	return SheetRecord{
-		Columns:   builder.SheetColumns(),
-		Row:       builder.SheetRow(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers),
-		CreatedAt: sub.CreatedAt,
-	}, nil
+	return builder, sub, answers, nil
 }
 
 // SheetPage — пачка накопленных ответов для догрузки: колонки один раз и строки

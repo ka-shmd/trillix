@@ -7,11 +7,17 @@ import {
   formSheetSchema,
   sheetListSchema,
   spreadsheetListSchema,
+  webhookSchema,
+  webhookSecretSchema,
+  webhookTestSchema,
   type DeliveryPage,
   type FormIntegrations,
   type FormSheet,
   type SheetRef,
   type SpreadsheetRef,
+  type Webhook,
+  type WebhookHeader,
+  type WebhookTest,
 } from '../../entities/integration'
 
 // Транспорт интеграций. Ответы парсятся Zod-схемой на границе — непровалидированный
@@ -186,4 +192,91 @@ export function updateConnection(
 export function startUrl(reconnect?: string): string {
   const base = '/api/v1/integrations/google/start'
   return reconnect ? `${base}?accountId=${encodeURIComponent(reconnect)}` : base
+}
+
+// ВЕБХУКИ (фаза 28). Второй вид цели доставки: адрес чужой системы вместо
+// таблицы. Адреса свои — под формой, как и связки.
+
+// Подключение — это адрес и название. Секрет подписи едет тем же запросом, если
+// человек нажал «Подписывать запросы» и ввёл его: подпись предлагают сразу, но по
+// умолчанию её нет. Обратно секрет не возвращается — его ввёл сам автор.
+export function createWebhook(
+  formId: string,
+  input: { name: string; url: string; secret?: string; headers?: WebhookHeader[] },
+): Promise<Webhook> {
+  return apiRequest(`/forms/${formId}/webhooks`, {
+    method: 'POST',
+    body: input,
+    schema: webhookSchema,
+  })
+}
+
+// Правка шлёт ровно названные поля: не названное сервер не трогает (так шлёт
+// тумблер из списка). Адрес, переданный даже тем же, делает правящего
+// ответственным за доставку и снимает поломку.
+export function updateWebhook(
+  formId: string,
+  webhookId: string,
+  patch: { name?: string; url?: string; enabled?: boolean; headers?: WebhookHeader[] },
+): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}`, { method: 'PATCH', body: patch })
+}
+
+export function deleteWebhook(formId: string, webhookId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}`, { method: 'DELETE' })
+}
+
+// Секрет подписи — отдельной ручкой по нажатию «Показать», а не в состоянии
+// таба: раздавать ключ подписи на каждый показ экрана незачем.
+export function getWebhookSecret(formId: string, webhookId: string): Promise<string> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, {
+    schema: webhookSecretSchema,
+  }).then((r) => r.secret)
+}
+
+// Включить подпись либо сменить секрет. Действует сразу: старый секрет перестаёт
+// подходить без переходного окна.
+//
+// Секрет придумывает автор — своего продукт не генерирует. Планка длины на бэке
+// (16 символов), здесь только не даём отправить заведомо короткий.
+export function setWebhookSecret(formId: string, webhookId: string, secret: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, {
+    method: 'POST',
+    body: { secret },
+  })
+}
+
+// Выключение подписи: секрет удаляется, заголовок в запросах пропадает.
+export function disableWebhookSignature(formId: string, webhookId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, { method: 'DELETE' })
+}
+
+// Проверка шлёт получателю образец с пометкой test. Удачная будит цель: и
+// сломанную, и спящую после неудачи — накопленная очередь уедет следом.
+export function testWebhook(formId: string, webhookId: string): Promise<WebhookTest> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/test`, {
+    method: 'POST',
+    schema: webhookTestSchema,
+  })
+}
+
+export function listWebhookDeliveries(
+  formId: string,
+  webhookId: string,
+  cursor?: string,
+): Promise<DeliveryPage> {
+  const params = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/deliveries${params}`, {
+    schema: deliveryPageSchema,
+  })
+}
+
+export function retryWebhookDelivery(
+  formId: string,
+  webhookId: string,
+  deliveryId: string,
+): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/deliveries/${deliveryId}/retry`, {
+    method: 'POST',
+  })
 }

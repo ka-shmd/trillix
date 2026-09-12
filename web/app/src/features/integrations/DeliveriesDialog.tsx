@@ -2,8 +2,8 @@ import { useState } from 'react'
 import { useInfiniteQuery } from '@tanstack/react-query'
 import { Check, RotateCw, SkipForward, TriangleAlert } from 'lucide-react'
 
-import type { Delivery, FormSheet } from '../../entities/integration'
-import { deliveriesQueryOptions, useRetryDelivery } from './queries'
+import type { Delivery } from '../../entities/integration'
+import { deliveriesQueryOptions, useRetryDelivery, useRetryWebhookDelivery } from './queries'
 import { humanError } from '../../shared/api/errors'
 import { formatDateTime } from '../../shared/format'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
@@ -32,24 +32,44 @@ import { ScrollArea } from '@/components/ui/scroll-area'
 // перенос), КАК кончилось (значок и заголовок), КОГДА (справа). Причина стоит
 // под заголовком целиком — обрезать её нечем: у поломки текст длинный, и
 // половина причины хуже её отсутствия.
+// DeliveryTarget — чью ленту показываем. Окно одно на оба вида цели: у них
+// одинаковая лента, одинаковый повтор и одна и та же мина двойного клика —
+// вторая копия окна разъехалась бы с первой на первой же правке.
+export interface DeliveryTarget {
+  id: string
+  kind: 'sheet' | 'webhook'
+  // broken — у сломанной цели повтор не предлагается: её доставка гасится
+  // первой же проверкой, и кнопка молча ничего не дала бы.
+  broken: boolean
+  // enabled — тумблер цели. У выключенной повтор тоже тупик: доставщик её не
+  // берёт, и поставленный ответ висел бы в очереди до включения. Сервер такой
+  // повтор отвергает (409), здесь мы не предлагаем.
+  enabled: boolean
+}
+
 export function DeliveriesDialog({
   open,
   onOpenChange,
   formId,
-  connection,
+  target,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
   formId: string
-  connection: FormSheet
+  target: DeliveryTarget
 }) {
+  const isWebhook = target.kind === 'webhook'
   const log = useInfiniteQuery({
-    ...deliveriesQueryOptions(formId, connection.id),
-    // Запрос уходит только при открытом окне: связок у формы сколько угодно, и
+    // Запрос уходит только при открытом окне: целей у формы сколько угодно, и
     // тянуть ленту каждой заранее — это запросы за данными, которых не просили.
+    ...deliveriesQueryOptions(formId, target),
     enabled: open,
   })
-  const retry = useRetryDelivery(formId, connection.id)
+  // Оба хука вызываются всегда: правило хуков не разрешает выбирать их по
+  // условию, а мутация без вызова ничего не делает.
+  const retrySheet = useRetryDelivery(formId, target.id)
+  const retryWebhook = useRetryWebhookDelivery(formId, target.id)
+  const retry = isWebhook ? retryWebhook : retrySheet
   // queued — строки, повтор которых УЖЕ поставлен в очередь в этом окне.
   //
   // ⚠ Без этого второй клик кладёт в чужую таблицу второй экземпляр ответа:
@@ -75,7 +95,11 @@ export function DeliveriesDialog({
         ) : rows.length === 0 ? (
           <EmptyState
             title="Доставок пока не было"
-            description="Здесь появится каждая попытка отправить ответ в таблицу — и удачная, и нет."
+            description={
+              isWebhook
+                ? 'Здесь появится каждая попытка отправить ответ на ваш адрес — и удачная, и нет.'
+                : 'Здесь появится каждая попытка отправить ответ в таблицу — и удачная, и нет.'
+            }
           />
         ) : (
           <ScrollArea className="max-h-[60vh]">
@@ -85,11 +109,13 @@ export function DeliveriesDialog({
                   <li key={d.id} className="border-b border-border/60 py-3 last:border-0">
                     <DeliveryRow
                       delivery={d}
-                      /* Повтор у СЛОМАННОЙ связки не показывается: её события
-                         гасятся первой же проверкой доставки, и кнопка молча
-                         ничего не дала бы. Сервер такой повтор и отвергает —
-                         здесь мы просто не предлагаем тупик. */
-                      canRetry={connection.status !== 'broken' && !queued.includes(d.id)}
+                      webhook={isWebhook}
+                      /* Повтор у СЛОМАННОЙ и у ВЫКЛЮЧЕННОЙ цели не
+                         показывается: её события гасятся первой же проверкой
+                         доставки либо не берутся вовсе, и кнопка молча ничего не
+                         дала бы. Сервер такой повтор и отвергает — здесь мы
+                         просто не предлагаем тупик. */
+                      canRetry={!target.broken && target.enabled && !queued.includes(d.id)}
                       retrying={retry.isPending && retry.variables === d.id}
                       onRetry={() =>
                         retry.mutate(d.id, {
@@ -127,16 +153,18 @@ export function DeliveriesDialog({
 
 function DeliveryRow({
   delivery,
+  webhook,
   canRetry,
   retrying,
   onRetry,
 }: {
   delivery: Delivery
+  webhook: boolean
   canRetry: boolean
   retrying: boolean
   onRetry: () => void
 }) {
-  const { Icon, color, title } = outcomeMeta(delivery)
+  const { Icon, color, title } = outcomeMeta(delivery, webhook)
   // Повторяют ОДИН ответ: у пачки переноса предмет — диапазон, и лечится он
   // перезаливом целиком, а не строкой. Успех не повторяют вовсе — у записи в
   // лист нет идемпотентности, и ответ лёг бы туда вторым разом.
@@ -149,6 +177,14 @@ function DeliveryRow({
         <p className="text-sm font-medium">{title}</p>
         {delivery.detail && (
           <p className="mt-0.5 text-sm break-words text-muted-foreground">{delivery.detail}</p>
+        )}
+        {/* Код ответа получателя — рядом с причиной, а не вместо неё: причина
+            объясняет, что делать, а код нужен тому, кто пойдёт смотреть логи на
+            своей стороне. Пусто, когда ответа не было вовсе. */}
+        {delivery.httpStatus !== undefined && (
+          <p className="mt-0.5 text-sm text-muted-foreground">
+            Код ответа: <span className="font-mono">{delivery.httpStatus}</span>
+          </p>
         )}
       </div>
       <div className="flex shrink-0 items-center gap-3">
@@ -170,7 +206,10 @@ function DeliveryRow({
 // пропуск красится нейтральным — это не беда, а решение, принятое за человека
 // («связка была выключена», «ответ удалён»), и красный рядом с ним читался бы
 // как поломка.
-function outcomeMeta(d: Delivery): {
+function outcomeMeta(
+  d: Delivery,
+  webhook: boolean,
+): {
   Icon: React.ComponentType<{ className?: string }>
   color: string
   title: string
@@ -179,8 +218,9 @@ function outcomeMeta(d: Delivery): {
     return {
       Icon: Check,
       color: 'text-success',
-      title:
-        d.kind === 'backfill'
+      title: webhook
+        ? 'Ответ отправлен'
+        : d.kind === 'backfill'
           ? `Перенесено накопленных ответов: ${d.rows}`
           : 'Ответ записан в таблицу',
     }
@@ -189,7 +229,7 @@ function outcomeMeta(d: Delivery): {
     return {
       Icon: TriangleAlert,
       color: 'text-destructive',
-      title: d.kind === 'backfill' ? 'Перенос не удался' : 'Ответ не записан',
+      title: webhook ? 'Ответ не отправлен' : d.kind === 'backfill' ? 'Перенос не удался' : 'Ответ не записан',
     }
   }
   return { Icon: SkipForward, color: 'text-muted-foreground', title: 'Ответ не отправляли' }

@@ -123,6 +123,24 @@ type FormVisit struct {
 	VisitorKey    []byte
 }
 
+type FormWebhook struct {
+	ID                  uuid.UUID
+	FormID              uuid.UUID
+	Name                string
+	Url                 string
+	Secret              []byte
+	SetBy               pgtype.UUID
+	Enabled             bool
+	Status              string
+	LastError           pgtype.Text
+	LastDeliveredAt     pgtype.Timestamptz
+	NextAttemptAt       pgtype.Timestamptz
+	FailingSince        pgtype.Timestamptz
+	ConsecutiveFailures int32
+	CreatedAt           pgtype.Timestamptz
+	Headers             []byte
+}
+
 type IntegrationAccount struct {
 	ID                uuid.UUID
 	Provider          string
@@ -137,13 +155,15 @@ type IntegrationAccount struct {
 
 type IntegrationDelivery struct {
 	ID           uuid.UUID
-	LinkID       uuid.UUID
+	LinkID       pgtype.UUID
 	Kind         string
 	SubmissionID pgtype.UUID
 	Outcome      string
 	Detail       string
 	RowCount     int32
 	CreatedAt    pgtype.Timestamptz
+	WebhookID    pgtype.UUID
+	HttpStatus   pgtype.Int4
 }
 
 type KnownDevice struct {
@@ -289,6 +309,12 @@ type UserIdentity struct {
 	UserID         uuid.UUID
 	CreatedAt      pgtype.Timestamptz
 	ProviderEmail  pgtype.Text
+}
+
+type WebhookQueue struct {
+	WebhookID    uuid.UUID
+	SubmissionID uuid.UUID
+	EnqueuedAt   pgtype.Timestamptz
 }
 
 type Workspace struct {

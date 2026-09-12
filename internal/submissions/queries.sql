@@ -26,6 +26,20 @@ WITH ins AS (
     ON CONFLICT (workspace_id, period)
     DO UPDATE SET submissions = workspace_usage.submissions + 1
     RETURNING 1 AS one
+), queued AS (
+    -- Доставка в вебхуки формы (фаза 28) ставится ТЕМ ЖЕ утверждением: ответ и
+    -- строка его очереди появляются вместе, поэтому падение процесса между ними
+    -- невозможно, а транзакции на быстром пути приёма по-прежнему нет. Читает
+    -- ins: идемпотентный ретрай не дал строки — второй доставки не появится,
+    -- откат сверх жёсткого капа уносит и очередь.
+    --
+    -- Выключенные вебхуки пропускаются здесь: событие, которое некому доставить,
+    -- лучше не заводить вовсе. СЛОМАННЫЕ — нет: их ответы копятся, и починка
+    -- увозит накопленное по порядку (спека §6).
+    INSERT INTO webhook_queue (webhook_id, submission_id)
+    SELECT w.id, $1 FROM form_webhooks w, ins
+    WHERE w.form_id = $2 AND w.enabled
+    RETURNING 1 AS one
 )
 SELECT one FROM ins;
 
@@ -133,9 +147,14 @@ SELECT pg_advisory_xact_lock(hashtextextended($1::text, 0));
 --
 -- NOT over_quota — тот же фильтр, что у кабинета: ответ, скрытый от владельца
 -- до оплаты, не должен всплыть у него же в Google Таблице.
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+--
+-- Название формы едет тем же запросом: тело вебхука его называет, а спрашивать
+-- его отдельно у forms доставке нечем — пользователя, чьё право можно проверить,
+-- на фоновом пути нет.
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version, f.title AS form_title
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+JOIN forms f ON f.id = s.form_id
 WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota;
 
 -- name: GetSubmissionForPrint :one

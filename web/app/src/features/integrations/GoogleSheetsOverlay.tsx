@@ -10,8 +10,6 @@ import {
   Upload,
 } from 'lucide-react'
 
-import type { LucideIcon } from 'lucide-react'
-
 import type {
   ConnectedAccount,
   FormIntegrations,
@@ -20,6 +18,7 @@ import type {
 } from '../../entities/integration'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { getPickerCredentials, startUrl } from './api'
+import { CompactAction } from './CompactAction'
 import { integrationKeys } from './keys'
 import { pickSpreadsheet } from './picker'
 import { GoogleSheetsIcon } from './ServiceIcon'
@@ -1024,17 +1023,23 @@ function AccountField({
           другой аккаунт» и выбор того же самого обновляет строку, — но он
           называется не тем словом, и найти его можно, только зная, как оно
           устроено внутри. */}
-      {/* Действия прижаты ВПРАВО и набраны мельче подписи поля: это не третий
-          вопрос анкеты, а обслуживание того, что уже выбрано. Слева под селектом
-          они читались бы продолжением формы и спорили с ней за очередь взгляда. */}
+      {/* Действия прижаты ВПРАВО: это не третий вопрос анкеты, а обслуживание
+          того, что уже выбрано. Слева под селектом они читались бы продолжением
+          формы и спорили с ней за очередь взгляда. Облик — общий CompactAction.
+
+          Обычная кнопка, а не ссылка: наружу она больше не ведёт — открывает шаг
+          согласия, а уже его большая кнопка уходит к провайдеру настоящим
+          переходом (там же и запасной путь на случай заблокированного окна).
+          Прежний <a href> на адрес похода был к тому же ловушкой: средний клик
+          уводил вкладку из кабинета прямо на ручку OAuth. */}
       <div className="flex flex-wrap items-center justify-end gap-1">
-        <AccountAction
+        <CompactAction
           icon={Plus}
           label="Подключить другой аккаунт"
           onClick={() => onConsent({ account: null })}
         />
         {chosen && (
-          <AccountAction
+          <CompactAction
             icon={RotateCw}
             label="Переподключить"
             onClick={() => onConsent({ account: chosen })}
@@ -1070,40 +1075,6 @@ function AccountField({
 }
 
 // AccountAction — действие с подключением под списком аккаунтов.
-//
-// Вид взят у «Изменить» в строке формы (features/forms/FormRow.tsx) — это уже
-// сложившийся в кабинете облик компактного действия со значком: ghost, поэтому
-// на наведении подложка, а не подчёркивание. Свой облик здесь заводить незачем:
-// задача та же, и второй вариант одного и того же читался бы как другой класс
-// кнопки.
-//
-// Обычная кнопка, а не ссылка: наружу она больше не ведёт — открывает шаг
-// согласия, а уже его большая кнопка уходит к провайдеру настоящим переходом
-// (там же и запасной путь на случай заблокированного окна). Прежний <a href> на
-// адрес похода был к тому же ловушкой: средний клик уводил вкладку из кабинета
-// прямо на ручку OAuth.
-function AccountAction({
-  icon: Icon,
-  label,
-  onClick,
-}: {
-  icon: LucideIcon
-  label: string
-  onClick: () => void
-}) {
-  return (
-    <Button
-      variant="ghost"
-      size="sm"
-      className="h-7 gap-1.5 px-2 text-muted-foreground"
-      onClick={onClick}
-    >
-      <Icon className="size-3.5" />
-      {label}
-    </Button>
-  )
-}
-
 function connectFailureText(outcome: OAuthOutcome): string {
   switch (outcome) {
     case 'integration_denied':

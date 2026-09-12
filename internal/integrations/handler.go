@@ -64,20 +64,43 @@ type integrationsService interface {
 	Disconnect(ctx context.Context, userID, accountID uuid.UUID) error
 	Deliveries(ctx context.Context, userID, formID, linkID, cursor uuid.UUID) ([]Delivery, error)
 	RetryDelivery(ctx context.Context, userID, formID, linkID, deliveryID uuid.UUID) error
+	CreateWebhook(ctx context.Context, userID, formID uuid.UUID, in WebhookInput) (Webhook, error)
+	WebhookDeliveries(ctx context.Context, userID, formID, webhookID, cursor uuid.UUID) ([]Delivery, error)
+	RetryWebhookDelivery(ctx context.Context, userID, formID, webhookID, deliveryID uuid.UUID) error
+	TestWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) (WebhookTestResult, error)
+	UpdateWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID, patch WebhookPatch) error
+	WebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error)
+	SetWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, secret string) error
+	DisableWebhookSignature(ctx context.Context, userID, formID, webhookID uuid.UUID) error
+	DeleteWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) error
+}
+
+// RateLimiter — лимитер проверки вебхука. Реализация — ratelimit.TokenBucket; в
+// тестах инжектируется пермиссивный (инвариант безопасности 6).
+type RateLimiter interface {
+	Allow(key string) bool
 }
 
 // Handler — приватный транспорт интеграций.
 type Handler struct {
-	svc          integrationsService
-	requireAuth  Middleware
-	requireCSRF  Middleware
+	svc         integrationsService
+	requireAuth Middleware
+	requireCSRF Middleware
+	// testLimiter — ведро на «Проверить». Кнопка шлёт запрос по адресу,
+	// который человек только что ввёл, и без лимита ею можно было бы стучать
+	// в чужой сервер с нашего IP. nil = сборка без лимита (тесты).
+	testLimiter  RateLimiter
 	appOrigin    string
 	cookieSecure bool
 	// secret — ключ подписи намерения (FORM_TOKEN_SECRET). Не логируется.
 	secret []byte
 }
 
-func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, appOrigin string, cookieSecure bool, secret []byte) *Handler {
+// testLimiter — ОБЯЗАТЕЛЬНЫЙ параметр, а не сеттер: «лимита нет» не должно
+// получаться молча (инвариант 6). Пермиссивная реализация инжектируется в тестах
+// явно (ratelimit.AllowAll), а выпавший из сборки лимитер ловит компилятор.
+// история — JOURNAL, «Слайс G. Находки ревью»
+func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, appOrigin string, cookieSecure bool, secret []byte, testLimiter RateLimiter) *Handler {
 	return &Handler{
 		svc:          svc,
 		requireAuth:  requireAuth,
@@ -85,6 +108,7 @@ func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, ap
 		appOrigin:    appOrigin,
 		cookieSecure: cookieSecure,
 		secret:       secret,
+		testLimiter:  testLimiter,
 	}
 }
 
@@ -125,6 +149,33 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.retryDelivery))))
 	mux.Handle("DELETE /api/v1/forms/{id}/integrations/{connectionId}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnectForm))))
+
+	// Вебхуки — своё семейство под формой: у них свой id и своя форма тела, а
+	// читаются они тем же состоянием таба (GET …/integrations).
+	mux.Handle("POST /api/v1/forms/{id}/webhooks",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.createWebhook))))
+	mux.Handle("PATCH /api/v1/forms/{id}/webhooks/{webhookId}",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.updateWebhook))))
+	mux.Handle("DELETE /api/v1/forms/{id}/webhooks/{webhookId}",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.deleteWebhook))))
+	// Секрет подписи — отдельной ручкой по нажатию «Показать», а не в состоянии
+	// таба: раздавать его на каждый показ незачем. POST того же адреса — задать.
+	mux.Handle("GET /api/v1/forms/{id}/webhooks/{webhookId}/secret",
+		h.requireAuth(http.HandlerFunc(h.webhookSecret)))
+	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/secret",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.setWebhookSecret))))
+	// Выключение подписи: секрет удаляется, заголовок в запросах пропадает.
+	mux.Handle("DELETE /api/v1/forms/{id}/webhooks/{webhookId}/secret",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disableWebhookSignature))))
+	// Журнал доставок вебхука и повтор одной доставки — те же адреса и те же
+	// права, что у ленты связки Таблиц.
+	mux.Handle("GET /api/v1/forms/{id}/webhooks/{webhookId}/deliveries",
+		h.requireAuth(http.HandlerFunc(h.webhookDeliveries)))
+	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/deliveries/{deliveryId}/retry",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.retryWebhookDelivery))))
+	// Проверка адреса: синхронный запрос образцом. Под лимитом — см. testLimiter.
+	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/test",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.testWebhook))))
 
 	// Один адрес на «подключить ещё один» и «переподключить»: возврат у них
 	// общий, а различает их необязательный accountId — почта названного аккаунта
@@ -207,6 +258,64 @@ type formStatusResponse struct {
 	// Connections — подключённые связки формы. Пустой список — не ошибка, а
 	// состояние экрана: у формы просто нет интеграций.
 	Connections []sheetResponse `json:"connections"`
+	// Webhooks — вебхуки формы; пустой список — тоже состояние экрана.
+	Webhooks []webhookResponse `json:"webhooks"`
+}
+
+// webhookResponse — вебхук глазами экрана.
+//
+// URL пуст у того, кто не вправе править форму (решает сервис): в пути адреса
+// лежит токен получателя. Host — у всех. Секрета здесь нет никогда: он
+// отдаётся отдельной ручкой по нажатию.
+type webhookResponse struct {
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	Host string `json:"host"`
+	URL  string `json:"url,omitempty"`
+	// Signed — включена ли подпись запросов. Сам секрет здесь не появляется
+	// никогда: за ним отдельная ручка по нажатию.
+	Signed bool `json:"signed"`
+	// Headers — свои заголовки запроса (0064). Приходят только тому, кто вправе
+	// править форму (решает сервис): в значении лежит ключ к чужой системе. Их
+	// правят полем в том же окне, что адрес, поэтому они едут вместе с ним, а не
+	// отдельной ручкой, как секрет подписи.
+	Headers         []webhookHeaderResponse `json:"headers,omitempty"`
+	Enabled         bool                    `json:"enabled"`
+	Status          string                  `json:"status"`
+	LastError       string                  `json:"lastError,omitempty"`
+	LastDeliveredAt *string                 `json:"lastDeliveredAt,omitempty"`
+	Queued          int64                   `json:"queued"`
+}
+
+// webhookHeaderResponse — один свой заголовок. Свой тип, а не WebhookHeader:
+// метки json там описывают ФОРМАТ ХРАНЕНИЯ (набор лежит шифротекстом), а здесь —
+// контракт ручки, и разъехаться им никто не мешает. Пока поля совпадают,
+// конверсия бесплатна, а разъедутся — об этом скажет компилятор.
+type webhookHeaderResponse struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+func toWebhookResponse(w Webhook) webhookResponse {
+	out := webhookResponse{
+		ID:        w.ID.String(),
+		Name:      w.Name,
+		Host:      w.Host,
+		URL:       w.URL,
+		Signed:    len(w.SecretSealed) > 0,
+		Enabled:   w.Enabled,
+		Status:    w.Status,
+		LastError: w.LastError,
+		Queued:    w.Queued,
+	}
+	for _, h := range w.Headers {
+		out.Headers = append(out.Headers, webhookHeaderResponse(h))
+	}
+	if !w.LastDeliveredAt.IsZero() {
+		at := w.LastDeliveredAt.UTC().Format(time.RFC3339)
+		out.LastDeliveredAt = &at
+	}
+	return out
 }
 
 func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
@@ -220,6 +329,10 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
+	// В состоянии таба едут полный адрес вебхука (в пути токен получателя) и его
+	// свои заголовки (в значении ключ к чужой системе): промежуточный кэш,
+	// сохранивший ответ, раздавал бы и то и другое.
+	w.Header().Set("Cache-Control", "no-store")
 
 	resp := formStatusResponse{
 		WorkspaceID: st.WorkspaceID.String(),
@@ -241,7 +354,187 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 	for _, link := range st.Connections {
 		resp.Connections = append(resp.Connections, *toSheetResponse(link))
 	}
+	resp.Webhooks = make([]webhookResponse, 0, len(st.Webhooks))
+	for _, wh := range st.Webhooks {
+		resp.Webhooks = append(resp.Webhooks, toWebhookResponse(wh))
+	}
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// webhookRequest — тело заведения и правки вебхука. Указатели: правка трогает
+// только названные поля (тумблер из списка шлёт один enabled).
+type webhookRequest struct {
+	Name    *string `json:"name"`
+	URL     *string `json:"url"`
+	Enabled *bool   `json:"enabled"`
+	// Secret — секрет подписи, введённый автором при ЗАВЕДЕНИИ (пусто = вебхук
+	// заводится без подписи). В правке не участвует: там у секрета своя ручка, и
+	// менять его заодно с названием значило бы ломать проверку у получателя
+	// незаметно.
+	Secret *string `json:"secret"`
+	// Headers — свои заголовки запроса. Набор заменяется ЦЕЛИКОМ; nil (поля нет)
+	// — не трогать, пустой список — убрать все.
+	Headers *[]webhookHeaderResponse `json:"headers"`
+}
+
+// webhookHeaders переводит заголовки тела в тип сервиса.
+func webhookHeaders(in []webhookHeaderResponse) []WebhookHeader {
+	out := make([]WebhookHeader, 0, len(in))
+	for _, h := range in {
+		out = append(out, WebhookHeader(h))
+	}
+	return out
+}
+
+type webhookSecretResponse struct {
+	Secret string `json:"secret"`
+}
+
+func (h *Handler) createWebhook(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+	req, ok := decodeWebhookRequest(w, r)
+	if !ok {
+		return
+	}
+	in := WebhookInput{}
+	if req.Name != nil {
+		in.Name = *req.Name
+	}
+	if req.URL != nil {
+		in.URL = *req.URL
+	}
+	if req.Secret != nil {
+		in.Secret = *req.Secret
+	}
+	if req.Headers != nil {
+		in.Headers = webhookHeaders(*req.Headers)
+	}
+	wh, err := h.svc.CreateWebhook(r.Context(), user.ID, formID, in)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	// В ответе полный адрес, а в его пути — токен получателя: промежуточный кэш,
+	// сохранивший ответ, раздавал бы его.
+	w.Header().Set("Cache-Control", "no-store")
+	httpserver.WriteJSON(w, r, http.StatusCreated, toWebhookResponse(wh))
+}
+
+func (h *Handler) updateWebhook(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	req, ok := decodeWebhookRequest(w, r)
+	if !ok {
+		return
+	}
+	patch := WebhookPatch{Name: req.Name, Enabled: req.Enabled, URL: req.URL}
+	if req.Headers != nil {
+		headers := webhookHeaders(*req.Headers)
+		patch.Headers = &headers
+	}
+	if err := h.svc.UpdateWebhook(r.Context(), user.ID, formID, webhookID, patch); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) deleteWebhook(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DeleteWebhook(r.Context(), user.ID, formID, webhookID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) webhookSecret(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	secret, err := h.svc.WebhookSecret(r.Context(), user.ID, formID, webhookID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.Header().Set("Cache-Control", "no-store")
+	httpserver.WriteJSON(w, r, http.StatusOK, webhookSecretResponse{Secret: secret})
+}
+
+// secretRequest — тело «включить подпись либо сменить секрет». Тело обязательно:
+// секрет придумывает автор, и пустое означало бы подпись неизвестно чем.
+type secretRequest struct {
+	Secret string `json:"secret"`
+}
+
+func (h *Handler) setWebhookSecret(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req secretRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	if err := h.svc.SetWebhookSecret(r.Context(), user.ID, formID, webhookID, req.Secret); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *Handler) disableWebhookSignature(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DisableWebhookSignature(r.Context(), user.ID, formID, webhookID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// decodeWebhookRequest читает тело заведения или правки: потолок размера
+// (инвариант 3) и запрет незнакомых полей.
+func decodeWebhookRequest(w http.ResponseWriter, r *http.Request) (webhookRequest, bool) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req webhookRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return webhookRequest{}, false
+	}
+	return req, true
+}
+
+// userFormWebhook достаёт спрашивающего, форму и вебхук из адреса. Битый id —
+// 404, как везде: по нему нельзя отличать существующие вебхуки.
+func (h *Handler) userFormWebhook(w http.ResponseWriter, r *http.Request) (auth.User, uuid.UUID, uuid.UUID, bool) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return auth.User{}, uuid.Nil, uuid.Nil, false
+	}
+	webhookID, err := uuid.Parse(r.PathValue("webhookId"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return auth.User{}, uuid.Nil, uuid.Nil, false
+	}
+	return user, formID, webhookID, true
 }
 
 // connectRequest — настройки из окна подключения.
@@ -456,7 +749,26 @@ type deliveryResponse struct {
 	Outcome      string `json:"outcome"`
 	Detail       string `json:"detail,omitempty"`
 	Rows         int32  `json:"rows"`
-	CreatedAt    string `json:"createdAt"`
+	// HTTPStatus — код ответа получателя вебхука; пусто у Таблиц и когда ответа
+	// не было вовсе (таймаут, DNS, запрет адреса).
+	HTTPStatus int32  `json:"httpStatus,omitempty"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+func toDeliveryResponse(d Delivery) deliveryResponse {
+	item := deliveryResponse{
+		ID:         d.ID.String(),
+		Kind:       d.Kind,
+		Outcome:    d.Outcome,
+		Detail:     d.Detail,
+		Rows:       d.RowCount,
+		HTTPStatus: d.HTTPStatus,
+		CreatedAt:  d.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if d.SubmissionID != uuid.Nil {
+		item.SubmissionID = d.SubmissionID.String()
+	}
+	return item
 }
 
 // deliveriesResponse — страница ленты. nextCursor пуст, когда страница
@@ -480,27 +792,89 @@ func (h *Handler) deliveries(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toDeliveriesResponse(list))
+}
+
+// toDeliveriesResponse — страница ленты. Полная страница означает «возможно,
+// есть ещё»; курсор — id последней. Лишний пустой запрос дешевле пропущенного
+// хвоста ленты.
+func toDeliveriesResponse(list []Delivery) deliveriesResponse {
 	resp := deliveriesResponse{Deliveries: make([]deliveryResponse, 0, len(list))}
 	for _, d := range list {
-		item := deliveryResponse{
-			ID:        d.ID.String(),
-			Kind:      d.Kind,
-			Outcome:   d.Outcome,
-			Detail:    d.Detail,
-			Rows:      d.RowCount,
-			CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
-		}
-		if d.SubmissionID != uuid.Nil {
-			item.SubmissionID = d.SubmissionID.String()
-		}
-		resp.Deliveries = append(resp.Deliveries, item)
+		resp.Deliveries = append(resp.Deliveries, toDeliveryResponse(d))
 	}
-	// Полная страница означает «возможно, есть ещё»; курсор — id последней.
-	// Лишний пустой запрос дешевле пропущенного хвоста ленты.
 	if len(list) == DeliveryPageSize {
 		resp.NextCursor = list[len(list)-1].ID.String()
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+	return resp
+}
+
+func (h *Handler) webhookDeliveries(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	// Кривой курсор — не ошибка клиента, а первая страница (как у ленты связки).
+	cursor, _ := uuid.Parse(r.URL.Query().Get("cursor"))
+
+	list, err := h.svc.WebhookDeliveries(r.Context(), user.ID, formID, webhookID, cursor)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toDeliveriesResponse(list))
+}
+
+// retryWebhookDelivery ставит ответ в очередь заново. 202, а не 204: доставка
+// поставлена, а не сделана — исход появится в ленте отдельной строкой.
+func (h *Handler) retryWebhookDelivery(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	deliveryID, err := uuid.Parse(r.PathValue("deliveryId"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	if err := h.svc.RetryWebhookDelivery(r.Context(), user.ID, formID, webhookID, deliveryID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// webhookTestResponse — исход проверки. Неуспех это ОТВЕТ, а не сбой ручки:
+// 200 с ok=false и русской причиной, потому что «получатель ответил 500» —
+// сведения о получателе, а не ошибка кабинета.
+type webhookTestResponse struct {
+	OK         bool   `json:"ok"`
+	StatusCode int    `json:"statusCode,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Ms         int64  `json:"ms"`
+}
+
+func (h *Handler) testWebhook(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	// Ведро на человека: кнопка ходит по адресу, который он только что ввёл.
+	if !h.testLimiter.Allow(user.ID.String()) {
+		httpserver.WriteError(w, r, domain.ErrRateLimited)
+		return
+	}
+	res, err := h.svc.TestWebhook(r.Context(), user.ID, formID, webhookID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, webhookTestResponse{
+		OK:         res.OK,
+		StatusCode: res.StatusCode,
+		Reason:     res.Reason,
+		Ms:         res.Elapsed.Milliseconds(),
+	})
 }
 
 // retryDelivery ставит доставку заново. 202, а не 204: событие поставлено в
