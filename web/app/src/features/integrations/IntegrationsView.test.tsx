@@ -1196,4 +1196,35 @@ describe('вебхуки на экране интеграций', () => {
     // спросили отдельной ручкой.
     expect((screen.getByLabelText('Секрет подписи') as HTMLInputElement).value).toMatch(/•+/)
   })
+  it('в окне можно задать свой секрет, и короткий не отправляется', async () => {
+    const sent: unknown[] = []
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'POST' && url.includes('/secret')) {
+        sent.push(init.body ? JSON.parse(String(init.body)) : null)
+        return new Response(JSON.stringify({ secret: 'общий-секрет-на-все-формы' }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      return new Response(null, { status: 204 })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    renderView(state({ webhooks: [hook()] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Задать свой' }))
+    const field = screen.getByLabelText('Свой секрет подписи')
+    // Короткий секрет обесценил бы подпись — кнопка не даёт его отправить.
+    fireEvent.change(field, { target: { value: '123456' } })
+    expect(
+      (screen.getByRole('button', { name: 'Сохранить секрет' }) as HTMLButtonElement).disabled,
+    ).toBe(true)
+
+    fireEvent.change(field, { target: { value: 'общий-секрет-на-все-формы' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить секрет' }))
+
+    await waitFor(() => expect(sent.length).toBe(1))
+    expect(sent[0]).toEqual({ secret: 'общий-секрет-на-все-формы' })
+    vi.unstubAllGlobals()
+  })
 })

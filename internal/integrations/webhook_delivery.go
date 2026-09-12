@@ -40,7 +40,11 @@ const (
 	// WebhookBatchPerTarget — сколько ответов увозится у одной цели за проход.
 	// Потолок нужен, чтобы цель с длинной очередью не держала слот весь тик:
 	// остаток уедет следующим проходом, они идут каждые несколько секунд.
-	WebhookBatchPerTarget = 20
+	//
+	// Десять, а не двадцать: таймаут запроса поднят вдвое (safehttp.DefaultTimeout),
+	// и произведение «пачка × таймаут» — то самое время, на которое медленный
+	// получатель занимает слот, — осталось прежним.
+	WebhookBatchPerTarget = 10
 	// WebhookConcurrency — сколько целей разбирается одновременно. Одна цель —
 	// один слот: порядок внутри неё этим и держится.
 	WebhookConcurrency = 4
@@ -285,7 +289,7 @@ func webhookFailureReason(code int, cause error) (permanent bool, reason string)
 		case safehttp.FailureInvalidURL:
 			return true, "Адрес больше не годится для отправки — задайте его заново."
 		case safehttp.FailureTimeout:
-			return false, "Получатель не ответил за пять секунд, попробуем ещё раз позже."
+			return false, "Получатель не ответил за десять секунд, попробуем ещё раз позже."
 		case safehttp.FailureNotFound:
 			return false, "Сервер с таким адресом не найден, попробуем ещё раз позже."
 		case safehttp.FailureTLS:

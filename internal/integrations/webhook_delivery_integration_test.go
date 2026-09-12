@@ -353,3 +353,61 @@ func signatureOf(t *testing.T, secret, ts string, body []byte) string {
 	}
 	return domain.SignWebhook(secret, time.Unix(at, 0), body)
 }
+
+// Секрет автора: задан своим, лёг шифротекстом и подписывает настоящую доставку.
+// Проверяется на живой доставке, а не на ручке: секрет ценен ровно тем, что им
+// подписан уехавший запрос.
+func TestWebhookDelivery_AuthorSuppliedSecret(t *testing.T) {
+	resetDB(t)
+	rec, recSrv, egress := newReceiver(t, http.StatusOK)
+	srv := newStackWithEgress(t, &fakeProvider{}, egress)
+	owner := registerUser(t, srv, "owner@example.com")
+	formID := newForm(t, personalWorkspace(t), "f-own-secret")
+	versionID := publishVersion(t, formID)
+
+	r := createWebhook(t, owner, srv, formID, `{"url":"`+recSrv.URL+`/hook"}`)
+	var hook webhookDTO
+	decode(t, r, &hook)
+
+	const mine = "общий-секрет-на-все-формы"
+	resp := postBodyWithCSRF(t, owner, srv,
+		"/api/v1/forms/"+formID+"/webhooks/"+hook.ID+"/secret", `{"secret":"`+mine+`"}`)
+	if resp.StatusCode != http.StatusOK {
+		closeBody(t, resp)
+		t.Fatalf("свой секрет: статус %d, ожидалось 200", resp.StatusCode)
+	}
+	var body struct {
+		Secret string `json:"secret"`
+	}
+	decode(t, resp, &body)
+	if body.Secret != mine {
+		t.Fatalf("вернулся секрет %q, ожидался заданный", body.Secret)
+	}
+	var sealed []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT secret FROM form_webhooks WHERE id = $1`, hook.ID).Scan(&sealed); err != nil {
+		t.Fatalf("строка вебхука: %v", err)
+	}
+	if strings.Contains(string(sealed), mine) {
+		t.Fatal("секрет автора лёг в базу открытым текстом")
+	}
+
+	subID := newSubmission(t, formID, versionID, `{"b1":"Кирилл"}`)
+	enqueueWebhook(t, hook.ID, subID)
+	if _, err := testIntegrations.DeliverWebhooks(context.Background()); err != nil {
+		t.Fatalf("проход доставщика: %v", err)
+	}
+	payload, sig := rec.last()
+	ts, _, _ := strings.Cut(strings.TrimPrefix(sig, "t="), ",")
+	if got := signatureOf(t, mine, ts, payload); got != sig {
+		t.Fatalf("запрос подписан не секретом автора: %q против %q", sig, got)
+	}
+
+	// Слишком короткий отвергается человеческим текстом, действующий остаётся.
+	resp = postBodyWithCSRF(t, owner, srv,
+		"/api/v1/forms/"+formID+"/webhooks/"+hook.ID+"/secret", `{"secret":"123456"}`)
+	closeBody(t, resp)
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("короткий секрет: статус %d, ожидалось 422", resp.StatusCode)
+	}
+}

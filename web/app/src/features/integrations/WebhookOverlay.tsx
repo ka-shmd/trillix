@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { AlertCircle, Check, Copy, Eye, RefreshCw, Send } from 'lucide-react'
+import { AlertCircle, Check, Copy, Eye, KeyRound, RefreshCw, Send } from 'lucide-react'
 
 import type { Webhook, WebhookTest } from '../../entities/integration'
 import { getWebhookSecret } from './api'
@@ -172,6 +172,10 @@ function SecretField({
   const reissue = useReissueWebhookSecret(formId)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<unknown>(null)
+  // own — открыт ввод своего секрета. Ввод — отдельное состояние, а не правка
+  // того же поля: показанный секрет читают и копируют, и случайная правка в нём
+  // означала бы молча сломанную подпись у получателя.
+  const [own, setOwn] = useState<string | null>(null)
 
   function show() {
     setLoading(true)
@@ -182,14 +186,63 @@ function SecretField({
       .finally(() => setLoading(false))
   }
 
+  function save(value?: string) {
+    reissue.mutate(
+      { webhookId, secret: value },
+      {
+        onSuccess: (fresh) => {
+          onSecret(fresh)
+          setOwn(null)
+        },
+      },
+    )
+  }
+
+  if (own !== null) {
+    return (
+      <div className="flex flex-col gap-2">
+        <Label htmlFor="webhook-own-secret">Свой секрет подписи</Label>
+        <div className="flex items-center gap-2">
+          <Input
+            id="webhook-own-secret"
+            autoFocus
+            className="h-10 font-mono md:text-base"
+            value={own}
+            onChange={(e) => setOwn(e.target.value)}
+          />
+          {/* Не просто «Сохранить»: внизу окна уже есть кнопка с этой надписью,
+              и списком кнопок они неразличимы. */}
+          <Button
+            disabled={reissue.isPending || own.trim().length < MIN_SECRET}
+            onClick={() => save(own.trim())}
+          >
+            Сохранить секрет
+          </Button>
+          <Button variant="ghost" onClick={() => setOwn(null)}>
+            Отмена
+          </Button>
+        </div>
+        <p className="text-sm text-muted-foreground">
+          От {MIN_SECRET} символов. Свой секрет удобен, когда получатель один на несколько форм:
+          проверка у него настраивается один раз.
+        </p>
+        {reissue.error && (
+          <p role="alert" className="text-sm text-destructive">
+            {humanError(reissue.error)}
+          </p>
+        )}
+      </div>
+    )
+  }
+
   return (
     <div className="flex flex-col gap-2">
       <Label htmlFor="webhook-secret">Секрет подписи</Label>
-      <div className="flex items-center gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Input
           id="webhook-secret"
           readOnly
-          className="h-10 font-mono md:text-base"
+          className="h-10 min-w-48 flex-1 font-mono md:text-base"
           value={secret ?? '••••••••••••••••'}
           onFocus={(e) => e.currentTarget.select()}
         />
@@ -201,13 +254,13 @@ function SecretField({
             Показать
           </Button>
         )}
-        <Button
-          variant="outline"
-          disabled={reissue.isPending}
-          onClick={() => reissue.mutate(webhookId, { onSuccess: onSecret })}
-        >
+        <Button variant="outline" disabled={reissue.isPending} onClick={() => save()}>
           <RefreshCw className="size-4" aria-hidden />
           Перевыпустить
+        </Button>
+        <Button variant="outline" onClick={() => setOwn('')}>
+          <KeyRound className="size-4" aria-hidden />
+          Задать свой
         </Button>
       </div>
       {/* Перевыпуск действует сразу — об этом сказано ДО нажатия: у получателя,
@@ -223,6 +276,11 @@ function SecretField({
     </div>
   )
 }
+
+// MIN_SECRET — та же планка, что на бэке (integrations.MinWebhookSecretLen).
+// Здесь она только гасит кнопку: слабый секрет обесценивает подпись, и проверку
+// всё равно делает сервер независимо от фронта.
+const MIN_SECRET = 16
 
 // FreshSecret — секрет только что заведённого вебхука.
 function FreshSecret({ secret }: { secret: string }) {

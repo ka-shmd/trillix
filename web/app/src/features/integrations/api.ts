@@ -232,9 +232,19 @@ export function getWebhookSecret(formId: string, webhookId: string): Promise<str
 }
 
 // Перевыпуск действует сразу: старый секрет перестаёт подходить без окна.
-export function reissueWebhookSecret(formId: string, webhookId: string): Promise<string> {
+//
+// secret пуст — сервер сгенерирует свой. Задан — берётся авторский: у человека с
+// двадцатью формами иначе двадцать разных секретов и столько же записей в
+// конфиге получателя. Планка длины — на бэке (16 символов), здесь только не даём
+// отправить заведомо короткий.
+export function reissueWebhookSecret(
+  formId: string,
+  webhookId: string,
+  secret?: string,
+): Promise<string> {
   return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, {
     method: 'POST',
+    body: secret ? { secret } : undefined,
     schema: webhookSecretSchema,
   }).then((r) => r.secret)
 }

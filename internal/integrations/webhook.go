@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 	"unicode/utf8"
 
 	"github.com/google/uuid"
@@ -30,7 +31,18 @@ import (
 const MaxWebhooksPerForm = 5
 
 // webhookSecretPrefix — по префиксу секрет узнаётся глазами и сканерами утечек.
+// Только у НАШЕГО секрета: чужой мы не переписываем.
 const webhookSecretPrefix = "whsec_"
+
+// MinWebhookSecretLen — минимум для секрета, заданного автором. Свой секрет
+// разрешён ради одного секрета на все формы (ADR §10), но «123456» обесценивает
+// подпись целиком: подделать запрос смог бы любой. Наш собственный секрет длиннее
+// вчетверо, и планка касается только введённого руками.
+const MinWebhookSecretLen = 16
+
+// MaxWebhookSecretLen — потолок: секрет едет ключом HMAC, и мегабайт в этом поле
+// не означает ничего, кроме промаха при вставке.
+const MaxWebhookSecretLen = 200
 
 // Webhook — вебхук формы, как он лежит у нас.
 //
@@ -303,16 +315,21 @@ func (s *Service) WebhookSecret(ctx context.Context, userID, formID, webhookID u
 	return secret, nil
 }
 
-// ReissueWebhookSecret заводит новый секрет подписи и отдаёт его. Старый перестаёт
+// ReissueWebhookSecret ставит новый секрет подписи и отдаёт его. Старый перестаёт
 // подходить сразу, без переходного окна (спека §7).
-func (s *Service) ReissueWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error) {
+//
+// custom пуст — секрет генерируем мы. Задан — берём авторский: у человека с
+// двадцатью формами иначе двадцать разных секретов и двадцать записей в конфиге
+// получателя (ADR §10, второй круг решений). Подпись при этом обязательна
+// всегда: выключателя у неё нет.
+func (s *Service) ReissueWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, custom string) (string, error) {
 	if s.webhooks == nil {
 		return "", domain.ErrNotFound
 	}
 	if err := s.canEditForm(ctx, userID, formID); err != nil {
 		return "", err
 	}
-	secret, sealed, err := s.newSealedSecret()
+	secret, sealed, err := s.sealedSecret(custom)
 	if err != nil {
 		return "", err
 	}
@@ -428,17 +445,46 @@ func webhookName(raw string) (string, error) {
 	return name, nil
 }
 
-// newSealedSecret заводит секрет подписи: 32 случайных байта и префикс. Отдаёт
-// открытый вид (показать человеку) и шифротекст (положить в базу).
+// newSealedSecret заводит НАШ секрет подписи: 32 случайных байта и префикс.
 func (s *Service) newSealedSecret() (string, []byte, error) {
-	b := make([]byte, 32)
-	if _, err := rand.Read(b); err != nil {
-		return "", nil, fmt.Errorf("webhook secret: %w", err)
+	return s.sealedSecret("")
+}
+
+// sealedSecret готовит секрет к записи: пустой custom — наш случайный, иначе
+// авторский после проверки. Отдаёт открытый вид (показать человеку) и
+// шифротекст (положить в базу).
+func (s *Service) sealedSecret(custom string) (string, []byte, error) {
+	secret := strings.TrimSpace(custom)
+	if secret == "" {
+		b := make([]byte, 32)
+		if _, err := rand.Read(b); err != nil {
+			return "", nil, fmt.Errorf("webhook secret: %w", err)
+		}
+		secret = webhookSecretPrefix + base64.RawURLEncoding.EncodeToString(b)
+	} else if err := checkWebhookSecret(secret); err != nil {
+		return "", nil, err
 	}
-	secret := webhookSecretPrefix + base64.RawURLEncoding.EncodeToString(b)
 	sealed, err := sealWebhookSecret(s.key, secret)
 	if err != nil {
 		return "", nil, err
 	}
 	return secret, sealed, nil
+}
+
+// checkWebhookSecret — правила для секрета, заданного автором. Ввод валидируется
+// на бэке независимо от фронта (инвариант 3).
+func checkWebhookSecret(secret string) error {
+	if n := utf8.RuneCountInString(secret); n < MinWebhookSecretLen || n > MaxWebhookSecretLen {
+		return fmt.Errorf("%w: секрет должен быть длиной от %d до %d символов",
+			domain.ErrValidation, MinWebhookSecretLen, MaxWebhookSecretLen)
+	}
+	// Управляющие символы в секрете — всегда промах при вставке (перенос строки
+	// из письма, табуляция из таблицы), а не замысел: у получателя он не сойдётся.
+	for _, r := range secret {
+		if unicode.IsControl(r) {
+			return fmt.Errorf("%w: в секрете есть переносы строк или табуляция — вставьте его одной строкой",
+				domain.ErrValidation)
+		}
+	}
+	return nil
 }

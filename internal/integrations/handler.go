@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -70,7 +71,7 @@ type integrationsService interface {
 	TestWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) (WebhookTestResult, error)
 	UpdateWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID, patch WebhookPatch) error
 	WebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error)
-	ReissueWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error)
+	ReissueWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, custom string) (string, error)
 	DeleteWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) error
 }
 
@@ -424,12 +425,29 @@ func (h *Handler) webhookSecret(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, webhookSecretResponse{Secret: secret})
 }
 
+// secretRequest — тело перевыпуска. Необязательное: пустое означает «сгенерируй
+// сам», непустое — секрет автора (он же, скорее всего, уже прописан у
+// получателя, и один на все его формы).
+type secretRequest struct {
+	Secret string `json:"secret"`
+}
+
 func (h *Handler) reissueWebhookSecret(w http.ResponseWriter, r *http.Request) {
 	user, formID, webhookID, ok := h.userFormWebhook(w, r)
 	if !ok {
 		return
 	}
-	secret, err := h.svc.ReissueWebhookSecret(r.Context(), user.ID, formID, webhookID)
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req secretRequest
+	// Пустое тело — штатный случай (кнопка «Перевыпустить» шлёт запрос без него),
+	// поэтому io.EOF здесь не ошибка. Битое тело — ошибка.
+	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	secret, err := h.svc.ReissueWebhookSecret(r.Context(), user.ID, formID, webhookID, req.Secret)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

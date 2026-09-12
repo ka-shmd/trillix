@@ -218,7 +218,9 @@ export function useDeleteWebhook(formId: string) {
 // и не инвалидирует его: новый секрет живёт в окне, которое его запросило.
 export function useReissueWebhookSecret(formId: string) {
   return useMutation({
-    mutationFn: (webhookId: string) => reissueWebhookSecret(formId, webhookId),
+    // secret пуст — сервер сгенерирует свой; задан — берётся авторский.
+    mutationFn: ({ webhookId, secret }: { webhookId: string; secret?: string }) =>
+      reissueWebhookSecret(formId, webhookId, secret),
   })
 }
 
