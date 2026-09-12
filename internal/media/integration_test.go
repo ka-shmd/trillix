@@ -78,7 +78,12 @@ func TestMain(m *testing.M) {
 
 func startMinIO(ctx context.Context) (endpoint string, stop func(), err error) {
 	req := testcontainers.ContainerRequest{
-		Image:        "minio/minio:RELEASE.2024-01-16T16-07-38Z",
+		// Реестр назван ЯВНО: с Docker Hub образ minio/minio пропал целиком —
+		// 2026-09-12 репозиторий отдавал ноль тегов, и CI встал на «pull access
+		// denied» во всех трёх пакетах, которые его поднимают. quay.io — второй
+		// официальный реестр MinIO, тот же тег и тот же digest.
+		// история — JOURNAL, «Образ MinIO уехал с Docker Hub»
+		Image:        "quay.io/minio/minio:RELEASE.2024-01-16T16-07-38Z",
 		Cmd:          []string{"server", "/data"},
 		Env:          map[string]string{"MINIO_ROOT_USER": "minioadmin", "MINIO_ROOT_PASSWORD": "minioadmin"},
 		ExposedPorts: []string{"9000/tcp"},
