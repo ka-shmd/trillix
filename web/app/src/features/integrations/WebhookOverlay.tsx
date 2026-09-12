@@ -354,17 +354,7 @@ function HeadersField({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      {/* Верхний ряд повторяет раскладку строки набора: подпись занимает место
-          полей, «Ещё заголовок» кончается там же, где кончается «Значение», а
-          пустая клетка держит колонку крестиков. Без неё кнопка съезжала бы
-          правее полей и вставала бы над крестиками. */}
-      <div className="flex items-center gap-2">
-        <Label className="flex-1">Свои заголовки</Label>
-        {rows.length < MAX_HEADERS && (
-          <CompactAction icon={Plus} label="Ещё заголовок" onClick={onAdd} />
-        )}
-        <div className="size-9 shrink-0" aria-hidden />
-      </div>
+      <Label>Свои заголовки</Label>
       {rows.map((row, i) => (
         <div key={row.id} className="flex items-center gap-2">
           <Input
@@ -391,6 +381,17 @@ function HeadersField({
           </Button>
         </div>
       ))}
+      {/* Кнопка стоит ПОД «Значением» и кончается там же, где оно: пустая клетка
+          держит колонку крестиков, иначе кнопка встала бы под ними. Под списком,
+          а не над ним, — она продолжает набранное, и смотреть на неё нужно после
+          строк, а не до. */}
+      {rows.length < MAX_HEADERS && (
+        <div className="flex items-center gap-2">
+          <div className="flex-1" aria-hidden />
+          <CompactAction icon={Plus} label="Ещё заголовок" onClick={onAdd} />
+          <div className="size-9 shrink-0" aria-hidden />
+        </div>
+      )}
       <p className="text-sm text-muted-foreground">
         Имя — латиницей: чаще всего это <span className="font-mono">Authorization</span> со
         значением <span className="font-mono">Bearer …</span>. Значение уедет получателю как
