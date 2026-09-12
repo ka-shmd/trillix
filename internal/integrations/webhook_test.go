@@ -178,7 +178,7 @@ func (f *fakeEgress) Post(context.Context, string, http.Header, []byte) (safehtt
 func newWebhookService(access integrations.Access, store *fakeWebhookStore, egress *fakeEgress) *integrations.Service {
 	f := fakeForms{form: forms.Form{ID: testForm, WorkspaceID: testWS}}
 	return integrations.NewService(nil, directTx{}, &fakeStore{}, access, f, nil, testKey).
-		WithWebhooks(store, egress, nil)
+		WithWebhooks(store, egress)
 }
 
 const testHookURL = "https://hooks.zapier.com/hooks/catch/123/abcSECRET/"
@@ -271,7 +271,7 @@ func TestCreateWebhook_NoResolveWithoutRight(t *testing.T) {
 	}
 
 	stranger := integrations.NewService(nil, directTx{}, &fakeStore{}, fakeAccess{},
-		fakeForms{getErr: domain.ErrNotFound}, nil, testKey).WithWebhooks(newFakeWebhookStore(), egress, nil)
+		fakeForms{getErr: domain.ErrNotFound}, nil, testKey).WithWebhooks(newFakeWebhookStore(), egress)
 	if _, err := stranger.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("чужая форма: %v, ожидался ErrNotFound", err)
 	}

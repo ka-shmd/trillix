@@ -627,19 +627,14 @@ func (g *Google) WriteHeader(ctx context.Context, accessToken string, s Spreadsh
 	return nil
 }
 
-// AppendRow дописывает строку в конец листа.
+// AppendRows дописывает пачку строк ОДНИМ запросом — и живые ответы тика, и
+// перенос накопленных: у Google 60 запросов в минуту на пользователя, и форма с
+// двадцатью тысячами ответов уперлась бы в лимит на первой же сотне.
 //
-// values.append, а не запись в вычисленную строку: номер следующей строки нам
+// values.append, а не запись в вычисленные строки: номер следующей строки нам
 // неизвестен (автор мог дописать своё руками, отсортировать, вставить строку), и
 // вычисленный индекс однажды затёр бы чужие данные. Ключа идемпотентности у
 // append нет — доставка at-least-once, дубль лечится перезаливом (ADR §10).
-func (g *Google) AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error {
-	return g.AppendRows(ctx, accessToken, s, [][]string{row})
-}
-
-// AppendRows дописывает пачку строк одним запросом. Догрузка накопленных
-// ответов идёт пачками, а не по строке: у Google 60 запросов в минуту на
-// пользователя, и форма с двадцатью тысячами ответов упёрлась бы в лимит.
 func (g *Google) AppendRows(ctx context.Context, accessToken string, s Spreadsheet, rows [][]string) error {
 	values := make([]any, 0, len(rows))
 	for _, row := range rows {

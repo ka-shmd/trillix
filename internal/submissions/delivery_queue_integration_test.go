@@ -1,8 +1,9 @@
 //go:build integration
 
-// Постановка доставки в вебхуки идёт ТЕМ ЖЕ SQL-утверждением, что вставка ответа
-// (фаза 28, ADR §10). Проверяется здесь, против настоящего Postgres: на фейках
-// «одно утверждение» не видно вовсе — там это два вызова.
+// Постановка доставки идёт ТЕМ ЖЕ SQL-утверждением, что вставка ответа — в обе
+// очереди сразу: вебхуков (фаза 28) и связок Google Таблиц (0065). Проверяется
+// здесь, против настоящего Postgres: на фейках «одно утверждение» не видно
+// вовсе — там это два вызова.
 package submissions_test
 
 import (
@@ -26,6 +27,47 @@ func webhookFor(t *testing.T, slug string, enabled bool, status string) uuid.UUI
 		t.Fatalf("insert webhook: %v", err)
 	}
 	return id
+}
+
+// sheetLinkFor заводит связку Таблиц напрямую — по той же причине, что и
+// вебхук: тест про очередь, а не про ручки кабинета.
+func sheetLinkFor(t *testing.T, slug string, enabled bool, status string) uuid.UUID {
+	t.Helper()
+	account := uuid.New()
+	// Владелец аккаунта — владелец пространства формы: сторож доставки спросит
+	// именно его членство, и посторонний пользователь сделал бы связку мёртвой.
+	_, err := testPool.Exec(context.Background(),
+		`INSERT INTO integration_accounts (id, user_id, provider, external_account_id, external_email, refresh_token, scopes)
+		 SELECT $1, m.user_id, 'google', $3, 'a@example.com', '\x00'::bytea, ''
+		 FROM forms f
+		 JOIN workspace_members m ON m.workspace_id = f.workspace_id AND m.role = 'owner'
+		 WHERE f.slug = $2`,
+		account, slug, account.String())
+	if err != nil {
+		t.Fatalf("insert integration account: %v", err)
+	}
+	id := uuid.New()
+	_, err = testPool.Exec(context.Background(),
+		`INSERT INTO form_integrations
+		     (id, form_id, account_id, spreadsheet_id, spreadsheet_url, sheet_id, sheet_title, columns, enabled, status)
+		 SELECT $1, id, $2, 'ss-1', 'https://docs.example', 0, 'Ответы', '[]'::jsonb, $4, $5
+		 FROM forms WHERE slug = $3`,
+		id, account, slug, enabled, status)
+	if err != nil {
+		t.Fatalf("insert form integration: %v", err)
+	}
+	return id
+}
+
+func sheetQueuedFor(t *testing.T, linkID uuid.UUID) int {
+	t.Helper()
+	var n int
+	err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM sheet_queue WHERE link_id = $1`, linkID).Scan(&n)
+	if err != nil {
+		t.Fatalf("count sheet queue: %v", err)
+	}
+	return n
 }
 
 func queuedFor(t *testing.T, webhookID uuid.UUID) int {
@@ -64,6 +106,33 @@ func TestSubmit_QueuesEnabledWebhooks(t *testing.T) {
 	}
 	if got := queuedFor(t, off); got != 0 {
 		t.Fatalf("у выключенного вебхука в очереди %d, ожидался ноль", got)
+	}
+}
+
+// То же правило у связок Таблиц, и той же веткой утверждения: до 0065 событие
+// ставилось ПОСЛЕ коммита ответа, и краш в этом окне стоил строки в чужой
+// таблице.
+func TestSubmit_QueuesEnabledSheetLinks(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	live := sheetLinkFor(t, slug, true, "live")
+	broken := sheetLinkFor(t, slug, true, "broken")
+	off := sheetLinkFor(t, slug, false, "live")
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Анна"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("приём: статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	if got := sheetQueuedFor(t, live); got != 1 {
+		t.Fatalf("у работающей связки в очереди %d, ожидался один ответ", got)
+	}
+	if got := sheetQueuedFor(t, broken); got != 1 {
+		t.Fatalf("у сломанной связки в очереди %d — ответы обязаны копиться до починки", got)
+	}
+	if got := sheetQueuedFor(t, off); got != 0 {
+		t.Fatalf("у выключенной связки в очереди %d, ожидался ноль", got)
 	}
 }
 

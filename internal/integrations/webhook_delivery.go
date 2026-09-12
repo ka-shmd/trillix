@@ -119,7 +119,7 @@ func (s *Service) DeliverWebhooks(ctx context.Context) (int, error) {
 // постановки. Первая же неудача заканчивает её проход: цель уснула, и остальные
 // её ответы ждут следующего окна, а не добавляют запросов в лежащий адрес.
 func (s *Service) deliverWebhook(ctx context.Context, w Webhook) int {
-	ids, err := s.webhooks.PendingSubmissions(ctx, s.db, w.ID, WebhookBatchPerTarget)
+	ids, err := s.webhooks.PendingWebhookSubmissions(ctx, s.db, w.ID, WebhookBatchPerTarget)
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Error("webhook queue not read",
 			slog.String("webhook_id", w.ID.String()), slog.String("error", err.Error()))
@@ -349,7 +349,7 @@ func webhookBackoff(failures int32) time.Duration {
 // dropQueued снимает ответ с очереди. Неудача снятия не роняет доставку: строка
 // уедет второй раз, а получатель дедуплицирует её по id ответа (контракт §7).
 func (s *Service) dropQueued(ctx context.Context, webhookID, submissionID uuid.UUID) {
-	if err := s.webhooks.Dequeue(ctx, s.db, webhookID, submissionID); err != nil {
+	if err := s.webhooks.DequeueWebhook(ctx, s.db, webhookID, submissionID); err != nil {
 		httpserver.LoggerFrom(ctx).Error("webhook queue row not removed",
 			slog.String("webhook_id", webhookID.String()), slog.String("error", err.Error()))
 	}
@@ -382,7 +382,7 @@ func (s *Service) CleanupWebhookQueue(ctx context.Context) (int64, error) {
 	if s.webhooks == nil {
 		return 0, nil
 	}
-	expired, err := s.webhooks.ExpiredQueued(ctx, s.db, s.now().Add(-WebhookQueueTTL), webhookCleanupBatch)
+	expired, err := s.webhooks.ExpiredWebhookQueued(ctx, s.db, s.now().Add(-WebhookQueueTTL), webhookCleanupBatch)
 	if err != nil {
 		return 0, err
 	}
@@ -391,7 +391,7 @@ func (s *Service) CleanupWebhookQueue(ctx context.Context) (int64, error) {
 		if ctx.Err() != nil {
 			return n, nil
 		}
-		if err := s.webhooks.Dequeue(ctx, s.db, ref.WebhookID, ref.SubmissionID); err != nil {
+		if err := s.webhooks.DequeueWebhook(ctx, s.db, ref.WebhookID, ref.SubmissionID); err != nil {
 			return n, err
 		}
 		s.logWebhookDelivery(ctx, ref.WebhookID, ref.SubmissionID, OutcomeFailed,
@@ -466,7 +466,7 @@ func (s *Service) RetryWebhookDelivery(ctx context.Context, userID, formID, webh
 	if w.Status == StatusBroken {
 		return fmt.Errorf("%w: сначала почините адрес — проверка вернёт вебхук в работу", domain.ErrConflict)
 	}
-	return s.webhooks.Enqueue(ctx, s.db, w.ID, d.SubmissionID)
+	return s.webhooks.EnqueueWebhook(ctx, s.db, w.ID, d.SubmissionID)
 }
 
 // WebhookTestResult — исход проверки адреса кнопкой.

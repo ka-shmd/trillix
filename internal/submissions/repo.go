@@ -195,17 +195,16 @@ func (Repo) GetForPrint(ctx context.Context, db postgres.DBTX, formID, id uuid.U
 	}, nil
 }
 
-// ListForBackfill — пачка ответов формы для догрузки во внешнюю таблицу:
-// старые сверху, строго до отсечки, после курсора after (uuid.Nil — с начала).
-func (Repo) ListForBackfill(ctx context.Context, db postgres.DBTX, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) ([]Submission, error) {
-	rows, err := postgres.New(db).ListSubmissionsForBackfill(ctx, postgres.ListSubmissionsForBackfillParams{
-		FormID:    formID,
-		CreatedAt: pgtype.Timestamptz{Time: before, Valid: true},
-		After:     after,
-		Limit:     limit,
+// ListForDelivery — названные ответы формы для доставки во внешнюю таблицу.
+// Порядок задаёт очередь связки, а не эта выборка: вернувшиеся строки
+// раскладывает по своему списку доставщик.
+func (Repo) ListForDelivery(ctx context.Context, db postgres.DBTX, formID uuid.UUID, ids []uuid.UUID) ([]Submission, error) {
+	rows, err := postgres.New(db).ListSubmissionsForDelivery(ctx, postgres.ListSubmissionsForDeliveryParams{
+		FormID: formID,
+		Ids:    ids,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("list submissions for backfill: %w", err)
+		return nil, fmt.Errorf("list submissions for delivery: %w", err)
 	}
 	out := make([]Submission, len(rows))
 	for i, r := range rows {

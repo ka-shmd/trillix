@@ -250,6 +250,9 @@ type sheetResponse struct {
 	Status          string  `json:"status"`
 	LastError       string  `json:"lastError,omitempty"`
 	LastDeliveredAt *string `json:"lastDeliveredAt,omitempty"`
+	// Queued — сколько ответов ждут доставки в лист. Им же экран показывает
+	// идущий перенос накопленных: отдельного статуса у него больше нет (0065).
+	Queued int64 `json:"queued"`
 }
 
 type formStatusResponse struct {
@@ -948,6 +951,7 @@ func toSheetResponse(l FormLink) *sheetResponse {
 		Name:          l.Name,
 		Status:        l.Status,
 		LastError:     l.LastError,
+		Queued:        l.Queued,
 	}
 	if !l.LastDeliveredAt.IsZero() {
 		at := l.LastDeliveredAt.UTC().Format(time.RFC3339)

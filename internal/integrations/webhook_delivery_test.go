@@ -51,7 +51,7 @@ func (f *fakeWebhookStore) DueWebhooks(_ context.Context, _ postgres.DBTX, limit
 	return out, nil
 }
 
-func (f *fakeWebhookStore) PendingSubmissions(_ context.Context, _ postgres.DBTX, webhookID uuid.UUID, limit int32) ([]uuid.UUID, error) {
+func (f *fakeWebhookStore) PendingWebhookSubmissions(_ context.Context, _ postgres.DBTX, webhookID uuid.UUID, limit int32) ([]uuid.UUID, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []uuid.UUID
@@ -67,7 +67,7 @@ func (f *fakeWebhookStore) PendingSubmissions(_ context.Context, _ postgres.DBTX
 	return out, nil
 }
 
-func (f *fakeWebhookStore) Dequeue(_ context.Context, _ postgres.DBTX, webhookID, submissionID uuid.UUID) error {
+func (f *fakeWebhookStore) DequeueWebhook(_ context.Context, _ postgres.DBTX, webhookID, submissionID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for i, q := range f.queue {
@@ -79,7 +79,7 @@ func (f *fakeWebhookStore) Dequeue(_ context.Context, _ postgres.DBTX, webhookID
 	return nil
 }
 
-func (f *fakeWebhookStore) Enqueue(_ context.Context, _ postgres.DBTX, webhookID, submissionID uuid.UUID) error {
+func (f *fakeWebhookStore) EnqueueWebhook(_ context.Context, _ postgres.DBTX, webhookID, submissionID uuid.UUID) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	for _, q := range f.queue {
@@ -91,7 +91,7 @@ func (f *fakeWebhookStore) Enqueue(_ context.Context, _ postgres.DBTX, webhookID
 	return nil
 }
 
-func (f *fakeWebhookStore) ExpiredQueued(_ context.Context, _ postgres.DBTX, before time.Time, limit int32) ([]integrations.QueuedRef, error) {
+func (f *fakeWebhookStore) ExpiredWebhookQueued(_ context.Context, _ postgres.DBTX, before time.Time, limit int32) ([]integrations.QueuedRef, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	var out []integrations.QueuedRef
@@ -244,10 +244,7 @@ type deliveryHarness struct {
 	store *fakeWebhookStore
 	out   *sender
 	subs  *fakeSubmissions
-	// outbox — очередь ПИСЕМ. Вебхуки её не касаются вовсе, и это проверяется:
-	// ради того разрез и делался (ADR §10).
-	outbox *fakeOutbox
-	now    time.Time
+	now   time.Time
 }
 
 func newDeliveryHarness(t *testing.T, code int) *deliveryHarness {
@@ -263,14 +260,13 @@ func newDeliveryHarness(t *testing.T, code int) *deliveryHarness {
 				{Key: "b1", Label: "Имя", Type: "short_text", Value: "Кирилл"},
 			},
 		}},
-		outbox: &fakeOutbox{},
-		now:    time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC),
+		now: time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC),
 	}
 	h.store.now = h.clock
 	h.svc = integrations.NewService(nil, directTx{}, &fakeStore{}, fakeAccess{},
 		fakeForms{form: formOfTest()}, nil, testKey).
-		WithWebhooks(h.store, h.out, h.clock).
-		WithDelivery(h.outbox, h.subs)
+		WithWebhooks(h.store, h.out).WithClock(h.clock).
+		WithDelivery(h.subs)
 	return h
 }
 
@@ -292,7 +288,7 @@ func (h *deliveryHarness) hook(t *testing.T, n int) (integrations.Webhook, []uui
 	ids := make([]uuid.UUID, n)
 	for i := range ids {
 		ids[i] = domain.NewID()
-		if err := h.store.Enqueue(context.Background(), nil, w.ID, ids[i]); err != nil {
+		if err := h.store.EnqueueWebhook(context.Background(), nil, w.ID, ids[i]); err != nil {
 			t.Fatalf("постановка: %v", err)
 		}
 	}
@@ -371,11 +367,6 @@ func TestDeliverWebhooks_SendsInOrder(t *testing.T) {
 	}
 	if got := h.target(t, w.ID); got.LastDeliveredAt.IsZero() || got.LastError != "" {
 		t.Fatalf("цель после успеха = %+v", got)
-	}
-	// Очередь писем не тронута ни разу: у вебхуков своя, и мёртвый получатель не
-	// имеет права задерживать письмо со сбросом пароля.
-	if h.outbox.channel != "" {
-		t.Fatalf("доставка вебхука положила строку в outbox (канал %q)", h.outbox.channel)
 	}
 }
 
@@ -525,8 +516,8 @@ func TestDeliverWebhooks_MemberLeftBreaksTarget(t *testing.T) {
 	w, _ := h.hook(t, 1)
 	h.svc = integrations.NewService(nil, directTx{}, &fakeStore{}, fakeAccess{gone: true},
 		fakeForms{form: formOfTest()}, nil, testKey).
-		WithWebhooks(h.store, h.out, h.clock).
-		WithDelivery(&fakeOutbox{}, h.subs)
+		WithWebhooks(h.store, h.out).WithClock(h.clock).
+		WithDelivery(h.subs)
 
 	if _, err := h.svc.DeliverWebhooks(context.Background()); err != nil {
 		t.Fatalf("проход: %v", err)
@@ -669,7 +660,7 @@ func TestRetryWebhookDelivery(t *testing.T) {
 	// повтор отказал бы раньше и по другой причине.
 	h.out.code = http.StatusInternalServerError
 	other := domain.NewID()
-	if err := h.store.Enqueue(context.Background(), nil, w.ID, other); err != nil {
+	if err := h.store.EnqueueWebhook(context.Background(), nil, w.ID, other); err != nil {
 		t.Fatalf("постановка: %v", err)
 	}
 	h.now = h.now.Add(time.Hour)
@@ -727,7 +718,7 @@ func TestDeliverWebhooks_OwnHeaders(t *testing.T) {
 	if err != nil {
 		t.Fatalf("подключение: %v", err)
 	}
-	if err := h.store.Enqueue(context.Background(), nil, w.ID, domain.NewID()); err != nil {
+	if err := h.store.EnqueueWebhook(context.Background(), nil, w.ID, domain.NewID()); err != nil {
 		t.Fatalf("постановка: %v", err)
 	}
 
@@ -758,7 +749,7 @@ func TestDeliverWebhooks_UnsignedByDefault(t *testing.T) {
 	if err != nil {
 		t.Fatalf("подключение: %v", err)
 	}
-	if err := h.store.Enqueue(context.Background(), nil, w.ID, domain.NewID()); err != nil {
+	if err := h.store.EnqueueWebhook(context.Background(), nil, w.ID, domain.NewID()); err != nil {
 		t.Fatalf("постановка: %v", err)
 	}
 

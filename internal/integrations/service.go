@@ -2,7 +2,6 @@ package integrations
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -40,13 +39,18 @@ type Store interface {
 	GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Connection, error)
 	InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error
 	ListLinks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]FormLink, error)
-	EnabledLinkIDs(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]uuid.UUID, error)
 	DeleteLink(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	UpdateLinkSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error)
-	UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, accountID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn, status string) (int64, error)
+	UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, accountID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn) (int64, error)
 	GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error)
-	StartBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID, before time.Time) error
-	FinishBackfill(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+	DueLinks(ctx context.Context, db postgres.DBTX, limit int32) ([]FormLink, error)
+	PendingSheetSubmissions(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, limit int32) ([]QueuedSheetRow, error)
+	DropSheetQueued(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, ids []uuid.UUID) error
+	EnqueueSheet(ctx context.Context, db postgres.DBTX, linkID, submissionID uuid.UUID) error
+	ClearSheetQueue(ctx context.Context, db postgres.DBTX, linkID uuid.UUID) error
+	EnqueueSheetBackfill(ctx context.Context, db postgres.DBTX, linkID, formID uuid.UUID) (int64, error)
+	ExpiredSheetQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]SheetQueueRef, error)
+	MarkFailed(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string, failingSince, next time.Time) error
 	UpdateLinkColumns(ctx context.Context, db postgres.DBTX, id uuid.UUID, columns []domain.SheetColumn) error
 	MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 	MarkBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, cause string) error
@@ -86,7 +90,6 @@ type Provider interface {
 	AppID() string
 	ReadHeader(ctx context.Context, accessToken string, s Spreadsheet) ([]string, error)
 	WriteHeader(ctx context.Context, accessToken string, s Spreadsheet, header []string) error
-	AppendRow(ctx context.Context, accessToken string, s Spreadsheet, row []string) error
 	AppendRows(ctx context.Context, accessToken string, s Spreadsheet, rows [][]string) error
 	ClearSheet(ctx context.Context, accessToken string, s Spreadsheet) error
 }
@@ -104,15 +107,15 @@ type Service struct {
 	repo   Store
 	access Access
 	forms  Forms
-	// outbox и submissions — доставка ответов (слайс C). Подключаются сеттером
-	// WithDelivery; nil означает «сборка без доставки» (её нет в тестах привязки).
-	outbox      Outbox
+	// submissions — строки ответов для листа. Подключается сеттером WithDelivery;
+	// nil означает «сборка без доставки» (её нет в тестах привязки).
 	submissions Submissions
 	// webhooks и egress — вебхуки (фаза 28). Подключаются сеттером WithWebhooks;
 	// nil означает «сборка без вебхуков» (её нет в тестах связок Таблиц).
 	webhooks WebhookStore
 	egress   Egress
-	// now — часы доставки вебхуков; подменяются в тестах (WithWebhooks).
+	// now — часы доставки (бэкофф цели, срок хранения очереди); подменяются в
+	// тестах через WithClock.
 	now func() time.Time
 	// pickerKey — браузерный ключ для окна выбора файла (см. WithPicker).
 	pickerKey string
@@ -357,9 +360,6 @@ func (s *Service) Disconnect(ctx context.Context, userID, accountID uuid.UUID) e
 
 // Статусы привязки формы (колонка form_integrations.status).
 const (
-	// StatusBackfilling — идёт перенос накопленных ответов (слайс D): живые
-	// строки ждут в outbox, чтобы не лечь поверх старых.
-	StatusBackfilling = "backfilling"
 	// StatusLive — доставка идёт.
 	StatusLive = "live"
 	// StatusBroken — доставка сломалась (доступ отозван, таблица удалена);
@@ -528,17 +528,18 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 		Columns:        columns,
 		Status:         StatusLive,
 	}
-	// Связка и старт переноса ложатся ОДНОЙ транзакцией.
+	// Связка и очередь накопленных ложатся ОДНОЙ транзакцией.
 	//
 	// Иначе сбой между ними (обрыв к БД, отменённый контекст запроса) отдаёт
 	// человеку ошибку при уже созданной связке: он жмёт «Подключить» второй раз,
 	// в Диске появляется вторая книга, и каждый ответ с этого момента уезжает в
 	// две таблицы — обе выглядят рабочими. Таблица в Диске, впрочем, останется
 	// висеть в любом случае: её создание чужому откату не подлежит.
-	status := StatusLive
-	if opts.Backfill {
-		status = StatusBackfilling
-	}
+	//
+	// Живой ответ, принятый в эти же секунды, в очередь встать ещё не может:
+	// ветка CTE приёма видит связку только после коммита. Значит, вся пачка
+	// переноса получает одно время постановки, и порядок в листе задаёт id
+	// ответа — то есть хронология.
 	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
 		if err := s.repo.InsertLink(ctx, tx, link); err != nil {
 			return err
@@ -546,7 +547,8 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 		if !opts.Backfill {
 			return nil
 		}
-		return s.startBackfill(ctx, tx, link.ID)
+		_, err := s.repo.EnqueueSheetBackfill(ctx, tx, link.ID, formID)
+		return err
 	})
 	if err != nil {
 		return FormLink{}, err
@@ -566,7 +568,7 @@ func (s *Service) ConnectForm(ctx context.Context, userID, formID uuid.UUID, opt
 		SheetTitle:     sheet.Title,
 		Columns:        link.Columns,
 		Name:           opts.Name,
-		Status:         status,
+		Status:         StatusLive,
 	}, nil
 }
 
@@ -819,7 +821,7 @@ func (s *Service) RefillForm(ctx context.Context, userID, formID, linkID uuid.UU
 	if err := s.repo.UpdateLinkColumns(ctx, s.db, link.ID, columns); err != nil {
 		return err
 	}
-	return s.startBackfill(ctx, s.db, link.ID)
+	return s.refillQueue(ctx, link.ID, formID)
 }
 
 // DeliveryPageSize — сколько попыток отдаётся одной страницей ленты. Потолок,
@@ -894,14 +896,22 @@ func (s *Service) RetryDelivery(ctx context.Context, userID, formID, linkID, del
 	if link.Status == StatusBroken {
 		return fmt.Errorf("%w: сначала устраните причину поломки связки", domain.ErrConflict)
 	}
-	if s.outbox == nil {
-		return domain.ErrNotFound
+	// Выключенная связка отказывает по тому же основанию, что и сломанная:
+	// доставщик её не берёт (DueSheetLinks), и повтор просто лёг бы в очередь,
+	// из которой никто не возьмёт, — а экран показывал бы «в очереди 1» без
+	// движения. До переезда на очередь этой ветки не было: событие outbox
+	// гасилось при доставке, то есть повтор молча уходил в никуда.
+	if !link.Enabled {
+		return fmt.Errorf("%w: связка выключена — включите её, чтобы повторить", domain.ErrConflict)
 	}
-	payload, err := json.Marshal(sheetsPayload{LinkID: link.ID, SubmissionID: d.SubmissionID})
-	if err != nil {
-		return fmt.Errorf("marshal sheets payload: %w", err)
+	if err := s.repo.EnqueueSheet(ctx, s.db, link.ID, d.SubmissionID); err != nil {
+		return err
 	}
-	return s.outbox.Enqueue(ctx, s.db, ChannelSheets, payload)
+	// Связка после неудачи спит до конца окна бэкоффа, и без пробуждения человек,
+	// устранивший причину, ждал бы до часа, глядя на кнопку, которая «сработала».
+	// Нажатие и означает «причину устранил, попробуй сейчас»: расписание
+	// начинается заново, как после перепроверки.
+	return s.repo.ClearError(ctx, s.db, link.ID)
 }
 
 // DeliveryTTL — сколько живёт запись журнала. Константа, а не переменная
@@ -1017,6 +1027,14 @@ func (s *Service) UpdateConnection(ctx context.Context, userID, formID, linkID u
 	if n == 0 {
 		return domain.ErrNotFound
 	}
+	if !patch.Enabled {
+		// Тумблер «выключить» — это «не доставлять», а не «доставить позже»:
+		// ждущие ответы снимаются тем же движением, иначе включение вывалило бы
+		// в лист всё накопленное разом.
+		if err := s.repo.ClearSheetQueue(ctx, s.db, linkID); err != nil {
+			return err
+		}
+	}
 	if patch.KeepTarget {
 		return nil
 	}
@@ -1074,17 +1092,31 @@ func (s *Service) retarget(ctx context.Context, userID uuid.UUID, link FormLink,
 
 	// Колонки собираются ЗАНОВО, а не переносятся: новый лист пуст, и держать в
 	// нём колонки вопросов, которых в форме уже нет, незачем.
-	status := StatusLive
-	if target.Backfill {
-		status = StatusBackfilling
-	}
-	if _, err := s.repo.UpdateLinkTarget(ctx, s.db, link.ID, formID, conn.ID, sheet, columns, status); err != nil {
+	if _, err := s.repo.UpdateLinkTarget(ctx, s.db, link.ID, formID, conn.ID, sheet, columns); err != nil {
 		return err
 	}
-	if target.Backfill {
-		return s.startBackfill(ctx, s.db, link.ID)
+	if !target.Backfill {
+		// Ответы, ждавшие прежнюю цель, остаются в очереди и поедут в новую: они
+		// не доставлены никуда, и терять их переезд не повод. «Не переносить
+		// накопленные» — про то, что уже лежит в базе, а не про очередь.
+		return nil
 	}
-	return nil
+	return s.refillQueue(ctx, link.ID, formID)
+}
+
+// refillQueue ставит в очередь связки все накопленные ответы формы, сняв с неё
+// то, что ждало раньше. Одной транзакцией: между чисткой и постановкой связка
+// иначе на мгновение остаётся с пустой очередью, и тик доставщика, попавший в
+// это окно, увёз бы в лист ничего — а пришедший следом живой ответ лёг бы ПЕРЕД
+// накопленными.
+func (s *Service) refillQueue(ctx context.Context, linkID, formID uuid.UUID) error {
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.ClearSheetQueue(ctx, tx, linkID); err != nil {
+			return err
+		}
+		_, err := s.repo.EnqueueSheetBackfill(ctx, tx, linkID, formID)
+		return err
+	})
 }
 
 // sameTarget отвечает, указывает ли правка на ту же пару «аккаунт + лист», что
