@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { AlertCircle, Check, Eye, Plus, Send, X } from 'lucide-react'
+import { AlertCircle, Check, Eye, Plus, Send, Trash2 } from 'lucide-react'
 
 import type { Webhook, WebhookHeader, WebhookTest } from '../../entities/integration'
 import { getWebhookSecret } from './api'
@@ -377,12 +377,12 @@ function HeadersField({
             aria-label={`Убрать заголовок ${i + 1}`}
             onClick={() => onRemove(row.id)}
           >
-            <X className="size-4" aria-hidden />
+            <Trash2 className="size-4" aria-hidden />
           </Button>
         </div>
       ))}
       {/* Кнопка стоит ПОД «Значением» и кончается там же, где оно: пустая клетка
-          держит колонку крестиков, иначе кнопка встала бы под ними. Под списком,
+          держит колонку корзин, иначе кнопка встала бы под ними. Под списком,
           а не над ним, — она продолжает набранное, и смотреть на неё нужно после
           строк, а не до. */}
       {rows.length < MAX_HEADERS && (
