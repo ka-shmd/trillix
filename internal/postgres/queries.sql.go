@@ -1589,18 +1589,28 @@ func (q *Queries) DeleteSessionsByUserExcept(ctx context.Context, arg DeleteSess
 const deleteSheetQueued = `-- name: DeleteSheetQueued :exec
 DELETE FROM sheet_queue
 WHERE link_id = $1 AND submission_id = ANY($2::uuid[])
+  AND enqueued_at <= $3
 `
 
 type DeleteSheetQueuedParams struct {
-	LinkID        uuid.UUID
-	SubmissionIds []uuid.UUID
+	LinkID         uuid.UUID
+	SubmissionIds  []uuid.UUID
+	EnqueuedBefore pgtype.Timestamptz
 }
 
 // Ответы доставлены (или доставлять их больше не надо): строки очереди уходят,
 // история остаётся в журнале. Пачкой, потому что пачкой и доставляются: у
 // Таблиц один append увозит все строки тика разом.
+//
+// ⚠ Мина: `enqueued_at <= $3` снимает ТУ ЖЕ строку, которую доставщик читал, а
+// не её тёзку. Между чтением очереди и этим удалением лежат два-три похода в
+// Google, и перезалив (или переезд на другую цель), успевший в это окно, уже
+// поставил те же ответы ЗАНОВО — под новый лист и с более поздним enqueued_at.
+// Без границы удаление сняло бы их: строки уехали бы в старый лист, а в новый
+// не попали бы вовсе — человек нажал «перезалить», получил 202 и недосчитался
+// ответов молча.
 func (q *Queries) DeleteSheetQueued(ctx context.Context, arg DeleteSheetQueuedParams) error {
-	_, err := q.db.Exec(ctx, deleteSheetQueued, arg.LinkID, arg.SubmissionIds)
+	_, err := q.db.Exec(ctx, deleteSheetQueued, arg.LinkID, arg.SubmissionIds, arg.EnqueuedBefore)
 	return err
 }
 
@@ -6306,7 +6316,7 @@ func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32,
 }
 
 const pendingSheetSubmissions = `-- name: PendingSheetSubmissions :many
-SELECT submission_id, backfill FROM sheet_queue
+SELECT submission_id, backfill, enqueued_at FROM sheet_queue
 WHERE link_id = $1
 ORDER BY enqueued_at, submission_id
 LIMIT $2
@@ -6320,6 +6330,7 @@ type PendingSheetSubmissionsParams struct {
 type PendingSheetSubmissionsRow struct {
 	SubmissionID uuid.UUID
 	Backfill     bool
+	EnqueuedAt   pgtype.Timestamptz
 }
 
 // Что связка везёт следующим — в порядке постановки. submission_id вторым
@@ -6328,7 +6339,8 @@ type PendingSheetSubmissionsRow struct {
 //
 // backfill едет рядом: от него зависит гранулярность журнала (одна запись на
 // пачку переноса против записи на каждый живой ответ), но ни порядок, ни
-// расписание он не трогает.
+// расписание он не трогает. enqueued_at — метка версии строки, см. соседний
+// DeleteSheetQueued.
 func (q *Queries) PendingSheetSubmissions(ctx context.Context, arg PendingSheetSubmissionsParams) ([]PendingSheetSubmissionsRow, error) {
 	rows, err := q.db.Query(ctx, pendingSheetSubmissions, arg.LinkID, arg.Limit)
 	if err != nil {
@@ -6338,7 +6350,7 @@ func (q *Queries) PendingSheetSubmissions(ctx context.Context, arg PendingSheetS
 	var items []PendingSheetSubmissionsRow
 	for rows.Next() {
 		var i PendingSheetSubmissionsRow
-		if err := rows.Scan(&i.SubmissionID, &i.Backfill); err != nil {
+		if err := rows.Scan(&i.SubmissionID, &i.Backfill, &i.EnqueuedAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

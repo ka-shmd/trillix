@@ -163,6 +163,10 @@ func (s *Service) deliverLink(ctx context.Context, link FormLink) int {
 	// (over_quota — скрытый от владельца ответ не должен всплыть у него же в
 	// Таблице). Везти нечего: снимаем с очереди со строкой в журнале, иначе он
 	// держал бы связку «занятой» вечно.
+	// mark — граница версии строк, которые читал ЭТОТ проход: снимать с очереди
+	// можно только их (см. DropSheetQueued). Максимум по пачке — её последняя
+	// строка: выборка идёт по возрастанию enqueued_at.
+	mark := pending[len(pending)-1].EnqueuedAt
 	var (
 		rows    [][]string
 		carried []QueuedSheetRow
@@ -180,7 +184,7 @@ func (s *Service) deliverLink(ctx context.Context, link FormLink) int {
 		carried = append(carried, q)
 	}
 	if len(gone) > 0 {
-		s.dropQueuedSheets(ctx, link.ID, gone)
+		s.dropQueuedSheets(ctx, link.ID, gone, mark)
 	}
 	if len(rows) == 0 {
 		return 0
@@ -214,7 +218,7 @@ func (s *Service) deliverLink(ctx context.Context, link FormLink) int {
 	for _, q := range carried {
 		delivered = append(delivered, q.SubmissionID)
 	}
-	s.dropQueuedSheets(ctx, link.ID, delivered)
+	s.dropQueuedSheets(ctx, link.ID, delivered, mark)
 	s.logDeliveredBatch(ctx, link.ID, carried)
 	if err := s.repo.MarkDelivered(ctx, s.db, link.ID); err != nil {
 		httpserver.LoggerFrom(ctx).Error("integration success not stored",
@@ -246,8 +250,8 @@ func (s *Service) logDeliveredBatch(ctx context.Context, linkID uuid.UUID, carri
 // dropQueuedSheets снимает строки с очереди. Отказ снятия доставку не роняет, но
 // в лог уходит: те же ответы поедут в лист второй раз, а append дублей не
 // замечает — человеку это лечится перезаливом, нам видно здесь.
-func (s *Service) dropQueuedSheets(ctx context.Context, linkID uuid.UUID, ids []uuid.UUID) {
-	if err := s.repo.DropSheetQueued(ctx, s.db, linkID, ids); err != nil {
+func (s *Service) dropQueuedSheets(ctx context.Context, linkID uuid.UUID, ids []uuid.UUID, before time.Time) {
+	if err := s.repo.DropSheetQueued(ctx, s.db, linkID, ids, before); err != nil {
 		httpserver.LoggerFrom(ctx).Error("sheet queue rows not removed",
 			slog.String("link_id", linkID.String()), slog.String("error", err.Error()))
 	}
@@ -323,7 +327,8 @@ func (s *Service) CleanupSheetQueue(ctx context.Context) (int64, error) {
 	if !s.Enabled() {
 		return 0, nil
 	}
-	expired, err := s.repo.ExpiredSheetQueued(ctx, s.db, s.now().Add(-SheetQueueTTL), sheetCleanupBatch)
+	border := s.now().Add(-SheetQueueTTL)
+	expired, err := s.repo.ExpiredSheetQueued(ctx, s.db, border, sheetCleanupBatch)
 	if err != nil {
 		return 0, err
 	}
@@ -332,7 +337,9 @@ func (s *Service) CleanupSheetQueue(ctx context.Context) (int64, error) {
 		if ctx.Err() != nil {
 			return n, nil
 		}
-		if err := s.repo.DropSheetQueued(ctx, s.db, ref.LinkID, []uuid.UUID{ref.SubmissionID}); err != nil {
+		// Граница та же, по которой строку признали просроченной: перезалив,
+		// успевший поставить этот ответ заново, её переживёт.
+		if err := s.repo.DropSheetQueued(ctx, s.db, ref.LinkID, []uuid.UUID{ref.SubmissionID}, border); err != nil {
 			return n, err
 		}
 		s.logDelivery(ctx, ref.LinkID, deliveryRef{kind: DeliveryKindSubmission, submissionID: ref.SubmissionID},

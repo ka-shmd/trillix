@@ -430,13 +430,16 @@ func (Repo) DueLinks(ctx context.Context, db postgres.DBTX, limit int32) ([]Form
 	return out, nil
 }
 
-// QueuedSubmission — строка очереди: что везти и приехала ли она переносом.
+// QueuedSheetRow — строка очереди: что везти, приехала ли она переносом и когда
+// встала. EnqueuedAt — метка версии: по ней доставщик снимает ТУ ЖЕ строку, что
+// читал, а не её тёзку, поставленную перезаливом, пока он ходил в Google.
 type QueuedSheetRow struct {
 	SubmissionID uuid.UUID
 	Backfill     bool
+	EnqueuedAt   time.Time
 }
 
-// PendingSubmissions — что связка везёт следующим, в порядке постановки.
+// PendingSheetSubmissions — что связка везёт следующим, в порядке постановки.
 func (Repo) PendingSheetSubmissions(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, limit int32) ([]QueuedSheetRow, error) {
 	rows, err := postgres.New(db).PendingSheetSubmissions(ctx, postgres.PendingSheetSubmissionsParams{
 		LinkID: linkID,
@@ -447,19 +450,26 @@ func (Repo) PendingSheetSubmissions(ctx context.Context, db postgres.DBTX, linkI
 	}
 	out := make([]QueuedSheetRow, 0, len(rows))
 	for _, row := range rows {
-		out = append(out, QueuedSheetRow{SubmissionID: row.SubmissionID, Backfill: row.Backfill})
+		out = append(out, QueuedSheetRow{
+			SubmissionID: row.SubmissionID,
+			Backfill:     row.Backfill,
+			EnqueuedAt:   row.EnqueuedAt.Time,
+		})
 	}
 	return out, nil
 }
 
-// DropQueued снимает с очереди пачку доставленных (или больше не нужных) ответов.
-func (Repo) DropSheetQueued(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, ids []uuid.UUID) error {
+// DropSheetQueued снимает с очереди пачку доставленных (или больше не нужных)
+// ответов — но только строки не новее прочитанных (before): строку,
+// поставленную заново, пока мы ходили в Google, снимать нельзя.
+func (Repo) DropSheetQueued(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, ids []uuid.UUID, before time.Time) error {
 	if len(ids) == 0 {
 		return nil
 	}
 	err := postgres.New(db).DeleteSheetQueued(ctx, postgres.DeleteSheetQueuedParams{
-		LinkID:        linkID,
-		SubmissionIds: ids,
+		LinkID:         linkID,
+		SubmissionIds:  ids,
+		EnqueuedBefore: pgtype.Timestamptz{Time: before, Valid: true},
 	})
 	if err != nil {
 		return fmt.Errorf("delete sheet queued: %w", err)
@@ -467,7 +477,7 @@ func (Repo) DropSheetQueued(ctx context.Context, db postgres.DBTX, linkID uuid.U
 	return nil
 }
 
-// Enqueue ставит ОДИН ответ в очередь связки — повтор доставки из журнала.
+// EnqueueSheet ставит ОДИН ответ в очередь связки — повтор доставки из журнала.
 func (Repo) EnqueueSheet(ctx context.Context, db postgres.DBTX, linkID, submissionID uuid.UUID) error {
 	err := postgres.New(db).InsertSheetQueued(ctx, postgres.InsertSheetQueuedParams{
 		LinkID:       linkID,
@@ -479,7 +489,7 @@ func (Repo) EnqueueSheet(ctx context.Context, db postgres.DBTX, linkID, submissi
 	return nil
 }
 
-// ClearQueue снимает с очереди всё, что ждало: выключение тумблера и перезалив.
+// ClearSheetQueue снимает с очереди всё, что ждало: выключение тумблера и перезалив.
 func (Repo) ClearSheetQueue(ctx context.Context, db postgres.DBTX, linkID uuid.UUID) error {
 	if err := postgres.New(db).ClearSheetQueue(ctx, linkID); err != nil {
 		return fmt.Errorf("clear sheet queue: %w", err)
@@ -487,7 +497,7 @@ func (Repo) ClearSheetQueue(ctx context.Context, db postgres.DBTX, linkID uuid.U
 	return nil
 }
 
-// EnqueueBackfill ставит в очередь связки ВСЕ накопленные ответы формы.
+// EnqueueSheetBackfill ставит в очередь связки ВСЕ накопленные ответы формы.
 // Возвращает число строк — оно же «сколько ответов перенесём».
 func (Repo) EnqueueSheetBackfill(ctx context.Context, db postgres.DBTX, linkID, formID uuid.UUID) (int64, error) {
 	n, err := postgres.New(db).EnqueueSheetBackfill(ctx, postgres.EnqueueSheetBackfillParams{
@@ -500,7 +510,7 @@ func (Repo) EnqueueSheetBackfill(ctx context.Context, db postgres.DBTX, linkID, 
 	return n, nil
 }
 
-// ExpiredQueued — ответы, прождавшие дольше срока хранения.
+// ExpiredSheetQueued — ответы, прождавшие дольше срока хранения.
 func (Repo) ExpiredSheetQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]SheetQueueRef, error) {
 	rows, err := postgres.New(db).ExpiredSheetQueued(ctx, postgres.ExpiredSheetQueuedParams{
 		EnqueuedAt: pgtype.Timestamptz{Time: before, Valid: true},
@@ -516,7 +526,7 @@ func (Repo) ExpiredSheetQueued(ctx context.Context, db postgres.DBTX, before tim
 	return out, nil
 }
 
-// ExpiredQueue — просроченная строка очереди: её снимают и пишут в журнал.
+// SheetQueueRef — просроченная строка очереди: её снимают и пишут в журнал.
 type SheetQueueRef struct {
 	LinkID       uuid.UUID
 	SubmissionID uuid.UUID

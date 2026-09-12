@@ -45,7 +45,7 @@ type Store interface {
 	GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error)
 	DueLinks(ctx context.Context, db postgres.DBTX, limit int32) ([]FormLink, error)
 	PendingSheetSubmissions(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, limit int32) ([]QueuedSheetRow, error)
-	DropSheetQueued(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, ids []uuid.UUID) error
+	DropSheetQueued(ctx context.Context, db postgres.DBTX, linkID uuid.UUID, ids []uuid.UUID, before time.Time) error
 	EnqueueSheet(ctx context.Context, db postgres.DBTX, linkID, submissionID uuid.UUID) error
 	ClearSheetQueue(ctx context.Context, db postgres.DBTX, linkID uuid.UUID) error
 	EnqueueSheetBackfill(ctx context.Context, db postgres.DBTX, linkID, formID uuid.UUID) (int64, error)
@@ -1109,8 +1109,19 @@ func (s *Service) retarget(ctx context.Context, userID uuid.UUID, link FormLink,
 // иначе на мгновение остаётся с пустой очередью, и тик доставщика, попавший в
 // это окно, увёз бы в лист ничего — а пришедший следом живой ответ лёг бы ПЕРЕД
 // накопленными.
+//
+// ⚠ Мина: пересборка очереди ОБЯЗАНА снимать поломку (`ClearError`), и той же
+// транзакцией. Оба вызывающих — явные действия человека «вези заново», а
+// доставщик сломанную связку не берёт вовсе (`DueSheetLinks`): без этого
+// перезалив оставлял бы вычищенный лист, полную очередь и красную точку
+// навсегда. Он к тому же и заводится ИЗ предупреждения о поломке — другого
+// входа в него на экране нет. У переезда на другую цель поломка снимается ещё и
+// записью самой цели, и второй раз она ничего не портит.
 func (s *Service) refillQueue(ctx context.Context, linkID, formID uuid.UUID) error {
 	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if err := s.repo.ClearError(ctx, tx, linkID); err != nil {
+			return err
+		}
 		if err := s.repo.ClearSheetQueue(ctx, tx, linkID); err != nil {
 			return err
 		}

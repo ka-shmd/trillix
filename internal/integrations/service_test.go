@@ -106,6 +106,9 @@ type fakeStore struct {
 	failedWith   string
 	failingSince time.Time
 	nextAttempt  time.Time
+	// now — часы теста; nil означает «расписание не проверяем» (так живёт
+	// большинство тестов, которым бэкофф не интересен).
+	now func() time.Time
 
 	// deliveries — журнал попыток доставки, как его видит связка. Порядок
 	// вставки: тесты проверяют исход последней попытки и их число.
@@ -164,12 +167,20 @@ func (f *fakeStore) ListLinks(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (
 }
 
 // DueLinks повторяет условие боевой выборки: связка берётся, только если она
-// включена, жива и ей есть что везти.
+// включена, жива, ей есть что везти И ЕЁ ВРЕМЯ НАСТУПИЛО.
+//
+// ⚠ Последнее условие в фейке обязательно, хотя и выглядит лишним: бэкофф цели —
+// весь смысл переезда на очередь по целям («лежащий лист получает одну попытку
+// за окно, сколько бы ответов ни ждало»), и без него ни один тест пакета не
+// заметил бы, что доставщик ходит в спящую связку.
 func (f *fakeStore) DueLinks(_ context.Context, _ postgres.DBTX, _ int32) ([]integrations.FormLink, error) {
 	if f.linkErr != nil {
 		return nil, f.linkErr
 	}
 	if f.link.ID == uuid.Nil || !f.link.Enabled || f.link.Status != integrations.StatusLive || len(f.queue) == 0 {
+		return nil, nil
+	}
+	if f.now != nil && f.link.NextAttemptAt.After(f.now()) {
 		return nil, nil
 	}
 	return []integrations.FormLink{f.link}, nil
@@ -182,20 +193,23 @@ func (f *fakeStore) PendingSheetSubmissions(_ context.Context, _ postgres.DBTX, 
 	return f.queue, nil
 }
 
-func (f *fakeStore) DropSheetQueued(_ context.Context, _ postgres.DBTX, _ uuid.UUID, ids []uuid.UUID) error {
-	f.dropped = append(f.dropped, ids...)
+// DropSheetQueued повторяет и границу версии: строку, поставленную ПОЗЖЕ
+// прочитанной доставщиком, снимать нельзя — это перезалив успел в окно.
+func (f *fakeStore) DropSheetQueued(_ context.Context, _ postgres.DBTX, _ uuid.UUID, ids []uuid.UUID, before time.Time) error {
 	kept := f.queue[:0]
 	for _, q := range f.queue {
 		drop := false
 		for _, id := range ids {
-			if q.SubmissionID == id {
+			if q.SubmissionID == id && !q.EnqueuedAt.After(before) {
 				drop = true
 				break
 			}
 		}
-		if !drop {
-			kept = append(kept, q)
+		if drop {
+			f.dropped = append(f.dropped, q.SubmissionID)
+			continue
 		}
+		kept = append(kept, q)
 	}
 	f.queue = kept
 	return nil
@@ -221,8 +235,16 @@ func (f *fakeStore) ExpiredSheetQueued(_ context.Context, _ postgres.DBTX, _ tim
 	return f.expired, nil
 }
 
+// MarkFailed записывает расписание НАЗАД в связку, а не только в поля-следы:
+// иначе второй проход в том же тесте снова забрал бы уснувшую цель.
 func (f *fakeStore) MarkFailed(_ context.Context, _ postgres.DBTX, _ uuid.UUID, cause string, failingSince, next time.Time) error {
 	f.failedWith, f.failingSince, f.nextAttempt = cause, failingSince, next
+	f.link.LastError = cause
+	f.link.ConsecutiveFailures++
+	if f.link.FailingSince.IsZero() {
+		f.link.FailingSince = failingSince
+	}
+	f.link.NextAttemptAt = next
 	return nil
 }
 
@@ -324,8 +346,14 @@ type fakeProvider struct {
 	sheetHeader []string
 	appended    [][]string
 	appendCalls int
-	cleared     string
-	appendErr   error
+	// attempts — ВСЕ походы за записью, включая отказные: по нему видно, ходил ли
+	// доставщик в связку вообще (appendCalls считает только удавшиеся).
+	attempts int
+	// beforeAppend — что случилось, ПОКА мы ходили в Google. Тестам гонок нужно
+	// окно между чтением очереди и снятием доставленных, а оно ровно здесь.
+	beforeAppend func()
+	cleared      string
+	appendErr    error
 	// refreshErr — провайдер отказал в обновлении токена. Отдельно от appendErr:
 	// отказ ТОКЕН-ручки означает смерть подключения, отказ ручки данных — беду
 	// одной таблицы, и путать их дорого.
@@ -402,6 +430,10 @@ func (f *fakeProvider) WriteHeader(_ context.Context, _ string, _ integrations.S
 }
 
 func (f *fakeProvider) AppendRows(_ context.Context, _ string, _ integrations.Spreadsheet, rows [][]string) error {
+	f.attempts++
+	if f.beforeAppend != nil {
+		f.beforeAppend()
+	}
 	if f.appendErr != nil {
 		return f.appendErr
 	}

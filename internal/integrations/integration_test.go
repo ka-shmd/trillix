@@ -1623,3 +1623,54 @@ func needsReconnect(t *testing.T, c *http.Client, srv *httptest.Server, formID, 
 	t.Fatalf("аккаунт %s пропал из состояния формы", accountID)
 	return false
 }
+
+// ⚠ Граница версии строки живёт в САМОМ запросе, а не в коде вокруг него:
+// снятие с очереди не имеет права трогать строку, поставленную ПОЗЖЕ той, что
+// читал доставщик. Между чтением очереди и снятием лежат два-три похода в
+// Google, и перезалив, успевший в это окно, ставит те же ответы заново — уже
+// под новый лист. Без границы они уехали бы в старый и пропали для нового.
+//
+// Проверяется против настоящего Postgres: в фейке это условие можно случайно
+// повторить неверно, а `<=` против `<` на равных метках виден только здесь.
+func TestIntegrations_QueueDropSpareRowsRequeuedLater(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t, &fakeProvider{})
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	accountID := connectAccount(t, owner, srv)
+
+	formID := newForm(t, wsID, "f-requeue")
+	versionID := publishVersion(t, formID)
+	closeBody(t, linkForm(t, owner, srv, formID, accountID))
+	linkID := uuid.MustParse(onlyLinkID(t, owner, srv, formID))
+
+	subID := uuid.MustParse(newSubmission(t, formID, versionID, `{"b1":"Ирина"}`))
+	enqueueDelivery(t, srv, formID, subID.String())
+
+	var enqueued time.Time
+	err := testPool.QueryRow(context.Background(),
+		`SELECT enqueued_at FROM sheet_queue WHERE link_id = $1 AND submission_id = $2`,
+		linkID, subID).Scan(&enqueued)
+	if err != nil {
+		t.Fatalf("строка очереди не найдена: %v", err)
+	}
+
+	// Доставщик читал строку СЕКУНДОЙ РАНЬШЕ — значит, эта уже чужая.
+	repo := integrations.Repo{}
+	if err := repo.DropSheetQueued(context.Background(), testPool, linkID,
+		[]uuid.UUID{subID}, enqueued.Add(-time.Second)); err != nil {
+		t.Fatalf("снятие с очереди: %v", err)
+	}
+	if got := sheetQueueLen(t, formID); got != 1 {
+		t.Fatal("снята строка, поставленная позже прочитанной: перезалив потерял бы свою очередь")
+	}
+
+	// Та же строка, что читали, снимается как обычно.
+	if err := repo.DropSheetQueued(context.Background(), testPool, linkID,
+		[]uuid.UUID{subID}, enqueued); err != nil {
+		t.Fatalf("снятие с очереди: %v", err)
+	}
+	if got := sheetQueueLen(t, formID); got != 0 {
+		t.Fatalf("в очереди осталось %d строк — доставленное не снимается", got)
+	}
+}

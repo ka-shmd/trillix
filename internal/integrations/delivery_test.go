@@ -683,9 +683,16 @@ func TestDeliverSheets_LogFailureDoesNotBreakDelivery(t *testing.T) {
 // ЖУРНАЛЕ: «не доставлен» — это исход, а не отсутствие записи.
 func TestCleanupSheetQueue_WritesOffExpiredAnswers(t *testing.T) {
 	link := linkedSheet()
-	store := &fakeStore{link: link, conn: sealedConn(t), expired: []integrations.SheetQueueRef{
-		{LinkID: link.ID, SubmissionID: testSubmission},
-	}}
+	// Строка реально лежит в очереди и реально стара: уборщик снимает её той же
+	// границей, по которой признал просроченной.
+	store := &fakeStore{
+		link: link, conn: sealedConn(t),
+		queue: []integrations.QueuedSheetRow{{
+			SubmissionID: testSubmission,
+			EnqueuedAt:   time.Now().Add(-integrations.SheetQueueTTL - time.Hour),
+		}},
+		expired: []integrations.SheetQueueRef{{LinkID: link.ID, SubmissionID: testSubmission}},
+	}
 	svc := deliveryService(store, &fakeProvider{}, &fakeSubmissions{})
 
 	n, err := svc.CleanupSheetQueue(context.Background())
@@ -879,5 +886,97 @@ func TestRefillForm_AccessLostMarksAccount(t *testing.T) {
 	}
 	if store.accessLostAt.IsZero() {
 		t.Fatal("подключение не помечено мёртвым — экран продолжит показывать его рабочим")
+	}
+}
+
+// ⚠ Перезалив ОБЯЗАН снимать поломку, иначе он её усугубляет.
+//
+// Кнопка «Перезаписать лист» живёт только внутри предупреждения о поломке —
+// другого входа в перезалив на экране нет. Доставщик сломанную связку не берёт
+// вовсе, поэтому перезалив, не снявший статус, оставляет вычищенный лист,
+// полную очередь и красную точку навсегда: через месяц уборщик спишет всю
+// очередь строками «не доставлен». Найдено ревью диффа переезда на очередь.
+func TestRefillForm_RevivesBrokenLink(t *testing.T) {
+	link := brokenLink()
+	link.LastError = "Google больше не принимает записи в эту таблицу."
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	provider := &fakeProvider{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{form: linkedForm()}, provider)
+
+	if err := svc.RefillForm(context.Background(), testUser, testForm, link.ID); err != nil {
+		t.Fatalf("перезалив: %v", err)
+	}
+	if provider.cleared == "" {
+		t.Fatal("лист не вычищен — тест проверяет не тот случай")
+	}
+	if !store.errorCleared {
+		t.Fatal("поломка не снята: доставщик такую связку не возьмёт, и перезалив оставит пустой лист")
+	}
+	if !store.queueCleared || store.backfilledForm != testForm {
+		t.Error("очередь не пересобрана")
+	}
+}
+
+// ⚠ Перезалив, успевший ПОКА ДОСТАВЩИК ХОДИЛ В GOOGLE, свою очередь сохраняет.
+//
+// Между чтением очереди и снятием доставленных лежат два-три сетевых запроса.
+// Перезалив в этом окне ставит те же ответы заново — уже под новый лист, — и
+// снятие «по id» унесло бы их: строки уехали бы в СТАРЫЙ лист, а в новый не
+// попали бы вовсе. Границу держит enqueued_at. Найдено ревью диффа.
+func TestDeliverSheets_RefillDuringTickKeepsItsQueue(t *testing.T) {
+	link := linkedSheet()
+	store := &fakeStore{link: link, conn: sealedConn(t), queue: []integrations.QueuedSheetRow{
+		{SubmissionID: testSubmission, EnqueuedAt: time.Now().Add(-time.Minute)},
+	}}
+	provider := &fakeProvider{header: headerOf(link)}
+	subs := &fakeSubmissions{page: onePage(link.Columns, "018f", "Аня", "a@b.c")}
+	// Перезалив случается ровно в окне: провайдер зовёт его из середины прохода,
+	// как это сделал бы человек, нажавший кнопку во время тика.
+	provider.beforeAppend = func() {
+		store.queue = []integrations.QueuedSheetRow{
+			{SubmissionID: testSubmission, Backfill: true, EnqueuedAt: time.Now()},
+		}
+	}
+	svc := deliveryService(store, provider, subs)
+
+	deliverSheets(t, svc)
+
+	if len(store.queue) != 1 {
+		t.Fatalf("очередь = %+v, перезалив потерял свою строку — в новый лист ответ не попадёт", store.queue)
+	}
+	if !store.queue[0].Backfill {
+		t.Error("снята строка перезалива, а осталась прочитанная доставщиком")
+	}
+}
+
+// Уснувшая после неудачи связка тиком НЕ берётся: лежащий лист получает одну
+// попытку за окно бэкоффа, сколько бы ответов ни ждало. Это весь смысл переезда
+// на очередь по целям, и до ревью его не сторожил ни один тест.
+func TestDeliverSheets_SleepingLinkIsNotTaken(t *testing.T) {
+	now := time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC)
+	link := linkedSheet()
+	store := &fakeStore{link: link, conn: sealedConn(t), queue: liveQueue(), now: func() time.Time { return now }}
+	provider := &fakeProvider{appendErr: errors.New("статус 503")}
+	subs := &fakeSubmissions{page: onePage(link.Columns, "018f", "Аня", "a@b.c")}
+	svc := deliveryService(store, provider, subs).WithClock(func() time.Time { return now })
+
+	// Первый проход: отказ усыпляет связку на минуту.
+	deliverSheets(t, svc)
+	if provider.attempts != 1 || store.nextAttempt.IsZero() {
+		t.Fatalf("первый проход не оставил расписания: попыток %d, next %v", provider.attempts, store.nextAttempt)
+	}
+	attempts := provider.attempts
+
+	// Второй проход в ту же секунду: в спящую связку доставщик не идёт.
+	deliverSheets(t, svc)
+	if provider.attempts != attempts {
+		t.Fatalf("попыток к Google стало %d — спящая связка взята тем же тиком", provider.attempts)
+	}
+
+	// Окно кончилось — связка снова в работе.
+	now = now.Add(integrations.SheetBackoffBase + time.Second)
+	deliverSheets(t, svc)
+	if provider.attempts == attempts {
+		t.Fatal("после окна бэкоффа связка так и не взята — она уснула навсегда")
 	}
 }
