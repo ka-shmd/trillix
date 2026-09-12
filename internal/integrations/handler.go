@@ -275,12 +275,26 @@ type webhookResponse struct {
 	URL  string `json:"url,omitempty"`
 	// Signed — включена ли подпись запросов. Сам секрет здесь не появляется
 	// никогда: за ним отдельная ручка по нажатию.
-	Signed          bool    `json:"signed"`
-	Enabled         bool    `json:"enabled"`
-	Status          string  `json:"status"`
-	LastError       string  `json:"lastError,omitempty"`
-	LastDeliveredAt *string `json:"lastDeliveredAt,omitempty"`
-	Queued          int64   `json:"queued"`
+	Signed bool `json:"signed"`
+	// Headers — свои заголовки запроса (0064). Приходят только тому, кто вправе
+	// править форму (решает сервис): в значении лежит ключ к чужой системе. Их
+	// правят полем в том же окне, что адрес, поэтому они едут вместе с ним, а не
+	// отдельной ручкой, как секрет подписи.
+	Headers         []webhookHeaderResponse `json:"headers,omitempty"`
+	Enabled         bool                    `json:"enabled"`
+	Status          string                  `json:"status"`
+	LastError       string                  `json:"lastError,omitempty"`
+	LastDeliveredAt *string                 `json:"lastDeliveredAt,omitempty"`
+	Queued          int64                   `json:"queued"`
+}
+
+// webhookHeaderResponse — один свой заголовок. Свой тип, а не WebhookHeader:
+// метки json там описывают ФОРМАТ ХРАНЕНИЯ (набор лежит шифротекстом), а здесь —
+// контракт ручки, и разъехаться им никто не мешает. Пока поля совпадают,
+// конверсия бесплатна, а разъедутся — об этом скажет компилятор.
+type webhookHeaderResponse struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
 }
 
 func toWebhookResponse(w Webhook) webhookResponse {
@@ -294,6 +308,9 @@ func toWebhookResponse(w Webhook) webhookResponse {
 		Status:    w.Status,
 		LastError: w.LastError,
 		Queued:    w.Queued,
+	}
+	for _, h := range w.Headers {
+		out.Headers = append(out.Headers, webhookHeaderResponse(h))
 	}
 	if !w.LastDeliveredAt.IsZero() {
 		at := w.LastDeliveredAt.UTC().Format(time.RFC3339)
@@ -313,6 +330,10 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
+	// В состоянии таба едут полный адрес вебхука (в пути токен получателя) и его
+	// свои заголовки (в значении ключ к чужой системе): промежуточный кэш,
+	// сохранивший ответ, раздавал бы и то и другое.
+	w.Header().Set("Cache-Control", "no-store")
 
 	resp := formStatusResponse{
 		WorkspaceID: st.WorkspaceID.String(),
@@ -352,6 +373,18 @@ type webhookRequest struct {
 	// менять его заодно с названием значило бы ломать проверку у получателя
 	// незаметно.
 	Secret *string `json:"secret"`
+	// Headers — свои заголовки запроса. Набор заменяется ЦЕЛИКОМ; nil (поля нет)
+	// — не трогать, пустой список — убрать все.
+	Headers *[]webhookHeaderResponse `json:"headers"`
+}
+
+// webhookHeaders переводит заголовки тела в тип сервиса.
+func webhookHeaders(in []webhookHeaderResponse) []WebhookHeader {
+	out := make([]WebhookHeader, 0, len(in))
+	for _, h := range in {
+		out = append(out, WebhookHeader(h))
+	}
+	return out
 }
 
 type webhookSecretResponse struct {
@@ -377,6 +410,9 @@ func (h *Handler) createWebhook(w http.ResponseWriter, r *http.Request) {
 	if req.Secret != nil {
 		in.Secret = *req.Secret
 	}
+	if req.Headers != nil {
+		in.Headers = webhookHeaders(*req.Headers)
+	}
 	wh, err := h.svc.CreateWebhook(r.Context(), user.ID, formID, in)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
@@ -398,6 +434,10 @@ func (h *Handler) updateWebhook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	patch := WebhookPatch{Name: req.Name, Enabled: req.Enabled, URL: req.URL}
+	if req.Headers != nil {
+		headers := webhookHeaders(*req.Headers)
+		patch.Headers = &headers
+	}
 	if err := h.svc.UpdateWebhook(r.Context(), user.ID, formID, webhookID, patch); err != nil {
 		httpserver.WriteError(w, r, err)
 		return

@@ -203,7 +203,10 @@ type sender struct {
 	err    error
 	bodies [][]byte
 	sigs   []string
-	calls  int
+	// heads — заголовки каждого запроса целиком: ими проверяются свои заголовки
+	// автора (0064) и то, что наши собственные ими не перебиты.
+	heads []http.Header
+	calls int
 }
 
 func (s *sender) Validate(_ context.Context, raw string) (*url.URL, error) { return url.Parse(raw) }
@@ -214,6 +217,7 @@ func (s *sender) Post(_ context.Context, _ string, header http.Header, body []by
 	s.calls++
 	s.bodies = append(s.bodies, body)
 	s.sigs = append(s.sigs, header.Get(domain.WebhookSignatureHeader))
+	s.heads = append(s.heads, header.Clone())
 	if s.err != nil {
 		return safehttp.Response{}, s.err
 	}
@@ -673,6 +677,44 @@ func TestCleanupWebhookQueue(t *testing.T) {
 	last := h.journal()[len(h.journal())-1]
 	if last.Outcome != integrations.OutcomeFailed || !strings.Contains(last.Detail, "30 дней") {
 		t.Fatalf("запись журнала = %+v", last)
+	}
+}
+
+// Свои заголовки автора едут в запросе. Наши собственные ими не перебиваются:
+// автор ставит их первыми, а Content-Type и подпись пишутся поверх — иначе один
+// заголовок в форме ломал бы разбор тела и проверку подписи у получателя.
+func TestDeliverWebhooks_OwnHeaders(t *testing.T) {
+	h := newDeliveryHarness(t, http.StatusOK)
+	w, err := h.svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{
+		URL:    testHookURL,
+		Secret: testSecret,
+		Headers: []integrations.WebhookHeader{
+			{Name: "Authorization", Value: "Bearer abc123"},
+			{Name: "X-Api-Version", Value: "2"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("подключение: %v", err)
+	}
+	if err := h.store.Enqueue(context.Background(), nil, w.ID, domain.NewID()); err != nil {
+		t.Fatalf("постановка: %v", err)
+	}
+
+	if _, err := h.svc.DeliverWebhooks(context.Background()); err != nil {
+		t.Fatalf("проход: %v", err)
+	}
+	if len(h.out.heads) != 1 {
+		t.Fatalf("запросов %d", len(h.out.heads))
+	}
+	got := h.out.heads[0]
+	if got.Get("Authorization") != "Bearer abc123" || got.Get("X-Api-Version") != "2" {
+		t.Fatalf("свои заголовки не уехали: %+v", got)
+	}
+	if ct := got.Get("Content-Type"); ct != "application/json; charset=utf-8" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+	if got.Get(domain.WebhookSignatureHeader) == "" {
+		t.Fatal("подписи в запросе нет")
 	}
 }
 

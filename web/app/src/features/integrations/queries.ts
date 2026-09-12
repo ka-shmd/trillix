@@ -5,6 +5,7 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 
+import type { WebhookHeader } from '../../entities/integration'
 import { integrationKeys } from './keys'
 import {
   createSheet,
@@ -188,7 +189,7 @@ export function useUpdateConnection(formId: string) {
 export function useCreateWebhook(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (input: { name: string; url: string; secret?: string }) =>
+    mutationFn: (input: { name: string; url: string; secret?: string; headers?: WebhookHeader[] }) =>
       createWebhook(formId, input),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
@@ -200,6 +201,9 @@ export interface WebhookPatch {
   name?: string
   url?: string
   enabled?: boolean
+  // headers заменяют набор ЦЕЛИКОМ; поля нет — сервер их не трогает (так шлёт
+  // тумблер из списка).
+  headers?: WebhookHeader[]
 }
 
 export function useUpdateWebhook(formId: string) {

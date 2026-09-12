@@ -16,6 +16,7 @@ import {
   type SheetRef,
   type SpreadsheetRef,
   type Webhook,
+  type WebhookHeader,
   type WebhookTest,
 } from '../../entities/integration'
 
@@ -201,7 +202,7 @@ export function startUrl(reconnect?: string): string {
 // умолчанию её нет. Обратно секрет не возвращается — его ввёл сам автор.
 export function createWebhook(
   formId: string,
-  input: { name: string; url: string; secret?: string },
+  input: { name: string; url: string; secret?: string; headers?: WebhookHeader[] },
 ): Promise<Webhook> {
   return apiRequest(`/forms/${formId}/webhooks`, {
     method: 'POST',
@@ -216,7 +217,7 @@ export function createWebhook(
 export function updateWebhook(
   formId: string,
   webhookId: string,
-  patch: { name?: string; url?: string; enabled?: boolean },
+  patch: { name?: string; url?: string; enabled?: boolean; headers?: WebhookHeader[] },
 ): Promise<void> {
   return apiRequest(`/forms/${formId}/webhooks/${webhookId}`, { method: 'PATCH', body: patch })
 }

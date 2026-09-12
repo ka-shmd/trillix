@@ -569,6 +569,7 @@ func (Repo) InsertWebhook(ctx context.Context, db postgres.DBTX, w NewWebhook, m
 		Name:       w.Name,
 		Url:        w.URL,
 		Secret:     w.SecretSealed,
+		Headers:    w.HeadersSealed,
 		SetBy:      w.SetBy,
 		MaxPerForm: maxPerForm,
 	})
@@ -634,6 +635,17 @@ func (Repo) UpdateWebhookSecret(ctx context.Context, db postgres.DBTX, id, formI
 	return n, nil
 }
 
+// UpdateWebhookHeaders перезаписывает шифротекст своих заголовков; nil — их нет.
+func (Repo) UpdateWebhookHeaders(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sealed []byte) (int64, error) {
+	n, err := postgres.New(db).UpdateFormWebhookHeaders(ctx, postgres.UpdateFormWebhookHeadersParams{
+		ID: id, FormID: formID, Headers: sealed,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("update form webhook headers: %w", err)
+	}
+	return n, nil
+}
+
 // ClearWebhookSecret выключает подпись: секрета у вебхука больше нет.
 func (Repo) ClearWebhookSecret(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error) {
 	n, err := postgres.New(db).ClearFormWebhookSecret(ctx, postgres.ClearFormWebhookSecretParams{
@@ -670,6 +682,7 @@ func toWebhook(r postgres.GetFormWebhookRow) Webhook {
 		URL:             r.Url,
 		Host:            webhookHost(r.Url),
 		SecretSealed:    r.Secret,
+		HeadersSealed:   r.Headers,
 		Enabled:         r.Enabled,
 		Status:          r.Status,
 		LastError:       r.LastError.String,
@@ -698,6 +711,7 @@ func (Repo) DueWebhooks(ctx context.Context, db postgres.DBTX, limit int32) ([]W
 			URL:                 r.Url,
 			Host:                webhookHost(r.Url),
 			SecretSealed:        r.Secret,
+			HeadersSealed:       r.Headers,
 			Enabled:             r.Enabled,
 			Status:              r.Status,
 			LastError:           r.LastError.String,

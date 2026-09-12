@@ -1,7 +1,7 @@
-import { useState } from 'react'
-import { AlertCircle, Check, Eye, KeyRound, Send } from 'lucide-react'
+import { useRef, useState } from 'react'
+import { AlertCircle, Check, Eye, KeyRound, ListPlus, Plus, Send, X } from 'lucide-react'
 
-import type { Webhook, WebhookTest } from '../../entities/integration'
+import type { Webhook, WebhookHeader, WebhookTest } from '../../entities/integration'
 import { getWebhookSecret } from './api'
 import {
   useCreateWebhook,
@@ -53,6 +53,15 @@ export function WebhookOverlay({
   const [known, setKnown] = useState<string | null>(null)
   const [showError, setShowError] = useState<unknown>(null)
   const [showing, setShowing] = useState(false)
+  // Свои заголовки запроса. Предлагаются той же кнопкой-приёмом, что подпись, и
+  // по тому же доводу: решение того же захода, но никому не навязанное.
+  const saved = webhook?.headers ?? []
+  const [headers, setHeaders] = useState<HeaderRow[]>(() => saved.map((h, i) => ({ id: i, ...h })))
+  const [showHeaders, setShowHeaders] = useState(saved.length > 0)
+  // Счётчик id новых строк. Читается только в обработчиках: чтение ref во время
+  // отрисовки — уже не чистая отрисовка, и линт на это ругается по делу.
+  const nextRowID = useRef(saved.length)
+  const newRow = (): HeaderRow => ({ id: nextRowID.current++, name: '', value: '' })
 
   const create = useCreateWebhook(formId)
   const update = useUpdateWebhook(formId)
@@ -60,6 +69,14 @@ export function WebhookOverlay({
   const disable = useDisableWebhookSignature(formId)
 
   const typed = secret.trim()
+  // Набор заголовков в том виде, в каком он уедет: выключенный — пустой, и это
+  // не «не трогать», а «убрать все».
+  const sentHeaders: WebhookHeader[] = showHeaders
+    ? headers.map((h) => ({ name: h.name, value: h.value }))
+    : []
+  // Значение без имени — недописанная строка, а не заголовок: сервер отказал бы,
+  // и отказ ради этого гонять незачем.
+  const headersBlocked = showHeaders && headers.some((h) => !h.name.trim() && h.value.trim() !== '')
   const saving =
     create.isPending || update.isPending || setSecretOf.isPending || disable.isPending
   const error =
@@ -71,13 +88,20 @@ export function WebhookOverlay({
   async function save() {
     try {
       if (!webhook) {
-        await create.mutateAsync({ name, url, secret: signing ? typed : undefined })
+        await create.mutateAsync({
+          name,
+          url,
+          secret: signing ? typed : undefined,
+          // Пустой набор при заведении не шлём вовсе: убирать нечего, а
+          // подключение без заголовков — это ровно адрес и название.
+          headers: sentHeaders.length > 0 ? sentHeaders : undefined,
+        })
         onClose()
         return
       }
       // Адрес шлётся всегда, даже неизменённый: так правящий становится
       // ответственным за доставку и снимает поломку (спека §9).
-      await update.mutateAsync({ id: webhook.id, name, url })
+      await update.mutateAsync({ id: webhook.id, name, url, headers: sentHeaders })
       if (signing && typed !== '' && typed !== known) {
         await setSecretOf.mutateAsync({ webhookId: webhook.id, secret: typed })
       } else if (!signing && webhook.signed) {
@@ -169,6 +193,25 @@ export function WebhookOverlay({
               <SignatureOffer onOn={() => setSigning(true)} />
             )}
 
+            {showHeaders ? (
+              <HeadersField
+                rows={headers}
+                onRows={setHeaders}
+                onAdd={() => setHeaders([...headers, newRow()])}
+                onOff={() => {
+                  setShowHeaders(false)
+                  setHeaders([])
+                }}
+              />
+            ) : (
+              <HeadersOffer
+                onOn={() => {
+                  setShowHeaders(true)
+                  setHeaders([newRow()])
+                }}
+              />
+            )}
+
             {/* Проверка — только у заведённого вебхука: до подключения адрес
                 ещё не сохранён, и проверять нечего. */}
             {webhook && <TestField formId={formId} webhookId={webhook.id} />}
@@ -184,7 +227,10 @@ export function WebhookOverlay({
               <Button variant="ghost" onClick={onClose}>
                 Отмена
               </Button>
-              <Button disabled={saving || url.trim() === '' || secretBlocked} onClick={save}>
+              <Button
+                disabled={saving || url.trim() === '' || secretBlocked || headersBlocked}
+                onClick={save}
+              >
                 {saving ? 'Сохраняем…' : webhook ? 'Сохранить' : 'Подключить'}
               </Button>
             </div>
@@ -272,6 +318,103 @@ function SecretField({
     </div>
   )
 }
+
+// HeaderRow — строка набора на экране. id свой, потому что ключом списка индекс
+// быть не может: убрали строку из середины — React переиспользовал бы поля
+// соседней вместе с фокусом и выделением.
+interface HeaderRow extends WebhookHeader {
+  id: number
+}
+
+// HeadersOffer — предложение задать свои заголовки. Кнопка, а не поля сразу: их
+// не нужно большинству, а нужны они тем, у кого получатель требует ключ.
+function HeadersOffer({ onOn }: { onOn: () => void }) {
+  return (
+    <div className="flex flex-col gap-2">
+      <div>
+        <Button variant="outline" onClick={onOn}>
+          <ListPlus className="size-4" aria-hidden />
+          Свои заголовки
+        </Button>
+      </div>
+      <p className="text-sm text-muted-foreground">
+        Уедут с каждым запросом. Так получателю передают ключ: обычно это{' '}
+        <span className="font-mono">Authorization</span> со значением{' '}
+        <span className="font-mono">Bearer …</span>.
+      </p>
+    </div>
+  )
+}
+
+// HeadersField — строки «имя / значение». Набор заменяется целиком тем же
+// «Подключить»/«Сохранить», что и всё остальное в окне.
+function HeadersField({
+  rows,
+  onRows,
+  onAdd,
+  onOff,
+}: {
+  rows: HeaderRow[]
+  onRows: (rows: HeaderRow[]) => void
+  onAdd: () => void
+  onOff: () => void
+}) {
+  function patch(id: number, change: Partial<WebhookHeader>) {
+    onRows(rows.map((r) => (r.id === id ? { ...r, ...change } : r)))
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      <div className="flex items-center justify-between gap-4">
+        <Label>Свои заголовки</Label>
+        <Button variant="ghost" size="sm" onClick={onOff}>
+          Без заголовков
+        </Button>
+      </div>
+      {rows.map((row, i) => (
+        <div key={row.id} className="flex items-center gap-2">
+          <Input
+            aria-label={`Имя заголовка ${i + 1}`}
+            placeholder="Authorization"
+            className="h-10 w-2/5 font-mono md:text-base"
+            value={row.name}
+            onChange={(e) => patch(row.id, { name: e.target.value })}
+          />
+          <Input
+            aria-label={`Значение заголовка ${i + 1}`}
+            placeholder="Bearer …"
+            className="h-10 flex-1 font-mono md:text-base"
+            value={row.value}
+            onChange={(e) => patch(row.id, { value: e.target.value })}
+          />
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={`Убрать заголовок ${i + 1}`}
+            onClick={() => onRows(rows.filter((r) => r.id !== row.id))}
+          >
+            <X className="size-4" aria-hidden />
+          </Button>
+        </div>
+      ))}
+      {rows.length < MAX_HEADERS && (
+        <div>
+          <Button variant="outline" size="sm" onClick={onAdd}>
+            <Plus className="size-4" aria-hidden />
+            Ещё заголовок
+          </Button>
+        </div>
+      )}
+      <p className="text-sm text-muted-foreground">
+        Имя — латиницей, значение уедет получателю как есть. Наши собственные
+        заголовки (<span className="font-mono">Content-Type</span>, подпись) задать нельзя.
+      </p>
+    </div>
+  )
+}
+
+// MAX_HEADERS — та же планка, что на бэке (integrations.MaxWebhookHeaders).
+const MAX_HEADERS = 10
 
 // MIN_SECRET — та же планка, что на бэке (integrations.MinWebhookSecretLen).
 // Здесь она только гасит кнопку: слабый секрет обесценивает подпись, и проверку

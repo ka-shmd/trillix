@@ -58,6 +58,10 @@ type webhookDTO struct {
 	Queued  int64  `json:"queued"`
 	Signed  bool   `json:"signed"`
 	Secret  string `json:"secret"`
+	Headers []struct {
+		Name  string `json:"name"`
+		Value string `json:"value"`
+	} `json:"headers"`
 }
 
 func webhooksOf(t *testing.T, c *http.Client, srv *httptest.Server, formID string) []webhookDTO {

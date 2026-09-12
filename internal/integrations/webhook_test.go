@@ -60,7 +60,8 @@ func (f *fakeWebhookStore) InsertWebhook(_ context.Context, _ postgres.DBTX, w i
 	f.writes++
 	f.hooks[w.ID] = integrations.Webhook{
 		ID: w.ID, FormID: w.FormID, Name: w.Name, URL: w.URL, Host: hostOf(w.URL),
-		SecretSealed: w.SecretSealed, SetBy: w.SetBy, Enabled: true, Status: integrations.StatusLive,
+		SecretSealed: w.SecretSealed, HeadersSealed: w.HeadersSealed,
+		SetBy: w.SetBy, Enabled: true, Status: integrations.StatusLive,
 	}
 	return true, nil
 }
@@ -122,6 +123,10 @@ func (f *fakeWebhookStore) UpdateWebhookURL(_ context.Context, _ postgres.DBTX, 
 
 func (f *fakeWebhookStore) UpdateWebhookSecret(_ context.Context, _ postgres.DBTX, id, formID uuid.UUID, sealed []byte) (int64, error) {
 	return f.edit(id, formID, func(w *integrations.Webhook) { w.SecretSealed = sealed }), nil
+}
+
+func (f *fakeWebhookStore) UpdateWebhookHeaders(_ context.Context, _ postgres.DBTX, id, formID uuid.UUID, sealed []byte) (int64, error) {
+	return f.edit(id, formID, func(w *integrations.Webhook) { w.HeadersSealed = sealed }), nil
 }
 
 func (f *fakeWebhookStore) ClearWebhookSecret(_ context.Context, _ postgres.DBTX, id, formID uuid.UUID) (int64, error) {
@@ -535,6 +540,129 @@ func TestCreateWebhook_WithAuthorSecret(t *testing.T) {
 	}
 	if len(store.hooks) != before {
 		t.Fatal("вебхук завёлся вопреки отказу по секрету")
+	}
+}
+
+// --- СВОИ ЗАГОЛОВКИ ЗАПРОСА (0064) ---
+
+// В заголовке едет ключ к чужой системе, поэтому набор лежит шифротекстом и
+// приезжает только тому, кто вправе править форму, — как и полный адрес.
+func TestWebhookHeaders_SealedAndVisibleToEditorsOnly(t *testing.T) {
+	store := newFakeWebhookStore()
+	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
+
+	w, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{
+		URL: testHookURL,
+		Headers: []integrations.WebhookHeader{
+			{Name: "  Authorization  ", Value: "  Bearer abc123  "},
+			// Пустая строка — незаполненная строка формы, а не ошибка.
+			{Name: "", Value: ""},
+		},
+	})
+	if err != nil {
+		t.Fatalf("заведение с заголовками: %v", err)
+	}
+	sealed := store.hooks[w.ID].HeadersSealed
+	if len(sealed) == 0 {
+		t.Fatal("заголовки не сохранились")
+	}
+	if bytes.Contains(sealed, []byte("Authorization")) || bytes.Contains(sealed, []byte("Bearer")) {
+		t.Fatal("заголовки легли в базу открытым текстом")
+	}
+
+	st, err := svc.FormStatus(context.Background(), testUser, testForm)
+	if err != nil {
+		t.Fatalf("состояние: %v", err)
+	}
+	got := st.Webhooks[0].Headers
+	if len(got) != 1 || got[0].Name != "Authorization" || got[0].Value != "Bearer abc123" {
+		t.Fatalf("редактору: %+v — ожидалась одна пара с обрезанными пробелами", got)
+	}
+
+	reader := newWebhookService(readerAccess(), store, &fakeEgress{})
+	st, err = reader.FormStatus(context.Background(), testUser, testForm)
+	if err != nil {
+		t.Fatalf("состояние читателя: %v", err)
+	}
+	if len(st.Webhooks[0].Headers) != 0 {
+		t.Fatalf("читателю ушли заголовки: %+v", st.Webhooks[0].Headers)
+	}
+}
+
+// Что своим заголовком задать нельзя. Первая строка списка — перенос строки в
+// значении: всё после него получатель прочтёт как отдельный заголовок.
+func TestWebhookHeaders_Rejected(t *testing.T) {
+	long := strings.Repeat("x", integrations.MaxWebhookHeaderValueLen+1)
+	many := make([]integrations.WebhookHeader, integrations.MaxWebhookHeaders+1)
+	for i := range many {
+		many[i] = integrations.WebhookHeader{Name: fmt.Sprintf("X-N%d", i), Value: "v"}
+	}
+	cases := map[string][]integrations.WebhookHeader{
+		"перенос строки в значении": {{Name: "X-Key", Value: "a\r\nX-Admin: 1"}},
+		"кириллица в имени":         {{Name: "Ключ", Value: "v"}},
+		"пробел в имени":            {{Name: "X Key", Value: "v"}},
+		"значение без имени":        {{Name: "  ", Value: "Bearer abc123"}},
+		"наш Content-Type":          {{Name: "content-type", Value: "text/plain"}},
+		"наша подпись":              {{Name: domain.WebhookSignatureHeader, Value: "t=1,v1=ff"}},
+		"служебный Host":            {{Name: "Host", Value: "evil.example.com"}},
+		"дубль имени":               {{Name: "X-Key", Value: "1"}, {Name: "x-key", Value: "2"}},
+		"слишком длинное значение":  {{Name: "X-Key", Value: long}},
+		"больше потолка":            many,
+	}
+	for name, headers := range cases {
+		store := newFakeWebhookStore()
+		svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
+		_, err := svc.CreateWebhook(context.Background(), testUser, testForm,
+			integrations.WebhookInput{URL: testHookURL, Headers: headers})
+		if !errors.Is(err, domain.ErrValidation) {
+			t.Errorf("%s: ошибка %v, ожидался ErrValidation", name, err)
+		}
+		if len(store.hooks) != 0 {
+			t.Errorf("%s: вебхук завёлся вопреки отказу по заголовкам", name)
+		}
+	}
+}
+
+// Правка заменяет набор ЦЕЛИКОМ: пустой список убирает все, отсутствие поля не
+// трогает ничего (так шлёт тумблер из списка).
+func TestWebhookHeaders_ReplacedWholesale(t *testing.T) {
+	store := newFakeWebhookStore()
+	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
+	w, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{
+		URL:     testHookURL,
+		Headers: []integrations.WebhookHeader{{Name: "X-Key", Value: "1"}, {Name: "X-Api-Version", Value: "2"}},
+	})
+	if err != nil {
+		t.Fatalf("заведение: %v", err)
+	}
+
+	// Тумблер шлёт только enabled — заголовки остаются на месте.
+	off := false
+	if err := svc.UpdateWebhook(context.Background(), testUser, testForm, w.ID,
+		integrations.WebhookPatch{Enabled: &off}); err != nil {
+		t.Fatalf("тумблер: %v", err)
+	}
+	if len(store.hooks[w.ID].HeadersSealed) == 0 {
+		t.Fatal("тумблер снёс заголовки")
+	}
+
+	replacement := []integrations.WebhookHeader{{Name: "X-Key", Value: "3"}}
+	if err := svc.UpdateWebhook(context.Background(), testUser, testForm, w.ID,
+		integrations.WebhookPatch{Headers: &replacement}); err != nil {
+		t.Fatalf("замена: %v", err)
+	}
+	st, _ := svc.FormStatus(context.Background(), testUser, testForm)
+	if got := st.Webhooks[0].Headers; len(got) != 1 || got[0].Value != "3" {
+		t.Fatalf("после замены %+v — ожидалась одна пара", got)
+	}
+
+	empty := []integrations.WebhookHeader{}
+	if err := svc.UpdateWebhook(context.Background(), testUser, testForm, w.ID,
+		integrations.WebhookPatch{Headers: &empty}); err != nil {
+		t.Fatalf("очистка: %v", err)
+	}
+	if len(store.hooks[w.ID].HeadersSealed) != 0 {
+		t.Fatal("пустой набор не убрал заголовки")
 	}
 }
 

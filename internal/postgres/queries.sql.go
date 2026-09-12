@@ -1690,7 +1690,7 @@ func (q *Queries) DemoteOwner(ctx context.Context, arg DemoteOwnerParams) (int64
 }
 
 const dueWebhooks = `-- name: DueWebhooks :many
-SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,
        w.next_attempt_at, w.failing_since, w.consecutive_failures, f.workspace_id
 FROM form_webhooks w
@@ -1707,6 +1707,7 @@ type DueWebhooksRow struct {
 	Name                string
 	Url                 string
 	Secret              []byte
+	Headers             []byte
 	SetBy               pgtype.UUID
 	Enabled             bool
 	Status              string
@@ -1740,6 +1741,7 @@ func (q *Queries) DueWebhooks(ctx context.Context, limit int32) ([]DueWebhooksRo
 			&i.Name,
 			&i.Url,
 			&i.Secret,
+			&i.Headers,
 			&i.SetBy,
 			&i.Enabled,
 			&i.Status,
@@ -2825,7 +2827,7 @@ func (q *Queries) GetFormTemplate(ctx context.Context, id uuid.UUID) (FormTempla
 }
 
 const getFormWebhook = `-- name: GetFormWebhook :one
-SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,
        (SELECT count(*) FROM webhook_queue q WHERE q.webhook_id = w.id) AS queued
 FROM form_webhooks w
@@ -2843,6 +2845,7 @@ type GetFormWebhookRow struct {
 	Name            string
 	Url             string
 	Secret          []byte
+	Headers         []byte
 	SetBy           pgtype.UUID
 	Enabled         bool
 	Status          string
@@ -2863,6 +2866,7 @@ func (q *Queries) GetFormWebhook(ctx context.Context, arg GetFormWebhookParams) 
 		&i.Name,
 		&i.Url,
 		&i.Secret,
+		&i.Headers,
 		&i.SetBy,
 		&i.Enabled,
 		&i.Status,
@@ -3799,10 +3803,11 @@ func (q *Queries) InsertFormVersion(ctx context.Context, arg InsertFormVersionPa
 
 const insertFormWebhook = `-- name: InsertFormWebhook :execrows
 
-INSERT INTO form_webhooks (id, form_id, name, url, secret, set_by)
+INSERT INTO form_webhooks (id, form_id, name, url, secret, headers, set_by)
 SELECT $1::uuid, $2::uuid, $3::text,
-       $4::text, $5::bytea, $6::uuid
-WHERE (SELECT count(*) FROM form_webhooks WHERE form_id = $2::uuid) < $7::int
+       $4::text, $5::bytea, $6::bytea,
+       $7::uuid
+WHERE (SELECT count(*) FROM form_webhooks WHERE form_id = $2::uuid) < $8::int
 `
 
 type InsertFormWebhookParams struct {
@@ -3811,6 +3816,7 @@ type InsertFormWebhookParams struct {
 	Name       string
 	Url        string
 	Secret     []byte
+	Headers    []byte
 	SetBy      uuid.UUID
 	MaxPerForm int32
 }
@@ -3821,6 +3827,7 @@ type InsertFormWebhookParams struct {
 // потолок гасит усиление «одна отправка формы → N запросов», а не держит
 // инвариант, и advisory-lock ради точности здесь не окупается.
 // secret пуст — подписи у вебхука нет (0063): заголовок не появляется вовсе.
+// headers пусты — своих заголовков нет (0064).
 func (q *Queries) InsertFormWebhook(ctx context.Context, arg InsertFormWebhookParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertFormWebhook,
 		arg.ID,
@@ -3828,6 +3835,7 @@ func (q *Queries) InsertFormWebhook(ctx context.Context, arg InsertFormWebhookPa
 		arg.Name,
 		arg.Url,
 		arg.Secret,
+		arg.Headers,
 		arg.SetBy,
 		arg.MaxPerForm,
 	)
@@ -4498,7 +4506,7 @@ func (q *Queries) ListFormVersions(ctx context.Context, formID uuid.UUID) ([]Lis
 }
 
 const listFormWebhooks = `-- name: ListFormWebhooks :many
-SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,
        (SELECT count(*) FROM webhook_queue q WHERE q.webhook_id = w.id) AS queued
 FROM form_webhooks w
@@ -4512,6 +4520,7 @@ type ListFormWebhooksRow struct {
 	Name            string
 	Url             string
 	Secret          []byte
+	Headers         []byte
 	SetBy           pgtype.UUID
 	Enabled         bool
 	Status          string
@@ -4539,6 +4548,7 @@ func (q *Queries) ListFormWebhooks(ctx context.Context, formID uuid.UUID) ([]Lis
 			&i.Name,
 			&i.Url,
 			&i.Secret,
+			&i.Headers,
 			&i.SetBy,
 			&i.Enabled,
 			&i.Status,
@@ -7595,6 +7605,27 @@ func (q *Queries) UpdateFormSchedule(ctx context.Context, arg UpdateFormSchedule
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const updateFormWebhookHeaders = `-- name: UpdateFormWebhookHeaders :execrows
+UPDATE form_webhooks SET headers = $3 WHERE id = $1 AND form_id = $2
+`
+
+type UpdateFormWebhookHeadersParams struct {
+	ID      uuid.UUID
+	FormID  uuid.UUID
+	Headers []byte
+}
+
+// Свои заголовки запроса (0064). Набор заменяется ЦЕЛИКОМ: он маленький, и
+// «добавить/убрать по одному» стоило бы трёх ручек вместо одной. NULL — своих
+// заголовков у вебхука нет.
+func (q *Queries) UpdateFormWebhookHeaders(ctx context.Context, arg UpdateFormWebhookHeadersParams) (int64, error) {
+	result, err := q.db.Exec(ctx, updateFormWebhookHeaders, arg.ID, arg.FormID, arg.Headers)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const updateFormWebhookSecret = `-- name: UpdateFormWebhookSecret :execrows

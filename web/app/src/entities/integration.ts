@@ -66,6 +66,13 @@ export const formSheetSchema = z.object({
 // адрес чужой системы вместо таблицы в чужом Диске.
 export const webhookStatusSchema = z.enum(['live', 'broken'])
 
+// Свой заголовок запроса (0064). Ради них вебхук цепляют к чужому API: Zapier и
+// Make ключа не просят, а CRM и свой бэкенд просят почти всегда.
+export const webhookHeaderSchema = z.object({
+  name: z.string(),
+  value: z.string(),
+})
+
 export const webhookSchema = z.object({
   id: z.string(),
   name: z.string().optional(),
@@ -83,6 +90,10 @@ export const webhookSchema = z.object({
   status: webhookStatusSchema,
   lastError: z.string().optional(),
   lastDeliveredAt: z.string().optional(),
+  // headers — свои заголовки запроса. Приходят только тому, кто вправе править
+  // форму: в значении лежит ключ к чужой системе (`Authorization: Bearer …`).
+  // Пусто — их нет либо спрашивающий не вправе их видеть.
+  headers: z.array(webhookHeaderSchema).default([]),
   // queued — сколько ответов ждут доставки. Растёт, пока получатель молчит.
   queued: z.number().int().default(0),
 })
@@ -160,6 +171,7 @@ export const sheetListSchema = z.object({
 })
 
 export type Webhook = z.infer<typeof webhookSchema>
+export type WebhookHeader = z.infer<typeof webhookHeaderSchema>
 export type WebhookStatus = z.infer<typeof webhookStatusSchema>
 export type WebhookTest = z.infer<typeof webhookTestSchema>
 export type SpreadsheetRef = z.infer<typeof spreadsheetRefSchema>

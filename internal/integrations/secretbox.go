@@ -26,6 +26,11 @@ const secretLabel = "trillix-integration-refresh-v1"
 // вебхуки встают с причиной «задайте секрет заново».
 const webhookSecretLabel = "trillix-webhook-secret-v1"
 
+// webhookHeadersLabel — метка ключа своих заголовков запроса (0064). Снова своя:
+// в заголовке едет ключ к чужой системе, и открываться он должен только ключом
+// своего назначения.
+const webhookHeadersLabel = "trillix-webhook-headers-v1"
+
 func sealToken(key []byte, token string) ([]byte, error) { return seal(key, secretLabel, token) }
 
 func openToken(key, sealed []byte) (string, error) { return openSealed(key, secretLabel, sealed) }
@@ -36,6 +41,14 @@ func sealWebhookSecret(key []byte, secret string) ([]byte, error) {
 
 func openWebhookSecret(key, sealed []byte) (string, error) {
 	return openSealed(key, webhookSecretLabel, sealed)
+}
+
+func sealWebhookHeaders(key []byte, headers string) ([]byte, error) {
+	return seal(key, webhookHeadersLabel, headers)
+}
+
+func openWebhookHeaders(key, sealed []byte) (string, error) {
+	return openSealed(key, webhookHeadersLabel, sealed)
 }
 
 func seal(key []byte, label, plaintext string) ([]byte, error) {

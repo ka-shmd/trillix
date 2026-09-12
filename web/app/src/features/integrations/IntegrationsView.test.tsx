@@ -1104,6 +1104,7 @@ function hook(patch: Partial<Webhook> = {}): Webhook {
     host: 'hooks.zapier.com',
     url: 'https://hooks.zapier.com/hooks/catch/1/SECRETPATH',
     signed: false,
+    headers: [],
     enabled: true,
     status: 'live',
     queued: 0,
@@ -1373,6 +1374,98 @@ describe('вебхуки на экране интеграций', () => {
 
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     expect(calls.map((c) => c.method)).toEqual(['PATCH'])
+    vi.unstubAllGlobals()
+  })
+
+  it('свои заголовки предлагаются кнопкой, полей до нажатия нет', () => {
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить вебхук' }))
+
+    expect(screen.getByRole('button', { name: 'Свои заголовки' })).toBeTruthy()
+    expect(screen.queryByLabelText('Имя заголовка 1')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Свои заголовки' }))
+    expect(screen.getByLabelText('Имя заголовка 1')).toBeTruthy()
+    expect(screen.getByLabelText('Значение заголовка 1')).toBeTruthy()
+
+    // Передумал — строки уходят, предложение возвращается.
+    fireEvent.click(screen.getByRole('button', { name: 'Без заголовков' }))
+    expect(screen.queryByLabelText('Имя заголовка 1')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Свои заголовки' })).toBeTruthy()
+  })
+
+  it('заголовки уезжают вместе с подключением, значение без имени его не даёт', async () => {
+    const posts: { url: string; body: unknown }[] = []
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify(state()), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      posts.push({ url, body: init?.body ? JSON.parse(String(init.body)) : null })
+      return new Response(JSON.stringify(hook({ id: 'hook-new' })), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить вебхук' }))
+
+    fireEvent.change(screen.getByLabelText('Адрес получателя'), {
+      target: { value: 'https://hooks.example.com/x' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Свои заголовки' }))
+    // Значение без имени — недописанная строка: отправлять её незачем, сервер
+    // всё равно откажет.
+    fireEvent.change(screen.getByLabelText('Значение заголовка 1'), {
+      target: { value: 'Bearer abc123' },
+    })
+    expect((screen.getByRole('button', { name: 'Подключить' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+
+    fireEvent.change(screen.getByLabelText('Имя заголовка 1'), {
+      target: { value: 'Authorization' },
+    })
+    // Вторая строка добавляется и убирается.
+    fireEvent.click(screen.getByRole('button', { name: 'Ещё заголовок' }))
+    expect(screen.getByLabelText('Имя заголовка 2')).toBeTruthy()
+    fireEvent.click(screen.getByRole('button', { name: 'Убрать заголовок 2' }))
+    expect(screen.queryByLabelText('Имя заголовка 2')).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    await waitFor(() => expect(posts.length).toBe(1))
+    expect(posts[0]!.body).toEqual({
+      name: '',
+      url: 'https://hooks.example.com/x',
+      headers: [{ name: 'Authorization', value: 'Bearer abc123' }],
+    })
+    vi.unstubAllGlobals()
+  })
+
+  it('заголовки заведённого вебхука видны в полях и убираются при сохранении', async () => {
+    const withHeaders = hook({ headers: [{ name: 'Authorization', value: 'Bearer abc123' }] })
+    const calls = mockWebhookCalls(state({ webhooks: [withHeaders] }))
+    renderView(state({ webhooks: [withHeaders] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
+
+    expect((screen.getByLabelText('Имя заголовка 1') as HTMLInputElement).value).toBe(
+      'Authorization',
+    )
+    expect((screen.getByLabelText('Значение заголовка 1') as HTMLInputElement).value).toBe(
+      'Bearer abc123',
+    )
+
+    fireEvent.click(screen.getByRole('button', { name: 'Без заголовков' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    // Пустой список — это «убрать все», а не «не трогать».
+    expect(calls[0]!.method).toBe('PATCH')
+    expect(calls[0]!.body).toMatchObject({ headers: [] })
     vi.unstubAllGlobals()
   })
 

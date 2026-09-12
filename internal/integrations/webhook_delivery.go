@@ -69,6 +69,11 @@ const (
 // FORM_TOKEN_SECRET). Подписать запрос нечем, и сама собой беда не пройдёт.
 var errSecretUnreadable = errors.New("integrations: секрет подписи вебхука не читается")
 
+// errHeadersUnreadable — то же с набором своих заголовков (0064). Отправить
+// запрос без них нельзя: получатель, который требует ключ, ответит 401, и автор
+// решил бы, что сломан адрес.
+var errHeadersUnreadable = errors.New("integrations: свои заголовки вебхука не читаются")
+
 // webhookStep — исход одной попытки для цикла по цели.
 type webhookStep int
 
@@ -213,6 +218,15 @@ func (s *Service) deliverToWebhook(ctx context.Context, w Webhook, submissionID 
 // появляется, и это штатное умолчание, а не сбой.
 func (s *Service) sendWebhook(ctx context.Context, w Webhook, body []byte) (resp safehttp.Response, err error) {
 	header := http.Header{}
+	// Свои заголовки автора ставятся ПЕРВЫМИ, наши пишутся поверх: перебить
+	// Content-Type или подпись нельзя даже в обход проверки при сохранении.
+	own, err := openHeaders(s.key, w.HeadersSealed)
+	if err != nil {
+		return safehttp.Response{}, errHeadersUnreadable
+	}
+	for _, h := range own {
+		header.Set(h.Name, h.Value)
+	}
 	header.Set("Content-Type", "application/json; charset=utf-8")
 	header.Set("User-Agent", webhookUserAgent)
 	if len(w.SecretSealed) > 0 {
@@ -286,6 +300,9 @@ func (s *Service) breakWebhook(ctx context.Context, w Webhook, submissionID uuid
 func webhookFailureReason(code int, cause error) (permanent bool, reason string) {
 	if errors.Is(cause, errSecretUnreadable) {
 		return true, "Секрет подписи больше не читается — задайте его заново в настройках вебхука."
+	}
+	if errors.Is(cause, errHeadersUnreadable) {
+		return true, "Свои заголовки запроса больше не читаются — задайте их заново в настройках вебхука."
 	}
 	if cause != nil {
 		switch safehttp.Classify(cause) {

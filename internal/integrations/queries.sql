@@ -262,16 +262,18 @@ DELETE FROM integration_deliveries WHERE created_at < $1;
 -- потолок гасит усиление «одна отправка формы → N запросов», а не держит
 -- инвариант, и advisory-lock ради точности здесь не окупается.
 -- secret пуст — подписи у вебхука нет (0063): заголовок не появляется вовсе.
-INSERT INTO form_webhooks (id, form_id, name, url, secret, set_by)
+-- headers пусты — своих заголовков нет (0064).
+INSERT INTO form_webhooks (id, form_id, name, url, secret, headers, set_by)
 SELECT sqlc.arg(id)::uuid, sqlc.arg(form_id)::uuid, sqlc.arg(name)::text,
-       sqlc.arg(url)::text, sqlc.arg(secret)::bytea, sqlc.arg(set_by)::uuid
+       sqlc.arg(url)::text, sqlc.arg(secret)::bytea, sqlc.arg(headers)::bytea,
+       sqlc.arg(set_by)::uuid
 WHERE (SELECT count(*) FROM form_webhooks WHERE form_id = sqlc.arg(form_id)::uuid) < sqlc.arg(max_per_form)::int;
 
 -- name: ListFormWebhooks :many
 -- Вебхуки формы в порядке заведения (UUIDv7 монотонен по времени). queued —
 -- сколько ответов ждут доставки: экран показывает «в очереди N», и отдельный
 -- запрос на каждую строку списка был бы лишним.
-SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,
        (SELECT count(*) FROM webhook_queue q WHERE q.webhook_id = w.id) AS queued
 FROM form_webhooks w
@@ -281,7 +283,7 @@ ORDER BY w.id;
 -- name: GetFormWebhook :one
 -- Один вебхук формы. form_id в условии не украшение: id вебхука приезжает из
 -- адреса и правом доступа не является (инвариант 1).
-SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,
        (SELECT count(*) FROM webhook_queue q WHERE q.webhook_id = w.id) AS queued
 FROM form_webhooks w
@@ -310,6 +312,12 @@ UPDATE form_webhooks SET secret = NULL WHERE id = $1 AND form_id = $2;
 -- не трогается: вернуть вебхук в работу может только проверка или новый адрес.
 UPDATE form_webhooks SET secret = $3 WHERE id = $1 AND form_id = $2;
 
+-- name: UpdateFormWebhookHeaders :execrows
+-- Свои заголовки запроса (0064). Набор заменяется ЦЕЛИКОМ: он маленький, и
+-- «добавить/убрать по одному» стоило бы трёх ручек вместо одной. NULL — своих
+-- заголовков у вебхука нет.
+UPDATE form_webhooks SET headers = $3 WHERE id = $1 AND form_id = $2;
+
 -- name: DeleteFormWebhook :execrows
 -- Удаление вебхука; очередь и журнал уходят каскадом.
 DELETE FROM form_webhooks WHERE id = $1 AND form_id = $2;
@@ -326,7 +334,7 @@ DELETE FROM webhook_queue WHERE webhook_id = $1;
 --
 -- workspace_id приезжает джойном из ФОРМЫ: по нему сторож проверяет, что тот,
 -- кто задал адрес, всё ещё участник пространства.
-SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,
        w.next_attempt_at, w.failing_since, w.consecutive_failures, f.workspace_id
 FROM form_webhooks w

@@ -2,6 +2,7 @@ package integrations
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -37,6 +38,29 @@ const MinWebhookSecretLen = 16
 // не означает ничего, кроме промаха при вставке.
 const MaxWebhookSecretLen = 200
 
+// MaxWebhookHeaders — сколько своих заголовков можно задать (0064). Больше
+// десятка — это уже не «ключ и версия API», а попытка переложить в заголовки то,
+// чему место в теле запроса.
+const MaxWebhookHeaders = 10
+
+// MaxWebhookHeaderNameLen и MaxWebhookHeaderValueLen — потолки строки. Ключ
+// получателя в тысячу символов не влезает разве что у самых щедрых.
+const (
+	MaxWebhookHeaderNameLen  = 64
+	MaxWebhookHeaderValueLen = 1024
+)
+
+// WebhookHeader — свой заголовок запроса. Ради них вебхук цепляют к чужому API:
+// Zapier и Make ключа не просят, а CRM и свой бэкенд просят почти всегда.
+//
+// Метки json — ФОРМАТ ХРАНЕНИЯ (набор лежит шифротекстом одной строкой JSON), а
+// не DTO ручки: у той в handler.go свой тип. Переименуете поле — старые
+// шифротексты перестанут читаться.
+type WebhookHeader struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
 // Webhook — вебхук формы, как он лежит у нас.
 //
 // SecretSealed — ШИФРОТЕКСТ и остаётся им везде выше repo, как refresh-токен у
@@ -54,6 +78,13 @@ type Webhook struct {
 	// (0063): заголовка в запросе не появляется, и на экране о секрете нет ни
 	// одного поля. Это умолчание.
 	SecretSealed []byte
+	// HeadersSealed — свои заголовки запроса шифротекстом (0064). Мина та же, что
+	// у SecretSealed: попадут в ответ API — отдадите наружу ключ от чужой системы.
+	HeadersSealed []byte
+	// Headers — те же заголовки в открытом виде. Заполняются ТОЛЬКО для того, кто
+	// вправе править форму (listWebhooks): экрану их надо показать в полях.
+	// Доставка открывает их сама из HeadersSealed.
+	Headers []WebhookHeader
 	// SetBy — кто последним задал адрес; нулевой — его аккаунт удалён, и
 	// отвечать за доставку некому.
 	SetBy           uuid.UUID
@@ -90,12 +121,13 @@ func webhookHost(raw string) string {
 
 // NewWebhook — что записать при заведении вебхука.
 type NewWebhook struct {
-	ID           uuid.UUID
-	FormID       uuid.UUID
-	Name         string
-	URL          string
-	SecretSealed []byte
-	SetBy        uuid.UUID
+	ID            uuid.UUID
+	FormID        uuid.UUID
+	Name          string
+	URL           string
+	SecretSealed  []byte
+	HeadersSealed []byte
+	SetBy         uuid.UUID
 }
 
 // WebhookStore — данные вебхуков. Отдельно от Store: у связок Таблиц своя
@@ -110,6 +142,7 @@ type WebhookStore interface {
 	UpdateWebhookSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error)
 	UpdateWebhookURL(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, rawURL string, setBy uuid.UUID) (int64, error)
 	UpdateWebhookSecret(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sealed []byte) (int64, error)
+	UpdateWebhookHeaders(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sealed []byte) (int64, error)
 	ClearWebhookSecret(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	DeleteWebhook(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	ClearWebhookQueue(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
@@ -167,6 +200,9 @@ type WebhookInput struct {
 	// подписи: подключение это адрес и всё. Подпись предлагается в том же окне
 	// кнопкой, и нажавший вводит секрет сам (ADR §10, четвёртый круг).
 	Secret string
+	// Headers — свои заголовки запроса. Пусто = их нет; предлагаются в том же
+	// окне и той же кнопкой-приёмом, что подпись.
+	Headers []WebhookHeader
 }
 
 // WebhookPatch — правка вебхука. nil — поле не трогается: тумблер из списка шлёт
@@ -177,6 +213,9 @@ type WebhookPatch struct {
 	// URL, переданный даже тем же, делает правящего ответственным за доставку и
 	// снимает поломку (спека §9).
 	URL *string
+	// Headers заменяют набор ЦЕЛИКОМ: он маленький, и «добавить/убрать по одному»
+	// стоило бы трёх ручек вместо одной. nil — не трогать, пустой — убрать все.
+	Headers *[]WebhookHeader
 }
 
 // CreateWebhook заводит вебхук формы. Секрет подписи в ответ не возвращается: он
@@ -206,14 +245,19 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, formID uuid.UUID, i
 			return Webhook{}, err
 		}
 	}
+	clean, headers, err := s.sealedHeaders(in.Headers)
+	if err != nil {
+		return Webhook{}, err
+	}
 
 	w := NewWebhook{
-		ID:           domain.NewID(),
-		FormID:       formID,
-		Name:         name,
-		URL:          rawURL,
-		SecretSealed: sealed,
-		SetBy:        userID,
+		ID:            domain.NewID(),
+		FormID:        formID,
+		Name:          name,
+		URL:           rawURL,
+		SecretSealed:  sealed,
+		HeadersSealed: headers,
+		SetBy:         userID,
 	}
 	ok, err := s.webhooks.InsertWebhook(ctx, s.db, w, MaxWebhooksPerForm)
 	if err != nil {
@@ -224,16 +268,18 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, formID uuid.UUID, i
 			domain.ErrValidation, MaxWebhooksPerForm)
 	}
 	return Webhook{
-		ID:           w.ID,
-		FormID:       formID,
-		Name:         name,
-		URL:          rawURL,
-		Host:         webhookHost(rawURL),
-		SecretSealed: sealed,
-		SetBy:        userID,
-		Enabled:      true,
-		Status:       StatusLive,
-		CreatedAt:    time.Now().UTC(),
+		ID:            w.ID,
+		FormID:        formID,
+		Name:          name,
+		URL:           rawURL,
+		Host:          webhookHost(rawURL),
+		SecretSealed:  sealed,
+		HeadersSealed: headers,
+		Headers:       clean,
+		SetBy:         userID,
+		Enabled:       true,
+		Status:        StatusLive,
+		CreatedAt:     time.Now().UTC(),
 	}, nil
 }
 
@@ -270,6 +316,12 @@ func (s *Service) UpdateWebhook(ctx context.Context, userID, formID, webhookID u
 			return err
 		}
 	}
+	var headers []byte
+	if patch.Headers != nil {
+		if _, headers, err = s.sealedHeaders(*patch.Headers); err != nil {
+			return err
+		}
+	}
 
 	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
 		if patch.Name != nil || patch.Enabled != nil {
@@ -284,6 +336,15 @@ func (s *Service) UpdateWebhook(ctx context.Context, userID, formID, webhookID u
 				if err := s.webhooks.ClearWebhookQueue(ctx, tx, w.ID); err != nil {
 					return err
 				}
+			}
+		}
+		if patch.Headers != nil {
+			n, err := s.webhooks.UpdateWebhookHeaders(ctx, tx, w.ID, formID, headers)
+			if err != nil {
+				return err
+			}
+			if n == 0 {
+				return domain.ErrNotFound
 			}
 		}
 		if patch.URL != nil {
@@ -411,7 +472,19 @@ func (s *Service) listWebhooks(ctx context.Context, formID uuid.UUID, canEdit bo
 	if !canEdit {
 		for i := range list {
 			list[i].URL = ""
+			list[i].HeadersSealed = nil
 		}
+		return list, nil
+	}
+	for i := range list {
+		// Шифротекст, переживший ротацию FORM_TOKEN_SECRET, не открывается. Это
+		// не повод ронять весь таб: заголовков просто не видно, а следующая
+		// доставка встанет с причиной, которая объясняет, что делать.
+		headers, err := openHeaders(s.key, list[i].HeadersSealed)
+		if err != nil {
+			continue
+		}
+		list[i].Headers = headers
 	}
 	return list, nil
 }
@@ -483,6 +556,147 @@ func (s *Service) sealedSecret(raw string) ([]byte, error) {
 		return nil, err
 	}
 	return sealWebhookSecret(s.key, secret)
+}
+
+// sealedHeaders проверяет набор своих заголовков и запечатывает его для записи.
+// Отдаёт очищенный набор (показать в ответе) и шифротекст (положить в базу);
+// пустой набор — nil и nil: «заголовков нет».
+func (s *Service) sealedHeaders(headers []WebhookHeader) ([]WebhookHeader, []byte, error) {
+	clean, err := checkWebhookHeaders(headers)
+	if err != nil {
+		return nil, nil, err
+	}
+	if len(clean) == 0 {
+		return nil, nil, nil
+	}
+	raw, err := json.Marshal(clean)
+	if err != nil {
+		return nil, nil, fmt.Errorf("webhook headers: %w", err)
+	}
+	sealed, err := sealWebhookHeaders(s.key, string(raw))
+	if err != nil {
+		return nil, nil, err
+	}
+	return clean, sealed, nil
+}
+
+// openHeaders достаёт набор заголовков из шифротекста; пусто — их нет.
+func openHeaders(key, sealed []byte) ([]WebhookHeader, error) {
+	if len(sealed) == 0 {
+		return nil, nil
+	}
+	raw, err := openWebhookHeaders(key, sealed)
+	if err != nil {
+		return nil, err
+	}
+	var out []WebhookHeader
+	if err := json.Unmarshal([]byte(raw), &out); err != nil {
+		return nil, fmt.Errorf("webhook headers: %w", err)
+	}
+	return out, nil
+}
+
+// forbiddenWebhookHeaders — что своим заголовком задать нельзя. Наши собственные
+// (перебивка сломала бы разбор тела и проверку подписи у получателя) и служебные
+// заголовки транспорта: их выставляет Go, и чужое значение в них ломает
+// соединение, а не настраивает его. Сверка по нижнему регистру — имена
+// заголовков регистронезависимы.
+var forbiddenWebhookHeaders = map[string]bool{
+	"content-type": true, "content-length": true, "user-agent": true,
+	"host": true, "connection": true, "transfer-encoding": true,
+	"accept-encoding": true, "upgrade": true, "te": true, "trailer": true,
+	"keep-alive": true, "expect": true,
+	strings.ToLower(domain.WebhookSignatureHeader): true,
+}
+
+// checkWebhookHeaders разбирает набор своих заголовков: обрезает пробелы,
+// проверяет каждый и отдаёт очищенный. Ввод валидируется на бэке независимо от
+// фронта (инвариант 3).
+//
+// Пустой набор — nil: «заголовков нет» и «пустой список» для вебхука одно и то же.
+func checkWebhookHeaders(in []WebhookHeader) ([]WebhookHeader, error) {
+	if len(in) > MaxWebhookHeaders {
+		return nil, fmt.Errorf("%w: своих заголовков можно задать не больше %d",
+			domain.ErrValidation, MaxWebhookHeaders)
+	}
+	out := make([]WebhookHeader, 0, len(in))
+	seen := make(map[string]bool, len(in))
+	for _, h := range in {
+		name, value := strings.TrimSpace(h.Name), strings.TrimSpace(h.Value)
+		// Пустая строка целиком — незаполненная строка формы, а не ошибка: на
+		// экране их добавляют заранее и заполняют не все.
+		if name == "" && value == "" {
+			continue
+		}
+		if err := checkWebhookHeaderName(name); err != nil {
+			return nil, err
+		}
+		if err := checkWebhookHeaderValue(name, value); err != nil {
+			return nil, err
+		}
+		key := strings.ToLower(name)
+		if seen[key] {
+			return nil, fmt.Errorf("%w: заголовок «%s» задан дважды", domain.ErrValidation, name)
+		}
+		seen[key] = true
+		out = append(out, WebhookHeader{Name: name, Value: value})
+	}
+	if len(out) == 0 {
+		return nil, nil
+	}
+	return out, nil
+}
+
+func checkWebhookHeaderName(name string) error {
+	if name == "" {
+		return fmt.Errorf("%w: у заголовка не названо имя", domain.ErrValidation)
+	}
+	if utf8.RuneCountInString(name) > MaxWebhookHeaderNameLen {
+		return fmt.Errorf("%w: имя заголовка длиннее %d символов",
+			domain.ErrValidation, MaxWebhookHeaderNameLen)
+	}
+	// Имя заголовка — token из RFC 7230: латиница, цифры и горстка знаков.
+	// Кириллица и пробел в него не входят, и Go отказался бы отправить запрос.
+	for _, r := range name {
+		if !isHeaderTokenRune(r) {
+			return fmt.Errorf("%w: в имени заголовка «%s» есть недопустимый знак — годятся латиница, цифры и дефис",
+				domain.ErrValidation, name)
+		}
+	}
+	if forbiddenWebhookHeaders[strings.ToLower(name)] {
+		return fmt.Errorf("%w: заголовок «%s» продукт ставит сам — задать его своим нельзя",
+			domain.ErrValidation, name)
+	}
+	return nil
+}
+
+// checkWebhookHeaderValue — МИНА: перенос строки в значении это инъекция
+// заголовков, всё после него получатель прочтёт как отдельный заголовок или как
+// начало тела. Поэтому значение — только видимый ASCII и табуляция, ровно как
+// требует HTTP.
+func checkWebhookHeaderValue(name, value string) error {
+	if utf8.RuneCountInString(value) > MaxWebhookHeaderValueLen {
+		return fmt.Errorf("%w: значение заголовка «%s» длиннее %d символов",
+			domain.ErrValidation, name, MaxWebhookHeaderValueLen)
+	}
+	for _, b := range []byte(value) {
+		if b == '\t' {
+			continue
+		}
+		if b < 0x20 || b > 0x7e {
+			return fmt.Errorf("%w: в значении заголовка «%s» есть переносы строк или буквы не латиницей — заголовки HTTP передают только латиницу, и получатель прочёл бы это мусором",
+				domain.ErrValidation, name)
+		}
+	}
+	return nil
+}
+
+func isHeaderTokenRune(r rune) bool {
+	switch {
+	case r >= 'a' && r <= 'z', r >= 'A' && r <= 'Z', r >= '0' && r <= '9':
+		return true
+	}
+	return strings.ContainsRune("!#$%&'*+-.^_`|~", r)
 }
 
 // checkWebhookSecret — правила для секрета подписи. Ввод валидируется на бэке

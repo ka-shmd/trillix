@@ -138,6 +138,7 @@ type FormWebhook struct {
 	FailingSince        pgtype.Timestamptz
 	ConsecutiveFailures int32
 	CreatedAt           pgtype.Timestamptz
+	Headers             []byte
 }
 
 type IntegrationAccount struct {

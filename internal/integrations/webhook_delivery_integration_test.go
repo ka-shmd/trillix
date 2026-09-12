@@ -9,6 +9,7 @@
 package integrations_test
 
 import (
+	"bytes"
 	"context"
 	"crypto/x509"
 	"encoding/json"
@@ -32,6 +33,8 @@ type receiver struct {
 	code   int
 	bodies [][]byte
 	sigs   []string
+	// heads — заголовки каждого запроса: ими проверяются свои заголовки автора.
+	heads []http.Header
 }
 
 func (r *receiver) handle(w http.ResponseWriter, req *http.Request) {
@@ -39,6 +42,7 @@ func (r *receiver) handle(w http.ResponseWriter, req *http.Request) {
 	r.mu.Lock()
 	r.bodies = append(r.bodies, body)
 	r.sigs = append(r.sigs, req.Header.Get(domain.WebhookSignatureHeader))
+	r.heads = append(r.heads, req.Header.Clone())
 	code := r.code
 	r.mu.Unlock()
 	w.WriteHeader(code)
@@ -57,6 +61,16 @@ func (r *receiver) last() ([]byte, string) {
 		return nil, ""
 	}
 	return r.bodies[len(r.bodies)-1], r.sigs[len(r.sigs)-1]
+}
+
+// lastHeaders — заголовки последнего запроса.
+func (r *receiver) lastHeaders() http.Header {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.heads) == 0 {
+		return nil
+	}
+	return r.heads[len(r.heads)-1]
 }
 
 func (r *receiver) setCode(code int) {
@@ -420,5 +434,62 @@ func TestWebhookDelivery_AuthorSuppliedSecret(t *testing.T) {
 	closeBody(t, resp)
 	if resp.StatusCode != http.StatusUnprocessableEntity {
 		t.Fatalf("короткий секрет: статус %d, ожидалось 422", resp.StatusCode)
+	}
+}
+
+// Свои заголовки запроса (0064) сквозным путём: задал в ручке — лежат в базе
+// шифротекстом — уехали получателю. Сокрытие заголовков от того, кто не вправе
+// править форму, проверяется юнитом: ролей в контуре две, и обе правят формы.
+func TestWebhookDelivery_OwnHeaders(t *testing.T) {
+	resetDB(t)
+	rec, recSrv, egress := newReceiver(t, http.StatusOK)
+	srv := newStackWithEgress(t, &fakeProvider{}, egress)
+	owner := registerUser(t, srv, "owner@example.com")
+	formID := newForm(t, personalWorkspace(t), "f-headers")
+	versionID := publishVersion(t, formID)
+
+	r := createWebhook(t, owner, srv, formID,
+		`{"url":"`+recSrv.URL+`/hook","headers":[{"name":"Authorization","value":"Bearer abc123"}]}`)
+	if r.StatusCode != http.StatusCreated {
+		closeBody(t, r)
+		t.Fatalf("заведение с заголовками: статус %d", r.StatusCode)
+	}
+	var hook webhookDTO
+	decode(t, r, &hook)
+	if len(hook.Headers) != 1 || hook.Headers[0].Value != "Bearer abc123" {
+		t.Fatalf("в ответе заголовки = %+v", hook.Headers)
+	}
+
+	// В базе — шифротекст, а не открытый ключ.
+	var sealed []byte
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT headers FROM form_webhooks WHERE id = $1`, hook.ID).Scan(&sealed); err != nil {
+		t.Fatalf("строка вебхука: %v", err)
+	}
+	if len(sealed) == 0 || bytes.Contains(sealed, []byte("Bearer abc123")) {
+		t.Fatal("заголовки легли в базу открытым текстом")
+	}
+
+	subID := newSubmission(t, formID, versionID, `{"b1":"Кирилл"}`)
+	enqueueWebhook(t, hook.ID, subID)
+	if _, err := testIntegrations.DeliverWebhooks(context.Background()); err != nil {
+		t.Fatalf("проход доставщика: %v", err)
+	}
+	head := rec.lastHeaders()
+	if head.Get("Authorization") != "Bearer abc123" {
+		t.Fatalf("получателю Authorization = %q", head.Get("Authorization"))
+	}
+	if ct := head.Get("Content-Type"); ct != "application/json; charset=utf-8" {
+		t.Fatalf("Content-Type = %q", ct)
+	}
+
+	// Правка заменяет набор целиком: пустой список убирает заголовки.
+	resp := patchWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/webhooks/"+hook.ID, `{"headers":[]}`)
+	closeBody(t, resp)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("очистка заголовков: статус %d", resp.StatusCode)
+	}
+	if got := webhooksOf(t, owner, srv, formID); len(got[0].Headers) != 0 {
+		t.Fatalf("после очистки заголовки = %+v", got[0].Headers)
 	}
 }
