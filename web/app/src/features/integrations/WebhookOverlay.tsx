@@ -168,9 +168,6 @@ export function WebhookOverlay({
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
-              <p className="text-sm text-muted-foreground">
-                Необязательно: по нему вебхук узнаётся в списке, когда их несколько.
-              </p>
             </div>
 
             {signing ? (
@@ -402,12 +399,6 @@ function HeadersField({
           <div className="size-9 shrink-0" aria-hidden />
         </div>
       )}
-      <p className="text-sm text-muted-foreground">
-        Имя — латиницей: чаще всего это <span className="font-mono">Authorization</span> со
-        значением <span className="font-mono">Bearer …</span>. Значение уедет получателю как
-        есть; наши собственные заголовки (<span className="font-mono">Content-Type</span>,
-        подпись) задать нельзя.
-      </p>
     </div>
   )
 }
