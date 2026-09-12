@@ -64,6 +64,10 @@ type Submissions interface {
 	// SheetRows — пачка накопленных ответов для догрузки: строго до отсечки,
 	// после курсора, старые сверху.
 	SheetRows(ctx context.Context, formID uuid.UUID, before time.Time, after uuid.UUID, limit int32) (submissions.SheetPage, error)
+	// WebhookRow — тот же ответ телом вебхука (фаза 28): поля с типами и
+	// название формы. Модель колонок общая с таблицей — иначе у вопроса «какие
+	// у формы поля» стало бы два ответа.
+	WebhookRow(ctx context.Context, formID, submissionID uuid.UUID) (submissions.WebhookRecord, error)
 }
 
 // WithDelivery подключает доставку ответов. Отдельным сеттером: submissions

@@ -75,6 +75,13 @@ func resetDB(t *testing.T) {
 // пермиссивные (инвариант 6: лимит не ослабляется ради теста, а инжектируется).
 func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 	t.Helper()
+	return newStackWithEgress(t, provider, testEgress())
+}
+
+// newStackWithEgress — та же вертикаль, но с заданным исходящим клиентом:
+// тестам доставки нужен получатель на loopback, а боевой Guard туда не пустит.
+func newStackWithEgress(t *testing.T, provider integrations.Provider, egress integrations.Egress) *httptest.Server {
+	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false)
 
@@ -85,7 +92,7 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 
 	svc := integrations.NewService(testPool, postgres.TxRunner{Pool: testPool}, integrations.Repo{},
 		wsSvc, formsSvc, provider, testKey).
-		WithWebhooks(integrations.Repo{}, testEgress())
+		WithWebhooks(integrations.Repo{}, egress, nil)
 	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey)
 
 	// Доставка: настоящий outbox (mail) как очередь, настоящий submissions как
@@ -1510,6 +1517,7 @@ type deliveryItem struct {
 	Outcome      string `json:"outcome"`
 	Detail       string `json:"detail"`
 	Rows         int32  `json:"rows"`
+	HTTPStatus   int32  `json:"httpStatus"`
 	CreatedAt    string `json:"createdAt"`
 }
 

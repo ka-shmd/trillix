@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"strings"
 	"time"
@@ -55,6 +56,18 @@ type Webhook struct {
 	// Queued — сколько ответов ждут доставки.
 	Queued    int64
 	CreatedAt time.Time
+
+	// Дальше — то, что нужно ДОСТАВЩИКУ и не нужно экрану; у чтений для таба
+	// эти поля пусты.
+	//
+	// WorkspaceID — пространство формы: по нему сторож спрашивает членство SetBy.
+	WorkspaceID uuid.UUID
+	// FailingSince — с какого момента цель подряд не принимает. Сутки — поломка;
+	// момент ПЕРВОГО отказа, а не последнего, иначе отсчёт не наступит никогда.
+	FailingSince time.Time
+	// ConsecutiveFailures — сколько неудач подряд: по нему считается бэкофф цели.
+	ConsecutiveFailures int32
+	NextAttemptAt       time.Time
 }
 
 // webhookHost — хост адреса: единственное, что о нём видит роль без права правки
@@ -91,6 +104,27 @@ type WebhookStore interface {
 	UpdateWebhookSecret(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sealed []byte) (int64, error)
 	DeleteWebhook(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	ClearWebhookQueue(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+
+	// Доставка (webhook_delivery.go).
+	DueWebhooks(ctx context.Context, db postgres.DBTX, limit int32) ([]Webhook, error)
+	PendingSubmissions(ctx context.Context, db postgres.DBTX, webhookID uuid.UUID, limit int32) ([]uuid.UUID, error)
+	Dequeue(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error
+	Enqueue(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error
+	ExpiredQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]QueuedRef, error)
+	MarkWebhookDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+	MarkWebhookFailed(ctx context.Context, db postgres.DBTX, id uuid.UUID, reason string, failingSince, nextAttemptAt time.Time) error
+	MarkWebhookBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, reason string) error
+	ReviveWebhook(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
+	InsertWebhookDelivery(ctx context.Context, db postgres.DBTX, d Delivery) error
+	ListWebhookDeliveries(ctx context.Context, db postgres.DBTX, webhookID, cursor uuid.UUID, limit int32) ([]Delivery, error)
+	GetWebhookDelivery(ctx context.Context, db postgres.DBTX, id, webhookID uuid.UUID) (Delivery, error)
+	WebhookSubmissionDelivered(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) (bool, error)
+}
+
+// QueuedRef — строка очереди: какой ответ в какую цель.
+type QueuedRef struct {
+	WebhookID    uuid.UUID
+	SubmissionID uuid.UUID
 }
 
 var _ WebhookStore = Repo{}
@@ -98,13 +132,21 @@ var _ WebhookStore = Repo{}
 // Egress — исходящий HTTP по адресу пользователя (internal/safehttp).
 type Egress interface {
 	Validate(ctx context.Context, raw string) (*url.URL, error)
+	Post(ctx context.Context, rawURL string, header http.Header, body []byte) (safehttp.Response, error)
 }
 
 // WithWebhooks подключает вебхуки. Отдельным сеттером, а не аргументом
 // конструктора: вебхуки не зависят от ключей Google, и сборка без провайдера
 // Таблиц (dev-контур без проекта в Google Cloud) обязана их иметь.
-func (s *Service) WithWebhooks(store WebhookStore, egress Egress) *Service {
+//
+// now — часы доставки (бэкофф цели и сутки до поломки). Параметром, как у
+// entitlements: тест с подменёнными часами не должен ждать реальных суток.
+// nil = time.Now.
+func (s *Service) WithWebhooks(store WebhookStore, egress Egress, now func() time.Time) *Service {
 	s.webhooks, s.egress = store, egress
+	if now != nil {
+		s.now = now
+	}
 	return s
 }
 

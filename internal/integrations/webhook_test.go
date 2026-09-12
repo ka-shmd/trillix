@@ -5,9 +5,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
+	"slices"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -22,17 +26,34 @@ import (
 // fakeWebhookStore — вебхуки в памяти. writes считает записи: «негодная правка
 // не записала ничего» проверяется по нему.
 type fakeWebhookStore struct {
+	// mu — доставщик разбирает цели параллельно, и фейк обязан это переживать.
+	mu      sync.Mutex
 	hooks   map[uuid.UUID]integrations.Webhook
 	full    bool // потолок на форму достигнут
 	cleared []uuid.UUID
 	writes  int
+
+	// Очередь и журнал (доставка, webhook_delivery_test.go).
+	queue   []queuedItem
+	journal []integrations.Delivery
+	// now — часы очереди: по ним считается «ждёт дольше срока хранения».
+	now func() time.Time
+}
+
+// queuedItem — строка очереди фейка.
+type queuedItem struct {
+	webhookID    uuid.UUID
+	submissionID uuid.UUID
+	at           time.Time
 }
 
 func newFakeWebhookStore() *fakeWebhookStore {
-	return &fakeWebhookStore{hooks: map[uuid.UUID]integrations.Webhook{}}
+	return &fakeWebhookStore{hooks: map[uuid.UUID]integrations.Webhook{}, now: time.Now}
 }
 
 func (f *fakeWebhookStore) InsertWebhook(_ context.Context, _ postgres.DBTX, w integrations.NewWebhook, _ int32) (bool, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	if f.full {
 		return false, nil
 	}
@@ -54,6 +75,8 @@ func hostOf(raw string) string {
 }
 
 func (f *fakeWebhookStore) ListWebhooks(_ context.Context, _ postgres.DBTX, formID uuid.UUID) ([]integrations.Webhook, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	var out []integrations.Webhook
 	for _, w := range f.hooks {
 		if w.FormID == formID {
@@ -64,6 +87,8 @@ func (f *fakeWebhookStore) ListWebhooks(_ context.Context, _ postgres.DBTX, form
 }
 
 func (f *fakeWebhookStore) GetWebhook(_ context.Context, _ postgres.DBTX, id, formID uuid.UUID) (integrations.Webhook, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	w, ok := f.hooks[id]
 	if !ok || w.FormID != formID {
 		return integrations.Webhook{}, pgx.ErrNoRows
@@ -71,7 +96,10 @@ func (f *fakeWebhookStore) GetWebhook(_ context.Context, _ postgres.DBTX, id, fo
 	return w, nil
 }
 
+// edit — правка цели под мьютексом. Зовущие его методы блокировку не берут.
 func (f *fakeWebhookStore) edit(id, formID uuid.UUID, fn func(*integrations.Webhook)) int64 {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	w, ok := f.hooks[id]
 	if !ok || w.FormID != formID {
 		return 0
@@ -97,6 +125,8 @@ func (f *fakeWebhookStore) UpdateWebhookSecret(_ context.Context, _ postgres.DBT
 }
 
 func (f *fakeWebhookStore) DeleteWebhook(_ context.Context, _ postgres.DBTX, id, formID uuid.UUID) (int64, error) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	w, ok := f.hooks[id]
 	if !ok || w.FormID != formID {
 		return 0, nil
@@ -106,7 +136,10 @@ func (f *fakeWebhookStore) DeleteWebhook(_ context.Context, _ postgres.DBTX, id,
 }
 
 func (f *fakeWebhookStore) ClearWebhookQueue(_ context.Context, _ postgres.DBTX, id uuid.UUID) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
 	f.cleared = append(f.cleared, id)
+	f.queue = slices.DeleteFunc(f.queue, func(q queuedItem) bool { return q.webhookID == id })
 	return nil
 }
 
@@ -125,12 +158,18 @@ func (f *fakeEgress) Validate(_ context.Context, raw string) (*url.URL, error) {
 	return url.Parse(raw)
 }
 
+// Post здесь не зовут: доставку проверяет webhook_delivery_test.go со своим
+// получателем. Реализация нужна, чтобы фейк годился как Egress.
+func (f *fakeEgress) Post(context.Context, string, http.Header, []byte) (safehttp.Response, error) {
+	return safehttp.Response{}, errors.New("fakeEgress: Post не задан")
+}
+
 // newWebhookService — сервис без провайдера Google: вебхуки от его ключей не
 // зависят, и dev-контур без проекта в Google Cloud обязан их иметь.
 func newWebhookService(access integrations.Access, store *fakeWebhookStore, egress *fakeEgress) *integrations.Service {
 	f := fakeForms{form: forms.Form{ID: testForm, WorkspaceID: testWS}}
 	return integrations.NewService(nil, directTx{}, &fakeStore{}, access, f, nil, testKey).
-		WithWebhooks(store, egress)
+		WithWebhooks(store, egress, nil)
 }
 
 const testHookURL = "https://hooks.zapier.com/hooks/catch/123/abcSECRET/"
@@ -217,7 +256,7 @@ func TestCreateWebhook_NoResolveWithoutRight(t *testing.T) {
 	}
 
 	stranger := integrations.NewService(nil, directTx{}, &fakeStore{}, fakeAccess{},
-		fakeForms{getErr: domain.ErrNotFound}, nil, testKey).WithWebhooks(newFakeWebhookStore(), egress)
+		fakeForms{getErr: domain.ErrNotFound}, nil, testKey).WithWebhooks(newFakeWebhookStore(), egress, nil)
 	if _, _, err := stranger.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("чужая форма: %v, ожидался ErrNotFound", err)
 	}

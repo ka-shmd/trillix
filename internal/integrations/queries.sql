@@ -313,3 +313,109 @@ DELETE FROM form_webhooks WHERE id = $1 AND form_id = $2;
 -- Тумблер «выключить» — это «не доставлять», а не «доставить позже»: ждущие
 -- ответы снимаются тем же движением, иначе включение вывалило бы их разом.
 DELETE FROM webhook_queue WHERE webhook_id = $1;
+
+-- name: DueWebhooks :many
+-- Цели, которым есть что везти и чьё время наступило. Сломанные не берутся
+-- вовсе: их ответы копятся до починки, но в сеть мы не ходим. Порядок — по
+-- next_attempt_at: дольше всех ждущая цель едет первой.
+--
+-- workspace_id приезжает джойном из ФОРМЫ: по нему сторож проверяет, что тот,
+-- кто задал адрес, всё ещё участник пространства.
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+       w.last_error, w.last_delivered_at, w.created_at,
+       w.next_attempt_at, w.failing_since, w.consecutive_failures, f.workspace_id
+FROM form_webhooks w
+JOIN forms f ON f.id = w.form_id
+WHERE w.enabled AND w.status = 'live' AND w.next_attempt_at <= now()
+  AND EXISTS (SELECT 1 FROM webhook_queue q WHERE q.webhook_id = w.id)
+ORDER BY w.next_attempt_at
+LIMIT $1;
+
+-- name: PendingWebhookSubmissions :many
+-- Что цель везёт следующим — в порядке постановки. submission_id вторым ключом
+-- сортировки: у двух ответов, поставленных в одну миллисекунду, порядок между
+-- собой иначе не определён, и пачка тика прыгала бы.
+SELECT submission_id FROM webhook_queue
+WHERE webhook_id = $1
+ORDER BY enqueued_at, submission_id
+LIMIT $2;
+
+-- name: DeleteWebhookQueued :exec
+-- Ответ доставлен (или доставлять его больше не надо): строка очереди уходит,
+-- история остаётся в журнале.
+DELETE FROM webhook_queue WHERE webhook_id = $1 AND submission_id = $2;
+
+-- name: InsertWebhookQueued :exec
+-- Повтор из журнала. Ключ-пара делает двойное нажатие безвредным.
+INSERT INTO webhook_queue (webhook_id, submission_id) VALUES ($1, $2)
+ON CONFLICT DO NOTHING;
+
+-- name: ExpiredWebhookQueued :many
+-- Ответы, ждущие дольше срока хранения: их снимают с очереди и пишут в журнал.
+SELECT webhook_id, submission_id FROM webhook_queue
+WHERE enqueued_at < $1
+ORDER BY enqueued_at
+LIMIT $2;
+
+-- name: MarkWebhookDelivered :exec
+-- Успех: гасим неудачи и время следующей попытки — очередь этой цели поедет
+-- дальше тем же тиком.
+UPDATE form_webhooks
+SET last_delivered_at = now(), last_error = NULL, failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
+WHERE id = $1;
+
+-- name: MarkWebhookFailed :exec
+-- Неудача усыпляет ЦЕЛЬ, а не строку очереди: лежащий адрес получает одну
+-- попытку за окно бэкоффа, сколько бы ответов ни ждало.
+--
+-- failing_since держит ПЕРВЫЙ момент отказа (COALESCE): по нему считаются сутки
+-- до поломки, и каждая следующая неудача не должна сдвигать отсчёт.
+UPDATE form_webhooks
+SET last_error = $2, consecutive_failures = consecutive_failures + 1,
+    failing_since = COALESCE(failing_since, sqlc.arg(failing_since)),
+    next_attempt_at = sqlc.arg(next_attempt_at)
+WHERE id = $1;
+
+-- name: MarkWebhookBroken :exec
+-- Доставка невозможна без человека: доставщик в эту цель больше не ходит, но
+-- ответы продолжают копиться — починка увезёт их по порядку.
+UPDATE form_webhooks SET status = 'broken', last_error = $2 WHERE id = $1;
+
+-- name: ReviveWebhook :exec
+-- Проверка прошла: цель снова в работе, расписание с нуля.
+UPDATE form_webhooks
+SET status = 'live', last_error = NULL, failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
+WHERE id = $1;
+
+-- name: InsertWebhookDelivery :exec
+-- Одна попытка доставки в вебхук. http_status пуст, когда ответа не было вовсе
+-- (таймаут, DNS, запрет адреса).
+INSERT INTO integration_deliveries (
+    id, webhook_id, kind, submission_id, outcome, detail, http_status
+) VALUES ($1, $2, 'submission', $3, $4, $5, $6);
+
+-- name: ListWebhookDeliveries :many
+-- Лента журнала вебхука: новые сверху, страница курсором (тот же приём, что у
+-- ленты связки).
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at, webhook_id, http_status
+FROM integration_deliveries
+WHERE webhook_id = sqlc.arg(webhook_id)::uuid
+  AND (sqlc.arg(cursor)::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR id < sqlc.arg(cursor))
+ORDER BY id DESC
+LIMIT sqlc.arg(page_size);
+
+-- name: GetWebhookDelivery :one
+-- Одна запись журнала вебхука — предмет повтора.
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at, webhook_id, http_status
+FROM integration_deliveries
+WHERE id = sqlc.arg(id) AND webhook_id = sqlc.arg(webhook_id)::uuid;
+
+-- name: WebhookSubmissionDelivered :one
+-- Доезжал ли ЭТОТ ответ в эту цель хоть раз. Спрашивается перед повтором — тот
+-- же вопрос и тот же довод, что у связки Таблиц.
+SELECT EXISTS (
+    SELECT 1 FROM integration_deliveries
+    WHERE webhook_id = sqlc.arg(webhook_id)::uuid AND submission_id = sqlc.arg(submission_id) AND outcome = 'delivered'
+);

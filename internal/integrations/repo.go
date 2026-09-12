@@ -458,6 +458,12 @@ type Delivery struct {
 	Detail       string
 	RowCount     int32
 	CreatedAt    time.Time
+	// WebhookID — цель, если попытка была в вебхук (0062). Запись висит ровно на
+	// одной цели: либо LinkID, либо WebhookID.
+	WebhookID uuid.UUID
+	// HTTPStatus — код ответа получателя вебхука; ноль, когда ответа не было
+	// вовсе (таймаут, DNS, запрет адреса) или когда цель — таблица.
+	HTTPStatus int32
 }
 
 // InsertDelivery пишет попытку в журнал.
@@ -544,6 +550,12 @@ func toDelivery(row postgres.IntegrationDelivery) Delivery {
 	}
 	if row.SubmissionID.Valid {
 		d.SubmissionID = row.SubmissionID.Bytes
+	}
+	if row.WebhookID.Valid {
+		d.WebhookID = row.WebhookID.Bytes
+	}
+	if row.HttpStatus.Valid {
+		d.HTTPStatus = row.HttpStatus.Int32
 	}
 	return d
 }
@@ -658,4 +670,189 @@ func toWebhook(r postgres.GetFormWebhookRow) Webhook {
 		w.SetBy = r.SetBy.Bytes
 	}
 	return w
+}
+
+// DueWebhooks — цели, которым есть что везти и чьё время наступило.
+func (Repo) DueWebhooks(ctx context.Context, db postgres.DBTX, limit int32) ([]Webhook, error) {
+	rows, err := postgres.New(db).DueWebhooks(ctx, limit)
+	if err != nil {
+		return nil, fmt.Errorf("due webhooks: %w", err)
+	}
+	out := make([]Webhook, 0, len(rows))
+	for _, r := range rows {
+		w := Webhook{
+			ID:                  r.ID,
+			FormID:              r.FormID,
+			Name:                r.Name,
+			URL:                 r.Url,
+			Host:                webhookHost(r.Url),
+			SecretSealed:        r.Secret,
+			Enabled:             r.Enabled,
+			Status:              r.Status,
+			LastError:           r.LastError.String,
+			LastDeliveredAt:     r.LastDeliveredAt.Time,
+			CreatedAt:           r.CreatedAt.Time,
+			WorkspaceID:         r.WorkspaceID,
+			FailingSince:        r.FailingSince.Time,
+			ConsecutiveFailures: r.ConsecutiveFailures,
+			NextAttemptAt:       r.NextAttemptAt.Time,
+		}
+		if r.SetBy.Valid {
+			w.SetBy = r.SetBy.Bytes
+		}
+		out = append(out, w)
+	}
+	return out, nil
+}
+
+// PendingSubmissions — что цель везёт следующим, в порядке постановки.
+func (Repo) PendingSubmissions(ctx context.Context, db postgres.DBTX, webhookID uuid.UUID, limit int32) ([]uuid.UUID, error) {
+	ids, err := postgres.New(db).PendingWebhookSubmissions(ctx, postgres.PendingWebhookSubmissionsParams{
+		WebhookID: webhookID,
+		Limit:     limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("pending webhook submissions: %w", err)
+	}
+	return ids, nil
+}
+
+// Dequeue снимает ответ с очереди цели.
+func (Repo) Dequeue(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error {
+	err := postgres.New(db).DeleteWebhookQueued(ctx, postgres.DeleteWebhookQueuedParams{
+		WebhookID:    webhookID,
+		SubmissionID: submissionID,
+	})
+	if err != nil {
+		return fmt.Errorf("dequeue webhook submission: %w", err)
+	}
+	return nil
+}
+
+// Enqueue ставит ответ в очередь цели (повтор из журнала).
+func (Repo) Enqueue(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) error {
+	err := postgres.New(db).InsertWebhookQueued(ctx, postgres.InsertWebhookQueuedParams{
+		WebhookID:    webhookID,
+		SubmissionID: submissionID,
+	})
+	if err != nil {
+		return fmt.Errorf("enqueue webhook submission: %w", err)
+	}
+	return nil
+}
+
+// ExpiredQueued — ответы, ждущие дольше срока хранения.
+func (Repo) ExpiredQueued(ctx context.Context, db postgres.DBTX, before time.Time, limit int32) ([]QueuedRef, error) {
+	rows, err := postgres.New(db).ExpiredWebhookQueued(ctx, postgres.ExpiredWebhookQueuedParams{
+		EnqueuedAt: pgtype.Timestamptz{Time: before, Valid: true},
+		Limit:      limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("expired webhook queue: %w", err)
+	}
+	out := make([]QueuedRef, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, QueuedRef{WebhookID: r.WebhookID, SubmissionID: r.SubmissionID})
+	}
+	return out, nil
+}
+
+// MarkWebhookDelivered — успех: неудачи и пауза сброшены.
+func (Repo) MarkWebhookDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).MarkWebhookDelivered(ctx, id); err != nil {
+		return fmt.Errorf("mark webhook delivered: %w", err)
+	}
+	return nil
+}
+
+// MarkWebhookFailed усыпляет ЦЕЛЬ до nextAttemptAt. failingSince ставится только
+// на первой неудаче подряд (COALESCE в SQL).
+func (Repo) MarkWebhookFailed(ctx context.Context, db postgres.DBTX, id uuid.UUID, reason string, failingSince, nextAttemptAt time.Time) error {
+	err := postgres.New(db).MarkWebhookFailed(ctx, postgres.MarkWebhookFailedParams{
+		ID:            id,
+		LastError:     pgtype.Text{String: reason, Valid: reason != ""},
+		FailingSince:  pgtype.Timestamptz{Time: failingSince, Valid: true},
+		NextAttemptAt: pgtype.Timestamptz{Time: nextAttemptAt, Valid: true},
+	})
+	if err != nil {
+		return fmt.Errorf("mark webhook failed: %w", err)
+	}
+	return nil
+}
+
+// MarkWebhookBroken — доставка невозможна без человека.
+func (Repo) MarkWebhookBroken(ctx context.Context, db postgres.DBTX, id uuid.UUID, reason string) error {
+	err := postgres.New(db).MarkWebhookBroken(ctx, postgres.MarkWebhookBrokenParams{
+		ID:        id,
+		LastError: pgtype.Text{String: reason, Valid: reason != ""},
+	})
+	if err != nil {
+		return fmt.Errorf("mark webhook broken: %w", err)
+	}
+	return nil
+}
+
+// ReviveWebhook возвращает цель в работу: расписание с нуля.
+func (Repo) ReviveWebhook(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
+	if err := postgres.New(db).ReviveWebhook(ctx, id); err != nil {
+		return fmt.Errorf("revive webhook: %w", err)
+	}
+	return nil
+}
+
+// InsertWebhookDelivery пишет попытку в журнал.
+func (Repo) InsertWebhookDelivery(ctx context.Context, db postgres.DBTX, d Delivery) error {
+	err := postgres.New(db).InsertWebhookDelivery(ctx, postgres.InsertWebhookDeliveryParams{
+		ID:           d.ID,
+		WebhookID:    pgtype.UUID{Bytes: d.WebhookID, Valid: d.WebhookID != uuid.Nil},
+		SubmissionID: pgtype.UUID{Bytes: d.SubmissionID, Valid: d.SubmissionID != uuid.Nil},
+		Outcome:      d.Outcome,
+		Detail:       d.Detail,
+		HttpStatus:   pgtype.Int4{Int32: d.HTTPStatus, Valid: d.HTTPStatus != 0},
+	})
+	if err != nil {
+		return fmt.Errorf("insert webhook delivery: %w", err)
+	}
+	return nil
+}
+
+// ListWebhookDeliveries — страница ленты вебхука, новые сверху.
+func (Repo) ListWebhookDeliveries(ctx context.Context, db postgres.DBTX, webhookID, cursor uuid.UUID, limit int32) ([]Delivery, error) {
+	rows, err := postgres.New(db).ListWebhookDeliveries(ctx, postgres.ListWebhookDeliveriesParams{
+		WebhookID: webhookID,
+		Cursor:    cursor,
+		PageSize:  limit,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("list webhook deliveries: %w", err)
+	}
+	out := make([]Delivery, 0, len(rows))
+	for _, row := range rows {
+		out = append(out, toDelivery(row))
+	}
+	return out, nil
+}
+
+// GetWebhookDelivery — одна запись журнала вебхука.
+func (Repo) GetWebhookDelivery(ctx context.Context, db postgres.DBTX, id, webhookID uuid.UUID) (Delivery, error) {
+	row, err := postgres.New(db).GetWebhookDelivery(ctx, postgres.GetWebhookDeliveryParams{
+		ID:        id,
+		WebhookID: webhookID,
+	})
+	if err != nil {
+		return Delivery{}, err
+	}
+	return toDelivery(row), nil
+}
+
+// WebhookSubmissionDelivered — доезжал ли этот ответ в эту цель хоть раз.
+func (Repo) WebhookSubmissionDelivered(ctx context.Context, db postgres.DBTX, webhookID, submissionID uuid.UUID) (bool, error) {
+	ok, err := postgres.New(db).WebhookSubmissionDelivered(ctx, postgres.WebhookSubmissionDeliveredParams{
+		WebhookID:    webhookID,
+		SubmissionID: pgtype.UUID{Bytes: submissionID, Valid: submissionID != uuid.Nil},
+	})
+	if err != nil {
+		return false, fmt.Errorf("webhook submission delivered: %w", err)
+	}
+	return ok, nil
 }

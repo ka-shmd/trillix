@@ -65,21 +65,40 @@ type integrationsService interface {
 	Deliveries(ctx context.Context, userID, formID, linkID, cursor uuid.UUID) ([]Delivery, error)
 	RetryDelivery(ctx context.Context, userID, formID, linkID, deliveryID uuid.UUID) error
 	CreateWebhook(ctx context.Context, userID, formID uuid.UUID, in WebhookInput) (Webhook, string, error)
+	WebhookDeliveries(ctx context.Context, userID, formID, webhookID, cursor uuid.UUID) ([]Delivery, error)
+	RetryWebhookDelivery(ctx context.Context, userID, formID, webhookID, deliveryID uuid.UUID) error
+	TestWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) (WebhookTestResult, error)
 	UpdateWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID, patch WebhookPatch) error
 	WebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error)
 	ReissueWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error)
 	DeleteWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) error
 }
 
+// RateLimiter — лимитер проверки вебхука. Реализация — ratelimit.TokenBucket; в
+// тестах инжектируется пермиссивный (инвариант безопасности 6).
+type RateLimiter interface {
+	Allow(key string) bool
+}
+
 // Handler — приватный транспорт интеграций.
 type Handler struct {
-	svc          integrationsService
-	requireAuth  Middleware
-	requireCSRF  Middleware
+	svc         integrationsService
+	requireAuth Middleware
+	requireCSRF Middleware
+	// testLimiter — ведро на «Проверить». Кнопка шлёт запрос по адресу,
+	// который человек только что ввёл, и без лимита ею можно было бы стучать
+	// в чужой сервер с нашего IP. nil = сборка без лимита (тесты).
+	testLimiter  RateLimiter
 	appOrigin    string
 	cookieSecure bool
 	// secret — ключ подписи намерения (FORM_TOKEN_SECRET). Не логируется.
 	secret []byte
+}
+
+// WithTestLimiter подключает ведро кнопки «Проверить».
+func (h *Handler) WithTestLimiter(l RateLimiter) *Handler {
+	h.testLimiter = l
+	return h
 }
 
 func NewHandler(svc integrationsService, requireAuth, requireCSRF Middleware, appOrigin string, cookieSecure bool, secret []byte) *Handler {
@@ -145,6 +164,15 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(http.HandlerFunc(h.webhookSecret)))
 	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/secret",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.reissueWebhookSecret))))
+	// Журнал доставок вебхука и повтор одной доставки — те же адреса и те же
+	// права, что у ленты связки Таблиц.
+	mux.Handle("GET /api/v1/forms/{id}/webhooks/{webhookId}/deliveries",
+		h.requireAuth(http.HandlerFunc(h.webhookDeliveries)))
+	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/deliveries/{deliveryId}/retry",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.retryWebhookDelivery))))
+	// Проверка адреса: синхронный запрос образцом. Под лимитом — см. testLimiter.
+	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/test",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.testWebhook))))
 
 	// Один адрес на «подключить ещё один» и «переподключить»: возврат у них
 	// общий, а различает их необязательный accountId — почта названного аккаунта
@@ -651,7 +679,26 @@ type deliveryResponse struct {
 	Outcome      string `json:"outcome"`
 	Detail       string `json:"detail,omitempty"`
 	Rows         int32  `json:"rows"`
-	CreatedAt    string `json:"createdAt"`
+	// HTTPStatus — код ответа получателя вебхука; пусто у Таблиц и когда ответа
+	// не было вовсе (таймаут, DNS, запрет адреса).
+	HTTPStatus int32  `json:"httpStatus,omitempty"`
+	CreatedAt  string `json:"createdAt"`
+}
+
+func toDeliveryResponse(d Delivery) deliveryResponse {
+	item := deliveryResponse{
+		ID:         d.ID.String(),
+		Kind:       d.Kind,
+		Outcome:    d.Outcome,
+		Detail:     d.Detail,
+		Rows:       d.RowCount,
+		HTTPStatus: d.HTTPStatus,
+		CreatedAt:  d.CreatedAt.UTC().Format(time.RFC3339),
+	}
+	if d.SubmissionID != uuid.Nil {
+		item.SubmissionID = d.SubmissionID.String()
+	}
+	return item
 }
 
 // deliveriesResponse — страница ленты. nextCursor пуст, когда страница
@@ -675,27 +722,89 @@ func (h *Handler) deliveries(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toDeliveriesResponse(list))
+}
+
+// toDeliveriesResponse — страница ленты. Полная страница означает «возможно,
+// есть ещё»; курсор — id последней. Лишний пустой запрос дешевле пропущенного
+// хвоста ленты.
+func toDeliveriesResponse(list []Delivery) deliveriesResponse {
 	resp := deliveriesResponse{Deliveries: make([]deliveryResponse, 0, len(list))}
 	for _, d := range list {
-		item := deliveryResponse{
-			ID:        d.ID.String(),
-			Kind:      d.Kind,
-			Outcome:   d.Outcome,
-			Detail:    d.Detail,
-			Rows:      d.RowCount,
-			CreatedAt: d.CreatedAt.UTC().Format(time.RFC3339),
-		}
-		if d.SubmissionID != uuid.Nil {
-			item.SubmissionID = d.SubmissionID.String()
-		}
-		resp.Deliveries = append(resp.Deliveries, item)
+		resp.Deliveries = append(resp.Deliveries, toDeliveryResponse(d))
 	}
-	// Полная страница означает «возможно, есть ещё»; курсор — id последней.
-	// Лишний пустой запрос дешевле пропущенного хвоста ленты.
 	if len(list) == DeliveryPageSize {
 		resp.NextCursor = list[len(list)-1].ID.String()
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+	return resp
+}
+
+func (h *Handler) webhookDeliveries(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	// Кривой курсор — не ошибка клиента, а первая страница (как у ленты связки).
+	cursor, _ := uuid.Parse(r.URL.Query().Get("cursor"))
+
+	list, err := h.svc.WebhookDeliveries(r.Context(), user.ID, formID, webhookID, cursor)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, toDeliveriesResponse(list))
+}
+
+// retryWebhookDelivery ставит ответ в очередь заново. 202, а не 204: доставка
+// поставлена, а не сделана — исход появится в ленте отдельной строкой.
+func (h *Handler) retryWebhookDelivery(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	deliveryID, err := uuid.Parse(r.PathValue("deliveryId"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	if err := h.svc.RetryWebhookDelivery(r.Context(), user.ID, formID, webhookID, deliveryID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusAccepted)
+}
+
+// webhookTestResponse — исход проверки. Неуспех это ОТВЕТ, а не сбой ручки:
+// 200 с ok=false и русской причиной, потому что «получатель ответил 500» —
+// сведения о получателе, а не ошибка кабинета.
+type webhookTestResponse struct {
+	OK         bool   `json:"ok"`
+	StatusCode int    `json:"statusCode,omitempty"`
+	Reason     string `json:"reason,omitempty"`
+	Ms         int64  `json:"ms"`
+}
+
+func (h *Handler) testWebhook(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	// Ведро на человека: кнопка ходит по адресу, который он только что ввёл.
+	if h.testLimiter != nil && !h.testLimiter.Allow(user.ID.String()) {
+		httpserver.WriteError(w, r, domain.ErrRateLimited)
+		return
+	}
+	res, err := h.svc.TestWebhook(r.Context(), user.ID, formID, webhookID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, webhookTestResponse{
+		OK:         res.OK,
+		StatusCode: res.StatusCode,
+		Reason:     res.Reason,
+		Ms:         res.Elapsed.Milliseconds(),
+	})
 }
 
 // retryDelivery ставит доставку заново. 202, а не 204: событие поставлено в

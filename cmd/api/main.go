@@ -266,6 +266,25 @@ const (
 	outboxBackoffBase = time.Minute
 	outboxBackoffMax  = time.Hour
 
+	// Доставка в вебхуки (фаза 28) — СВОЙ проход, почта его не видит: у цели с
+	// адресом во внешнем мире своё расписание, и мёртвый получатель не имеет
+	// права задерживать письмо со сбросом пароля (ADR §10).
+	//
+	// Тик чаще почтового: ответ обязан уезжать «через секунды», а пустой проход
+	// стоит одного запроса — целей без очереди выборка не берёт.
+	webhookDispatchInterval = 5 * time.Second
+	// Таймаут прохода: цель везёт до 20 ответов, по 5 с на запрос в худшем
+	// случае; недоделанное уедет следующим проходом, строки очереди на месте.
+	webhookDispatchTimeout = time.Minute
+	// Уборка очереди вебхуков: ответы, прождавшие дольше срока хранения.
+	webhookQueueCleanupInterval = time.Hour
+	webhookQueueCleanupTimeout  = 30 * time.Second
+	// Ведро кнопки «Проверить»: шесть проверок в минуту на человека. Кнопка
+	// ходит по адресу, который человек только что ввёл, и без ведра ею можно
+	// было бы стучать в чужой сервер с нашего IP.
+	webhookTestRatePerSec = 0.1
+	webhookTestBurst      = 6
+
 	// Периодический сбор простаивающих вёдер лимитеров (TD-5): ключ ведра — реальный
 	// IP (после TD-1) либо id пользователя, поэтому карта иначе растёт неограниченно.
 	// GC удаляет только пополнившиеся дополна ведра, а время полного пополнения у
@@ -513,7 +532,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	})
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey).
-		WithWebhooks(integrations.Repo{}, webhookEgress)
+		WithWebhooks(integrations.Repo{}, webhookEgress, time.Now)
 	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
 	// числа расписаний — у entitlements. Транзакция нужна одному действию — переносу
 	// записи: лок слота, счёт мест и правка обязаны быть одной.
@@ -542,8 +561,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		cfg.TrustedProxy,
 	).WithCancel(bookingCancelSvc, ratelimit.NewTokenBucket(cancelRatePerSec, cancelBurst))
 
+	webhookTestLimiter := ratelimit.NewTokenBucket(webhookTestRatePerSec, webhookTestBurst)
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
-		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret)
+		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret).
+		WithTestLimiter(webhookTestLimiter)
 	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
 
 	formTokenLimiter := ratelimit.NewTokenBucket(formTokenRatePerSec, formTokenBurst)
@@ -917,6 +938,38 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		},
 	})
 	tasks.Start(ctx, periodic.Task{
+		Name:     "webhook-delivery",
+		Interval: webhookDispatchInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, webhookDispatchTimeout)
+			defer cancel()
+			n, err := integrationsSvc.DeliverWebhooks(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("webhook deliveries sent", slog.Int("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
+		Name:     "webhook-queue-cleanup",
+		Interval: webhookQueueCleanupInterval,
+		Run: func(ctx context.Context) error {
+			ctx, cancel := context.WithTimeout(ctx, webhookQueueCleanupTimeout)
+			defer cancel()
+			n, err := integrationsSvc.CleanupWebhookQueue(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("webhook queue rows expired", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	tasks.Start(ctx, periodic.Task{
 		Name:     "ratelimit-gc",
 		Interval: ratelimitGCInterval,
 		Run: func(context.Context) error {
@@ -928,7 +981,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +
 				respondentMailLimiter.GC() + unlockLimiter.GC() + unlockIPLimiter.GC() +
-				uploadLimiter.GC()
+				uploadLimiter.GC() + webhookTestLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}

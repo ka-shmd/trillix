@@ -1589,6 +1589,22 @@ func (q *Queries) DeleteSubmissionFiles(ctx context.Context, dollar_1 []uuid.UUI
 	return err
 }
 
+const deleteWebhookQueued = `-- name: DeleteWebhookQueued :exec
+DELETE FROM webhook_queue WHERE webhook_id = $1 AND submission_id = $2
+`
+
+type DeleteWebhookQueuedParams struct {
+	WebhookID    uuid.UUID
+	SubmissionID uuid.UUID
+}
+
+// Ответ доставлен (или доставлять его больше не надо): строка очереди уходит,
+// история остаётся в журнале.
+func (q *Queries) DeleteWebhookQueued(ctx context.Context, arg DeleteWebhookQueuedParams) error {
+	_, err := q.db.Exec(ctx, deleteWebhookQueued, arg.WebhookID, arg.SubmissionID)
+	return err
+}
+
 const deleteWorkspace = `-- name: DeleteWorkspace :execrows
 DELETE FROM workspaces WHERE id = $1 AND personal_user_id IS NULL
 `
@@ -1653,6 +1669,78 @@ func (q *Queries) DemoteOwner(ctx context.Context, arg DemoteOwnerParams) (int64
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const dueWebhooks = `-- name: DueWebhooks :many
+SELECT w.id, w.form_id, w.name, w.url, w.secret, w.set_by, w.enabled, w.status,
+       w.last_error, w.last_delivered_at, w.created_at,
+       w.next_attempt_at, w.failing_since, w.consecutive_failures, f.workspace_id
+FROM form_webhooks w
+JOIN forms f ON f.id = w.form_id
+WHERE w.enabled AND w.status = 'live' AND w.next_attempt_at <= now()
+  AND EXISTS (SELECT 1 FROM webhook_queue q WHERE q.webhook_id = w.id)
+ORDER BY w.next_attempt_at
+LIMIT $1
+`
+
+type DueWebhooksRow struct {
+	ID                  uuid.UUID
+	FormID              uuid.UUID
+	Name                string
+	Url                 string
+	Secret              []byte
+	SetBy               pgtype.UUID
+	Enabled             bool
+	Status              string
+	LastError           pgtype.Text
+	LastDeliveredAt     pgtype.Timestamptz
+	CreatedAt           pgtype.Timestamptz
+	NextAttemptAt       pgtype.Timestamptz
+	FailingSince        pgtype.Timestamptz
+	ConsecutiveFailures int32
+	WorkspaceID         uuid.UUID
+}
+
+// Цели, которым есть что везти и чьё время наступило. Сломанные не берутся
+// вовсе: их ответы копятся до починки, но в сеть мы не ходим. Порядок — по
+// next_attempt_at: дольше всех ждущая цель едет первой.
+//
+// workspace_id приезжает джойном из ФОРМЫ: по нему сторож проверяет, что тот,
+// кто задал адрес, всё ещё участник пространства.
+func (q *Queries) DueWebhooks(ctx context.Context, limit int32) ([]DueWebhooksRow, error) {
+	rows, err := q.db.Query(ctx, dueWebhooks, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []DueWebhooksRow
+	for rows.Next() {
+		var i DueWebhooksRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.FormID,
+			&i.Name,
+			&i.Url,
+			&i.Secret,
+			&i.SetBy,
+			&i.Enabled,
+			&i.Status,
+			&i.LastError,
+			&i.LastDeliveredAt,
+			&i.CreatedAt,
+			&i.NextAttemptAt,
+			&i.FailingSince,
+			&i.ConsecutiveFailures,
+			&i.WorkspaceID,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const emailTaken = `-- name: EmailTaken :one
@@ -1724,6 +1812,44 @@ type EnqueueOutboxParams struct {
 func (q *Queries) EnqueueOutbox(ctx context.Context, arg EnqueueOutboxParams) error {
 	_, err := q.db.Exec(ctx, enqueueOutbox, arg.ID, arg.Channel, arg.Payload)
 	return err
+}
+
+const expiredWebhookQueued = `-- name: ExpiredWebhookQueued :many
+SELECT webhook_id, submission_id FROM webhook_queue
+WHERE enqueued_at < $1
+ORDER BY enqueued_at
+LIMIT $2
+`
+
+type ExpiredWebhookQueuedParams struct {
+	EnqueuedAt pgtype.Timestamptz
+	Limit      int32
+}
+
+type ExpiredWebhookQueuedRow struct {
+	WebhookID    uuid.UUID
+	SubmissionID uuid.UUID
+}
+
+// Ответы, ждущие дольше срока хранения: их снимают с очереди и пишут в журнал.
+func (q *Queries) ExpiredWebhookQueued(ctx context.Context, arg ExpiredWebhookQueuedParams) ([]ExpiredWebhookQueuedRow, error) {
+	rows, err := q.db.Query(ctx, expiredWebhookQueued, arg.EnqueuedAt, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ExpiredWebhookQueuedRow
+	for rows.Next() {
+		var i ExpiredWebhookQueuedRow
+		if err := rows.Scan(&i.WebhookID, &i.SubmissionID); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const fillEmptyProfile = `-- name: FillEmptyProfile :one
@@ -3201,9 +3327,10 @@ func (q *Queries) GetSubmissionFileForAnswer(ctx context.Context, arg GetSubmiss
 }
 
 const getSubmissionForDelivery = `-- name: GetSubmissionForDelivery :one
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version, f.title AS form_title
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+JOIN forms f ON f.id = s.form_id
 WHERE s.id = $1 AND s.form_id = $2 AND NOT s.over_quota
 `
 
@@ -3217,6 +3344,7 @@ type GetSubmissionForDeliveryRow struct {
 	Answers     []byte
 	CreatedAt   pgtype.Timestamptz
 	FormVersion int32
+	FormTitle   string
 }
 
 // Один ответ для фоновой доставки во внешнюю таблицу (фаза 25). form_id в
@@ -3225,6 +3353,10 @@ type GetSubmissionForDeliveryRow struct {
 //
 // NOT over_quota — тот же фильтр, что у кабинета: ответ, скрытый от владельца
 // до оплаты, не должен всплыть у него же в Google Таблице.
+//
+// Название формы едет тем же запросом: тело вебхука его называет, а спрашивать
+// его отдельно у forms доставке нечем — пользователя, чьё право можно проверить,
+// на фоновом пути нет.
 func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissionForDeliveryParams) (GetSubmissionForDeliveryRow, error) {
 	row := q.db.QueryRow(ctx, getSubmissionForDelivery, arg.ID, arg.FormID)
 	var i GetSubmissionForDeliveryRow
@@ -3233,6 +3365,7 @@ func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissio
 		&i.Answers,
 		&i.CreatedAt,
 		&i.FormVersion,
+		&i.FormTitle,
 	)
 	return i, err
 }
@@ -3472,6 +3605,36 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 	return i, err
 }
 
+const getWebhookDelivery = `-- name: GetWebhookDelivery :one
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at, webhook_id, http_status
+FROM integration_deliveries
+WHERE id = $1 AND webhook_id = $2::uuid
+`
+
+type GetWebhookDeliveryParams struct {
+	ID        uuid.UUID
+	WebhookID uuid.UUID
+}
+
+// Одна запись журнала вебхука — предмет повтора.
+func (q *Queries) GetWebhookDelivery(ctx context.Context, arg GetWebhookDeliveryParams) (IntegrationDelivery, error) {
+	row := q.db.QueryRow(ctx, getWebhookDelivery, arg.ID, arg.WebhookID)
+	var i IntegrationDelivery
+	err := row.Scan(
+		&i.ID,
+		&i.LinkID,
+		&i.Kind,
+		&i.SubmissionID,
+		&i.Outcome,
+		&i.Detail,
+		&i.RowCount,
+		&i.CreatedAt,
+		&i.WebhookID,
+		&i.HttpStatus,
+	)
+	return i, err
+}
+
 const getWorkspaceByID = `-- name: GetWorkspaceByID :one
 SELECT id, slug, name, created_at, (personal_user_id IS NOT NULL)::bool AS is_personal
 FROM workspaces WHERE id = $1
@@ -3706,6 +3869,20 @@ WITH ins AS (
     ON CONFLICT (workspace_id, period)
     DO UPDATE SET submissions = workspace_usage.submissions + 1
     RETURNING 1 AS one
+), queued AS (
+    -- Доставка в вебхуки формы (фаза 28) ставится ТЕМ ЖЕ утверждением: ответ и
+    -- строка его очереди появляются вместе, поэтому падение процесса между ними
+    -- невозможно, а транзакции на быстром пути приёма по-прежнему нет. Читает
+    -- ins: идемпотентный ретрай не дал строки — второй доставки не появится,
+    -- откат сверх жёсткого капа уносит и очередь.
+    --
+    -- Выключенные вебхуки пропускаются здесь: событие, которое некому доставить,
+    -- лучше не заводить вовсе. СЛОМАННЫЕ — нет: их ответы копятся, и починка
+    -- увозит накопленное по порядку (спека §6).
+    INSERT INTO webhook_queue (webhook_id, submission_id)
+    SELECT w.id, $1 FROM form_webhooks w, ins
+    WHERE w.form_id = $2 AND w.enabled
+    RETURNING 1 AS one
 )
 SELECT one FROM ins
 `
@@ -3786,6 +3963,51 @@ func (q *Queries) InsertSubmissionFile(ctx context.Context, arg InsertSubmission
 		arg.SizeBytes,
 		arg.ContentType,
 	)
+	return err
+}
+
+const insertWebhookDelivery = `-- name: InsertWebhookDelivery :exec
+INSERT INTO integration_deliveries (
+    id, webhook_id, kind, submission_id, outcome, detail, http_status
+) VALUES ($1, $2, 'submission', $3, $4, $5, $6)
+`
+
+type InsertWebhookDeliveryParams struct {
+	ID           uuid.UUID
+	WebhookID    pgtype.UUID
+	SubmissionID pgtype.UUID
+	Outcome      string
+	Detail       string
+	HttpStatus   pgtype.Int4
+}
+
+// Одна попытка доставки в вебхук. http_status пуст, когда ответа не было вовсе
+// (таймаут, DNS, запрет адреса).
+func (q *Queries) InsertWebhookDelivery(ctx context.Context, arg InsertWebhookDeliveryParams) error {
+	_, err := q.db.Exec(ctx, insertWebhookDelivery,
+		arg.ID,
+		arg.WebhookID,
+		arg.SubmissionID,
+		arg.Outcome,
+		arg.Detail,
+		arg.HttpStatus,
+	)
+	return err
+}
+
+const insertWebhookQueued = `-- name: InsertWebhookQueued :exec
+INSERT INTO webhook_queue (webhook_id, submission_id) VALUES ($1, $2)
+ON CONFLICT DO NOTHING
+`
+
+type InsertWebhookQueuedParams struct {
+	WebhookID    uuid.UUID
+	SubmissionID uuid.UUID
+}
+
+// Повтор из журнала. Ключ-пара делает двойное нажатие безвредным.
+func (q *Queries) InsertWebhookQueued(ctx context.Context, arg InsertWebhookQueuedParams) error {
+	_, err := q.db.Exec(ctx, insertWebhookQueued, arg.WebhookID, arg.SubmissionID)
 	return err
 }
 
@@ -5284,6 +5506,54 @@ func (q *Queries) ListUpcomingBookings(ctx context.Context, arg ListUpcomingBook
 	return items, nil
 }
 
+const listWebhookDeliveries = `-- name: ListWebhookDeliveries :many
+SELECT id, link_id, kind, submission_id, outcome, detail, row_count, created_at, webhook_id, http_status
+FROM integration_deliveries
+WHERE webhook_id = $1::uuid
+  AND ($2::uuid = '00000000-0000-0000-0000-000000000000'::uuid OR id < $2)
+ORDER BY id DESC
+LIMIT $3
+`
+
+type ListWebhookDeliveriesParams struct {
+	WebhookID uuid.UUID
+	Cursor    uuid.UUID
+	PageSize  int32
+}
+
+// Лента журнала вебхука: новые сверху, страница курсором (тот же приём, что у
+// ленты связки).
+func (q *Queries) ListWebhookDeliveries(ctx context.Context, arg ListWebhookDeliveriesParams) ([]IntegrationDelivery, error) {
+	rows, err := q.db.Query(ctx, listWebhookDeliveries, arg.WebhookID, arg.Cursor, arg.PageSize)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []IntegrationDelivery
+	for rows.Next() {
+		var i IntegrationDelivery
+		if err := rows.Scan(
+			&i.ID,
+			&i.LinkID,
+			&i.Kind,
+			&i.SubmissionID,
+			&i.Outcome,
+			&i.Detail,
+			&i.RowCount,
+			&i.CreatedAt,
+			&i.WebhookID,
+			&i.HttpStatus,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listWorkspaceFileKeys = `-- name: ListWorkspaceFileKeys :many
 SELECT id, object_key
 FROM submission_files
@@ -5713,6 +5983,66 @@ func (q *Queries) MarkVisitSubmitted(ctx context.Context, arg MarkVisitSubmitted
 	return result.RowsAffected(), nil
 }
 
+const markWebhookBroken = `-- name: MarkWebhookBroken :exec
+UPDATE form_webhooks SET status = 'broken', last_error = $2 WHERE id = $1
+`
+
+type MarkWebhookBrokenParams struct {
+	ID        uuid.UUID
+	LastError pgtype.Text
+}
+
+// Доставка невозможна без человека: доставщик в эту цель больше не ходит, но
+// ответы продолжают копиться — починка увезёт их по порядку.
+func (q *Queries) MarkWebhookBroken(ctx context.Context, arg MarkWebhookBrokenParams) error {
+	_, err := q.db.Exec(ctx, markWebhookBroken, arg.ID, arg.LastError)
+	return err
+}
+
+const markWebhookDelivered = `-- name: MarkWebhookDelivered :exec
+UPDATE form_webhooks
+SET last_delivered_at = now(), last_error = NULL, failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
+WHERE id = $1
+`
+
+// Успех: гасим неудачи и время следующей попытки — очередь этой цели поедет
+// дальше тем же тиком.
+func (q *Queries) MarkWebhookDelivered(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markWebhookDelivered, id)
+	return err
+}
+
+const markWebhookFailed = `-- name: MarkWebhookFailed :exec
+UPDATE form_webhooks
+SET last_error = $2, consecutive_failures = consecutive_failures + 1,
+    failing_since = COALESCE(failing_since, $3),
+    next_attempt_at = $4
+WHERE id = $1
+`
+
+type MarkWebhookFailedParams struct {
+	ID            uuid.UUID
+	LastError     pgtype.Text
+	FailingSince  pgtype.Timestamptz
+	NextAttemptAt pgtype.Timestamptz
+}
+
+// Неудача усыпляет ЦЕЛЬ, а не строку очереди: лежащий адрес получает одну
+// попытку за окно бэкоффа, сколько бы ответов ни ждало.
+//
+// failing_since держит ПЕРВЫЙ момент отказа (COALESCE): по нему считаются сутки
+// до поломки, и каждая следующая неудача не должна сдвигать отсчёт.
+func (q *Queries) MarkWebhookFailed(ctx context.Context, arg MarkWebhookFailedParams) error {
+	_, err := q.db.Exec(ctx, markWebhookFailed,
+		arg.ID,
+		arg.LastError,
+		arg.FailingSince,
+		arg.NextAttemptAt,
+	)
+	return err
+}
+
 const moveBooking = `-- name: MoveBooking :one
 UPDATE bookings SET starts_at = $3, revision = revision + 1
 WHERE id = $1 AND schedule_id = $2 AND status = 'confirmed'
@@ -5756,6 +6086,41 @@ func (q *Queries) NextFormVersion(ctx context.Context, formID uuid.UUID) (int32,
 	var next_version int32
 	err := row.Scan(&next_version)
 	return next_version, err
+}
+
+const pendingWebhookSubmissions = `-- name: PendingWebhookSubmissions :many
+SELECT submission_id FROM webhook_queue
+WHERE webhook_id = $1
+ORDER BY enqueued_at, submission_id
+LIMIT $2
+`
+
+type PendingWebhookSubmissionsParams struct {
+	WebhookID uuid.UUID
+	Limit     int32
+}
+
+// Что цель везёт следующим — в порядке постановки. submission_id вторым ключом
+// сортировки: у двух ответов, поставленных в одну миллисекунду, порядок между
+// собой иначе не определён, и пачка тика прыгала бы.
+func (q *Queries) PendingWebhookSubmissions(ctx context.Context, arg PendingWebhookSubmissionsParams) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, pendingWebhookSubmissions, arg.WebhookID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var submission_id uuid.UUID
+		if err := rows.Scan(&submission_id); err != nil {
+			return nil, err
+		}
+		items = append(items, submission_id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const promoteToOwner = `-- name: PromoteToOwner :execrows
@@ -5845,6 +6210,19 @@ func (q *Queries) RevealHiddenSubmissions(ctx context.Context, workspaceID uuid.
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const reviveWebhook = `-- name: ReviveWebhook :exec
+UPDATE form_webhooks
+SET status = 'live', last_error = NULL, failing_since = NULL,
+    consecutive_failures = 0, next_attempt_at = now()
+WHERE id = $1
+`
+
+// Проверка прошла: цель снова в работе, расписание с нуля.
+func (q *Queries) ReviveWebhook(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, reviveWebhook, id)
+	return err
 }
 
 const revokeJoinLink = `-- name: RevokeJoinLink :execrows
@@ -7905,4 +8283,25 @@ func (q *Queries) VisitUserAgents(ctx context.Context, arg VisitUserAgentsParams
 		return nil, err
 	}
 	return items, nil
+}
+
+const webhookSubmissionDelivered = `-- name: WebhookSubmissionDelivered :one
+SELECT EXISTS (
+    SELECT 1 FROM integration_deliveries
+    WHERE webhook_id = $1::uuid AND submission_id = $2 AND outcome = 'delivered'
+)
+`
+
+type WebhookSubmissionDeliveredParams struct {
+	WebhookID    uuid.UUID
+	SubmissionID pgtype.UUID
+}
+
+// Доезжал ли ЭТОТ ответ в эту цель хоть раз. Спрашивается перед повтором — тот
+// же вопрос и тот же довод, что у связки Таблиц.
+func (q *Queries) WebhookSubmissionDelivered(ctx context.Context, arg WebhookSubmissionDeliveredParams) (bool, error) {
+	row := q.db.QueryRow(ctx, webhookSubmissionDelivered, arg.WebhookID, arg.SubmissionID)
+	var exists bool
+	err := row.Scan(&exists)
+	return exists, err
 }

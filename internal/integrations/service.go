@@ -112,6 +112,8 @@ type Service struct {
 	// nil означает «сборка без вебхуков» (её нет в тестах связок Таблиц).
 	webhooks WebhookStore
 	egress   Egress
+	// now — часы доставки вебхуков; подменяются в тестах (WithWebhooks).
+	now func() time.Time
 	// pickerKey — браузерный ключ для окна выбора файла (см. WithPicker).
 	pickerKey string
 	google    Provider
@@ -122,7 +124,7 @@ type Service struct {
 }
 
 func NewService(db postgres.DBTX, tx Transactor, repo Store, access Access, f Forms, google Provider, key []byte) *Service {
-	return &Service{db: db, tx: tx, repo: repo, access: access, forms: f, google: google, key: key}
+	return &Service{db: db, tx: tx, repo: repo, access: access, forms: f, google: google, key: key, now: time.Now}
 }
 
 // WithPicker включает окно выбора файла на Google Диске. Ключ — браузерный

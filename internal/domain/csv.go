@@ -64,6 +64,7 @@ func (v blockView) slotTime(raw string) string {
 // раз на экспорт, затем Row вызывается на каждый ответ (потоково, без накопления).
 type CSVBuilder struct {
 	columns []string                     // block_id в порядке колонок
+	types   []BlockType                  // тип вопроса той же колонки (нужен телу вебхука)
 	headers []string                     // подписи колонок (мета + вопросы)
 	byVer   map[int]map[string]blockView // версия → block_id → вид блока
 	// files — имена приложенных файлов (upload_id → файл), фаза 24. В выгрузке
@@ -115,6 +116,7 @@ func NewCSVBuilder(versions []VersionedSchema) *CSVBuilder {
 	b.headers = append(b.headers, csvMetaHeader...)
 	for _, q := range QuestionOrder(versions) {
 		b.columns = append(b.columns, q.ID)
+		b.types = append(b.types, q.Block.Type)
 		b.headers = append(b.headers, q.Label)
 	}
 	return b
