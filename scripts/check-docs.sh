@@ -12,6 +12,15 @@
 #
 # Образец формата ошибки — «sqlc drift check» в .github/workflows/ci.yml.
 set -uo pipefail
+
+# ⚠ Мина: `echo "$x" | grep -q …` под `pipefail` краснеет НА СОВПАДЕНИИ. grep -q
+# выходит по первой же найденной строке, echo получает SIGPIPE (141), и pipefail
+# отдаёт код пайплайна по нему — то есть проверка сообщает о расхождении,
+# которого нет. Срабатывает по таймингу: чем раньше в списке лежит искомое и чем
+# длиннее список, тем вероятнее. Поймано на CI (PR #189): `LOG_LEVEL` — вторая
+# строка якоря окружения, и гейт объявил, что compose её не передаёт, хотя
+# передаёт; локально та же проверка была зелёной. Поэтому здесь и дальше только
+# here-string: `grep -qx "$v" <<<"$list"`.
 cd "$(dirname "$0")/.."
 
 # fail — итог всего прогона (код возврата), errs — счётчик ТЕКУЩЕЙ проверки.
@@ -77,10 +86,10 @@ declared=$(sed -n '/^export const BLOCK_TYPES = \[/,/\] as const/p' \
 	web/shared/entities/blocks/contract.ts |
 	grep -vE '^\s*//' | grep -oE "'[a-z0-9_]+'" | tr -d "'" | sort -u)
 for t in $declared; do
-	echo "$listed" | grep -qx "$t" || err "тип $t объявлен в BLOCK_TYPES, но его нет в сводной таблице" "файл: $readme"
+	grep -qx "$t" <<<"$listed" || err "тип $t объявлен в BLOCK_TYPES, но его нет в сводной таблице" "файл: $readme"
 done
 for t in $listed; do
-	echo "$declared" | grep -qx "$t" || err "тип $t есть в сводной таблице, но его нет в BLOCK_TYPES" "файл: $readme"
+	grep -qx "$t" <<<"$declared" || err "тип $t есть в сводной таблице, но его нет в BLOCK_TYPES" "файл: $readme"
 done
 ok_if_clean "все типы блоков ($(echo "$declared" | wc -w)) есть в сводной таблице fields/README.md"
 
@@ -120,7 +129,7 @@ readvars=$( {
 	grep -rhoP 'os\.(Getenv|LookupEnv)\("\K[A-Z][A-Z0-9_]{2,}(?=")' cmd internal --include='*.go'
 } | sort -u)
 for v in $readvars; do
-	echo "$documented" | grep -qx "$v" ||
+	grep -qx "$v" <<<"$documented" ||
 		err "код читает $v, но .env.example его не описывает" \
 			"DoD: config + .env.example + оба контура — в одном коммите"
 done
@@ -132,7 +141,7 @@ for f in .env.dev .env.prod-local; do
 		continue
 	}
 	for v in $(grep -hoP '^\s*(export\s+)?\K[A-Z][A-Z0-9_]*(?=\s*=)' "$f" | sort -u); do
-		echo "$documented" | grep -qx "$v" ||
+		grep -qx "$v" <<<"$documented" ||
 			err "$f задаёт $v, но .env.example его не описывает" \
 				"каждая переменная контура обязана быть задокументирована"
 	done
@@ -167,7 +176,7 @@ else
 	delivered=$(sed -n '/^x-[a-z-]*env:/,/^[^[:space:]]/p' "$compose" |
 		grep -oP '^\s+\K[A-Z][A-Z0-9_]*(?=:)' | sort -u)
 	for v in $readvars; do
-		echo "$delivered" | grep -qx "$v" ||
+		grep -qx "$v" <<<"$delivered" ||
 			err "код читает $v, но ни один якорь окружения в compose.prod.yml её не передаёт" \
 				"переменная не доедет до контейнера ни при каком .env"
 	done
@@ -261,9 +270,9 @@ known=$(grep -oP '^(###\s+|-\s+\*\*)TD-\K[0-9]+' docs/TECH-DEBT.md | sort -un)
 for f in docs/STATUS.md docs/DEV-PLAN.md README.md; do
 	[ -f "$f" ] || continue
 	for td in $(grep -oP '\bTD-\K[0-9]+' "$f" | sort -un); do
-		if ! echo "$known" | grep -qx "$td"; then
+		if ! grep -qx "$td" <<<"$known"; then
 			err "$f ссылается на TD-$td, которого нет в TECH-DEBT.md" "опечатка или пункт удалён"
-		elif [ "$f" = "docs/STATUS.md" ] && echo "$closed" | grep -qx "$td"; then
+		elif [ "$f" = "docs/STATUS.md" ] && grep -qx "$td" <<<"$closed"; then
 			err "STATUS.md показывает TD-$td как открытый, а он в разделе «Закрыто»" \
 				"состояние обязано быть правдой — почини строку, а не заводи заметку"
 		fi
@@ -366,7 +375,7 @@ code=$(perl -0777 -pe 's{/\*.*?\*/}{}gs' "$css")
 base=$(printf '%s\n' "$code" | grep -oP '^\s*--rf-font-size\s*:\s*\K[^;]+' || true)
 if [ -z "$base" ]; then
 	err "fields.css: база шкалы --rf-font-size не объявлена" "$css"
-elif printf '%s' "$base" | grep -q 'var('; then
+elif grep -q 'var(' <<<"$base"; then
 	err "fields.css: база шкалы ссылается на переменную — цикл погасит все кегли" "--rf-font-size: $base"
 fi
 
@@ -393,7 +402,7 @@ fi
 submit=$(printf '%s\n' "$code" | grep -oP '^\s*--rf-submit-size\s*:\s*\K[^;]+' || true)
 if [ -z "$submit" ]; then
 	err "fields.css: --rf-submit-size не объявлен — кегль кнопки ссылается в пустоту" "$css"
-elif ! printf '%s' "$submit" | grep -qF 'var(--rf-font-size)'; then
+elif ! grep -qF 'var(--rf-font-size)' <<<"$submit"; then
 	err "fields.css: --rf-submit-size оторван от базы шкалы" "--rf-submit-size: $submit"
 fi
 
@@ -413,7 +422,7 @@ fi
 
 # Холст страницы и заливка контрола — разные токены (фаза 22 §3.1): пока это был
 # один --rf-surface, «цветная страница с белыми карточками» была невыразима.
-if printf '%s' "$code" | grep -q -- '--rf-surface'; then
+if grep -q -- '--rf-surface' <<<"$code"; then
 	err "fields.css: --rf-surface вернулся — холст и заливка обязаны быть разными токенами" "$css"
 fi
 
