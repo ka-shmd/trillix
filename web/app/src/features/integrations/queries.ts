@@ -185,7 +185,8 @@ export function useUpdateConnection(formId: string) {
 export function useCreateWebhook(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (input: { name: string; url: string }) => createWebhook(formId, input),
+    mutationFn: (input: { name: string; url: string; secret?: string }) =>
+      createWebhook(formId, input),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }

@@ -199,7 +199,7 @@ export function startUrl(reconnect?: string): string {
 // Заведение отдаёт вебхук ВМЕСТЕ с секретом подписи: показать сразу.
 export function createWebhook(
   formId: string,
-  input: { name: string; url: string },
+  input: { name: string; url: string; secret?: string },
 ): Promise<CreatedWebhook> {
   return apiRequest(`/forms/${formId}/webhooks`, {
     method: 'POST',

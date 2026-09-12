@@ -36,27 +36,39 @@ export function WebhookOverlay({
 }) {
   const [url, setUrl] = useState(webhook?.url ?? '')
   const [name, setName] = useState(webhook?.name ?? '')
+  // ownSecret — секрет автора, введённый ПРИ ПОДКЛЮЧЕНИИ. Пусто — сгенерируем
+  // сами: про секрет человек думает ровно в этот момент, потому что в тот же
+  // заход настраивает проверку у получателя.
+  const [ownSecret, setOwnSecret] = useState('')
   const create = useCreateWebhook(formId)
   const update = useUpdateWebhook(formId)
   // secret — секрет подписи в открытом виде. В состоянии таба его нет никогда:
   // он приезжает либо ответом на заведение, либо по нажатию «Показать».
   const [secret, setSecret] = useState<string | null>(null)
+  // created — вебхук, заведённый прямо сейчас. Окно после заведения НЕ
+  // закрывается и переходит в режим настройки: секрет и «Проверить» нужны
+  // человеку в тот же заход, а не после повторного открытия строки списка.
+  const [created, setCreated] = useState<Webhook | null>(null)
+  const target = webhook ?? created
   const saving = create.isPending || update.isPending
   const error = create.error ?? update.error
 
   function save() {
-    if (webhook) {
+    if (target) {
       // Адрес шлётся всегда, даже неизменённый: так правящий становится
       // ответственным за доставку и снимает поломку (спека §9).
-      update.mutate({ id: webhook.id, name, url }, { onSuccess: onClose })
+      update.mutate({ id: target.id, name, url }, { onSuccess: onClose })
       return
     }
     create.mutate(
-      { name, url },
+      { name, url, secret: ownSecret.trim() || undefined },
       {
-        // Свежий секрет показывается сразу: заставлять человека жать «Показать»
-        // в только что открытом окне незачем, а второго раза у ответа нет.
-        onSuccess: (created) => setSecret(created.secret),
+        onSuccess: (fresh) => {
+          // Свежий секрет показывается сразу: заставлять человека жать
+          // «Показать» в только что открытом окне незачем.
+          setSecret(fresh.secret)
+          setCreated(fresh)
+        },
       },
     )
   }
@@ -110,21 +122,34 @@ export function WebhookOverlay({
               </p>
             </div>
 
-            {/* Секрет и проверка появляются только у заведённого вебхука: до
-                заведения проверять нечего и подписывать нечем. */}
-            {webhook && (
+            {/* До заведения секрет можно только ЗАДАТЬ: показывать, менять и
+                проверять ещё нечего. После — полный набор, включая «Проверить».  */}
+            {target ? (
               <>
                 <SecretField
                   formId={formId}
-                  webhookId={webhook.id}
+                  webhookId={target.id}
                   secret={secret}
                   onSecret={setSecret}
                 />
-                <TestField formId={formId} webhookId={webhook.id} />
+                <TestField formId={formId} webhookId={target.id} />
               </>
+            ) : (
+              <div className="flex flex-col gap-2">
+                <Label htmlFor="webhook-new-secret">Секрет подписи</Label>
+                <Input
+                  id="webhook-new-secret"
+                  className="h-10 font-mono md:text-base"
+                  placeholder="Сгенерируем сами"
+                  value={ownSecret}
+                  onChange={(e) => setOwnSecret(e.target.value)}
+                />
+                <p className="text-sm text-muted-foreground">
+                  Необязательно. Свой секрет удобен, когда получатель один на несколько форм:
+                  проверка у него настраивается один раз. От {MIN_SECRET} символов.
+                </p>
+              </div>
             )}
-
-            {secret && !webhook && <FreshSecret secret={secret} />}
 
             <SignatureHint />
 
@@ -137,15 +162,20 @@ export function WebhookOverlay({
 
             <div className="flex items-center justify-end gap-2">
               <Button variant="ghost" onClick={onClose}>
-                {secret && !webhook ? 'Готово' : 'Отмена'}
+                {created ? 'Готово' : 'Отмена'}
               </Button>
-              {/* У только что заведённого вебхука кнопки сохранения нет: он уже
-                  заведён, и второе нажатие завело бы второй. */}
-              {!(secret && !webhook) && (
-                <Button disabled={saving || url.trim() === ''} onClick={save}>
-                  {saving ? 'Сохраняем…' : webhook ? 'Сохранить' : 'Подключить'}
-                </Button>
-              )}
+              {/* После заведения кнопка становится «Сохранить»: она правит уже
+                  заведённый вебхук, а не заводит второй. */}
+              <Button
+                disabled={
+                  saving ||
+                  url.trim() === '' ||
+                  (!target && ownSecret.trim() !== '' && ownSecret.trim().length < MIN_SECRET)
+                }
+                onClick={save}
+              >
+                {saving ? 'Сохраняем…' : target ? 'Сохранить' : 'Подключить'}
+              </Button>
             </div>
           </div>
         </div>
@@ -281,28 +311,6 @@ function SecretField({
 // Здесь она только гасит кнопку: слабый секрет обесценивает подпись, и проверку
 // всё равно делает сервер независимо от фронта.
 const MIN_SECRET = 16
-
-// FreshSecret — секрет только что заведённого вебхука.
-function FreshSecret({ secret }: { secret: string }) {
-  return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor="webhook-fresh-secret">Секрет подписи</Label>
-      <div className="flex items-center gap-2">
-        <Input
-          id="webhook-fresh-secret"
-          readOnly
-          className="h-10 font-mono md:text-base"
-          value={secret}
-          onFocus={(e) => e.currentTarget.select()}
-        />
-        <CopyButton value={secret} />
-      </div>
-      <p className="text-sm text-muted-foreground">
-        Вебхук подключён. Секрет можно посмотреть здесь же в любой момент.
-      </p>
-    </div>
-  )
-}
 
 // TestField — проверка адреса: образец с примерными ответами и исход рядом.
 //

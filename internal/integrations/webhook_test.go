@@ -501,3 +501,34 @@ func TestWebhookSecret_CustomRejected(t *testing.T) {
 		t.Fatalf("секрет подменён на %q", got)
 	}
 }
+
+// Секрет автора принимается СРАЗУ при заведении: про него человек думает в тот
+// же заход, когда настраивает проверку у получателя.
+func TestCreateWebhook_WithAuthorSecret(t *testing.T) {
+	store := newFakeWebhookStore()
+	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
+
+	const mine = "общий-секрет-на-все-формы"
+	w, secret, err := svc.CreateWebhook(context.Background(), testUser, testForm,
+		integrations.WebhookInput{URL: testHookURL, Secret: mine})
+	if err != nil {
+		t.Fatalf("заведение со своим секретом: %v", err)
+	}
+	if secret != mine {
+		t.Fatalf("секрет = %q, ожидался заданный автором", secret)
+	}
+	if shown, _ := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID); shown != mine {
+		t.Fatalf("показан %q", shown)
+	}
+
+	// Короткий отвергается, и вебхук при этом не заводится.
+	before := len(store.hooks)
+	_, _, err = svc.CreateWebhook(context.Background(), testUser, testForm,
+		integrations.WebhookInput{URL: testHookURL, Secret: "123456"})
+	if !errors.Is(err, domain.ErrValidation) {
+		t.Fatalf("короткий секрет: %v, ожидался ErrValidation", err)
+	}
+	if len(store.hooks) != before {
+		t.Fatal("вебхук завёлся вопреки отказу по секрету")
+	}
+}

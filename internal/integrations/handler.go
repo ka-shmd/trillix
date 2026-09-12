@@ -340,6 +340,10 @@ type webhookRequest struct {
 	Name    *string `json:"name"`
 	URL     *string `json:"url"`
 	Enabled *bool   `json:"enabled"`
+	// Secret — секрет подписи автора при ЗАВЕДЕНИИ (пусто = сгенерируем сами).
+	// В правке не участвует: там у секрета своя ручка, и менять его заодно с
+	// подписью связки значило бы ломать проверку у получателя незаметно.
+	Secret *string `json:"secret"`
 }
 
 // createdWebhookResponse — заведённый вебхук и его секрет: показать сразу, не
@@ -368,6 +372,9 @@ func (h *Handler) createWebhook(w http.ResponseWriter, r *http.Request) {
 	}
 	if req.URL != nil {
 		in.URL = *req.URL
+	}
+	if req.Secret != nil {
+		in.Secret = *req.Secret
 	}
 	wh, secret, err := h.svc.CreateWebhook(r.Context(), user.ID, formID, in)
 	if err != nil {

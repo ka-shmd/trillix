@@ -166,6 +166,10 @@ func (s *Service) WithWebhooks(store WebhookStore, egress Egress, now func() tim
 type WebhookInput struct {
 	Name string
 	URL  string
+	// Secret — секрет подписи автора. Пусто = генерируем сами. Спрашивается
+	// ЗДЕСЬ, а не только в правке: про секрет человек думает ровно в момент
+	// подключения — он в этот же заход настраивает проверку у получателя.
+	Secret string
 }
 
 // WebhookPatch — правка вебхука. nil — поле не трогается: тумблер из списка шлёт
@@ -198,7 +202,7 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, formID uuid.UUID, i
 	if err != nil {
 		return Webhook{}, "", err
 	}
-	secret, sealed, err := s.newSealedSecret()
+	secret, sealed, err := s.sealedSecret(in.Secret)
 	if err != nil {
 		return Webhook{}, "", err
 	}
@@ -443,11 +447,6 @@ func webhookName(raw string) (string, error) {
 		return "", fmt.Errorf("%w: название длиннее %d символов", domain.ErrValidation, MaxConnectionNameLen)
 	}
 	return name, nil
-}
-
-// newSealedSecret заводит НАШ секрет подписи: 32 случайных байта и префикс.
-func (s *Service) newSealedSecret() (string, []byte, error) {
-	return s.sealedSecret("")
 }
 
 // sealedSecret готовит секрет к записи: пустой custom — наш случайный, иначе

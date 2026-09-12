@@ -1196,7 +1196,68 @@ describe('вебхуки на экране интеграций', () => {
     // спросили отдельной ручкой.
     expect((screen.getByLabelText('Секрет подписи') as HTMLInputElement).value).toMatch(/•+/)
   })
-  it('в окне можно задать свой секрет, и короткий не отправляется', async () => {
+  it('свой секрет задаётся ПРИ ПОДКЛЮЧЕНИИ, а окно после него не закрывается', async () => {
+    const posts: { url: string; body: unknown }[] = []
+    // После заведения экран перезапрашивает состояние формы — мок обязан
+    // отвечать на него настоящим телом, иначе вид уходит в отказ и проверять
+    // будет нечего.
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if ((init?.method ?? 'GET') === 'GET' && url.endsWith('/integrations')) {
+        return new Response(JSON.stringify(state()), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
+      }
+      if (init?.method === 'POST') {
+        posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null })
+        return new Response(
+          JSON.stringify({
+            id: 'hook-new',
+            host: 'hooks.example.com',
+            url: 'https://hooks.example.com/x',
+            enabled: true,
+            status: 'live',
+            queued: 0,
+            secret: 'общий-секрет-на-все-формы',
+          }),
+          { status: 201, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(null, { status: 204 })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить вебхук' }))
+
+    fireEvent.change(screen.getByLabelText('Адрес получателя'), {
+      target: { value: 'https://hooks.example.com/x' },
+    })
+    // Поле секрета доступно СРАЗУ, до заведения: про секрет человек думает
+    // ровно в этот момент.
+    const secretField = screen.getByLabelText('Секрет подписи')
+    fireEvent.change(secretField, { target: { value: '123456' } })
+    expect((screen.getByRole('button', { name: 'Подключить' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+    fireEvent.change(secretField, { target: { value: 'общий-секрет-на-все-формы' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    await waitFor(() => expect(posts.length).toBe(1))
+    expect(posts[0]!.body).toEqual({
+      name: '',
+      url: 'https://hooks.example.com/x',
+      secret: 'общий-секрет-на-все-формы',
+    })
+    // Окно осталось открытым и перешло в настройку: секрет виден, проверка рядом.
+    await screen.findByRole('button', { name: 'Проверить' })
+    expect((screen.getByLabelText('Секрет подписи') as HTMLInputElement).value).toBe(
+      'общий-секрет-на-все-формы',
+    )
+    expect(screen.getByRole('button', { name: 'Задать свой' })).toBeTruthy()
+    vi.unstubAllGlobals()
+  })
+
+  it('в окне правки можно задать свой секрет, и короткий не отправляется', async () => {
     const sent: unknown[] = []
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST' && url.includes('/secret')) {
