@@ -1206,7 +1206,6 @@ describe('вебхуки на экране интеграций', () => {
     // нужно, чтобы подпись работала. Кто хочет свой секрет — стирает и вписывает.
     const field = screen.getByLabelText('Секрет подписи') as HTMLInputElement
     expect(field.value.length).toBeGreaterThanOrEqual(16)
-    expect(screen.getByText(/Trillix-Signature/)).toBeTruthy()
     // Передумал — поле уходит, предложение возвращается.
     fireEvent.click(screen.getByRole('button', { name: 'Убрать подпись' }))
     expect(screen.queryByLabelText('Секрет подписи')).toBeNull()
@@ -1238,7 +1237,9 @@ describe('вебхуки на экране интеграций', () => {
     // «не менять».
     const field = screen.getByLabelText('Секрет подписи') as HTMLInputElement
     expect(field.value).toBe('')
-    expect(screen.getByText(/Trillix-Signature/)).toBeTruthy()
+    // Пустое здесь значит «не менять», и говорит об этом плейсхолдер: объяснений
+    // текстом в окне больше нет (решение владельца).
+    expect(field.placeholder).toBe('Не менять')
 
     fireEvent.click(screen.getByRole('button', { name: 'Показать' }))
     await waitFor(() => expect(field.value).toBe('общий-секрет-на-все-формы'))

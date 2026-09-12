@@ -157,10 +157,6 @@ export function WebhookOverlay({
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
               />
-              <p className="text-sm text-muted-foreground">
-                Только https. Запросы во внутреннюю сеть и на адреса самого Trillix не
-                отправляются.
-              </p>
             </div>
 
             <div className="flex flex-col gap-2">
@@ -322,12 +318,15 @@ function SecretField({
           <Trash2 className="size-4" aria-hidden />
         </Button>
       </div>
-      <p className="text-sm text-muted-foreground">
-        {signed
-          ? 'Пустое поле — оставить прежний. Новый секрет начинает действовать сразу: не забудьте поменять его у получателя.'
-          : `Секрет уже готов — пропишите его у получателя, ею подписывается каждый запрос. Можно заменить своим от ${MIN_SECRET} символов: один секрет годится на все ваши формы.`}
-      </p>
-      <SignatureHint />
+      {/* Единственное, что блок говорит сверх полей, и только у подписанного:
+          пустое поле здесь значит «не менять», а смена секрета ломает проверку у
+          получателя в ту же секунду. Это про состояние поля, а не про устройство
+          подписи — устройство описано в INTEGRATIONS.md. */}
+      {signed && (
+        <p className="text-sm text-muted-foreground">
+          Новый секрет начинает действовать сразу: не забудьте поменять его у получателя.
+        </p>
+      )}
     </div>
   )
 }
@@ -474,19 +473,3 @@ function TestField({ formId, webhookId }: { formId: string; webhookId: string })
   )
 }
 
-// SignatureHint — как получателю убедиться, что запрос наш. Текст, а не пример
-// кода: страницы документации у продукта нет, а имя заголовка и формула — это
-// всё, что нужно, чтобы написать проверку на своей стороне.
-function SignatureHint() {
-  return (
-    <div className="rounded-lg border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
-      <p className="font-medium text-foreground">Как проверить, что запрос от нас</p>
-      <p className="mt-1">
-        В заголовке <span className="font-mono">Trillix-Signature</span> едут время{' '}
-        <span className="font-mono">t</span> и подпись <span className="font-mono">v1</span> —
-        HMAC-SHA256 строки «время, точка, тело запроса» на вашем секрете. Сверьте её и отбросьте
-        запросы старше пяти минут.
-      </p>
-    </div>
-  )
-}
