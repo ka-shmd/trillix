@@ -197,12 +197,18 @@ export function WebhookOverlay({
             {showHeaders ? (
               <HeadersField
                 rows={headers}
-                onRows={setHeaders}
-                onAdd={() => setHeaders([...headers, newRow()])}
-                onOff={() => {
-                  setShowHeaders(false)
-                  setHeaders([])
+                onPatch={(id, change) =>
+                  setHeaders(headers.map((r) => (r.id === id ? { ...r, ...change } : r)))
+                }
+                onRemove={(id) => {
+                  const left = headers.filter((r) => r.id !== id)
+                  setHeaders(left)
+                  // Убрали последнюю строку — блок схлопывается в предложение:
+                  // отдельной кнопки «без заголовков» нет, и пустой список полей
+                  // был бы ровно ею, только без надписи (решение владельца).
+                  if (left.length === 0) setShowHeaders(false)
                 }}
+                onAdd={() => setHeaders([...headers, newRow()])}
               />
             ) : (
               <HeadersOffer
@@ -337,26 +343,27 @@ function HeadersOffer({ onOn }: { onOn: () => void }) {
 // «Подключить»/«Сохранить», что и всё остальное в окне.
 function HeadersField({
   rows,
-  onRows,
+  onPatch,
+  onRemove,
   onAdd,
-  onOff,
 }: {
   rows: HeaderRow[]
-  onRows: (rows: HeaderRow[]) => void
+  onPatch: (id: number, change: Partial<WebhookHeader>) => void
+  onRemove: (id: number) => void
   onAdd: () => void
-  onOff: () => void
 }) {
-  function patch(id: number, change: Partial<WebhookHeader>) {
-    onRows(rows.map((r) => (r.id === id ? { ...r, ...change } : r)))
-  }
-
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-4">
-        <Label>Свои заголовки</Label>
-        <Button variant="ghost" size="sm" onClick={onOff}>
-          Без заголовков
-        </Button>
+      {/* Верхний ряд повторяет раскладку строки набора: подпись занимает место
+          полей, «Ещё заголовок» кончается там же, где кончается «Значение», а
+          пустая клетка держит колонку крестиков. Без неё кнопка съезжала бы
+          правее полей и вставала бы над крестиками. */}
+      <div className="flex items-center gap-2">
+        <Label className="flex-1">Свои заголовки</Label>
+        {rows.length < MAX_HEADERS && (
+          <CompactAction icon={Plus} label="Ещё заголовок" onClick={onAdd} />
+        )}
+        <div className="size-9 shrink-0" aria-hidden />
       </div>
       {rows.map((row, i) => (
         <div key={row.id} className="flex items-center gap-2">
@@ -365,33 +372,25 @@ function HeadersField({
             placeholder="Имя"
             className="h-10 w-2/5 font-mono md:text-base"
             value={row.name}
-            onChange={(e) => patch(row.id, { name: e.target.value })}
+            onChange={(e) => onPatch(row.id, { name: e.target.value })}
           />
           <Input
             aria-label={`Значение заголовка ${i + 1}`}
             placeholder="Значение"
             className="h-10 flex-1 font-mono md:text-base"
             value={row.value}
-            onChange={(e) => patch(row.id, { value: e.target.value })}
+            onChange={(e) => onPatch(row.id, { value: e.target.value })}
           />
           <Button
             variant="ghost"
             size="icon"
             aria-label={`Убрать заголовок ${i + 1}`}
-            onClick={() => onRows(rows.filter((r) => r.id !== row.id))}
+            onClick={() => onRemove(row.id)}
           >
             <X className="size-4" aria-hidden />
           </Button>
         </div>
       ))}
-      {/* Прижата ВПРАВО, под крестики строк: это продолжение уже набранного
-          списка, а не следующий вопрос окна. Слева она вставала бы в один столбец
-          с полями и читалась бы наравне с ними. */}
-      {rows.length < MAX_HEADERS && (
-        <div className="flex justify-end">
-          <CompactAction icon={Plus} label="Ещё заголовок" onClick={onAdd} />
-        </div>
-      )}
       <p className="text-sm text-muted-foreground">
         Имя — латиницей: чаще всего это <span className="font-mono">Authorization</span> со
         значением <span className="font-mono">Bearer …</span>. Значение уедет получателю как

@@ -1392,8 +1392,9 @@ describe('вебхуки на экране интеграций', () => {
       'Значение',
     )
 
-    // Передумал — строки уходят, предложение возвращается.
-    fireEvent.click(screen.getByRole('button', { name: 'Без заголовков' }))
+    // Передумал — убрал единственную строку крестиком, и блок схлопнулся обратно
+    // в предложение: отдельной кнопки «без заголовков» нет.
+    fireEvent.click(screen.getByRole('button', { name: 'Убрать заголовок 1' }))
     expect(screen.queryByLabelText('Имя заголовка 1')).toBeNull()
     expect(screen.getByRole('button', { name: 'Свои заголовки' })).toBeTruthy()
   })
@@ -1463,7 +1464,7 @@ describe('вебхуки на экране интеграций', () => {
       'Bearer abc123',
     )
 
-    fireEvent.click(screen.getByRole('button', { name: 'Без заголовков' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Убрать заголовок 1' }))
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
 
     await waitFor(() => expect(calls.length).toBe(1))
