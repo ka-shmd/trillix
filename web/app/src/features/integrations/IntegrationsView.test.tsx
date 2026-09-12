@@ -1205,7 +1205,7 @@ describe('вебхуки на экране интеграций', () => {
     expect(screen.getByLabelText('Секрет подписи')).toBeTruthy()
     expect(screen.getByText(/Trillix-Signature/)).toBeTruthy()
     // Передумал — поле уходит, предложение возвращается.
-    fireEvent.click(screen.getByRole('button', { name: 'Без подписи' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Убрать подпись' }))
     expect(screen.queryByLabelText('Секрет подписи')).toBeNull()
     expect(screen.getByRole('button', { name: 'Подписывать запросы' })).toBeTruthy()
   })
@@ -1474,12 +1474,12 @@ describe('вебхуки на экране интеграций', () => {
     vi.unstubAllGlobals()
   })
 
-  it('«Без подписи» у подписанного вебхука выключает её при сохранении', async () => {
+  it('корзина у секрета подписанного вебхука выключает её при сохранении', async () => {
     const calls = mockWebhookCalls(state({ webhooks: [hook({ signed: true })] }))
     renderView(state({ webhooks: [hook({ signed: true })] }))
     fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Без подписи' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Убрать подпись' }))
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
 
     await waitFor(() => expect(calls.length).toBe(2))

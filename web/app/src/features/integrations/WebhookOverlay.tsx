@@ -289,12 +289,7 @@ function SecretField({
 }) {
   return (
     <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between gap-4">
-        <Label htmlFor="webhook-secret">Секрет подписи</Label>
-        <Button variant="ghost" size="sm" onClick={onOff}>
-          Без подписи
-        </Button>
-      </div>
+      <Label htmlFor="webhook-secret">Секрет подписи</Label>
       <div className="flex items-center gap-2">
         <Input
           id="webhook-secret"
@@ -310,6 +305,17 @@ function SecretField({
             Показать
           </Button>
         )}
+        {/* Корзина после поля — тот же приём, что у строки заголовка: убирает
+            подпись целиком. Отдельной кнопки «без подписи» нет — у поля, которое
+            можно убрать, ей рядом делать нечего (решение владельца). */}
+        <Button
+          variant="ghost"
+          size="icon"
+          aria-label="Убрать подпись"
+          onClick={onOff}
+        >
+          <Trash2 className="size-4" aria-hidden />
+        </Button>
       </div>
       <p className="text-sm text-muted-foreground">
         {signed
