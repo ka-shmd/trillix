@@ -112,7 +112,7 @@ func TestWebhooks_Lifecycle(t *testing.T) {
 		t.Fatalf("заведение: статус %d, ожидалось 201", r.StatusCode)
 	}
 	if cc := r.Header.Get("Cache-Control"); cc != "no-store" {
-		t.Errorf("Cache-Control = %q — ответ с секретом кэшируется", cc)
+		t.Errorf("Cache-Control = %q — ответ с полным адресом кэшируется", cc)
 	}
 	var created webhookDTO
 	decode(t, r, &created)
@@ -138,16 +138,16 @@ func TestWebhooks_Lifecycle(t *testing.T) {
 		t.Fatalf("set_by=%s url=%q", setBy, stored)
 	}
 
-	// Включили подпись — секрет появился, и лёг он шифротекстом.
+	// Включили подпись своим секретом — он появился и лёг шифротекстом.
 	secret := enableSignature(t, owner, srv, formID, created.ID)
-	if !strings.HasPrefix(secret, "whsec_") {
-		t.Fatalf("секрет = %q", secret)
-	}
 	if err := testPool.QueryRow(context.Background(),
 		`SELECT secret FROM form_webhooks WHERE id = $1`, created.ID).Scan(&sealed); err != nil {
 		t.Fatalf("строка вебхука: %v", err)
 	}
-	if bytes.Contains(sealed, []byte(secret)) || bytes.Contains(sealed, []byte(secret[len("whsec_"):])) {
+	if len(sealed) == 0 {
+		t.Fatal("включение подписи не завело секрет")
+	}
+	if bytes.Contains(sealed, []byte(secret)) {
 		t.Fatal("секрет лёг в базу открытым текстом")
 	}
 	if got := webhooksOf(t, owner, srv, formID)[0]; !got.Signed {
@@ -265,11 +265,11 @@ func TestWebhooks_StrangerGetsNotFound(t *testing.T) {
 
 	base := "/api/v1/forms/" + formID + "/webhooks"
 	for name, r := range map[string]*http.Response{
-		"заведение":  createWebhook(t, stranger, srv, formID, `{"url":"`+hookURL+`"}`),
-		"правка":     patchWithCSRF(t, stranger, srv, base+"/"+hook.ID, `{"enabled":false}`),
-		"секрет":     do(t, stranger, http.MethodGet, srv.URL+base+"/"+hook.ID+"/secret"),
-		"перевыпуск": postWithCSRF(t, stranger, srv, base+"/"+hook.ID+"/secret"),
-		"удаление":   deleteWithCSRF(t, stranger, srv, base+"/"+hook.ID),
+		"заведение": createWebhook(t, stranger, srv, formID, `{"url":"`+hookURL+`"}`),
+		"правка":    patchWithCSRF(t, stranger, srv, base+"/"+hook.ID, `{"enabled":false}`),
+		"секрет":    do(t, stranger, http.MethodGet, srv.URL+base+"/"+hook.ID+"/secret"),
+		"подпись":   postBodyWithCSRF(t, stranger, srv, base+"/"+hook.ID+"/secret", `{"secret":"`+hookSecret+`"}`),
+		"удаление":  deleteWithCSRF(t, stranger, srv, base+"/"+hook.ID),
 	} {
 		closeBody(t, r)
 		if r.StatusCode != http.StatusNotFound {
@@ -348,7 +348,7 @@ func TestWebhooks_DisableClearsQueue(t *testing.T) {
 	}
 }
 
-func TestWebhooks_SecretShowAndReissue(t *testing.T) {
+func TestWebhooks_SecretShowAndReplace(t *testing.T) {
 	resetDB(t)
 	srv := newStack(t, &fakeProvider{})
 	owner := registerUser(t, srv, "owner@example.com")
@@ -375,22 +375,29 @@ func TestWebhooks_SecretShowAndReissue(t *testing.T) {
 	}
 
 	if got := show(); got != hook.Secret {
-		t.Fatalf("показан %q, ожидался выданный при заведении", got)
+		t.Fatalf("показан %q, ожидался заданный при включении подписи", got)
 	}
-	r := postWithCSRF(t, owner, srv, path)
-	if r.StatusCode != http.StatusOK {
-		closeBody(t, r)
-		t.Fatalf("перевыпуск: статус %d", r.StatusCode)
+
+	// Смена секрета: 204 и ни слова в ответ — секрет и так у того, кто его ввёл.
+	const next = "новый-секрет-на-все-формы"
+	r := postBodyWithCSRF(t, owner, srv, path, `{"secret":"`+next+`"}`)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("смена секрета: статус %d", r.StatusCode)
 	}
-	var fresh struct {
-		Secret string `json:"secret"`
+	if got := show(); got != next {
+		t.Fatalf("после смены показан %q, ожидался новый", got)
 	}
-	decode(t, r, &fresh)
-	if fresh.Secret == hook.Secret || !strings.HasPrefix(fresh.Secret, "whsec_") {
-		t.Fatalf("перевыпущен %q", fresh.Secret)
+
+	// Пустое тело — отказ, а не «сгенерируй сам»: своего секрета продукт не
+	// заводит, и подпись неизвестно чем была бы хуже её отсутствия.
+	r = postWithCSRF(t, owner, srv, path)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("пустое тело: статус %d, ожидалось 422", r.StatusCode)
 	}
-	if got := show(); got != fresh.Secret {
-		t.Fatalf("после перевыпуска показан %q, ожидался новый", got)
+	if got := show(); got != next {
+		t.Fatalf("после отказа показан %q — действующий секрет подменён", got)
 	}
 }
 

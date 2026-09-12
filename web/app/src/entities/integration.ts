@@ -75,8 +75,9 @@ export const webhookSchema = z.object({
   // у Zapier и Make лежит токен получателя. Пусто — у спрашивающего нет права
   // на правку, и окно настройки ему показывать нечего.
   url: z.string().optional(),
-  // signed — включена ли подпись запросов. По умолчанию выключена: подключение
-  // это адрес и всё, а подпись нужна лишь тому, кто собирается её проверять.
+  // signed — включена ли подпись запросов. По умолчанию выключена: подписывать
+  // нужно лишь тому, кто собирается проверять подпись у себя. Сам секрет в
+  // состоянии таба не приезжает никогда — за ним отдельная ручка.
   signed: z.boolean().default(false),
   enabled: z.boolean(),
   status: webhookStatusSchema,
@@ -86,11 +87,9 @@ export const webhookSchema = z.object({
   queued: z.number().int().default(0),
 })
 
-// Заведённый вебхук. Секрет приезжает, только если автор назвал свой при
-// подключении: по умолчанию подписи нет вовсе. В состоянии таба секрета не
-// бывает никогда.
-export const createdWebhookSchema = webhookSchema.extend({ secret: z.string().optional() })
-
+// Секрет подписи — отдельной ручкой по нажатию «Показать». Ни в состоянии таба,
+// ни в ответе на подключение его нет: секрет придумывает автор, и возвращать
+// ему введённое незачем.
 export const webhookSecretSchema = z.object({ secret: z.string() })
 
 // Исход проверки адреса. Неуспех — тоже ответ (200 с ok: false): «получатель
@@ -162,7 +161,6 @@ export const sheetListSchema = z.object({
 
 export type Webhook = z.infer<typeof webhookSchema>
 export type WebhookStatus = z.infer<typeof webhookStatusSchema>
-export type CreatedWebhook = z.infer<typeof createdWebhookSchema>
 export type WebhookTest = z.infer<typeof webhookTestSchema>
 export type SpreadsheetRef = z.infer<typeof spreadsheetRefSchema>
 export type SheetRef = z.infer<typeof sheetRefSchema>

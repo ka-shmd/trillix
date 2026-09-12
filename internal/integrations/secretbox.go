@@ -23,7 +23,7 @@ const secretLabel = "trillix-integration-refresh-v1"
 // webhookSecretLabel — метка ключа секретов подписи вебхуков (0062). Своя, а не
 // общая с refresh-токенами: без разных меток шифротекст одного назначения
 // открывался бы ключом другого. Ротация FORM_TOKEN_SECRET рвёт и эти секреты —
-// вебхуки встают с причиной «перевыпустите секрет».
+// вебхуки встают с причиной «задайте секрет заново».
 const webhookSecretLabel = "trillix-webhook-secret-v1"
 
 func sealToken(key []byte, token string) ([]byte, error) { return seal(key, secretLabel, token) }

@@ -76,20 +76,21 @@ func newReceiver(t *testing.T, code int) (*receiver, *httptest.Server, integrati
 	return rec, srv, safehttp.New(safehttp.AllowAll{}, safehttp.Options{RootCAs: pool})
 }
 
-// enableSignature включает подпись запросов и отдаёт секрет: по умолчанию
+// hookSecret — секрет подписи, какой его вводит автор: своего продукт не
+// генерирует (ADR §10, четвёртый круг).
+const hookSecret = "секрет-проверки-подписи"
+
+// enableSignature включает подпись запросов секретом автора: по умолчанию
 // подписи нет (ADR §10), а проверкам подписи нужен подписанный запрос.
 func enableSignature(t *testing.T, c *http.Client, srv *httptest.Server, formID, webhookID string) string {
 	t.Helper()
-	r := postWithCSRF(t, c, srv, "/api/v1/forms/"+formID+"/webhooks/"+webhookID+"/secret")
-	if r.StatusCode != http.StatusOK {
-		closeBody(t, r)
+	r := postBodyWithCSRF(t, c, srv, "/api/v1/forms/"+formID+"/webhooks/"+webhookID+"/secret",
+		`{"secret":"`+hookSecret+`"}`)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNoContent {
 		t.Fatalf("включение подписи: статус %d", r.StatusCode)
 	}
-	var body struct {
-		Secret string `json:"secret"`
-	}
-	decode(t, r, &body)
-	return body.Secret
+	return hookSecret
 }
 
 // enqueueWebhook ставит ответ в очередь цели напрямую: путь «приём ответа →
@@ -389,16 +390,9 @@ func TestWebhookDelivery_AuthorSuppliedSecret(t *testing.T) {
 	const mine = "общий-секрет-на-все-формы"
 	resp := postBodyWithCSRF(t, owner, srv,
 		"/api/v1/forms/"+formID+"/webhooks/"+hook.ID+"/secret", `{"secret":"`+mine+`"}`)
-	if resp.StatusCode != http.StatusOK {
-		closeBody(t, resp)
-		t.Fatalf("свой секрет: статус %d, ожидалось 200", resp.StatusCode)
-	}
-	var body struct {
-		Secret string `json:"secret"`
-	}
-	decode(t, resp, &body)
-	if body.Secret != mine {
-		t.Fatalf("вернулся секрет %q, ожидался заданный", body.Secret)
+	closeBody(t, resp)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("свой секрет: статус %d, ожидалось 204", resp.StatusCode)
 	}
 	var sealed []byte
 	if err := testPool.QueryRow(context.Background(),

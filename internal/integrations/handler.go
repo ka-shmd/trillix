@@ -9,7 +9,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"strconv"
@@ -65,13 +64,13 @@ type integrationsService interface {
 	Disconnect(ctx context.Context, userID, accountID uuid.UUID) error
 	Deliveries(ctx context.Context, userID, formID, linkID, cursor uuid.UUID) ([]Delivery, error)
 	RetryDelivery(ctx context.Context, userID, formID, linkID, deliveryID uuid.UUID) error
-	CreateWebhook(ctx context.Context, userID, formID uuid.UUID, in WebhookInput) (Webhook, string, error)
+	CreateWebhook(ctx context.Context, userID, formID uuid.UUID, in WebhookInput) (Webhook, error)
 	WebhookDeliveries(ctx context.Context, userID, formID, webhookID, cursor uuid.UUID) ([]Delivery, error)
 	RetryWebhookDelivery(ctx context.Context, userID, formID, webhookID, deliveryID uuid.UUID) error
 	TestWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) (WebhookTestResult, error)
 	UpdateWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID, patch WebhookPatch) error
 	WebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error)
-	ReissueWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, custom string) (string, error)
+	SetWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, secret string) error
 	DisableWebhookSignature(ctx context.Context, userID, formID, webhookID uuid.UUID) error
 	DeleteWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) error
 }
@@ -161,11 +160,11 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("DELETE /api/v1/forms/{id}/webhooks/{webhookId}",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.deleteWebhook))))
 	// Секрет подписи — отдельной ручкой по нажатию «Показать», а не в состоянии
-	// таба: раздавать его на каждый показ незачем. POST того же адреса — перевыпуск.
+	// таба: раздавать его на каждый показ незачем. POST того же адреса — задать.
 	mux.Handle("GET /api/v1/forms/{id}/webhooks/{webhookId}/secret",
 		h.requireAuth(http.HandlerFunc(h.webhookSecret)))
 	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/secret",
-		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.reissueWebhookSecret))))
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.setWebhookSecret))))
 	// Выключение подписи: секрет удаляется, заголовок в запросах пропадает.
 	mux.Handle("DELETE /api/v1/forms/{id}/webhooks/{webhookId}/secret",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disableWebhookSignature))))
@@ -348,19 +347,11 @@ type webhookRequest struct {
 	Name    *string `json:"name"`
 	URL     *string `json:"url"`
 	Enabled *bool   `json:"enabled"`
-	// Secret — секрет подписи автора при ЗАВЕДЕНИИ (пусто = сгенерируем сами).
-	// В правке не участвует: там у секрета своя ручка, и менять его заодно с
-	// подписью связки значило бы ломать проверку у получателя незаметно.
+	// Secret — секрет подписи, введённый автором при ЗАВЕДЕНИИ (пусто = вебхук
+	// заводится без подписи). В правке не участвует: там у секрета своя ручка, и
+	// менять его заодно с названием значило бы ломать проверку у получателя
+	// незаметно.
 	Secret *string `json:"secret"`
-}
-
-// createdWebhookResponse — заведённый вебхук и его секрет: показать сразу, не
-// заставляя человека жать «Показать» в только что открытом окне.
-type createdWebhookResponse struct {
-	webhookResponse
-	// Secret — секрет подписи в открытом виде. Появляется, только если автор
-	// назвал свой при заведении: по умолчанию подписи нет вовсе.
-	Secret string `json:"secret,omitempty"`
 }
 
 type webhookSecretResponse struct {
@@ -386,17 +377,15 @@ func (h *Handler) createWebhook(w http.ResponseWriter, r *http.Request) {
 	if req.Secret != nil {
 		in.Secret = *req.Secret
 	}
-	wh, secret, err := h.svc.CreateWebhook(r.Context(), user.ID, formID, in)
+	wh, err := h.svc.CreateWebhook(r.Context(), user.ID, formID, in)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	// В ответе секрет: промежуточный кэш, сохранивший его, раздавал бы ключ подписи.
+	// В ответе полный адрес, а в его пути — токен получателя: промежуточный кэш,
+	// сохранивший ответ, раздавал бы его.
 	w.Header().Set("Cache-Control", "no-store")
-	httpserver.WriteJSON(w, r, http.StatusCreated, createdWebhookResponse{
-		webhookResponse: toWebhookResponse(wh),
-		Secret:          secret,
-	})
+	httpserver.WriteJSON(w, r, http.StatusCreated, toWebhookResponse(wh))
 }
 
 func (h *Handler) updateWebhook(w http.ResponseWriter, r *http.Request) {
@@ -442,14 +431,13 @@ func (h *Handler) webhookSecret(w http.ResponseWriter, r *http.Request) {
 	httpserver.WriteJSON(w, r, http.StatusOK, webhookSecretResponse{Secret: secret})
 }
 
-// secretRequest — тело перевыпуска. Необязательное: пустое означает «сгенерируй
-// сам», непустое — секрет автора (он же, скорее всего, уже прописан у
-// получателя, и один на все его формы).
+// secretRequest — тело «включить подпись либо сменить секрет». Тело обязательно:
+// секрет придумывает автор, и пустое означало бы подпись неизвестно чем.
 type secretRequest struct {
 	Secret string `json:"secret"`
 }
 
-func (h *Handler) reissueWebhookSecret(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) setWebhookSecret(w http.ResponseWriter, r *http.Request) {
 	user, formID, webhookID, ok := h.userFormWebhook(w, r)
 	if !ok {
 		return
@@ -458,19 +446,15 @@ func (h *Handler) reissueWebhookSecret(w http.ResponseWriter, r *http.Request) {
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	var req secretRequest
-	// Пустое тело — штатный случай (кнопка «Перевыпустить» шлёт запрос без него),
-	// поэтому io.EOF здесь не ошибка. Битое тело — ошибка.
-	if err := dec.Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+	if err := dec.Decode(&req); err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
 		return
 	}
-	secret, err := h.svc.ReissueWebhookSecret(r.Context(), user.ID, formID, webhookID, req.Secret)
-	if err != nil {
+	if err := h.svc.SetWebhookSecret(r.Context(), user.ID, formID, webhookID, req.Secret); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	w.Header().Set("Cache-Control", "no-store")
-	httpserver.WriteJSON(w, r, http.StatusOK, webhookSecretResponse{Secret: secret})
+	w.WriteHeader(http.StatusNoContent)
 }
 
 func (h *Handler) disableWebhookSignature(w http.ResponseWriter, r *http.Request) {

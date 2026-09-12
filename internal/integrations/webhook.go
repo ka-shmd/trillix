@@ -2,8 +2,6 @@ package integrations
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"net/http"
@@ -23,21 +21,16 @@ import (
 
 // ВЕБХУКИ (фаза 28 `DEV-PLAN`, спека docs/design/webhooks.md, ADR §10) — второй
 // вид цели доставки рядом со связкой Google Таблиц. Здесь — управление: завести,
-// править, показать и перевыпустить секрет, удалить. Статусы — те же StatusLive
+// править, показать и сменить секрет подписи, удалить. Статусы — те же StatusLive
 // и StatusBroken, что у связки (CHECK form_webhooks_status_check).
 
 // MaxWebhooksPerForm — потолок вебхуков на форму: без него одна отправка формы
 // превращается в N запросов с нашего IP (спека §9).
 const MaxWebhooksPerForm = 5
 
-// webhookSecretPrefix — по префиксу секрет узнаётся глазами и сканерами утечек.
-// Только у НАШЕГО секрета: чужой мы не переписываем.
-const webhookSecretPrefix = "whsec_"
-
-// MinWebhookSecretLen — минимум для секрета, заданного автором. Свой секрет
-// разрешён ради одного секрета на все формы (ADR §10), но «123456» обесценивает
-// подпись целиком: подделать запрос смог бы любой. Наш собственный секрет длиннее
-// вчетверо, и планка касается только введённого руками.
+// MinWebhookSecretLen — минимум для секрета подписи. Секрет придумывает автор —
+// своего продукт не генерирует (ADR §10, четвёртый круг), — а «123456»
+// обесценивает подпись целиком: подделать запрос смог бы любой.
 const MinWebhookSecretLen = 16
 
 // MaxWebhookSecretLen — потолок: секрет едет ключом HMAC, и мегабайт в этом поле
@@ -170,9 +163,9 @@ func (s *Service) WithWebhooks(store WebhookStore, egress Egress, now func() tim
 type WebhookInput struct {
 	Name string
 	URL  string
-	// Secret — секрет подписи автора. Пусто = вебхук заводится БЕЗ подписи:
-	// подключение это адрес и всё, а подпись включается потом тумблером в
-	// настройках (ADR §10, третий круг).
+	// Secret — секрет подписи, придуманный автором. Пусто = вебхук заводится БЕЗ
+	// подписи: подключение это адрес и всё. Подпись предлагается в том же окне
+	// кнопкой, и нажавший вводит секрет сам (ADR §10, четвёртый круг).
 	Secret string
 }
 
@@ -186,32 +179,31 @@ type WebhookPatch struct {
 	URL *string
 }
 
-// CreateWebhook заводит вебхук формы и отдаёт его вместе с секретом подписи в
-// открытом виде — показать сразу после заведения.
+// CreateWebhook заводит вебхук формы. Секрет подписи в ответ не возвращается: он
+// либо не заводился вовсе, либо его только что ввёл сам автор.
 //
 // Адрес проверяется ПОСЛЕ права на форму: проверка резолвит имя, и постороннему
 // нельзя давать пользоваться нами как DNS-оракулом.
-func (s *Service) CreateWebhook(ctx context.Context, userID, formID uuid.UUID, in WebhookInput) (Webhook, string, error) {
+func (s *Service) CreateWebhook(ctx context.Context, userID, formID uuid.UUID, in WebhookInput) (Webhook, error) {
 	if s.webhooks == nil {
-		return Webhook{}, "", domain.ErrNotFound
+		return Webhook{}, domain.ErrNotFound
 	}
 	name, err := webhookName(in.Name)
 	if err != nil {
-		return Webhook{}, "", err
+		return Webhook{}, err
 	}
 	if err := s.canEditForm(ctx, userID, formID); err != nil {
-		return Webhook{}, "", err
+		return Webhook{}, err
 	}
 	rawURL, err := s.checkWebhookURL(ctx, in.URL)
 	if err != nil {
-		return Webhook{}, "", err
+		return Webhook{}, err
 	}
-	// Подписи по умолчанию нет: секрет заводится, только если автор назвал свой.
-	var secret string
+	// Подписи по умолчанию нет: секрет заводится, только если автор его ввёл.
 	var sealed []byte
 	if strings.TrimSpace(in.Secret) != "" {
-		if secret, sealed, err = s.sealedSecret(in.Secret); err != nil {
-			return Webhook{}, "", err
+		if sealed, err = s.sealedSecret(in.Secret); err != nil {
+			return Webhook{}, err
 		}
 	}
 
@@ -225,10 +217,10 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, formID uuid.UUID, i
 	}
 	ok, err := s.webhooks.InsertWebhook(ctx, s.db, w, MaxWebhooksPerForm)
 	if err != nil {
-		return Webhook{}, "", err
+		return Webhook{}, err
 	}
 	if !ok {
-		return Webhook{}, "", fmt.Errorf("%w: у формы уже %d вебхуков — больше завести нельзя",
+		return Webhook{}, fmt.Errorf("%w: у формы уже %d вебхуков — больше завести нельзя",
 			domain.ErrValidation, MaxWebhooksPerForm)
 	}
 	return Webhook{
@@ -242,7 +234,7 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, formID uuid.UUID, i
 		Enabled:      true,
 		Status:       StatusLive,
 		CreatedAt:    time.Now().UTC(),
-	}, secret, nil
+	}, nil
 }
 
 // UpdateWebhook правит подпись, тумблер и адрес.
@@ -327,37 +319,38 @@ func (s *Service) WebhookSecret(ctx context.Context, userID, formID, webhookID u
 	secret, err := openWebhookSecret(s.key, w.SecretSealed)
 	if err != nil {
 		// Шифротекст пережил ротацию FORM_TOKEN_SECRET: открыть его больше нечем.
-		return "", fmt.Errorf("%w: секрет подписи больше не читается — перевыпустите его", domain.ErrConflict)
+		return "", fmt.Errorf("%w: секрет подписи больше не читается — задайте его заново", domain.ErrConflict)
 	}
 	return secret, nil
 }
 
-// ReissueWebhookSecret ставит новый секрет подписи и отдаёт его. Старый перестаёт
-// подходить сразу, без переходного окна (спека §7).
+// SetWebhookSecret включает подпись либо меняет секрет: и то и другое — «с этого
+// момента запросы подписаны вот этим». Действует сразу, переходного окна со
+// старым секретом нет (спека §7).
 //
-// custom пуст — секрет генерируем мы. Задан — берём авторский: у человека с
-// двадцатью формами иначе двадцать разных секретов и двадцать записей в конфиге
-// получателя (ADR §10, второй круг решений). Подпись при этом обязательна
-// всегда: выключателя у неё нет.
-func (s *Service) ReissueWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, custom string) (string, error) {
+// Секрет придумывает автор, продукт своего не генерирует. Довод не про удобство
+// ввода: у получателя секрет всё равно прописывается руками, и один свой на все
+// формы избавляет автора двадцати форм от двадцати записей в его конфиге (ADR
+// §10, четвёртый круг). Пустой — отказ, а не «сгенерируй сам».
+func (s *Service) SetWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, secret string) error {
 	if s.webhooks == nil {
-		return "", domain.ErrNotFound
+		return domain.ErrNotFound
 	}
 	if err := s.canEditForm(ctx, userID, formID); err != nil {
-		return "", err
+		return err
 	}
-	secret, sealed, err := s.sealedSecret(custom)
+	sealed, err := s.sealedSecret(secret)
 	if err != nil {
-		return "", err
+		return err
 	}
 	n, err := s.webhooks.UpdateWebhookSecret(ctx, s.db, webhookID, formID, sealed)
 	if err != nil {
-		return "", err
+		return err
 	}
 	if n == 0 {
-		return "", domain.ErrNotFound
+		return domain.ErrNotFound
 	}
-	return secret, nil
+	return nil
 }
 
 // DisableWebhookSignature выключает подпись: секрет удаляется, и заголовок в
@@ -483,29 +476,17 @@ func webhookName(raw string) (string, error) {
 	return name, nil
 }
 
-// sealedSecret готовит секрет к записи: пустой custom — наш случайный, иначе
-// авторский после проверки. Отдаёт открытый вид (показать человеку) и
-// шифротекст (положить в базу).
-func (s *Service) sealedSecret(custom string) (string, []byte, error) {
-	secret := strings.TrimSpace(custom)
-	if secret == "" {
-		b := make([]byte, 32)
-		if _, err := rand.Read(b); err != nil {
-			return "", nil, fmt.Errorf("webhook secret: %w", err)
-		}
-		secret = webhookSecretPrefix + base64.RawURLEncoding.EncodeToString(b)
-	} else if err := checkWebhookSecret(secret); err != nil {
-		return "", nil, err
+// sealedSecret проверяет введённый секрет и запечатывает его для записи.
+func (s *Service) sealedSecret(raw string) ([]byte, error) {
+	secret := strings.TrimSpace(raw)
+	if err := checkWebhookSecret(secret); err != nil {
+		return nil, err
 	}
-	sealed, err := sealWebhookSecret(s.key, secret)
-	if err != nil {
-		return "", nil, err
-	}
-	return secret, sealed, nil
+	return sealWebhookSecret(s.key, secret)
 }
 
-// checkWebhookSecret — правила для секрета, заданного автором. Ввод валидируется
-// на бэке независимо от фронта (инвариант 3).
+// checkWebhookSecret — правила для секрета подписи. Ввод валидируется на бэке
+// независимо от фронта (инвариант 3).
 func checkWebhookSecret(secret string) error {
 	if n := utf8.RuneCountInString(secret); n < MinWebhookSecretLen || n > MaxWebhookSecretLen {
 		return fmt.Errorf("%w: секрет должен быть длиной от %d до %d символов",

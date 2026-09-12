@@ -1176,7 +1176,7 @@ describe('вебхуки на экране интеграций', () => {
     expect(screen.getByText(/сами ответы формы останутся на месте/)).toBeTruthy()
   })
 
-  it('окно подключения — это адрес и всё: ни секрета, ни проверки', () => {
+  it('окно подключения — адрес, название и ПРЕДЛОЖЕНИЕ подписи, но не поле', () => {
     renderView(state())
 
     fireEvent.click(screen.getByRole('button', { name: 'Подключить вебхук' }))
@@ -1184,14 +1184,32 @@ describe('вебхуки на экране интеграций', () => {
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(screen.getByLabelText('Адрес получателя')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Подключить' })).toBeTruthy()
-    // Подпись — отдельное решение, а не шаг подключения: человек, который
-    // цепляет Zapier, ничего никуда не вставляет.
-    expect(screen.queryByLabelText('Подписывать запросы')).toBeNull()
-    expect(screen.queryByText(/Секрет подписи/)).toBeNull()
+    // Подпись предлагается сразу — но кнопкой: поля секрета до нажатия нет, и
+    // человек, который цепляет Zapier, ничего никуда не вставляет.
+    expect(screen.getByRole('button', { name: 'Подписывать запросы' })).toBeTruthy()
+    expect(screen.queryByLabelText('Секрет подписи')).toBeNull()
+    // Проверять нечего: адрес ещё не сохранён.
     expect(screen.queryByRole('button', { name: 'Проверить' })).toBeNull()
   })
 
-  it('окно настройки: адрес в поле, проверка рядом, подпись выключена', () => {
+  it('предложение подписи — кнопка, и она открывает поле секрета', () => {
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить вебхук' }))
+
+    // Тумблера у подписи нет: включение требует ввести секрет, а тумблер обещал
+    // бы мгновенное действие.
+    expect(screen.queryByRole('switch', { name: 'Подписывать запросы' })).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Подписывать запросы' }))
+
+    expect(screen.getByLabelText('Секрет подписи')).toBeTruthy()
+    expect(screen.getByText(/Trillix-Signature/)).toBeTruthy()
+    // Передумал — поле уходит, предложение возвращается.
+    fireEvent.click(screen.getByRole('button', { name: 'Без подписи' }))
+    expect(screen.queryByLabelText('Секрет подписи')).toBeNull()
+    expect(screen.getByRole('button', { name: 'Подписывать запросы' })).toBeTruthy()
+  })
+
+  it('окно настройки: адрес в поле, проверка рядом, подпись не включена', () => {
     renderView(state({ webhooks: [hook()] }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
@@ -1199,21 +1217,35 @@ describe('вебхуки на экране интеграций', () => {
     const url = screen.getByLabelText('Адрес получателя') as HTMLInputElement
     expect(url.value).toBe('https://hooks.zapier.com/hooks/catch/1/SECRETPATH')
     expect(screen.getByRole('button', { name: 'Проверить' })).toBeTruthy()
-    // Подпись выключена — полей о секрете нет вовсе, только тумблер.
-    expect((screen.getByRole('switch', { name: 'Подписывать запросы' }) as HTMLButtonElement).getAttribute('data-state')).toBe('unchecked')
+    // Подпись не включена — полей о секрете нет вовсе, только предложение.
+    expect(screen.getByRole('button', { name: 'Подписывать запросы' })).toBeTruthy()
     expect(screen.queryByLabelText('Секрет подписи')).toBeNull()
   })
 
-  it('включённая подпись показывает секрет и объяснение', () => {
+  it('у подписанного вебхука поле пустое, а показ действующего — не смена', async () => {
+    const calls = mockWebhookCalls(state({ webhooks: [hook({ signed: true })] }), {
+      secret: 'общий-секрет-на-все-формы',
+    })
     renderView(state({ webhooks: [hook({ signed: true })] }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
 
-    // Секрет в состоянии таба не приезжает — окно показывает точки, пока его не
-    // спросили отдельной ручкой.
-    expect((screen.getByLabelText('Секрет подписи') as HTMLInputElement).value).toMatch(/•+/)
-    expect(screen.getByRole('button', { name: 'Задать свой' })).toBeTruthy()
+    // Секрет в состоянии таба не приезжает: поле пустое, и пустое значит
+    // «не менять».
+    const field = screen.getByLabelText('Секрет подписи') as HTMLInputElement
+    expect(field.value).toBe('')
     expect(screen.getByText(/Trillix-Signature/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Показать' }))
+    await waitFor(() => expect(field.value).toBe('общий-секрет-на-все-формы'))
+
+    // Посмотрел и сохранил — секрет не переписывается тем же значением: у
+    // получателя смена ломает проверку, и делать её «заодно с показом» нельзя.
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls.map((c) => c.method)).toEqual(['PATCH'])
+    vi.unstubAllGlobals()
   })
   it('подключение закрывает окно и не шлёт ничего про секрет', async () => {
     const posts: { url: string; body: unknown }[] = []
@@ -1257,35 +1289,128 @@ describe('вебхуки на экране интеграций', () => {
     vi.unstubAllGlobals()
   })
 
-  it('в настройках можно задать свой секрет, и короткий не отправляется', async () => {
-    const sent: unknown[] = []
+  it('подпись включают ПРЯМО при подключении: секрет уезжает тем же запросом', async () => {
+    const posts: { url: string; body: unknown }[] = []
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
-      if (init?.method === 'POST' && url.includes('/secret')) {
-        sent.push(init.body ? JSON.parse(String(init.body)) : null)
-        return new Response(JSON.stringify({ secret: 'общий-секрет-на-все-формы' }), {
+      if ((init?.method ?? 'GET') === 'GET') {
+        return new Response(JSON.stringify(state()), {
           status: 200,
           headers: { 'content-type': 'application/json' },
         })
       }
-      return new Response(null, { status: 204 })
+      if (init?.method === 'POST') {
+        posts.push({ url, body: init.body ? JSON.parse(String(init.body)) : null })
+      }
+      return new Response(
+        JSON.stringify({
+          id: 'hook-new',
+          host: 'hooks.example.com',
+          url: 'https://hooks.example.com/x',
+          signed: true,
+          enabled: true,
+          status: 'live',
+          queued: 0,
+        }),
+        { status: 201, headers: { 'content-type': 'application/json' } },
+      )
     })
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить вебхук' }))
+
+    fireEvent.change(screen.getByLabelText('Адрес получателя'), {
+      target: { value: 'https://hooks.example.com/x' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Подписывать запросы' }))
+    // Короткий секрет обесценил бы подпись — подключиться с ним нельзя.
+    fireEvent.change(screen.getByLabelText('Секрет подписи'), { target: { value: '123456' } })
+    expect((screen.getByRole('button', { name: 'Подключить' }) as HTMLButtonElement).disabled).toBe(
+      true,
+    )
+
+    fireEvent.change(screen.getByLabelText('Секрет подписи'), {
+      target: { value: 'общий-секрет-на-все-формы' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    // Один запрос, а не «завести, потом включить подпись».
+    await waitFor(() => expect(posts.length).toBe(1))
+    expect(posts[0]!.body).toEqual({
+      name: '',
+      url: 'https://hooks.example.com/x',
+      secret: 'общий-секрет-на-все-формы',
+    })
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    vi.unstubAllGlobals()
+  })
+
+  it('в настройках одно «Сохранить» шлёт и правку, и секрет', async () => {
+    const calls = mockWebhookCalls(state({ webhooks: [hook({ signed: true })] }))
     renderView(state({ webhooks: [hook({ signed: true })] }))
     fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
 
-    fireEvent.click(screen.getByRole('button', { name: 'Задать свой' }))
-    const field = screen.getByLabelText('Свой секрет подписи')
-    // Короткий секрет обесценил бы подпись — кнопка не даёт его отправить.
-    fireEvent.change(field, { target: { value: '123456' } })
-    expect(
-      (screen.getByRole('button', { name: 'Сохранить секрет' }) as HTMLButtonElement).disabled,
-    ).toBe(true)
+    fireEvent.change(screen.getByLabelText('Секрет подписи'), {
+      target: { value: 'общий-секрет-на-все-формы' },
+    })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
 
-    fireEvent.change(field, { target: { value: 'общий-секрет-на-все-формы' } })
-    fireEvent.click(screen.getByRole('button', { name: 'Сохранить секрет' }))
+    await waitFor(() => expect(calls.length).toBe(2))
+    expect(calls[0]!.method).toBe('PATCH')
+    expect(calls[1]!.method).toBe('POST')
+    expect(calls[1]!.url).toContain('/webhooks/hook-1/secret')
+    expect(calls[1]!.body).toEqual({ secret: 'общий-секрет-на-все-формы' })
+    // Второй кнопки «Сохранить секрет» нет: окно закрывается одним нажатием.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    vi.unstubAllGlobals()
+  })
 
-    await waitFor(() => expect(sent.length).toBe(1))
-    expect(sent[0]).toEqual({ secret: 'общий-секрет-на-все-формы' })
+  it('пустое поле секрета у подписанного вебхука его НЕ меняет', async () => {
+    const calls = mockWebhookCalls(state({ webhooks: [hook({ signed: true })] }))
+    renderView(state({ webhooks: [hook({ signed: true })] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls.map((c) => c.method)).toEqual(['PATCH'])
+    vi.unstubAllGlobals()
+  })
+
+  it('«Без подписи» у подписанного вебхука выключает её при сохранении', async () => {
+    const calls = mockWebhookCalls(state({ webhooks: [hook({ signed: true })] }))
+    renderView(state({ webhooks: [hook({ signed: true })] }))
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Без подписи' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+    await waitFor(() => expect(calls.length).toBe(2))
+    expect(calls[1]!.method).toBe('DELETE')
+    expect(calls[1]!.url).toContain('/webhooks/hook-1/secret')
     vi.unstubAllGlobals()
   })
 })
+
+// mockWebhookCalls подменяет fetch: состояние таба отдаётся настоящим JSON (иначе
+// перезапрос после мутации подменил бы окно экраном отказа), остальное считается.
+// secret — что отдать на запрос показа секрета.
+function mockWebhookCalls(
+  snapshot: unknown,
+  opts: { secret?: string } = {},
+): { method: string; url: string; body: unknown }[] {
+  const calls: { method: string; url: string; body: unknown }[] = []
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    if (method === 'GET') {
+      const body = url.includes('/secret') ? { secret: opts.secret ?? '' } : snapshot
+      return new Response(JSON.stringify(body), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null })
+    return new Response(null, { status: 204 })
+  })
+  vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+  return calls
+}

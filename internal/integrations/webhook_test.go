@@ -178,20 +178,23 @@ func newWebhookService(access integrations.Access, store *fakeWebhookStore, egre
 
 const testHookURL = "https://hooks.zapier.com/hooks/catch/123/abcSECRET/"
 
+// testSecret — секрет подписи, какой его вводит автор: своего продукт не
+// генерирует (ADR §10, четвёртый круг).
+const testSecret = "секрет-проверки-подписи"
+
 // createHook заводит вебхук БЕЗ подписи (умолчание продукта) и сразу включает
-// её нашим секретом — большинству проверок нужен вебхук с секретом.
+// её — большинству проверок нужен вебхук с секретом.
 func createHook(t *testing.T, svc *integrations.Service) (integrations.Webhook, string) {
 	t.Helper()
-	w, _, err := svc.CreateWebhook(context.Background(), testUser, testForm,
+	w, err := svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{Name: " CRM ", URL: "  " + testHookURL + "  "})
 	if err != nil {
 		t.Fatalf("create webhook: %v", err)
 	}
-	secret, err := svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, "")
-	if err != nil {
+	if err := svc.SetWebhookSecret(context.Background(), testUser, testForm, w.ID, testSecret); err != nil {
 		t.Fatalf("включение подписи: %v", err)
 	}
-	return w, secret
+	return w, testSecret
 }
 
 func TestCreateWebhook_StoresSealedSecretAndAuthor(t *testing.T) {
@@ -200,9 +203,6 @@ func TestCreateWebhook_StoresSealedSecretAndAuthor(t *testing.T) {
 
 	w, secret := createHook(t, svc)
 
-	if !strings.HasPrefix(secret, "whsec_") || len(secret) < 40 {
-		t.Fatalf("секрет %q — ожидался префикс и 32 случайных байта", secret)
-	}
 	stored := store.hooks[w.ID]
 	if bytes.Contains(stored.SecretSealed, []byte(secret)) {
 		t.Fatal("секрет лёг в базу открытым текстом")
@@ -226,7 +226,7 @@ func TestCreateWebhook_URLRefusalsAreHuman(t *testing.T) {
 		safehttp.ErrOwnHost, fmt.Errorf("%w: 10.0.0.5", safehttp.ErrForbiddenAddress), safehttp.ErrNotFound,
 	} {
 		svc := newWebhookService(fakeAccess{}, newFakeWebhookStore(), &fakeEgress{err: cause})
-		_, _, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL})
+		_, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL})
 		if !errors.Is(err, domain.ErrValidation) {
 			t.Errorf("%v: ошибка %v, ожидался ErrValidation", cause, err)
 			continue
@@ -238,7 +238,7 @@ func TestCreateWebhook_URLRefusalsAreHuman(t *testing.T) {
 
 	boom := errors.New("resolver exploded")
 	svc := newWebhookService(fakeAccess{}, newFakeWebhookStore(), &fakeEgress{err: boom})
-	_, _, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL})
+	_, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL})
 	if errors.Is(err, domain.ErrValidation) || !errors.Is(err, boom) {
 		t.Fatalf("незнакомая ошибка = %v — выдана за отказ адреса", err)
 	}
@@ -247,7 +247,7 @@ func TestCreateWebhook_URLRefusalsAreHuman(t *testing.T) {
 func TestCreateWebhook_EmptyURL(t *testing.T) {
 	egress := &fakeEgress{}
 	svc := newWebhookService(fakeAccess{}, newFakeWebhookStore(), egress)
-	_, _, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: "   "})
+	_, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: "   "})
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка %v, ожидался ErrValidation", err)
 	}
@@ -261,13 +261,13 @@ func TestCreateWebhook_EmptyURL(t *testing.T) {
 func TestCreateWebhook_NoResolveWithoutRight(t *testing.T) {
 	egress := &fakeEgress{}
 	svc := newWebhookService(readerAccess(), newFakeWebhookStore(), egress)
-	if _, _, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL}); !errors.Is(err, domain.ErrForbidden) {
+	if _, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL}); !errors.Is(err, domain.ErrForbidden) {
 		t.Fatalf("без права на запись: %v, ожидался ErrForbidden", err)
 	}
 
 	stranger := integrations.NewService(nil, directTx{}, &fakeStore{}, fakeAccess{},
 		fakeForms{getErr: domain.ErrNotFound}, nil, testKey).WithWebhooks(newFakeWebhookStore(), egress, nil)
-	if _, _, err := stranger.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL}); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := stranger.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL}); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("чужая форма: %v, ожидался ErrNotFound", err)
 	}
 	if egress.calls != 0 {
@@ -279,7 +279,7 @@ func TestCreateWebhook_Cap(t *testing.T) {
 	store := newFakeWebhookStore()
 	store.full = true
 	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
-	_, _, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL})
+	_, err := svc.CreateWebhook(context.Background(), testUser, testForm, integrations.WebhookInput{URL: testHookURL})
 	if !errors.Is(err, domain.ErrValidation) || !strings.Contains(err.Error(), "5") {
 		t.Fatalf("ошибка %v, ожидался отказ с потолком", err)
 	}
@@ -287,7 +287,7 @@ func TestCreateWebhook_Cap(t *testing.T) {
 
 func TestCreateWebhook_LongName(t *testing.T) {
 	svc := newWebhookService(fakeAccess{}, newFakeWebhookStore(), &fakeEgress{})
-	_, _, err := svc.CreateWebhook(context.Background(), testUser, testForm,
+	_, err := svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{Name: strings.Repeat("я", integrations.MaxConnectionNameLen+1), URL: testHookURL})
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка %v, ожидался ErrValidation", err)
@@ -381,38 +381,35 @@ func TestUpdateWebhook_OtherFormNotFound(t *testing.T) {
 	if _, err := svc.WebhookSecret(context.Background(), testUser, testForm, foreign); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("секрет чужого: %v, ожидался ErrNotFound", err)
 	}
-	if _, err := svc.ReissueWebhookSecret(context.Background(), testUser, testForm, foreign, ""); !errors.Is(err, domain.ErrNotFound) {
-		t.Fatalf("перевыпуск чужого: %v, ожидался ErrNotFound", err)
+	if err := svc.SetWebhookSecret(context.Background(), testUser, testForm, foreign, testSecret); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("секрет чужому: %v, ожидался ErrNotFound", err)
 	}
 	if _, ok := store.hooks[foreign]; !ok {
 		t.Fatal("чужой вебхук удалён")
 	}
 }
 
-func TestWebhookSecret_ShowAndReissue(t *testing.T) {
+func TestWebhookSecret_ShowAndReplace(t *testing.T) {
 	store := newFakeWebhookStore()
 	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
 	w, secret := createHook(t, svc)
 
 	got, err := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID)
 	if err != nil || got != secret {
-		t.Fatalf("показ секрета = %q, %v; ожидался выданный при заведении", got, err)
+		t.Fatalf("показ секрета = %q, %v; ожидался заданный при включении подписи", got, err)
 	}
-	fresh, err := svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, "")
-	if err != nil {
-		t.Fatalf("перевыпуск: %v", err)
+	const next = "новый-секрет-на-все-формы"
+	if err := svc.SetWebhookSecret(context.Background(), testUser, testForm, w.ID, next); err != nil {
+		t.Fatalf("смена секрета: %v", err)
 	}
-	if fresh == secret {
-		t.Fatal("перевыпуск вернул прежний секрет")
-	}
-	if got, _ := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID); got != fresh {
-		t.Fatalf("после перевыпуска показан %q, ожидался новый", got)
+	if got, _ := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID); got != next {
+		t.Fatalf("после смены показан %q, ожидался новый", got)
 	}
 }
 
 // Шифротекст, переживший ротацию FORM_TOKEN_SECRET, не открывается — человеку
-// нужен ответ «перевыпустите», а не пятисотка.
-func TestWebhookSecret_UnreadableAsksReissue(t *testing.T) {
+// нужен ответ «задайте заново», а не пятисотка.
+func TestWebhookSecret_UnreadableAsksToSetAgain(t *testing.T) {
 	store := newFakeWebhookStore()
 	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
 	w, _ := createHook(t, svc)
@@ -421,8 +418,8 @@ func TestWebhookSecret_UnreadableAsksReissue(t *testing.T) {
 	store.hooks[w.ID] = stale
 
 	_, err := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID)
-	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "перевыпустите") {
-		t.Fatalf("ошибка %v, ожидался конфликт с советом перевыпустить", err)
+	if !errors.Is(err, domain.ErrConflict) || !strings.Contains(err.Error(), "задайте его заново") {
+		t.Fatalf("ошибка %v, ожидался конфликт с советом задать секрет заново", err)
 	}
 }
 
@@ -460,48 +457,49 @@ func TestFormStatus_WebhookURLOnlyForEditors(t *testing.T) {
 	}
 }
 
-// Секрет, заданный АВТОРОМ: у человека с двадцатью формами иначе двадцать разных
-// секретов и двадцать записей в конфиге получателя (ADR §10, второй круг).
-func TestWebhookSecret_CustomAccepted(t *testing.T) {
+// Секрет придумывает автор: у человека с двадцатью формами иначе двадцать разных
+// секретов и двадцать записей в конфиге получателя (ADR §10, четвёртый круг).
+func TestWebhookSecret_Accepted(t *testing.T) {
 	store := newFakeWebhookStore()
 	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
-	w, generated := createHook(t, svc)
+	w, before := createHook(t, svc)
 
 	const mine = "  общий-секрет-на-все-формы  "
-	got, err := svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, mine)
-	if err != nil {
+	if err := svc.SetWebhookSecret(context.Background(), testUser, testForm, w.ID, mine); err != nil {
 		t.Fatalf("свой секрет: %v", err)
 	}
-	if got != strings.TrimSpace(mine) {
-		t.Fatalf("секрет = %q — пробелы по краям не обрезаны", got)
-	}
-	if got == generated {
-		t.Fatal("свой секрет не заменил наш")
-	}
-	// Лёг шифротекстом, как и наш собственный.
-	if bytes.Contains(store.hooks[w.ID].SecretSealed, []byte(strings.TrimSpace(mine))) {
-		t.Fatal("свой секрет лёг в базу открытым текстом")
-	}
 	shown, err := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID)
-	if err != nil || shown != strings.TrimSpace(mine) {
-		t.Fatalf("показан %q, %v — ожидался секрет автора", shown, err)
+	if err != nil {
+		t.Fatalf("показ: %v", err)
+	}
+	if shown != strings.TrimSpace(mine) {
+		t.Fatalf("секрет = %q — пробелы по краям не обрезаны", shown)
+	}
+	if shown == before {
+		t.Fatal("новый секрет не заменил прежний")
+	}
+	if bytes.Contains(store.hooks[w.ID].SecretSealed, []byte(strings.TrimSpace(mine))) {
+		t.Fatal("секрет лёг в базу открытым текстом")
 	}
 }
 
-// Слабый секрет обесценивает подпись целиком, поэтому у авторского есть планка.
-// Нашего собственного она не касается — он длиннее вчетверо.
-func TestWebhookSecret_CustomRejected(t *testing.T) {
+// Слабый секрет обесценивает подпись целиком, поэтому у него есть планка. Пустой
+// в этом же списке: «сгенерируй сам» продукт больше не умеет, и молчаливая
+// генерация вместо отказа вернула бы человеку секрет, которого он не вводил.
+func TestWebhookSecret_Rejected(t *testing.T) {
 	store := newFakeWebhookStore()
 	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
 	w, before := createHook(t, svc)
 
 	for _, bad := range []string{
+		"",
+		"   ",
 		"123456",
 		strings.Repeat("я", integrations.MinWebhookSecretLen-1),
 		strings.Repeat("x", integrations.MaxWebhookSecretLen+1),
 		"секрет-с-переносом\nстроки-и-длиной",
 	} {
-		_, err := svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, bad)
+		err := svc.SetWebhookSecret(context.Background(), testUser, testForm, w.ID, bad)
 		if !errors.Is(err, domain.ErrValidation) {
 			t.Errorf("секрет %q: ошибка %v, ожидался ErrValidation", bad, err)
 		}
@@ -519,13 +517,10 @@ func TestCreateWebhook_WithAuthorSecret(t *testing.T) {
 	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
 
 	const mine = "общий-секрет-на-все-формы"
-	w, secret, err := svc.CreateWebhook(context.Background(), testUser, testForm,
+	w, err := svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{URL: testHookURL, Secret: mine})
 	if err != nil {
 		t.Fatalf("заведение со своим секретом: %v", err)
-	}
-	if secret != mine {
-		t.Fatalf("секрет = %q, ожидался заданный автором", secret)
 	}
 	if shown, _ := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID); shown != mine {
 		t.Fatalf("показан %q", shown)
@@ -533,7 +528,7 @@ func TestCreateWebhook_WithAuthorSecret(t *testing.T) {
 
 	// Короткий отвергается, и вебхук при этом не заводится.
 	before := len(store.hooks)
-	_, _, err = svc.CreateWebhook(context.Background(), testUser, testForm,
+	_, err = svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{URL: testHookURL, Secret: "123456"})
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("короткий секрет: %v, ожидался ErrValidation", err)
@@ -544,29 +539,28 @@ func TestCreateWebhook_WithAuthorSecret(t *testing.T) {
 }
 
 // Подключение — это адрес и всё: подписи по умолчанию нет, секрета не заводится.
-// Включается она отдельно, тумблером в настройках, и так же выключается.
+// Включается она отдельно — кнопкой и введённым секретом, — и так же выключается.
 func TestWebhookSignature_OffByDefault(t *testing.T) {
 	store := newFakeWebhookStore()
 	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
 
-	w, secret, err := svc.CreateWebhook(context.Background(), testUser, testForm,
+	w, err := svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{URL: testHookURL})
 	if err != nil {
 		t.Fatalf("подключение: %v", err)
 	}
-	if secret != "" || len(store.hooks[w.ID].SecretSealed) != 0 {
-		t.Fatalf("у свежего вебхука завёлся секрет %q — подписи по умолчанию нет", secret)
+	if len(store.hooks[w.ID].SecretSealed) != 0 {
+		t.Fatal("у свежего вебхука завёлся секрет — подписи по умолчанию нет")
 	}
 	// Показывать нечего: секрета нет, и это состояние, а не сбой.
 	if _, err := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("показ секрета выключенной подписи: %v, ожидался ErrNotFound", err)
 	}
 
-	fresh, err := svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, "")
-	if err != nil {
+	if err := svc.SetWebhookSecret(context.Background(), testUser, testForm, w.ID, testSecret); err != nil {
 		t.Fatalf("включение подписи: %v", err)
 	}
-	if fresh == "" || len(store.hooks[w.ID].SecretSealed) == 0 {
+	if len(store.hooks[w.ID].SecretSealed) == 0 {
 		t.Fatal("включение подписи не завело секрет")
 	}
 

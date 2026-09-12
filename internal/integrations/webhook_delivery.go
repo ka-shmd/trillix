@@ -285,7 +285,7 @@ func (s *Service) breakWebhook(ctx context.Context, w Webhook, submissionID uuid
 // Текст РУССКИЙ и наш: ответ получателя на экран не попадает ни в каком виде.
 func webhookFailureReason(code int, cause error) (permanent bool, reason string) {
 	if errors.Is(cause, errSecretUnreadable) {
-		return true, "Секрет подписи больше не читается — перевыпустите его в настройках вебхука."
+		return true, "Секрет подписи больше не читается — задайте его заново в настройках вебхука."
 	}
 	if cause != nil {
 		switch safehttp.Classify(cause) {

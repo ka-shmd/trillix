@@ -18,9 +18,9 @@ import {
   listSpreadsheets,
   recheckSheet,
   refillSheet,
-  reissueWebhookSecret,
   retryDelivery,
   retryWebhookDelivery,
+  setWebhookSecret,
   testWebhook,
   unlinkSheet,
   updateConnection,
@@ -183,10 +183,13 @@ export function useUpdateConnection(formId: string) {
 
 // --- ВЕБХУКИ (фаза 28) ---
 
+// Подключение несёт адрес, название и — если человек нажал «Подписывать
+// запросы» — введённый им секрет: одно нажатие «Подключить», один запрос.
 export function useCreateWebhook(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (input: { name: string; url: string }) => createWebhook(formId, input),
+    mutationFn: (input: { name: string; url: string; secret?: string }) =>
+      createWebhook(formId, input),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
@@ -216,7 +219,7 @@ export function useDeleteWebhook(formId: string) {
 }
 
 // Выключение подписи МЕНЯЕТ состояние таба (признак signed), поэтому
-// инвалидирует его — в отличие от перевыпуска, который меняет только секрет.
+// инвалидирует его.
 export function useDisableWebhookSignature(formId: string) {
   const qc = useQueryClient()
   return useMutation({
@@ -225,14 +228,14 @@ export function useDisableWebhookSignature(formId: string) {
   })
 }
 
-// Включение подписи и перевыпуск секрета: признак signed меняется, значит
-// состояние таба перезапрашивается тоже.
-export function useReissueWebhookSecret(formId: string) {
+// Включение подписи и смена секрета — одна ручка: и то и другое означает «с
+// этого момента запросы подписаны вот этим». Признак signed при включении
+// меняется, значит состояние таба перезапрашивается тоже.
+export function useSetWebhookSecret(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    // secret пуст — сервер сгенерирует свой; задан — берётся авторский.
-    mutationFn: ({ webhookId, secret }: { webhookId: string; secret?: string }) =>
-      reissueWebhookSecret(formId, webhookId, secret),
+    mutationFn: ({ webhookId, secret }: { webhookId: string; secret: string }) =>
+      setWebhookSecret(formId, webhookId, secret),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }

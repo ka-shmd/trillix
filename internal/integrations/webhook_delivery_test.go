@@ -277,12 +277,12 @@ func (h *deliveryHarness) clock() time.Time { return h.now }
 // подписи — свой тест ниже.
 func (h *deliveryHarness) hook(t *testing.T, n int) (integrations.Webhook, []uuid.UUID) {
 	t.Helper()
-	w, _, err := h.svc.CreateWebhook(context.Background(), testUser, testForm,
+	w, err := h.svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{Name: "CRM", URL: testHookURL})
 	if err != nil {
 		t.Fatalf("создание вебхука: %v", err)
 	}
-	if _, err := h.svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, ""); err != nil {
+	if err := h.svc.SetWebhookSecret(context.Background(), testUser, testForm, w.ID, testSecret); err != nil {
 		t.Fatalf("включение подписи: %v", err)
 	}
 	ids := make([]uuid.UUID, n)
@@ -680,7 +680,7 @@ func TestCleanupWebhookQueue(t *testing.T) {
 // нём нет вовсе — ни пустого, ни с чужим секретом.
 func TestDeliverWebhooks_UnsignedByDefault(t *testing.T) {
 	h := newDeliveryHarness(t, http.StatusOK)
-	w, _, err := h.svc.CreateWebhook(context.Background(), testUser, testForm,
+	w, err := h.svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{URL: testHookURL})
 	if err != nil {
 		t.Fatalf("подключение: %v", err)

@@ -2,20 +2,20 @@ import { z } from 'zod'
 
 import { apiRequest } from '../../shared/api/client'
 import {
-  createdWebhookSchema,
   deliveryPageSchema,
   formIntegrationsSchema,
   formSheetSchema,
   sheetListSchema,
   spreadsheetListSchema,
+  webhookSchema,
   webhookSecretSchema,
   webhookTestSchema,
-  type CreatedWebhook,
   type DeliveryPage,
   type FormIntegrations,
   type FormSheet,
   type SheetRef,
   type SpreadsheetRef,
+  type Webhook,
   type WebhookTest,
 } from '../../entities/integration'
 
@@ -196,17 +196,17 @@ export function startUrl(reconnect?: string): string {
 // ВЕБХУКИ (фаза 28). Второй вид цели доставки: адрес чужой системы вместо
 // таблицы. Адреса свои — под формой, как и связки.
 
-// Заведение отдаёт вебхук ВМЕСТЕ с секретом подписи: показать сразу.
-// Подключение — это адрес и название: подписи по умолчанию нет, и секрет здесь
-// не участвует. Включают её потом, тумблером в настройках.
+// Подключение — это адрес и название. Секрет подписи едет тем же запросом, если
+// человек нажал «Подписывать запросы» и ввёл его: подпись предлагают сразу, но по
+// умолчанию её нет. Обратно секрет не возвращается — его ввёл сам автор.
 export function createWebhook(
   formId: string,
-  input: { name: string; url: string },
-): Promise<CreatedWebhook> {
+  input: { name: string; url: string; secret?: string },
+): Promise<Webhook> {
   return apiRequest(`/forms/${formId}/webhooks`, {
     method: 'POST',
     body: input,
-    schema: createdWebhookSchema,
+    schema: webhookSchema,
   })
 }
 
@@ -233,31 +233,25 @@ export function getWebhookSecret(formId: string, webhookId: string): Promise<str
   }).then((r) => r.secret)
 }
 
-// Перевыпуск действует сразу: старый секрет перестаёт подходить без окна.
+// Включить подпись либо сменить секрет. Действует сразу: старый секрет перестаёт
+// подходить без переходного окна.
 //
-// secret пуст — сервер сгенерирует свой. Задан — берётся авторский: у человека с
-// двадцатью формами иначе двадцать разных секретов и столько же записей в
-// конфиге получателя. Планка длины — на бэке (16 символов), здесь только не даём
-// отправить заведомо короткий.
-export function reissueWebhookSecret(
-  formId: string,
-  webhookId: string,
-  secret?: string,
-): Promise<string> {
+// Секрет придумывает автор — своего продукт не генерирует. Планка длины на бэке
+// (16 символов), здесь только не даём отправить заведомо короткий.
+export function setWebhookSecret(formId: string, webhookId: string, secret: string): Promise<void> {
   return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, {
     method: 'POST',
-    body: secret ? { secret } : undefined,
-    schema: webhookSecretSchema,
-  }).then((r) => r.secret)
+    body: { secret },
+  })
 }
 
-// Проверка шлёт получателю образец с пометкой test. Удачная будит цель: и
-// сломанную, и спящую после неудачи — накопленная очередь уедет следом.
 // Выключение подписи: секрет удаляется, заголовок в запросах пропадает.
 export function disableWebhookSignature(formId: string, webhookId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, { method: 'DELETE' })
 }
 
+// Проверка шлёт получателю образец с пометкой test. Удачная будит цель: и
+// сломанную, и спящую после неудачи — накопленная очередь уедет следом.
 export function testWebhook(formId: string, webhookId: string): Promise<WebhookTest> {
   return apiRequest(`/forms/${formId}/webhooks/${webhookId}/test`, {
     method: 'POST',
