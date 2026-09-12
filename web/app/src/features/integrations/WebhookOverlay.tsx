@@ -1,5 +1,5 @@
 import { useRef, useState } from 'react'
-import { AlertCircle, Check, Eye, KeyRound, ListPlus, Plus, Send, X } from 'lucide-react'
+import { AlertCircle, Check, Eye, Plus, Send, X } from 'lucide-react'
 
 import type { Webhook, WebhookHeader, WebhookTest } from '../../entities/integration'
 import { getWebhookSecret } from './api'
@@ -254,7 +254,7 @@ export function WebhookOverlay({
 function SignatureOffer({ onOn }: { onOn: () => void }) {
   return (
     <div>
-      <CompactAction icon={KeyRound} label="Подписывать запросы" onClick={onOn} />
+      <CompactAction icon={Plus} label="Подписывать запросы" onClick={onOn} />
     </div>
   )
 }
@@ -328,7 +328,7 @@ interface HeaderRow extends WebhookHeader {
 function HeadersOffer({ onOn }: { onOn: () => void }) {
   return (
     <div>
-      <CompactAction icon={ListPlus} label="Свои заголовки" onClick={onOn} />
+      <CompactAction icon={Plus} label="Свои заголовки" onClick={onOn} />
     </div>
   )
 }
@@ -384,12 +384,12 @@ function HeadersField({
           </Button>
         </div>
       ))}
+      {/* Прижата ВПРАВО, под крестики строк: это продолжение уже набранного
+          списка, а не следующий вопрос окна. Слева она вставала бы в один столбец
+          с полями и читалась бы наравне с ними. */}
       {rows.length < MAX_HEADERS && (
-        <div>
-          <Button variant="outline" size="sm" onClick={onAdd}>
-            <Plus className="size-4" aria-hidden />
-            Ещё заголовок
-          </Button>
+        <div className="flex justify-end">
+          <CompactAction icon={Plus} label="Ещё заголовок" onClick={onAdd} />
         </div>
       )}
       <p className="text-sm text-muted-foreground">
