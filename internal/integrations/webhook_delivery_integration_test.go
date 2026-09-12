@@ -76,6 +76,22 @@ func newReceiver(t *testing.T, code int) (*receiver, *httptest.Server, integrati
 	return rec, srv, safehttp.New(safehttp.AllowAll{}, safehttp.Options{RootCAs: pool})
 }
 
+// enableSignature включает подпись запросов и отдаёт секрет: по умолчанию
+// подписи нет (ADR §10), а проверкам подписи нужен подписанный запрос.
+func enableSignature(t *testing.T, c *http.Client, srv *httptest.Server, formID, webhookID string) string {
+	t.Helper()
+	r := postWithCSRF(t, c, srv, "/api/v1/forms/"+formID+"/webhooks/"+webhookID+"/secret")
+	if r.StatusCode != http.StatusOK {
+		closeBody(t, r)
+		t.Fatalf("включение подписи: статус %d", r.StatusCode)
+	}
+	var body struct {
+		Secret string `json:"secret"`
+	}
+	decode(t, r, &body)
+	return body.Secret
+}
+
 // enqueueWebhook ставит ответ в очередь цели напрямую: путь «приём ответа →
 // очередь» проверяется в internal/submissions (он живёт в SQL приёма).
 func enqueueWebhook(t *testing.T, webhookID, submissionID string) {
@@ -114,6 +130,7 @@ func TestWebhookDelivery_EndToEnd(t *testing.T) {
 	}
 	var hook webhookDTO
 	decode(t, r, &hook)
+	hook.Secret = enableSignature(t, owner, srv, formID, hook.ID)
 
 	subID := newSubmission(t, formID, versionID, `{"b1":"Кирилл"}`)
 	enqueueWebhook(t, hook.ID, subID)

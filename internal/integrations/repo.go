@@ -634,6 +634,17 @@ func (Repo) UpdateWebhookSecret(ctx context.Context, db postgres.DBTX, id, formI
 	return n, nil
 }
 
+// ClearWebhookSecret выключает подпись: секрета у вебхука больше нет.
+func (Repo) ClearWebhookSecret(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).ClearFormWebhookSecret(ctx, postgres.ClearFormWebhookSecretParams{
+		ID: id, FormID: formID,
+	})
+	if err != nil {
+		return 0, fmt.Errorf("clear form webhook secret: %w", err)
+	}
+	return n, nil
+}
+
 // DeleteWebhook удаляет вебхук формы и отдаёт число строк.
 func (Repo) DeleteWebhook(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error) {
 	n, err := postgres.New(db).DeleteFormWebhook(ctx, postgres.DeleteFormWebhookParams{ID: id, FormID: formID})

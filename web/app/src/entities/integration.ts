@@ -75,6 +75,9 @@ export const webhookSchema = z.object({
   // у Zapier и Make лежит токен получателя. Пусто — у спрашивающего нет права
   // на правку, и окно настройки ему показывать нечего.
   url: z.string().optional(),
+  // signed — включена ли подпись запросов. По умолчанию выключена: подключение
+  // это адрес и всё, а подпись нужна лишь тому, кто собирается её проверять.
+  signed: z.boolean().default(false),
   enabled: z.boolean(),
   status: webhookStatusSchema,
   lastError: z.string().optional(),
@@ -83,10 +86,10 @@ export const webhookSchema = z.object({
   queued: z.number().int().default(0),
 })
 
-// Заведённый вебхук приезжает вместе с секретом подписи — показать сразу, не
-// заставляя жать «Показать» в только что открытом окне. Больше секрет в
-// состоянии таба не появляется никогда.
-export const createdWebhookSchema = webhookSchema.extend({ secret: z.string() })
+// Заведённый вебхук. Секрет приезжает, только если автор назвал свой при
+// подключении: по умолчанию подписи нет вовсе. В состоянии таба секрета не
+// бывает никогда.
+export const createdWebhookSchema = webhookSchema.extend({ secret: z.string().optional() })
 
 export const webhookSecretSchema = z.object({ secret: z.string() })
 

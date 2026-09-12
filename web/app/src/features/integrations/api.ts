@@ -197,9 +197,11 @@ export function startUrl(reconnect?: string): string {
 // таблицы. Адреса свои — под формой, как и связки.
 
 // Заведение отдаёт вебхук ВМЕСТЕ с секретом подписи: показать сразу.
+// Подключение — это адрес и название: подписи по умолчанию нет, и секрет здесь
+// не участвует. Включают её потом, тумблером в настройках.
 export function createWebhook(
   formId: string,
-  input: { name: string; url: string; secret?: string },
+  input: { name: string; url: string },
 ): Promise<CreatedWebhook> {
   return apiRequest(`/forms/${formId}/webhooks`, {
     method: 'POST',
@@ -251,6 +253,11 @@ export function reissueWebhookSecret(
 
 // Проверка шлёт получателю образец с пометкой test. Удачная будит цель: и
 // сломанную, и спящую после неудачи — накопленная очередь уедет следом.
+// Выключение подписи: секрет удаляется, заголовок в запросах пропадает.
+export function disableWebhookSignature(formId: string, webhookId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, { method: 'DELETE' })
+}
+
 export function testWebhook(formId: string, webhookId: string): Promise<WebhookTest> {
   return apiRequest(`/forms/${formId}/webhooks/${webhookId}/test`, {
     method: 'POST',

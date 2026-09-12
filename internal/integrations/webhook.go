@@ -56,7 +56,10 @@ type Webhook struct {
 	Name   string
 	URL    string
 	// Host — хост адреса, выведенный при чтении: его видят все, кто видит форму.
-	Host         string
+	Host string
+	// SecretSealed — секрет подписи шифротекстом. ПУСТО = подпись выключена
+	// (0063): заголовка в запросе не появляется, и на экране о секрете нет ни
+	// одного поля. Это умолчание.
 	SecretSealed []byte
 	// SetBy — кто последним задал адрес; нулевой — его аккаунт удалён, и
 	// отвечать за доставку некому.
@@ -114,6 +117,7 @@ type WebhookStore interface {
 	UpdateWebhookSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error)
 	UpdateWebhookURL(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, rawURL string, setBy uuid.UUID) (int64, error)
 	UpdateWebhookSecret(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, sealed []byte) (int64, error)
+	ClearWebhookSecret(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	DeleteWebhook(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	ClearWebhookQueue(ctx context.Context, db postgres.DBTX, id uuid.UUID) error
 
@@ -166,9 +170,9 @@ func (s *Service) WithWebhooks(store WebhookStore, egress Egress, now func() tim
 type WebhookInput struct {
 	Name string
 	URL  string
-	// Secret — секрет подписи автора. Пусто = генерируем сами. Спрашивается
-	// ЗДЕСЬ, а не только в правке: про секрет человек думает ровно в момент
-	// подключения — он в этот же заход настраивает проверку у получателя.
+	// Secret — секрет подписи автора. Пусто = вебхук заводится БЕЗ подписи:
+	// подключение это адрес и всё, а подпись включается потом тумблером в
+	// настройках (ADR §10, третий круг).
 	Secret string
 }
 
@@ -202,9 +206,13 @@ func (s *Service) CreateWebhook(ctx context.Context, userID, formID uuid.UUID, i
 	if err != nil {
 		return Webhook{}, "", err
 	}
-	secret, sealed, err := s.sealedSecret(in.Secret)
-	if err != nil {
-		return Webhook{}, "", err
+	// Подписи по умолчанию нет: секрет заводится, только если автор назвал свой.
+	var secret string
+	var sealed []byte
+	if strings.TrimSpace(in.Secret) != "" {
+		if secret, sealed, err = s.sealedSecret(in.Secret); err != nil {
+			return Webhook{}, "", err
+		}
 	}
 
 	w := NewWebhook{
@@ -300,6 +308,8 @@ func (s *Service) UpdateWebhook(ctx context.Context, userID, formID, webhookID u
 }
 
 // WebhookSecret отдаёт секрет подписи в открытом виде — по нажатию «Показать».
+// У вебхука без подписи секрета нет вовсе: это не ошибка, а его состояние, и
+// отвечаем мы тем же, чем на несуществующее, — 404.
 func (s *Service) WebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error) {
 	if s.webhooks == nil {
 		return "", domain.ErrNotFound
@@ -310,6 +320,9 @@ func (s *Service) WebhookSecret(ctx context.Context, userID, formID, webhookID u
 	w, err := s.webhookOfForm(ctx, formID, webhookID)
 	if err != nil {
 		return "", err
+	}
+	if len(w.SecretSealed) == 0 {
+		return "", domain.ErrNotFound
 	}
 	secret, err := openWebhookSecret(s.key, w.SecretSealed)
 	if err != nil {
@@ -345,6 +358,27 @@ func (s *Service) ReissueWebhookSecret(ctx context.Context, userID, formID, webh
 		return "", domain.ErrNotFound
 	}
 	return secret, nil
+}
+
+// DisableWebhookSignature выключает подпись: секрет удаляется, и заголовок в
+// запросах больше не появляется. Отдельным действием, а не «пустым секретом» в
+// правке: выключение подписи — осознанный шаг, и спутать его с очисткой поля
+// нельзя.
+func (s *Service) DisableWebhookSignature(ctx context.Context, userID, formID, webhookID uuid.UUID) error {
+	if s.webhooks == nil {
+		return domain.ErrNotFound
+	}
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return err
+	}
+	n, err := s.webhooks.ClearWebhookSecret(ctx, s.db, webhookID, formID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }
 
 // DeleteWebhook удаляет вебхук; его очередь и журнал уходят каскадом.

@@ -206,17 +206,22 @@ func (s *Service) deliverToWebhook(ctx context.Context, w Webhook, submissionID 
 	return s.webhookFailed(ctx, w, submissionID, resp.StatusCode, err)
 }
 
-// sendWebhook подписывает тело и отправляет его. Секрет открывается здесь —
-// ЕДИНСТВЕННОЕ место расшифровки на пути доставки.
+// sendWebhook отправляет тело и, если подпись включена, подписывает его. Секрет
+// открывается здесь — ЕДИНСТВЕННОЕ место расшифровки на пути доставки.
+//
+// Подписи у вебхука может не быть вовсе (0063, ADR §10): тогда заголовка не
+// появляется, и это штатное умолчание, а не сбой.
 func (s *Service) sendWebhook(ctx context.Context, w Webhook, body []byte) (resp safehttp.Response, err error) {
-	secret, err := openWebhookSecret(s.key, w.SecretSealed)
-	if err != nil {
-		return safehttp.Response{}, errSecretUnreadable
-	}
 	header := http.Header{}
 	header.Set("Content-Type", "application/json; charset=utf-8")
 	header.Set("User-Agent", webhookUserAgent)
-	header.Set(domain.WebhookSignatureHeader, domain.SignWebhook(secret, s.now(), body))
+	if len(w.SecretSealed) > 0 {
+		secret, err := openWebhookSecret(s.key, w.SecretSealed)
+		if err != nil {
+			return safehttp.Response{}, errSecretUnreadable
+		}
+		header.Set(domain.WebhookSignatureHeader, domain.SignWebhook(secret, s.now(), body))
+	}
 	return s.egress.Post(ctx, w.URL, header, body)
 }
 

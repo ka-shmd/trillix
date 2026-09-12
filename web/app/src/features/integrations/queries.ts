@@ -10,6 +10,7 @@ import {
   createSheet,
   createWebhook,
   deleteWebhook,
+  disableWebhookSignature,
   getFormIntegrations,
   listDeliveries,
   listWebhookDeliveries,
@@ -185,8 +186,7 @@ export function useUpdateConnection(formId: string) {
 export function useCreateWebhook(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (input: { name: string; url: string; secret?: string }) =>
-      createWebhook(formId, input),
+    mutationFn: (input: { name: string; url: string }) => createWebhook(formId, input),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
@@ -215,13 +215,25 @@ export function useDeleteWebhook(formId: string) {
   })
 }
 
-// Перевыпуск секрета состояние таба не меняет (секрета там нет вовсе), поэтому
-// и не инвалидирует его: новый секрет живёт в окне, которое его запросило.
+// Выключение подписи МЕНЯЕТ состояние таба (признак signed), поэтому
+// инвалидирует его — в отличие от перевыпуска, который меняет только секрет.
+export function useDisableWebhookSignature(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (webhookId: string) => disableWebhookSignature(formId, webhookId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+// Включение подписи и перевыпуск секрета: признак signed меняется, значит
+// состояние таба перезапрашивается тоже.
 export function useReissueWebhookSecret(formId: string) {
+  const qc = useQueryClient()
   return useMutation({
     // secret пуст — сервер сгенерирует свой; задан — берётся авторский.
     mutationFn: ({ webhookId, secret }: { webhookId: string; secret?: string }) =>
       reissueWebhookSecret(formId, webhookId, secret),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
 

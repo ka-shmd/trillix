@@ -272,13 +272,18 @@ func newDeliveryHarness(t *testing.T, code int) *deliveryHarness {
 
 func (h *deliveryHarness) clock() time.Time { return h.now }
 
-// hook заводит цель с очередью из n ответов.
+// hook заводит цель с очередью из n ответов и ВКЛЮЧЁННОЙ подписью: по умолчанию
+// её нет (ADR §10), а проверкам доставки нужен подписанный запрос. Случай без
+// подписи — свой тест ниже.
 func (h *deliveryHarness) hook(t *testing.T, n int) (integrations.Webhook, []uuid.UUID) {
 	t.Helper()
 	w, _, err := h.svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{Name: "CRM", URL: testHookURL})
 	if err != nil {
 		t.Fatalf("создание вебхука: %v", err)
+	}
+	if _, err := h.svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, ""); err != nil {
+		t.Fatalf("включение подписи: %v", err)
 	}
 	ids := make([]uuid.UUID, n)
 	for i := range ids {
@@ -668,5 +673,30 @@ func TestCleanupWebhookQueue(t *testing.T) {
 	last := h.journal()[len(h.journal())-1]
 	if last.Outcome != integrations.OutcomeFailed || !strings.Contains(last.Detail, "30 дней") {
 		t.Fatalf("запись журнала = %+v", last)
+	}
+}
+
+// Вебхук без подписи (умолчание продукта): запрос уходит, заголовка подписи в
+// нём нет вовсе — ни пустого, ни с чужим секретом.
+func TestDeliverWebhooks_UnsignedByDefault(t *testing.T) {
+	h := newDeliveryHarness(t, http.StatusOK)
+	w, _, err := h.svc.CreateWebhook(context.Background(), testUser, testForm,
+		integrations.WebhookInput{URL: testHookURL})
+	if err != nil {
+		t.Fatalf("подключение: %v", err)
+	}
+	if err := h.store.Enqueue(context.Background(), nil, w.ID, domain.NewID()); err != nil {
+		t.Fatalf("постановка: %v", err)
+	}
+
+	n, err := h.svc.DeliverWebhooks(context.Background())
+	if err != nil {
+		t.Fatalf("проход: %v", err)
+	}
+	if n != 1 || h.out.count() != 1 {
+		t.Fatalf("уехало %d при %d запросах", n, h.out.count())
+	}
+	if h.out.sigs[0] != "" {
+		t.Fatalf("заголовок подписи = %q, ожидалось его отсутствие", h.out.sigs[0])
 	}
 }

@@ -56,6 +56,7 @@ type webhookDTO struct {
 	Enabled bool   `json:"enabled"`
 	Status  string `json:"status"`
 	Queued  int64  `json:"queued"`
+	Signed  bool   `json:"signed"`
 	Secret  string `json:"secret"`
 }
 
@@ -115,22 +116,52 @@ func TestWebhooks_Lifecycle(t *testing.T) {
 	}
 	var created webhookDTO
 	decode(t, r, &created)
-	if !strings.HasPrefix(created.Secret, "whsec_") || created.URL != hookURL || created.Host != "hooks.example.com" {
+	if created.URL != hookURL || created.Host != "hooks.example.com" {
 		t.Fatalf("заведённый вебхук = %+v", created)
 	}
+	// Подписи по умолчанию нет: подключение — это адрес и всё (ADR §10).
+	if created.Secret != "" || created.Signed {
+		t.Fatalf("у свежего вебхука завелась подпись: %+v", created)
+	}
 
-	// В базе секрет — шифротекст, адрес — обрезанный, ответственный — заведший.
+	// В базе секрета нет вовсе, адрес обрезан, ответственный — заведший.
 	var sealed []byte
 	var setBy, stored string
 	if err := testPool.QueryRow(context.Background(),
 		`SELECT secret, set_by, url FROM form_webhooks WHERE id = $1`, created.ID).Scan(&sealed, &setBy, &stored); err != nil {
 		t.Fatalf("строка вебхука: %v", err)
 	}
-	if bytes.Contains(sealed, []byte(created.Secret)) || bytes.Contains(sealed, []byte(created.Secret[len("whsec_"):])) {
-		t.Fatal("секрет лёг в базу открытым текстом")
+	if len(sealed) != 0 {
+		t.Fatalf("в базе завёлся секрет (%d байт) при выключенной подписи", len(sealed))
 	}
 	if setBy != userID(t, "owner@example.com") || stored != hookURL {
 		t.Fatalf("set_by=%s url=%q", setBy, stored)
+	}
+
+	// Включили подпись — секрет появился, и лёг он шифротекстом.
+	secret := enableSignature(t, owner, srv, formID, created.ID)
+	if !strings.HasPrefix(secret, "whsec_") {
+		t.Fatalf("секрет = %q", secret)
+	}
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT secret FROM form_webhooks WHERE id = $1`, created.ID).Scan(&sealed); err != nil {
+		t.Fatalf("строка вебхука: %v", err)
+	}
+	if bytes.Contains(sealed, []byte(secret)) || bytes.Contains(sealed, []byte(secret[len("whsec_"):])) {
+		t.Fatal("секрет лёг в базу открытым текстом")
+	}
+	if got := webhooksOf(t, owner, srv, formID)[0]; !got.Signed {
+		t.Fatalf("признак подписи = %+v", got)
+	}
+
+	// Выключили — секрет удалён, признак снят.
+	resp := deleteWithCSRF(t, owner, srv, "/api/v1/forms/"+formID+"/webhooks/"+created.ID+"/secret")
+	closeBody(t, resp)
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("выключение подписи: статус %d", resp.StatusCode)
+	}
+	if got := webhooksOf(t, owner, srv, formID)[0]; got.Signed {
+		t.Fatal("признак подписи остался после выключения")
 	}
 
 	list := webhooksOf(t, owner, srv, formID)
@@ -323,6 +354,7 @@ func TestWebhooks_SecretShowAndReissue(t *testing.T) {
 	owner := registerUser(t, srv, "owner@example.com")
 	formID := newForm(t, personalWorkspace(t), "f-secret")
 	hook := mustCreateWebhook(t, owner, srv, formID)
+	hook.Secret = enableSignature(t, owner, srv, formID, hook.ID)
 	path := "/api/v1/forms/" + formID + "/webhooks/" + hook.ID + "/secret"
 
 	show := func() string {

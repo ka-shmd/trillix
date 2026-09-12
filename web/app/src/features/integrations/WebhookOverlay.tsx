@@ -6,6 +6,7 @@ import type { Webhook, WebhookTest } from '../../entities/integration'
 import { getWebhookSecret } from './api'
 import {
   useCreateWebhook,
+  useDisableWebhookSignature,
   useReissueWebhookSecret,
   useTestWebhook,
   useUpdateWebhook,
@@ -16,6 +17,7 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { Switch } from '@/components/ui/switch'
 
 // Окно вебхука — полноэкранный оверлей, как у Google Таблиц: решения о том,
 // куда уедут ответы, принимают до первой отправки наружу, и в строке списка они
@@ -36,41 +38,26 @@ export function WebhookOverlay({
 }) {
   const [url, setUrl] = useState(webhook?.url ?? '')
   const [name, setName] = useState(webhook?.name ?? '')
-  // ownSecret — секрет автора, введённый ПРИ ПОДКЛЮЧЕНИИ. Пусто — сгенерируем
-  // сами: про секрет человек думает ровно в этот момент, потому что в тот же
-  // заход настраивает проверку у получателя.
-  const [ownSecret, setOwnSecret] = useState('')
   const create = useCreateWebhook(formId)
   const update = useUpdateWebhook(formId)
   // secret — секрет подписи в открытом виде. В состоянии таба его нет никогда:
-  // он приезжает либо ответом на заведение, либо по нажатию «Показать».
+  // он приезжает по нажатию «Показать» либо при включении подписи.
   const [secret, setSecret] = useState<string | null>(null)
-  // created — вебхук, заведённый прямо сейчас. Окно после заведения НЕ
-  // закрывается и переходит в режим настройки: секрет и «Проверить» нужны
-  // человеку в тот же заход, а не после повторного открытия строки списка.
-  const [created, setCreated] = useState<Webhook | null>(null)
-  const target = webhook ?? created
   const saving = create.isPending || update.isPending
   const error = create.error ?? update.error
 
+  // Подключение — это АДРЕС И ВСЁ (ADR §10, третий круг). Ни секрета, ни
+  // проверки, ни объяснений про подпись: человек, который цепляет Zapier,
+  // ничего никуда не вставляет. Всё остальное живёт в настройках заведённого
+  // вебхука, куда идут осознанно — карандашом из строки списка.
   function save() {
-    if (target) {
+    if (webhook) {
       // Адрес шлётся всегда, даже неизменённый: так правящий становится
       // ответственным за доставку и снимает поломку (спека §9).
-      update.mutate({ id: target.id, name, url }, { onSuccess: onClose })
+      update.mutate({ id: webhook.id, name, url }, { onSuccess: onClose })
       return
     }
-    create.mutate(
-      { name, url, secret: ownSecret.trim() || undefined },
-      {
-        onSuccess: (fresh) => {
-          // Свежий секрет показывается сразу: заставлять человека жать
-          // «Показать» в только что открытом окне незачем.
-          setSecret(fresh.secret)
-          setCreated(fresh)
-        },
-      },
-    )
+    create.mutate({ name, url }, { onSuccess: onClose })
   }
 
   return (
@@ -122,36 +109,20 @@ export function WebhookOverlay({
               </p>
             </div>
 
-            {/* До заведения секрет можно только ЗАДАТЬ: показывать, менять и
-                проверять ещё нечего. После — полный набор, включая «Проверить».  */}
-            {target ? (
+            {/* Проверка и подпись — только у заведённого вебхука: до подключения
+                проверять нечего, а подпись это отдельное решение, а не шаг
+                подключения. */}
+            {webhook && (
               <>
-                <SecretField
+                <TestField formId={formId} webhookId={webhook.id} />
+                <SignatureSection
                   formId={formId}
-                  webhookId={target.id}
+                  webhook={webhook}
                   secret={secret}
                   onSecret={setSecret}
                 />
-                <TestField formId={formId} webhookId={target.id} />
               </>
-            ) : (
-              <div className="flex flex-col gap-2">
-                <Label htmlFor="webhook-new-secret">Секрет подписи</Label>
-                <Input
-                  id="webhook-new-secret"
-                  className="h-10 font-mono md:text-base"
-                  placeholder="Сгенерируем сами"
-                  value={ownSecret}
-                  onChange={(e) => setOwnSecret(e.target.value)}
-                />
-                <p className="text-sm text-muted-foreground">
-                  Необязательно. Свой секрет удобен, когда получатель один на несколько форм:
-                  проверка у него настраивается один раз. От {MIN_SECRET} символов.
-                </p>
-              </div>
             )}
-
-            <SignatureHint />
 
             {error && (
               <p role="alert" className="flex gap-2 text-sm text-destructive">
@@ -162,25 +133,79 @@ export function WebhookOverlay({
 
             <div className="flex items-center justify-end gap-2">
               <Button variant="ghost" onClick={onClose}>
-                {created ? 'Готово' : 'Отмена'}
+                Отмена
               </Button>
-              {/* После заведения кнопка становится «Сохранить»: она правит уже
-                  заведённый вебхук, а не заводит второй. */}
-              <Button
-                disabled={
-                  saving ||
-                  url.trim() === '' ||
-                  (!target && ownSecret.trim() !== '' && ownSecret.trim().length < MIN_SECRET)
-                }
-                onClick={save}
-              >
-                {saving ? 'Сохраняем…' : target ? 'Сохранить' : 'Подключить'}
+              <Button disabled={saving || url.trim() === ''} onClick={save}>
+                {saving ? 'Сохраняем…' : webhook ? 'Сохранить' : 'Подключить'}
               </Button>
             </div>
           </div>
         </div>
       </DialogContent>
     </Dialog>
+  )
+}
+
+// SignatureSection — подпись запросов: тумблер и, когда она включена, секрет.
+//
+// Выключена по умолчанию и живёт ТОЛЬКО в настройках: подпись имеет ценность
+// ровно тогда, когда получатель её проверяет, а обязательная навязывала работу
+// тем, кто проверять не собирался (ADR §10, третий круг).
+function SignatureSection({
+  formId,
+  webhook,
+  secret,
+  onSecret,
+}: {
+  formId: string
+  webhook: Webhook
+  secret: string | null
+  onSecret: (secret: string) => void
+}) {
+  const reissue = useReissueWebhookSecret(formId)
+  const disable = useDisableWebhookSignature(formId)
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="flex items-start justify-between gap-4">
+        <div>
+          <Label htmlFor="webhook-signature">Подписывать запросы</Label>
+          <p className="mt-1 text-sm text-muted-foreground">
+            Получатель сможет убедиться, что запрос пришёл от нас. Нужно, только если вы
+            собираетесь проверять подпись у себя.
+          </p>
+        </div>
+        <Switch
+          id="webhook-signature"
+          checked={webhook.signed}
+          disabled={reissue.isPending || disable.isPending}
+          onCheckedChange={(on) => {
+            if (on) {
+              reissue.mutate({ webhookId: webhook.id }, { onSuccess: onSecret })
+            } else {
+              disable.mutate(webhook.id)
+            }
+          }}
+        />
+      </div>
+
+      {webhook.signed && (
+        <>
+          <SecretField
+            formId={formId}
+            webhookId={webhook.id}
+            secret={secret}
+            onSecret={onSecret}
+          />
+          <SignatureHint />
+        </>
+      )}
+      {(reissue.error ?? disable.error) && (
+        <p role="alert" className="text-sm text-destructive">
+          {humanError(reissue.error ?? disable.error)}
+        </p>
+      )}
+    </div>
   )
 }
 

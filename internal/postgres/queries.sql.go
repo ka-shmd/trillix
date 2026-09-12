@@ -302,6 +302,24 @@ func (q *Queries) ClearFormIntegrationError(ctx context.Context, id uuid.UUID) e
 	return err
 }
 
+const clearFormWebhookSecret = `-- name: ClearFormWebhookSecret :execrows
+UPDATE form_webhooks SET secret = NULL WHERE id = $1 AND form_id = $2
+`
+
+type ClearFormWebhookSecretParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+// Подпись выключена: секрета больше нет, и заголовок в запросах не появляется.
+func (q *Queries) ClearFormWebhookSecret(ctx context.Context, arg ClearFormWebhookSecretParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearFormWebhookSecret, arg.ID, arg.FormID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearIntegrationAccountAccessLost = `-- name: ClearIntegrationAccountAccessLost :exec
 UPDATE integration_accounts SET access_lost_at = NULL WHERE id = $1
 `
@@ -3802,6 +3820,7 @@ type InsertFormWebhookParams struct {
 // строк — потолок достигнут. Гонка двух одновременных сохранений даёт ±1 —
 // потолок гасит усиление «одна отправка формы → N запросов», а не держит
 // инвариант, и advisory-lock ради точности здесь не окупается.
+// secret пуст — подписи у вебхука нет (0063): заголовок не появляется вовсе.
 func (q *Queries) InsertFormWebhook(ctx context.Context, arg InsertFormWebhookParams) (int64, error) {
 	result, err := q.db.Exec(ctx, insertFormWebhook,
 		arg.ID,

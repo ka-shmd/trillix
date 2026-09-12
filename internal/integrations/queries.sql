@@ -261,6 +261,7 @@ DELETE FROM integration_deliveries WHERE created_at < $1;
 -- строк — потолок достигнут. Гонка двух одновременных сохранений даёт ±1 —
 -- потолок гасит усиление «одна отправка формы → N запросов», а не держит
 -- инвариант, и advisory-lock ради точности здесь не окупается.
+-- secret пуст — подписи у вебхука нет (0063): заголовок не появляется вовсе.
 INSERT INTO form_webhooks (id, form_id, name, url, secret, set_by)
 SELECT sqlc.arg(id)::uuid, sqlc.arg(form_id)::uuid, sqlc.arg(name)::text,
        sqlc.arg(url)::text, sqlc.arg(secret)::bytea, sqlc.arg(set_by)::uuid
@@ -299,6 +300,10 @@ UPDATE form_webhooks
 SET url = $3, set_by = $4, status = 'live', last_error = NULL, failing_since = NULL,
     consecutive_failures = 0, next_attempt_at = now()
 WHERE id = $1 AND form_id = $2;
+
+-- name: ClearFormWebhookSecret :execrows
+-- Подпись выключена: секрета больше нет, и заголовок в запросах не появляется.
+UPDATE form_webhooks SET secret = NULL WHERE id = $1 AND form_id = $2;
 
 -- name: UpdateFormWebhookSecret :execrows
 -- Перевыпуск секрета. Действует сразу, переходного окна со старым нет. Статус

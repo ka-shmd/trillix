@@ -124,6 +124,10 @@ func (f *fakeWebhookStore) UpdateWebhookSecret(_ context.Context, _ postgres.DBT
 	return f.edit(id, formID, func(w *integrations.Webhook) { w.SecretSealed = sealed }), nil
 }
 
+func (f *fakeWebhookStore) ClearWebhookSecret(_ context.Context, _ postgres.DBTX, id, formID uuid.UUID) (int64, error) {
+	return f.edit(id, formID, func(w *integrations.Webhook) { w.SecretSealed = nil }), nil
+}
+
 func (f *fakeWebhookStore) DeleteWebhook(_ context.Context, _ postgres.DBTX, id, formID uuid.UUID) (int64, error) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -174,12 +178,18 @@ func newWebhookService(access integrations.Access, store *fakeWebhookStore, egre
 
 const testHookURL = "https://hooks.zapier.com/hooks/catch/123/abcSECRET/"
 
+// createHook заводит вебхук БЕЗ подписи (умолчание продукта) и сразу включает
+// её нашим секретом — большинству проверок нужен вебхук с секретом.
 func createHook(t *testing.T, svc *integrations.Service) (integrations.Webhook, string) {
 	t.Helper()
-	w, secret, err := svc.CreateWebhook(context.Background(), testUser, testForm,
+	w, _, err := svc.CreateWebhook(context.Background(), testUser, testForm,
 		integrations.WebhookInput{Name: " CRM ", URL: "  " + testHookURL + "  "})
 	if err != nil {
 		t.Fatalf("create webhook: %v", err)
+	}
+	secret, err := svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, "")
+	if err != nil {
+		t.Fatalf("включение подписи: %v", err)
 	}
 	return w, secret
 }
@@ -530,5 +540,44 @@ func TestCreateWebhook_WithAuthorSecret(t *testing.T) {
 	}
 	if len(store.hooks) != before {
 		t.Fatal("вебхук завёлся вопреки отказу по секрету")
+	}
+}
+
+// Подключение — это адрес и всё: подписи по умолчанию нет, секрета не заводится.
+// Включается она отдельно, тумблером в настройках, и так же выключается.
+func TestWebhookSignature_OffByDefault(t *testing.T) {
+	store := newFakeWebhookStore()
+	svc := newWebhookService(fakeAccess{}, store, &fakeEgress{})
+
+	w, secret, err := svc.CreateWebhook(context.Background(), testUser, testForm,
+		integrations.WebhookInput{URL: testHookURL})
+	if err != nil {
+		t.Fatalf("подключение: %v", err)
+	}
+	if secret != "" || len(store.hooks[w.ID].SecretSealed) != 0 {
+		t.Fatalf("у свежего вебхука завёлся секрет %q — подписи по умолчанию нет", secret)
+	}
+	// Показывать нечего: секрета нет, и это состояние, а не сбой.
+	if _, err := svc.WebhookSecret(context.Background(), testUser, testForm, w.ID); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("показ секрета выключенной подписи: %v, ожидался ErrNotFound", err)
+	}
+
+	fresh, err := svc.ReissueWebhookSecret(context.Background(), testUser, testForm, w.ID, "")
+	if err != nil {
+		t.Fatalf("включение подписи: %v", err)
+	}
+	if fresh == "" || len(store.hooks[w.ID].SecretSealed) == 0 {
+		t.Fatal("включение подписи не завело секрет")
+	}
+
+	if err := svc.DisableWebhookSignature(context.Background(), testUser, testForm, w.ID); err != nil {
+		t.Fatalf("выключение подписи: %v", err)
+	}
+	if len(store.hooks[w.ID].SecretSealed) != 0 {
+		t.Fatal("после выключения секрет остался")
+	}
+	// Чужой вебхук выключением подписи не тронуть.
+	if err := svc.DisableWebhookSignature(context.Background(), testUser, testForm, uuid.New()); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("выключение чужого: %v, ожидался ErrNotFound", err)
 	}
 }

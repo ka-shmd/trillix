@@ -1103,6 +1103,7 @@ function hook(patch: Partial<Webhook> = {}): Webhook {
     name: 'CRM',
     host: 'hooks.zapier.com',
     url: 'https://hooks.zapier.com/hooks/catch/1/SECRETPATH',
+    signed: false,
     enabled: true,
     status: 'live',
     queued: 0,
@@ -1175,7 +1176,7 @@ describe('вебхуки на экране интеграций', () => {
     expect(screen.getByText(/сами ответы формы останутся на месте/)).toBeTruthy()
   })
 
-  it('плитка каталога открывает окно вебхука, а не Таблиц', () => {
+  it('окно подключения — это адрес и всё: ни секрета, ни проверки', () => {
     renderView(state())
 
     fireEvent.click(screen.getByRole('button', { name: 'Подключить вебхук' }))
@@ -1183,24 +1184,39 @@ describe('вебхуки на экране интеграций', () => {
     expect(screen.getByRole('dialog')).toBeTruthy()
     expect(screen.getByLabelText('Адрес получателя')).toBeTruthy()
     expect(screen.getByRole('button', { name: 'Подключить' })).toBeTruthy()
+    // Подпись — отдельное решение, а не шаг подключения: человек, который
+    // цепляет Zapier, ничего никуда не вставляет.
+    expect(screen.queryByLabelText('Подписывать запросы')).toBeNull()
+    expect(screen.queryByText(/Секрет подписи/)).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Проверить' })).toBeNull()
   })
 
-  it('окно правки открывается с адресом вебхука в поле', () => {
+  it('окно настройки: адрес в поле, проверка рядом, подпись выключена', () => {
     renderView(state({ webhooks: [hook()] }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
 
     const url = screen.getByLabelText('Адрес получателя') as HTMLInputElement
     expect(url.value).toBe('https://hooks.zapier.com/hooks/catch/1/SECRETPATH')
+    expect(screen.getByRole('button', { name: 'Проверить' })).toBeTruthy()
+    // Подпись выключена — полей о секрете нет вовсе, только тумблер.
+    expect((screen.getByRole('switch', { name: 'Подписывать запросы' }) as HTMLButtonElement).getAttribute('data-state')).toBe('unchecked')
+    expect(screen.queryByLabelText('Секрет подписи')).toBeNull()
+  })
+
+  it('включённая подпись показывает секрет и объяснение', () => {
+    renderView(state({ webhooks: [hook({ signed: true })] }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
+
     // Секрет в состоянии таба не приезжает — окно показывает точки, пока его не
     // спросили отдельной ручкой.
     expect((screen.getByLabelText('Секрет подписи') as HTMLInputElement).value).toMatch(/•+/)
+    expect(screen.getByRole('button', { name: 'Задать свой' })).toBeTruthy()
+    expect(screen.getByText(/Trillix-Signature/)).toBeTruthy()
   })
-  it('свой секрет задаётся ПРИ ПОДКЛЮЧЕНИИ, а окно после него не закрывается', async () => {
+  it('подключение закрывает окно и не шлёт ничего про секрет', async () => {
     const posts: { url: string; body: unknown }[] = []
-    // После заведения экран перезапрашивает состояние формы — мок обязан
-    // отвечать на него настоящим телом, иначе вид уходит в отказ и проверять
-    // будет нечего.
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if ((init?.method ?? 'GET') === 'GET' && url.endsWith('/integrations')) {
         return new Response(JSON.stringify(state()), {
@@ -1215,10 +1231,10 @@ describe('вебхуки на экране интеграций', () => {
             id: 'hook-new',
             host: 'hooks.example.com',
             url: 'https://hooks.example.com/x',
+            signed: false,
             enabled: true,
             status: 'live',
             queued: 0,
-            secret: 'общий-секрет-на-все-формы',
           }),
           { status: 201, headers: { 'content-type': 'application/json' } },
         )
@@ -1232,32 +1248,16 @@ describe('вебхуки на экране интеграций', () => {
     fireEvent.change(screen.getByLabelText('Адрес получателя'), {
       target: { value: 'https://hooks.example.com/x' },
     })
-    // Поле секрета доступно СРАЗУ, до заведения: про секрет человек думает
-    // ровно в этот момент.
-    const secretField = screen.getByLabelText('Секрет подписи')
-    fireEvent.change(secretField, { target: { value: '123456' } })
-    expect((screen.getByRole('button', { name: 'Подключить' }) as HTMLButtonElement).disabled).toBe(
-      true,
-    )
-    fireEvent.change(secretField, { target: { value: 'общий-секрет-на-все-формы' } })
     fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
 
     await waitFor(() => expect(posts.length).toBe(1))
-    expect(posts[0]!.body).toEqual({
-      name: '',
-      url: 'https://hooks.example.com/x',
-      secret: 'общий-секрет-на-все-формы',
-    })
-    // Окно осталось открытым и перешло в настройку: секрет виден, проверка рядом.
-    await screen.findByRole('button', { name: 'Проверить' })
-    expect((screen.getByLabelText('Секрет подписи') as HTMLInputElement).value).toBe(
-      'общий-секрет-на-все-формы',
-    )
-    expect(screen.getByRole('button', { name: 'Задать свой' })).toBeTruthy()
+    expect(posts[0]!.body).toEqual({ name: '', url: 'https://hooks.example.com/x' })
+    // Окно закрылось: человек вернулся к списку, а не получил второй экран.
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
     vi.unstubAllGlobals()
   })
 
-  it('в окне правки можно задать свой секрет, и короткий не отправляется', async () => {
+  it('в настройках можно задать свой секрет, и короткий не отправляется', async () => {
     const sent: unknown[] = []
     const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
       if (init?.method === 'POST' && url.includes('/secret')) {
@@ -1270,7 +1270,7 @@ describe('вебхуки на экране интеграций', () => {
       return new Response(null, { status: 204 })
     })
     vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
-    renderView(state({ webhooks: [hook()] }))
+    renderView(state({ webhooks: [hook({ signed: true })] }))
     fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
 
     fireEvent.click(screen.getByRole('button', { name: 'Задать свой' }))

@@ -72,6 +72,7 @@ type integrationsService interface {
 	UpdateWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID, patch WebhookPatch) error
 	WebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID) (string, error)
 	ReissueWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, custom string) (string, error)
+	DisableWebhookSignature(ctx context.Context, userID, formID, webhookID uuid.UUID) error
 	DeleteWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) error
 }
 
@@ -165,6 +166,9 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(http.HandlerFunc(h.webhookSecret)))
 	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/secret",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.reissueWebhookSecret))))
+	// Выключение подписи: секрет удаляется, заголовок в запросах пропадает.
+	mux.Handle("DELETE /api/v1/forms/{id}/webhooks/{webhookId}/secret",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disableWebhookSignature))))
 	// Журнал доставок вебхука и повтор одной доставки — те же адреса и те же
 	// права, что у ленты связки Таблиц.
 	mux.Handle("GET /api/v1/forms/{id}/webhooks/{webhookId}/deliveries",
@@ -266,10 +270,13 @@ type formStatusResponse struct {
 // лежит токен получателя. Host — у всех. Секрета здесь нет никогда: он
 // отдаётся отдельной ручкой по нажатию.
 type webhookResponse struct {
-	ID              string  `json:"id"`
-	Name            string  `json:"name,omitempty"`
-	Host            string  `json:"host"`
-	URL             string  `json:"url,omitempty"`
+	ID   string `json:"id"`
+	Name string `json:"name,omitempty"`
+	Host string `json:"host"`
+	URL  string `json:"url,omitempty"`
+	// Signed — включена ли подпись запросов. Сам секрет здесь не появляется
+	// никогда: за ним отдельная ручка по нажатию.
+	Signed          bool    `json:"signed"`
 	Enabled         bool    `json:"enabled"`
 	Status          string  `json:"status"`
 	LastError       string  `json:"lastError,omitempty"`
@@ -283,6 +290,7 @@ func toWebhookResponse(w Webhook) webhookResponse {
 		Name:      w.Name,
 		Host:      w.Host,
 		URL:       w.URL,
+		Signed:    len(w.SecretSealed) > 0,
 		Enabled:   w.Enabled,
 		Status:    w.Status,
 		LastError: w.LastError,
@@ -350,7 +358,9 @@ type webhookRequest struct {
 // заставляя человека жать «Показать» в только что открытом окне.
 type createdWebhookResponse struct {
 	webhookResponse
-	Secret string `json:"secret"`
+	// Secret — секрет подписи в открытом виде. Появляется, только если автор
+	// назвал свой при заведении: по умолчанию подписи нет вовсе.
+	Secret string `json:"secret,omitempty"`
 }
 
 type webhookSecretResponse struct {
@@ -461,6 +471,18 @@ func (h *Handler) reissueWebhookSecret(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Cache-Control", "no-store")
 	httpserver.WriteJSON(w, r, http.StatusOK, webhookSecretResponse{Secret: secret})
+}
+
+func (h *Handler) disableWebhookSignature(w http.ResponseWriter, r *http.Request) {
+	user, formID, webhookID, ok := h.userFormWebhook(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DisableWebhookSignature(r.Context(), user.ID, formID, webhookID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // decodeWebhookRequest читает тело заведения или правки: потолок размера
