@@ -61,11 +61,50 @@ export const formSheetSchema = z.object({
   lastDeliveredAt: z.string().optional(),
 })
 
+// Вебхук формы (фаза 28). Второй вид цели доставки рядом со связкой Таблиц:
+// у него тот же тумблер, тот же журнал и та же логика статуса, но своя природа —
+// адрес чужой системы вместо таблицы в чужом Диске.
+export const webhookStatusSchema = z.enum(['live', 'broken'])
+
+export const webhookSchema = z.object({
+  id: z.string(),
+  name: z.string().optional(),
+  // host — хост адреса. Приходит ВСЕГДА и виден всем, кто видит форму.
+  host: z.string(),
+  // url — полный адрес. Приходит только тому, кто вправе править форму: в пути
+  // у Zapier и Make лежит токен получателя. Пусто — у спрашивающего нет права
+  // на правку, и окно настройки ему показывать нечего.
+  url: z.string().optional(),
+  enabled: z.boolean(),
+  status: webhookStatusSchema,
+  lastError: z.string().optional(),
+  lastDeliveredAt: z.string().optional(),
+  // queued — сколько ответов ждут доставки. Растёт, пока получатель молчит.
+  queued: z.number().int().default(0),
+})
+
+// Заведённый вебхук приезжает вместе с секретом подписи — показать сразу, не
+// заставляя жать «Показать» в только что открытом окне. Больше секрет в
+// состоянии таба не появляется никогда.
+export const createdWebhookSchema = webhookSchema.extend({ secret: z.string() })
+
+export const webhookSecretSchema = z.object({ secret: z.string() })
+
+// Исход проверки адреса. Неуспех — тоже ответ (200 с ok: false): «получатель
+// ответил 500» это сведения о получателе, а не ошибка кабинета.
+export const webhookTestSchema = z.object({
+  ok: z.boolean(),
+  statusCode: z.number().int().optional(),
+  reason: z.string().optional(),
+  ms: z.number().default(0),
+})
+
 export const formIntegrationsSchema = z.object({
   workspaceId: z.string(),
   account: integrationAccountSchema,
   // Пустой список — состояние экрана, а не ошибка: у формы просто нет связок.
   connections: z.array(formSheetSchema),
+  webhooks: z.array(webhookSchema).default([]),
 })
 
 // Одна попытка доставки в журнале связки (INTEGRATIONS.md §12). Зеркалит
@@ -83,6 +122,9 @@ export const deliverySchema = z.object({
   detail: z.string().optional(),
   // rows — сколько строк легло в лист: 1 у ответа, до 200 у пачки переноса.
   rows: z.number().int().default(0),
+  // httpStatus — код ответа получателя вебхука. Пусто у Таблиц и когда ответа
+  // не было вовсе: таймаут, DNS, запрет адреса.
+  httpStatus: z.number().int().optional(),
   createdAt: z.string(),
 })
 
@@ -115,6 +157,10 @@ export const sheetListSchema = z.object({
   sheets: z.array(sheetRefSchema),
 })
 
+export type Webhook = z.infer<typeof webhookSchema>
+export type WebhookStatus = z.infer<typeof webhookStatusSchema>
+export type CreatedWebhook = z.infer<typeof createdWebhookSchema>
+export type WebhookTest = z.infer<typeof webhookTestSchema>
 export type SpreadsheetRef = z.infer<typeof spreadsheetRefSchema>
 export type SheetRef = z.infer<typeof sheetRefSchema>
 export type ConnectedAccount = z.infer<typeof connectedAccountSchema>

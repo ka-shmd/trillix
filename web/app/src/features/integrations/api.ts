@@ -2,16 +2,21 @@ import { z } from 'zod'
 
 import { apiRequest } from '../../shared/api/client'
 import {
+  createdWebhookSchema,
   deliveryPageSchema,
   formIntegrationsSchema,
   formSheetSchema,
   sheetListSchema,
   spreadsheetListSchema,
+  webhookSecretSchema,
+  webhookTestSchema,
+  type CreatedWebhook,
   type DeliveryPage,
   type FormIntegrations,
   type FormSheet,
   type SheetRef,
   type SpreadsheetRef,
+  type WebhookTest,
 } from '../../entities/integration'
 
 // Транспорт интеграций. Ответы парсятся Zod-схемой на границе — непровалидированный
@@ -186,4 +191,80 @@ export function updateConnection(
 export function startUrl(reconnect?: string): string {
   const base = '/api/v1/integrations/google/start'
   return reconnect ? `${base}?accountId=${encodeURIComponent(reconnect)}` : base
+}
+
+// ВЕБХУКИ (фаза 28). Второй вид цели доставки: адрес чужой системы вместо
+// таблицы. Адреса свои — под формой, как и связки.
+
+// Заведение отдаёт вебхук ВМЕСТЕ с секретом подписи: показать сразу.
+export function createWebhook(
+  formId: string,
+  input: { name: string; url: string },
+): Promise<CreatedWebhook> {
+  return apiRequest(`/forms/${formId}/webhooks`, {
+    method: 'POST',
+    body: input,
+    schema: createdWebhookSchema,
+  })
+}
+
+// Правка шлёт ровно названные поля: не названное сервер не трогает (так шлёт
+// тумблер из списка). Адрес, переданный даже тем же, делает правящего
+// ответственным за доставку и снимает поломку.
+export function updateWebhook(
+  formId: string,
+  webhookId: string,
+  patch: { name?: string; url?: string; enabled?: boolean },
+): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}`, { method: 'PATCH', body: patch })
+}
+
+export function deleteWebhook(formId: string, webhookId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}`, { method: 'DELETE' })
+}
+
+// Секрет подписи — отдельной ручкой по нажатию «Показать», а не в состоянии
+// таба: раздавать ключ подписи на каждый показ экрана незачем.
+export function getWebhookSecret(formId: string, webhookId: string): Promise<string> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, {
+    schema: webhookSecretSchema,
+  }).then((r) => r.secret)
+}
+
+// Перевыпуск действует сразу: старый секрет перестаёт подходить без окна.
+export function reissueWebhookSecret(formId: string, webhookId: string): Promise<string> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/secret`, {
+    method: 'POST',
+    schema: webhookSecretSchema,
+  }).then((r) => r.secret)
+}
+
+// Проверка шлёт получателю образец с пометкой test. Удачная будит цель: и
+// сломанную, и спящую после неудачи — накопленная очередь уедет следом.
+export function testWebhook(formId: string, webhookId: string): Promise<WebhookTest> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/test`, {
+    method: 'POST',
+    schema: webhookTestSchema,
+  })
+}
+
+export function listWebhookDeliveries(
+  formId: string,
+  webhookId: string,
+  cursor?: string,
+): Promise<DeliveryPage> {
+  const params = cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/deliveries${params}`, {
+    schema: deliveryPageSchema,
+  })
+}
+
+export function retryWebhookDelivery(
+  formId: string,
+  webhookId: string,
+  deliveryId: string,
+): Promise<void> {
+  return apiRequest(`/forms/${formId}/webhooks/${webhookId}/deliveries/${deliveryId}/retry`, {
+    method: 'POST',
+  })
 }

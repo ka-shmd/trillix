@@ -23,4 +23,9 @@ export const integrationKeys = {
   // повтор доставки виден в ней сам, без второй инвалидации.
   deliveries: (formId: string, connectionId: string) =>
     ['integrations', formId, 'deliveries', connectionId] as const,
+  // Журнал ВЕБХУКА. Отдельный ключ, а не общий с лентой связки: id у них из
+  // разных таблиц, и совпадение было бы случайностью, на которую нельзя
+  // полагаться.
+  webhookDeliveries: (formId: string, webhookId: string) =>
+    ['integrations', formId, 'webhook-deliveries', webhookId] as const,
 }

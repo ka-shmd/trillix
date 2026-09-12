@@ -18,3 +18,29 @@ export function GoogleSheetsIcon({ className }: { className?: string }) {
     </svg>
   )
 }
+
+// Вебхук — не сервис, и фирменного знака у него нет: рисуем предметный —
+// «запрос уходит из формы наружу». Цвет берётся токеном действия (`--primary`),
+// а не литералом: у знака нет своего бренда, и в тёмной теме он обязан жить.
+export function WebhookIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="Вебхук">
+      <rect x="2" y="4" width="13" height="16" rx="2.5" className="fill-primary/15" />
+      <path
+        d="M5.5 8.5h6M5.5 12h6M5.5 15.5h3.5"
+        className="stroke-primary"
+        strokeWidth="1.4"
+        strokeLinecap="round"
+      />
+      {/* Стрелка наружу: она и отличает вебхук от «ещё одной таблицы». */}
+      <path
+        d="M14 12h7m0 0-3-3m3 3-3 3"
+        className="stroke-primary"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        fill="none"
+      />
+    </svg>
+  )
+}

@@ -3,7 +3,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 
-import type { ConnectedAccount, FormIntegrations, FormSheet } from '../../entities/integration'
+import type {
+  ConnectedAccount,
+  FormIntegrations,
+  FormSheet,
+  Webhook,
+} from '../../entities/integration'
 import { IntegrationsView } from './IntegrationsView'
 import { TooltipProvider } from '@/components/ui/tooltip'
 import { integrationKeys } from './keys'
@@ -108,6 +113,7 @@ function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
       accounts: [],
     },
     connections: [],
+    webhooks: [],
     ...patch,
   }
 }
@@ -153,7 +159,7 @@ function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
 // Два входа в оверлей: из каталога — подключить ещё одну связку, из строки
 // списка — настроить существующую.
 function openSetup() {
-  fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Подключить Google Таблицы' }))
 }
 
 function openConnection() {
@@ -179,7 +185,7 @@ describe('два блока экрана', () => {
     expect(screen.getByText(/ответы синхронизируются с/i)).toBeTruthy()
     expect(screen.getByRole('link', { name: 'таблицей' })).toBeTruthy()
     // Каталог не исчезает: подключить вторую связку — законное действие.
-    expect(screen.getByRole('button', { name: 'Подключить' })).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Подключить Google Таблицы' })).toBeTruthy()
   })
 
   // Ключ контура сменился — подключение осталось строкой в базе, но работать им
@@ -1087,5 +1093,107 @@ describe('журнал доставок', () => {
     openLog()
 
     expect(screen.getByText('Доставок пока не было')).toBeTruthy()
+  })
+})
+
+// hook — вебхук в состоянии «работает», если не сказано иное.
+function hook(patch: Partial<Webhook> = {}): Webhook {
+  return {
+    id: 'hook-1',
+    name: 'CRM',
+    host: 'hooks.zapier.com',
+    url: 'https://hooks.zapier.com/hooks/catch/1/SECRETPATH',
+    enabled: true,
+    status: 'live',
+    queued: 0,
+    ...patch,
+  }
+}
+
+describe('вебхуки на экране интеграций', () => {
+  it('каталог предлагает вебхук отдельной плиткой', () => {
+    renderView(state())
+
+    expect(screen.getByText('Вебхук')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Подключить вебхук' })).toBeTruthy()
+  })
+
+  it('строка вебхука показывает ХОСТ, а не адрес целиком', () => {
+    renderView(state({ webhooks: [hook()] }))
+
+    expect(screen.getByText(/hooks\.zapier\.com/)).toBeTruthy()
+    // Путь адреса — секрет (у Zapier и Make в нём токен): в списке его нет.
+    expect(document.body.textContent).not.toContain('SECRETPATH')
+  })
+
+  it('очередь названа, когда она есть', () => {
+    renderView(state({ webhooks: [hook({ queued: 3 })] }))
+
+    expect(screen.getByText(/в очереди 3/)).toBeTruthy()
+  })
+
+  it('сломанный вебхук говорит причиной, а не общей фразой', () => {
+    renderView(
+      state({
+        webhooks: [
+          hook({ status: 'broken', lastError: 'Получатель сообщил, что этого адреса больше нет.' }),
+        ],
+      }),
+    )
+
+    expect(screen.getByRole('button', { name: 'Сломано' })).toBeTruthy()
+  })
+
+  it('тумблер строки шлёт правку, не трогая адрес', async () => {
+    // Считаем только правки: после мутации экран перезапрашивает состояние
+    // формы, и её GET попал бы в тот же счётчик.
+    const calls: { url: string; body: unknown }[] = []
+    const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+      if (init?.method === 'PATCH') {
+        calls.push({ url, body: init.body ? JSON.parse(String(init.body)) : undefined })
+      }
+      return new Response(null, { status: 204 })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    renderView(state({ webhooks: [hook()] }))
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Выключить вебхук' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    const patch = calls[0]!
+    expect(patch.url).toContain('/forms/form-1/webhooks/hook-1')
+    expect(patch.body).toEqual({ enabled: false })
+    vi.unstubAllGlobals()
+  })
+
+  it('удаление спрашивает и обещает сохранить сами ответы', () => {
+    renderView(state({ webhooks: [hook()] }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить вебхук' }))
+
+    expect(screen.getByText('Удалить вебхук?')).toBeTruthy()
+    expect(screen.getByText(/сами ответы формы останутся на месте/)).toBeTruthy()
+  })
+
+  it('плитка каталога открывает окно вебхука, а не Таблиц', () => {
+    renderView(state())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить вебхук' }))
+
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.getByLabelText('Адрес получателя')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Подключить' })).toBeTruthy()
+  })
+
+  it('окно правки открывается с адресом вебхука в поле', () => {
+    renderView(state({ webhooks: [hook()] }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить вебхук' }))
+
+    const url = screen.getByLabelText('Адрес получателя') as HTMLInputElement
+    expect(url.value).toBe('https://hooks.zapier.com/hooks/catch/1/SECRETPATH')
+    // Секрет в состоянии таба не приезжает — окно показывает точки, пока его не
+    // спросили отдельной ручкой.
+    expect((screen.getByLabelText('Секрет подписи') as HTMLInputElement).value).toMatch(/•+/)
   })
 })
