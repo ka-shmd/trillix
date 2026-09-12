@@ -228,17 +228,16 @@ export function WebhookOverlay({
               </p>
             )}
 
-            <div className="flex items-center justify-end gap-2">
-              <Button variant="ghost" onClick={onClose}>
-                Отмена
-              </Button>
-              <Button
-                disabled={saving || url.trim() === '' || secretBlocked || headersBlocked}
-                onClick={save}
-              >
-                {saving ? 'Сохраняем…' : webhook ? 'Сохранить' : 'Подключить'}
-              </Button>
-            </div>
+            {/* Одно действие во всю ширину, как в окне Таблиц. «Отмены» нет:
+                уйти не сохранив можно крестиком окна и Escape, а кнопка рядом с
+                действием делала бы вид, что отказ — такой же шаг, как согласие. */}
+            <Button
+              size="lg"
+              disabled={saving || url.trim() === '' || secretBlocked || headersBlocked}
+              onClick={save}
+            >
+              {saving ? 'Сохраняем…' : webhook ? 'Сохранить' : 'Подключить'}
+            </Button>
           </div>
         </div>
       </DialogContent>
