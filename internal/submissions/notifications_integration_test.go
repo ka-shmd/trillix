@@ -121,3 +121,113 @@ func TestListSubmissions_MarksNotificationRead(t *testing.T) {
 		t.Errorf("новая строка стартует со счётчиком %d, ожидалась 1", count)
 	}
 }
+
+// setPlanLimit меняет лимит тарифа на время теста (лимиты — данные, а не код).
+func setPlanLimit(t *testing.T, plan, key, value string) {
+	t.Helper()
+	_, err := testPool.Exec(context.Background(),
+		`UPDATE plans SET limits = jsonb_set(limits, ARRAY[$2], $3::jsonb) WHERE code = $1`,
+		plan, key, value)
+	if err != nil {
+		t.Fatalf("правка лимита: %v", err)
+	}
+}
+
+// addEditor подселяет в пространство формы участника с ролью editor.
+func addEditor(t *testing.T, formID uuid.UUID) uuid.UUID {
+	t.Helper()
+	ctx := context.Background()
+	id := uuid.New()
+	if _, err := testPool.Exec(ctx,
+		`INSERT INTO users (id, email) VALUES ($1, $2)`, id, "editor-"+id.String()+"@example.com"); err != nil {
+		t.Fatalf("insert user: %v", err)
+	}
+	_, err := testPool.Exec(ctx,
+		`INSERT INTO workspace_members (workspace_id, user_id, role)
+		 SELECT workspace_id, $2, 'editor' FROM forms WHERE id = $1`, formID, id)
+	if err != nil {
+		t.Fatalf("insert member: %v", err)
+	}
+	return id
+}
+
+// Сверхлимитный ответ поднимает повод о КВОТЕ и не поднимает повода о новых
+// ответах; адресован он только владельцу — тариф это его дело, а редактор на
+// счёт всё равно не ответит. Проверяется вся цепочка: реестр называет действие,
+// workspaces отбирает по нему людей, запрос кладёт строку каждому.
+func TestSubmit_OverQuota_NotifiesOwnerOnly(t *testing.T) {
+	resetDB(t)
+	setPlanLimit(t, "free", "submissions_per_month", "0")
+	t.Cleanup(func() { setPlanLimit(t, "free", "submissions_per_month", "null") })
+
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	formID, owner := formOwner(t, slug)
+	editor := addEditor(t, formID)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Анна"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("приём: статус %d, ожидалось 201 — квота не отказывает респонденту", resp.StatusCode)
+	}
+
+	ctx := context.Background()
+	kindsOf := func(user uuid.UUID) []string {
+		t.Helper()
+		rows, err := testPool.Query(ctx, `SELECT kind FROM notifications WHERE user_id = $1`, user)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var k string
+			if err := rows.Scan(&k); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, k)
+		}
+		return out
+	}
+
+	got := kindsOf(owner)
+	if len(got) != 1 || got[0] != "over_quota" {
+		t.Fatalf("у владельца поводы %v, ожидался один про квоту", got)
+	}
+	if got := kindsOf(editor); len(got) != 0 {
+		t.Fatalf("редактор получил поводы %v, а тариф — не его дело", got)
+	}
+
+	var period string
+	if err := testPool.QueryRow(ctx,
+		`SELECT payload->>'period' FROM notifications WHERE user_id = $1`, owner).Scan(&period); err != nil {
+		t.Fatal(err)
+	}
+	if period == "" {
+		t.Error("период в снимке пуст — на границе месяца склейку рвать будет нечем")
+	}
+}
+
+// Ответ в пределах квоты адресуется ОБОИМ: формы видят и владелец, и редактор.
+func TestSubmit_WithinQuota_NotifiesWholeTeam(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, _ := publishedForm(t, requiredNameSchema)
+	formID, owner := formOwner(t, slug)
+	editor := addEditor(t, formID)
+
+	body := `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Анна"}}`
+	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+		t.Fatalf("приём: статус %d, ожидалось 201", resp.StatusCode)
+	}
+
+	var n int
+	err := testPool.QueryRow(context.Background(),
+		`SELECT count(*) FROM notifications WHERE kind = 'new_submissions' AND user_id = ANY($1)`,
+		[]uuid.UUID{owner, editor}).Scan(&n)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n != 2 {
+		t.Fatalf("строк повода %d, ожидалось по одной каждому участнику", n)
+	}
+}

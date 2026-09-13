@@ -578,6 +578,11 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	if inserted && !in.OverQuota {
 		s.notifyNewSubmissions(ctx, pf, slug)
 	}
+	// А сверхлимитный — свой повод, и адресован он другим людям: тариф это дело
+	// владельца пространства, редактор на него всё равно не ответит.
+	if inserted && in.OverQuota {
+		s.notifyOverQuota(ctx, pf, in.Period)
+	}
 	// Письмо о записи НЕ зависит от тумблеров уведомлений и от тарифа: без него у
 	// респондента нет ссылки отмены, а значит, место не вернуть в оборот (§4.8 спеки).
 	if inserted && booking.BlockID != "" {
@@ -746,6 +751,32 @@ func (s *Service) notifyNewSubmissions(ctx context.Context, pf forms.PublicForm,
 	if err != nil {
 		httpserver.LoggerFrom(ctx).Warn("new submissions notification not stored",
 			slog.String("form_id", pf.FormID.String()), slog.String("error", err.Error()))
+	}
+}
+
+// notifyOverQuota ставит повод «ответы пошли сверх лимита тарифа». Субъект —
+// ПРОСТРАНСТВО, а не форма: лимит считается по пространству, и три формы,
+// упёршиеся в общий потолок, — одна новость, а не три.
+//
+// Период уезжает в снимок, потому что по нему рвётся склейка: непрочитанная
+// строка прошлого месяца не должна копить счётчик дальше, иначе «сверх лимита:
+// 43» означало бы сумму за два месяца. Разрывает её сама постановка (запрос
+// InsertNotifications), здесь достаточно честно назвать период.
+func (s *Service) notifyOverQuota(ctx context.Context, pf forms.PublicForm, period time.Time) {
+	if s.notes == nil {
+		return
+	}
+	err := s.notes.Notify(ctx, s.db, notify.Event{
+		WorkspaceID: pf.WorkspaceID,
+		Kind:        notify.KindOverQuota,
+		// FormID не заполняется: повод про пространство, и каскад формы ему не
+		// нужен — форму удалят, а счёт за месяц останется.
+		SubjectID: pf.WorkspaceID,
+		Payload:   notify.Payload{Period: period.Format("2006-01")},
+	})
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Warn("over quota notification not stored",
+			slog.String("workspace_id", pf.WorkspaceID.String()), slog.String("error", err.Error()))
 	}
 }
 

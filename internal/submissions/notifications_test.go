@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -85,20 +86,58 @@ func TestSubmit_RaisesNewSubmissionsNotification(t *testing.T) {
 	}
 }
 
-// Сверхлимитный ответ повода не поднимает: в таблице ответов кабинета такой
-// строки не видно (счётчик карточки считает NOT over_quota), и обещать её
-// колокольчиком нельзя.
-func TestSubmit_OverQuota_RaisesNoNewSubmissions(t *testing.T) {
+// Сверхлимитный ответ повода о новых ответах не поднимает: в таблице ответов
+// кабинета такой строки не видно (счётчик карточки считает NOT over_quota), и
+// обещать её колокольчиком нельзя. Вместо него приходит повод о квоте — новость
+// другая и адресована другим людям.
+func TestSubmit_OverQuota_RaisesQuotaInstead(t *testing.T) {
+	pf := notifiedForm()
+	period := time.Date(2026, 9, 1, 0, 0, 0, 0, time.UTC)
 	notes := &fakeNotes{}
-	svc := NewService(nil, fakeTx{}, fakeForms{pf: notifiedForm()},
-		nil, &fakeMailer{}, fakePlans{allowed: false}, &fakeSubStore{insertN: 1}, "https://app.test").
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: pf},
+		nil, &fakeMailer{}, fakePlans{allowed: false, period: period}, &fakeSubStore{insertN: 1}, "https://app.test").
 		WithNotifications(notes)
 
 	if err := svc.Submit(context.Background(), "zayavka", uuid.New(), map[string]json.RawMessage{}, Meta{}); err != nil {
 		t.Fatalf("Submit: %v", err)
 	}
-	if len(notes.events) != 0 {
-		t.Fatalf("сверхлимитный ответ поднял повод о новых ответах: %+v", notes.events)
+	if len(notes.events) != 1 {
+		t.Fatalf("поводов %d, ожидался один — про квоту", len(notes.events))
+	}
+	ev := notes.events[0]
+	if ev.Kind != notify.KindOverQuota {
+		t.Fatalf("повод = %q, ожидался про квоту", ev.Kind)
+	}
+	// Субъект — ПРОСТРАНСТВО: лимит считается по нему, и три формы, упёршиеся в
+	// общий потолок, — одна новость, а не три.
+	if ev.SubjectID != pf.WorkspaceID || ev.WorkspaceID != pf.WorkspaceID {
+		t.Errorf("субъект = %s, ожидалось пространство %s", ev.SubjectID, pf.WorkspaceID)
+	}
+	// Формы у повода нет: её удалят, а счёт за месяц останется.
+	if ev.FormID != uuid.Nil {
+		t.Errorf("повод о квоте привязан к форме %s", ev.FormID)
+	}
+	// Период — тот, что прочитала проверка квоты: по нему рвётся склейка на
+	// границе месяца.
+	if ev.Payload.Period != "2026-09" {
+		t.Errorf("период в снимке = %q, ожидался 2026-09", ev.Payload.Period)
+	}
+}
+
+// Ответ в пределах квоты повода о квоте не поднимает.
+func TestSubmit_WithinQuota_RaisesNoQuotaNotice(t *testing.T) {
+	notes := &fakeNotes{}
+	svc := NewService(nil, fakeTx{}, fakeForms{pf: notifiedForm()},
+		nil, &fakeMailer{}, okPlans(), &fakeSubStore{insertN: 1}, "https://app.test").
+		WithNotifications(notes)
+
+	if err := svc.Submit(context.Background(), "zayavka", uuid.New(), map[string]json.RawMessage{}, Meta{}); err != nil {
+		t.Fatalf("Submit: %v", err)
+	}
+	for _, ev := range notes.events {
+		if ev.Kind == notify.KindOverQuota {
+			t.Fatalf("ответ в пределах квоты поднял повод о ней: %+v", ev)
+		}
 	}
 }
 
