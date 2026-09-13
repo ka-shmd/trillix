@@ -89,9 +89,6 @@ type Mailer interface {
 // формы, — поэтому здесь уезжает событие, а не сообщение.
 type Notifications interface {
 	Notify(ctx context.Context, db postgres.DBTX, ev notify.Event) error
-	// MarkReadBySubject гасит повод формы у одного человека: он открыл таблицу
-	// ответов, то есть пришёл туда, куда повод звал.
-	MarkReadBySubject(ctx context.Context, userID uuid.UUID, kind notify.Kind, subjectID uuid.UUID) error
 }
 
 // RespondentLimiter — потолок писем РЕСПОНДЕНТАМ на одну форму
@@ -780,23 +777,6 @@ func (s *Service) notifyOverQuota(ctx context.Context, pf forms.PublicForm, peri
 	}
 }
 
-// seenSubmissions гасит повод о новых ответах этой формы: человек открыл таблицу,
-// то есть пришёл туда, куда повод звал. Отметка ставится ему одному — у остальных
-// участников строка остаётся непрочитанной.
-//
-// Зовётся только на ПЕРВОЙ странице (курсора нет): это открытие таблицы, а не
-// прокрутка. Best-effort — не показать таблицу из-за отметки было бы обменом
-// главного на второстепенное.
-func (s *Service) seenSubmissions(ctx context.Context, userID, formID uuid.UUID) {
-	if s.notes == nil {
-		return
-	}
-	if err := s.notes.MarkReadBySubject(ctx, userID, notify.KindNewSubmissions, formID); err != nil {
-		httpserver.LoggerFrom(ctx).Warn("new submissions notification not marked read",
-			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
-	}
-}
-
 // notifyMail ставит письма, поводом для которых стал принятый ответ: владельцу
 // формы и/или респонденту. Владельца резолвим ОДИН раз на оба письма — строка
 // нужна обоим (тариф, заголовки формы, бланки), а поход в базу стоит одинаково.
@@ -1196,9 +1176,6 @@ func (s *Service) ListFeedForForm(ctx context.Context, userID, formID uuid.UUID,
 	if err != nil {
 		return FeedPage{}, err
 	}
-	if after == nil {
-		s.seenSubmissions(ctx, userID, formID)
-	}
 	withPartials, err := s.forms.CollectPartial(ctx, form.WorkspaceID, form.CollectPartial)
 	if err != nil {
 		return FeedPage{}, err
@@ -1354,9 +1331,6 @@ func (s *Service) GetForForm(ctx context.Context, userID, formID, submissionID u
 func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error) {
 	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
 		return Page{}, err
-	}
-	if after == nil {
-		s.seenSubmissions(ctx, userID, formID)
 	}
 	limit = clampLimit(limit)
 

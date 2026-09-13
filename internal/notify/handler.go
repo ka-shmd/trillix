@@ -27,6 +27,8 @@ type feedService interface {
 	Feed(ctx context.Context, userID, cursor uuid.UUID, limit int32) (Page, error)
 	MarkRead(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) error
 	MarkAllRead(ctx context.Context, userID uuid.UUID) error
+	Delete(ctx context.Context, userID, id uuid.UUID) error
+	DeleteAll(ctx context.Context, userID uuid.UUID) error
 }
 
 // Handler — лента уведомлений в кабинете.
@@ -43,6 +45,8 @@ func NewHandler(svc feedService, requireAuth, requireCSRF Middleware) *Handler {
 func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/notifications", h.requireAuth(http.HandlerFunc(h.list)))
 	mux.Handle("POST /api/v1/notifications/read", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.read))))
+	mux.Handle("DELETE /api/v1/notifications/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.delete))))
+	mux.Handle("DELETE /api/v1/notifications", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.deleteAll))))
 }
 
 // maxReadBodyBytes — потолок тела отметки (инвариант 3). Пятьдесят id по 36
@@ -158,6 +162,42 @@ func (h *Handler) read(w http.ResponseWriter, r *http.Request) {
 		err = h.svc.MarkRead(r.Context(), u.ID, req.IDs)
 	}
 	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// delete убирает одну строку ленты. Неразбираемый id и чужая строка отвечают
+// одинаково — 204: строки у спрашивающего не стало (её и не было), а разные
+// ответы рассказывали бы о чужих уведомлениях.
+func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	id, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if err := h.svc.Delete(r.Context(), u.ID, id); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// deleteAll очищает ленту целиком — включая непрочитанное: это решение человека,
+// а не уборка по возрасту.
+func (h *Handler) deleteAll(w http.ResponseWriter, r *http.Request) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	if err := h.svc.DeleteAll(r.Context(), u.ID); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}

@@ -342,3 +342,104 @@ func TestFeedHTTP_Pagination(t *testing.T) {
 		t.Fatalf("вторая страница = %+v", second)
 	}
 }
+
+func deleteReq(t *testing.T, c *http.Client, srv *httptest.Server, path string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+path, nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	req.Header.Set("X-CSRF-Token", csrfToken(t, c, srv.URL))
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE %s: %v", path, err)
+	}
+	return resp
+}
+
+// Удаление строки — не прочтение: её не остаётся вовсе.
+func TestDelete_RemovesOwnRow(t *testing.T) {
+	resetDB(t)
+	srv := feedStack(t)
+	c, user := registered(t, srv, "cleaner@example.com")
+	ws := workspaceOf(t, user)
+	raise(t, user, ws, formIn(t, ws, "Первая", "first"), "Первая", "first")
+	raise(t, user, ws, formIn(t, ws, "Вторая", "second"), "Вторая", "second")
+
+	body := getFeed(t, c, srv, "")
+	resp := deleteReq(t, c, srv, "/api/v1/notifications/"+body.Items[0].ID.String())
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("удаление: статус %d, ожидалось 204", resp.StatusCode)
+	}
+
+	after := getFeed(t, c, srv, "")
+	if len(after.Items) != 1 || after.Unread != 1 {
+		t.Fatalf("после удаления лента = %+v", after)
+	}
+}
+
+// Чужую строку удалить нельзя, и узнать о её существовании по ответу — тоже:
+// 204 на чужой id ровно потому, что «не нашлось» и «не ваше» неразличимы.
+func TestDelete_AlienRowSurvives(t *testing.T) {
+	resetDB(t)
+	srv := feedStack(t)
+	victim, victimID := registered(t, srv, "victim2@example.com")
+	attacker, _ := registered(t, srv, "attacker2@example.com")
+	ws := workspaceOf(t, victimID)
+	raise(t, victimID, ws, formIn(t, ws, "Заявка", "zayavka"), "Заявка", "zayavka")
+
+	body := getFeed(t, victim, srv, "")
+	resp := deleteReq(t, attacker, srv, "/api/v1/notifications/"+body.Items[0].ID.String())
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("статус %d, ожидалось 204", resp.StatusCode)
+	}
+	if after := getFeed(t, victim, srv, ""); len(after.Items) != 1 {
+		t.Error("чужая рука удалила строку владельца")
+	}
+}
+
+// «Удалить все» уносит и непрочитанное: это решение человека, а не уборка.
+func TestDelete_All(t *testing.T) {
+	resetDB(t)
+	srv := feedStack(t)
+	c, user := registered(t, srv, "purge@example.com")
+	ws := workspaceOf(t, user)
+	raise(t, user, ws, formIn(t, ws, "Первая", "first"), "Первая", "first")
+	raise(t, user, ws, formIn(t, ws, "Вторая", "second"), "Вторая", "second")
+
+	resp := deleteReq(t, c, srv, "/api/v1/notifications")
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusNoContent {
+		t.Fatalf("очистка: статус %d, ожидалось 204", resp.StatusCode)
+	}
+	if after := getFeed(t, c, srv, ""); len(after.Items) != 0 || after.Unread != 0 {
+		t.Fatalf("лента после очистки = %+v", after)
+	}
+}
+
+// Удаление — изменяющая операция, поэтому за CSRF.
+func TestDelete_RequiresCSRF(t *testing.T) {
+	resetDB(t)
+	srv := feedStack(t)
+	c, user := registered(t, srv, "csrf2@example.com")
+	ws := workspaceOf(t, user)
+	raise(t, user, ws, formIn(t, ws, "Заявка", "zayavka"), "Заявка", "zayavka")
+
+	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/notifications", nil)
+	if err != nil {
+		t.Fatalf("build request: %v", err)
+	}
+	resp, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("DELETE: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode == http.StatusNoContent {
+		t.Fatal("очистка без CSRF-токена прошла")
+	}
+	if after := getFeed(t, c, srv, ""); len(after.Items) != 1 {
+		t.Error("лента всё-таки очистилась")
+	}
+}

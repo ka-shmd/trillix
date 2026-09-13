@@ -1200,6 +1200,21 @@ func (q *Queries) CreateWorkspaceMember(ctx context.Context, arg CreateWorkspace
 	return err
 }
 
+const deleteAllNotifications = `-- name: DeleteAllNotifications :execrows
+DELETE FROM notifications WHERE user_id = $1::uuid
+`
+
+// «Удалить все» — вся лента этого человека, включая непрочитанное: это его
+// решение, а не уборка по возрасту. Чужие строки того же повода не трогаются —
+// у каждого адресата своя.
+func (q *Queries) DeleteAllNotifications(ctx context.Context, userID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAllNotifications, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDeliveredOutboxByTemplate = `-- name: DeleteDeliveredOutboxByTemplate :execrows
 DELETE FROM outbox
 WHERE payload->>'template' = $1::text AND sent_at IS NOT NULL AND sent_at <= $2
@@ -1461,6 +1476,25 @@ type DeleteMemberParams struct {
 // на уровне запроса: владельца не удаляют вовсе, ни своей рукой, ни чужой.
 func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteMember, arg.WorkspaceID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteNotification = `-- name: DeleteNotification :execrows
+DELETE FROM notifications WHERE id = $1::uuid AND user_id = $2::uuid
+`
+
+type DeleteNotificationParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+// Удаление одной строки ленты человеком. Отбор по владельцу: чужую строку запрос
+// просто не находит, и отвечать на неё отдельно незачем.
+func (q *Queries) DeleteNotification(ctx context.Context, arg DeleteNotificationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteNotification, arg.ID, arg.UserID)
 	if err != nil {
 		return 0, err
 	}
@@ -6445,29 +6479,6 @@ type MarkNotificationsReadParams struct {
 // прочитанные не переписываются — иначе повтор сдвигал бы им срок уборки.
 func (q *Queries) MarkNotificationsRead(ctx context.Context, arg MarkNotificationsReadParams) (int64, error) {
 	result, err := q.db.Exec(ctx, markNotificationsRead, arg.UserID, arg.Ids)
-	if err != nil {
-		return 0, err
-	}
-	return result.RowsAffected(), nil
-}
-
-const markNotificationsReadBySubject = `-- name: MarkNotificationsReadBySubject :execrows
-UPDATE notifications SET read_at = now()
-WHERE user_id = $1::uuid AND kind = $2::text
-  AND subject_id = $3::uuid AND read_at IS NULL
-`
-
-type MarkNotificationsReadBySubjectParams struct {
-	UserID    uuid.UUID
-	Kind      string
-	SubjectID uuid.UUID
-}
-
-// Прочтение «по субъекту»: человек открыл таблицу ответов формы, и повод о новых
-// ответах именно этой формы гаснет сам. Это единственный вид отметки, который
-// ставит не нажатие в шторке, а приход человека туда, куда повод звал.
-func (q *Queries) MarkNotificationsReadBySubject(ctx context.Context, arg MarkNotificationsReadBySubjectParams) (int64, error) {
-	result, err := q.db.Exec(ctx, markNotificationsReadBySubject, arg.UserID, arg.Kind, arg.SubjectID)
 	if err != nil {
 		return 0, err
 	}

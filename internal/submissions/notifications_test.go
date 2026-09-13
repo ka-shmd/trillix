@@ -15,25 +15,13 @@ import (
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
-type readMark struct {
-	user    uuid.UUID
-	kind    notify.Kind
-	subject uuid.UUID
-}
-
 type fakeNotes struct {
 	events []notify.Event
-	marks  []readMark
 	err    error
 }
 
 func (f *fakeNotes) Notify(_ context.Context, _ postgres.DBTX, ev notify.Event) error {
 	f.events = append(f.events, ev)
-	return f.err
-}
-
-func (f *fakeNotes) MarkReadBySubject(_ context.Context, userID uuid.UUID, kind notify.Kind, subjectID uuid.UUID) error {
-	f.marks = append(f.marks, readMark{userID, kind, subjectID})
 	return f.err
 }
 

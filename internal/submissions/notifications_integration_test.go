@@ -68,9 +68,10 @@ func TestSubmit_CoalescesNewSubmissionsNotification(t *testing.T) {
 	}
 }
 
-// Открытие таблицы ответов гасит повод: человек пришёл туда, куда повод звал.
-// Отметка ставится ТОМУ, кто открыл, — у остальных участников строка остаётся.
-func TestListSubmissions_MarksNotificationRead(t *testing.T) {
+// Открытие таблицы ответов повода НЕ гасит (решение владельца 2026-09-13):
+// прочтением считается только нажатие на саму строку уведомления. Человек, зашедший
+// в таблицу по своим делам, ничего не «прочитал» — и уж точно не за других.
+func TestListSubmissions_KeepsNotificationUnread(t *testing.T) {
 	resetDB(t)
 	srv := newServer(t)
 	svc := newService(t)
@@ -99,26 +100,22 @@ func TestListSubmissions_MarksNotificationRead(t *testing.T) {
 	if _, err := svc.ListForForm(ctx, owner, formID, nil, 20); err != nil {
 		t.Fatalf("листинг ответов: %v", err)
 	}
-	if unread() != 0 {
-		t.Error("открытие таблицы ответов не погасило повод")
+	if unread() != 1 {
+		t.Error("открытие таблицы ответов погасило повод — прочтение ставит только нажатие")
 	}
 
-	// Следующий ответ заводит НОВУЮ строку: к уже увиденному счётчик не
-	// дописывается.
+	// Второй ответ по-прежнему склеивается в ту же строку: она не прочитана.
 	body = `{"submission_id":"` + uuid.NewString() + `","token":"` + freshToken() + `","answers":{"b1":"Пётр"}}`
 	if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
 		t.Fatalf("приём: статус %d, ожидалось 201", resp.StatusCode)
 	}
-	if unread() != 1 {
-		t.Error("новый ответ после прочтения не поднял повода заново")
-	}
-	var count int
+	var rows, count int
 	if err := testPool.QueryRow(ctx,
-		`SELECT count FROM notifications WHERE user_id = $1 AND read_at IS NULL`, owner).Scan(&count); err != nil {
+		`SELECT count(*), max(count) FROM notifications WHERE user_id = $1`, owner).Scan(&rows, &count); err != nil {
 		t.Fatal(err)
 	}
-	if count != 1 {
-		t.Errorf("новая строка стартует со счётчиком %d, ожидалась 1", count)
+	if rows != 1 || count != 2 {
+		t.Errorf("строк %d со счётчиком %d, ожидалась одна со счётчиком 2", rows, count)
 	}
 }
 

@@ -39,9 +39,10 @@ type fakeStore struct {
 	listErr   error
 	unread    int64
 
-	markedIDs     []uuid.UUID
-	markedAll     int
-	markedSubject []clearCall
+	markedIDs  []uuid.UUID
+	markedAll  int
+	deleted    []uuid.UUID
+	deletedAll int
 
 	purgeRead   time.Time
 	purgeUnread time.Time
@@ -82,9 +83,14 @@ func (f *fakeStore) MarkAllRead(_ context.Context, _ postgres.DBTX, _ uuid.UUID)
 	return 0, nil
 }
 
-func (f *fakeStore) MarkReadBySubject(_ context.Context, _ postgres.DBTX, _ uuid.UUID, kind string, subjectID uuid.UUID) (int64, error) {
-	f.markedSubject = append(f.markedSubject, clearCall{kind, subjectID})
+func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _ uuid.UUID, id uuid.UUID) (int64, error) {
+	f.deleted = append(f.deleted, id)
 	return 1, nil
+}
+
+func (f *fakeStore) DeleteAll(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (int64, error) {
+	f.deletedAll++
+	return 2, nil
 }
 
 func (f *fakeStore) Purge(_ context.Context, _ postgres.DBTX, readBefore, unreadBefore time.Time) (int64, error) {
@@ -346,19 +352,30 @@ func TestMarkRead(t *testing.T) {
 	}
 }
 
-func TestMarkReadBySubject(t *testing.T) {
+// Удаление — не прочтение: строки не остаётся вовсе, тогда как прочитанная живёт
+// историей до уборщика.
+func TestDelete(t *testing.T) {
 	store := &fakeStore{}
 	svc := newTestService(&fakeAccess{}, store)
-	form := uuid.New()
+	id := uuid.New()
 
-	if err := svc.MarkReadBySubject(context.Background(), uuid.New(), KindNewSubmissions, form); err != nil {
+	if err := svc.Delete(context.Background(), uuid.New(), id); err != nil {
 		t.Fatal(err)
 	}
-	if len(store.markedSubject) != 1 || store.markedSubject[0].subject != form {
-		t.Fatalf("гашение ушло не туда: %+v", store.markedSubject)
+	if len(store.deleted) != 1 || store.deleted[0] != id {
+		t.Fatalf("удалено не то: %+v", store.deleted)
 	}
-	if err := svc.MarkReadBySubject(context.Background(), uuid.New(), "telepathy", form); err == nil {
-		t.Fatal("повод не из реестра обязан быть ошибкой")
+}
+
+func TestDeleteAll(t *testing.T) {
+	store := &fakeStore{}
+	svc := newTestService(&fakeAccess{}, store)
+
+	if err := svc.DeleteAll(context.Background(), uuid.New()); err != nil {
+		t.Fatal(err)
+	}
+	if store.deletedAll != 1 {
+		t.Fatalf("очистка ленты не дошла до хранилища: %d", store.deletedAll)
 	}
 }
 

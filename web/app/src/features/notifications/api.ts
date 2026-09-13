@@ -12,3 +12,15 @@ export function listNotifications(): Promise<NotificationFeed> {
 export function markNotificationsRead(body: { ids: string[] } | { all: true }): Promise<void> {
   return apiRequest('/notifications/read', { method: 'POST', body })
 }
+
+// deleteNotification убирает одну строку насовсем. От прочтения отличается тем,
+// что строки не остаётся вовсе: прочитанная живёт историей до уборщика.
+export function deleteNotification(id: string): Promise<void> {
+  return apiRequest(`/notifications/${id}`, { method: 'DELETE' })
+}
+
+// deleteAllNotifications чистит ленту целиком, включая непрочитанное: это решение
+// человека, а не уборка по возрасту.
+export function deleteAllNotifications(): Promise<void> {
+  return apiRequest('/notifications', { method: 'DELETE' })
+}

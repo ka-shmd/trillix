@@ -128,16 +128,24 @@ func (Repo) MarkAllRead(ctx context.Context, db postgres.DBTX, userID uuid.UUID)
 	return n, nil
 }
 
-// MarkReadBySubject гасит повод одного субъекта у одного пользователя: человек
-// пришёл туда, куда повод звал.
-func (Repo) MarkReadBySubject(ctx context.Context, db postgres.DBTX, userID uuid.UUID, kind string, subjectID uuid.UUID) (int64, error) {
-	n, err := postgres.New(db).MarkNotificationsReadBySubject(ctx, postgres.MarkNotificationsReadBySubjectParams{
-		UserID:    userID,
-		Kind:      kind,
-		SubjectID: subjectID,
+// Delete убирает одну строку ленты. Чужая строка не находится — отбор идёт по
+// владельцу.
+func (Repo) Delete(ctx context.Context, db postgres.DBTX, userID, id uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeleteNotification(ctx, postgres.DeleteNotificationParams{
+		ID:     id,
+		UserID: userID,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("mark notifications read by subject (%s): %w", kind, err)
+		return 0, fmt.Errorf("delete notification %s: %w", id, err)
+	}
+	return n, nil
+}
+
+// DeleteAll убирает всю ленту человека, включая непрочитанное.
+func (Repo) DeleteAll(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeleteAllNotifications(ctx, userID)
+	if err != nil {
+		return 0, fmt.Errorf("delete all notifications of %s: %w", userID, err)
 	}
 	return n, nil
 }

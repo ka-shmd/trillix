@@ -74,13 +74,16 @@ WHERE user_id = @user_id::uuid AND read_at IS NULL AND id = ANY(@ids::uuid[]);
 UPDATE notifications SET read_at = now()
 WHERE user_id = @user_id::uuid AND read_at IS NULL;
 
--- name: MarkNotificationsReadBySubject :execrows
--- Прочтение «по субъекту»: человек открыл таблицу ответов формы, и повод о новых
--- ответах именно этой формы гаснет сам. Это единственный вид отметки, который
--- ставит не нажатие в шторке, а приход человека туда, куда повод звал.
-UPDATE notifications SET read_at = now()
-WHERE user_id = @user_id::uuid AND kind = @kind::text
-  AND subject_id = @subject_id::uuid AND read_at IS NULL;
+-- name: DeleteNotification :execrows
+-- Удаление одной строки ленты человеком. Отбор по владельцу: чужую строку запрос
+-- просто не находит, и отвечать на неё отдельно незачем.
+DELETE FROM notifications WHERE id = @id::uuid AND user_id = @user_id::uuid;
+
+-- name: DeleteAllNotifications :execrows
+-- «Удалить все» — вся лента этого человека, включая непрочитанное: это его
+-- решение, а не уборка по возрасту. Чужие строки того же повода не трогаются —
+-- у каждого адресата своя.
+DELETE FROM notifications WHERE user_id = @user_id::uuid;
 
 -- name: PurgeNotifications :execrows
 -- Уборка по возрасту: прочитанные живут короче непрочитанных. Индекса под ветку

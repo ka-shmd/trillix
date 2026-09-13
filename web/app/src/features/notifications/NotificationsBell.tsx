@@ -3,7 +3,12 @@ import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { Bell, X } from 'lucide-react'
 
-import { notificationsQueryOptions, useMarkNotificationsRead } from './queries'
+import {
+  notificationsQueryOptions,
+  useDeleteAllNotifications,
+  useDeleteNotification,
+  useMarkNotificationsRead,
+} from './queries'
 import { groupByWorkspace } from './grouping'
 import type { Notification } from '../../entities/notification'
 import { formatRelativeDate } from '../../shared/format'
@@ -24,6 +29,8 @@ export function NotificationsBell() {
   const [open, setOpen] = useState(false)
   const feed = useQuery(notificationsQueryOptions)
   const markRead = useMarkNotificationsRead()
+  const removeOne = useDeleteNotification()
+  const removeAll = useDeleteAllNotifications()
 
   const unread = feed.data?.unread ?? 0
   const items = feed.data?.items ?? []
@@ -79,10 +86,25 @@ export function NotificationsBell() {
             <Button
               variant="ghost"
               size="sm"
+              className="px-2 text-xs"
               onClick={() => markRead.mutate({ all: true })}
               disabled={markRead.isPending}
             >
               Прочитать всё
+            </Button>
+          )}
+          {/* «Удалить все» уносит и непрочитанное: это решение человека, а не
+            уборка по возрасту, и спрашивать «а точно?» у ленты, которая и так
+            стирается сама через месяц, значило бы пугать на ровном месте. */}
+          {items.length > 0 && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="px-2 text-xs"
+              onClick={() => removeAll.mutate()}
+              disabled={removeAll.isPending}
+            >
+              Удалить все
             </Button>
           )}
           {/* Крестик рядом с «Прочитать всё»: шторка закрывается и щелчком мимо, и
@@ -118,6 +140,7 @@ export function NotificationsBell() {
                     setOpen(false)
                     if (!item.read) markRead.mutate({ ids: [item.id] })
                   }}
+                  onDelete={() => removeOne.mutate(item.id)}
                 />
               ))}
             </div>
@@ -130,31 +153,60 @@ export function NotificationsBell() {
 
 // NotificationRow — строка ленты. Текст и адрес пришли готовыми с сервера: экран
 // решает только, как их показать.
-function NotificationRow({ item, onOpen }: { item: Notification; onOpen: () => void }) {
+//
+// Ссылка растянута псевдоэлементом на всю строку (`after:absolute after:inset-0`),
+// а крестик стоит выше по слою (`relative z-10`) — тот же приём, что у строки
+// списка форм: нажимается вся строка, но кнопка внутри неё остаётся кнопкой, а не
+// вложенной в ссылку (такой разметки не бывает).
+function NotificationRow({
+  item,
+  onOpen,
+  onDelete,
+}: {
+  item: Notification
+  onOpen: () => void
+  onDelete: () => void
+}) {
   return (
-    <Link
-      to={item.link}
-      onClick={onOpen}
+    <div
       className={cn(
-        'flex items-start gap-2 rounded-md px-2 py-2 transition-colors',
-        'hover:bg-accent/60 focus-visible:bg-accent/60 focus-visible:outline-none',
+        'group relative flex items-start gap-2 rounded-md px-2 py-2 transition-colors',
+        'hover:bg-accent/60 has-[a:focus-visible]:bg-accent/60',
       )}
     >
       <span
         className={cn(
           'mt-1.5 size-1.5 shrink-0 rounded-full',
-          item.read ? 'bg-transparent' : 'bg-primary',
+          item.read ? 'bg-transparent' : 'bg-highlight',
         )}
         aria-hidden="true"
       />
       <span className="min-w-0 flex-1">
-        <span className={cn('block text-sm', item.read && 'text-muted-foreground')}>
+        <Link
+          to={item.link}
+          onClick={onOpen}
+          className={cn(
+            'block text-sm after:absolute after:inset-0 after:rounded-md focus-visible:outline-none',
+            item.read && 'text-muted-foreground',
+          )}
+        >
           {item.text}
-        </span>
+        </Link>
         <span className="block text-xs text-muted-foreground">
           {formatRelativeDate(item.lastAt)}
         </span>
       </span>
-    </Link>
+      {/* Крестик появляется по наведению и по фокусу: в спокойной ленте он шум, а
+        с клавиатуры до него иначе было бы не добраться. */}
+      <Button
+        variant="ghost"
+        size="icon"
+        className="relative z-10 size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        onClick={onDelete}
+      >
+        <X className="size-3.5" />
+        <span className="sr-only">Удалить уведомление</span>
+      </Button>
+    </div>
   )
 }

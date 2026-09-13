@@ -1,6 +1,11 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
 import { notificationKeys } from './keys'
-import { listNotifications, markNotificationsRead } from './api'
+import {
+  deleteAllNotifications,
+  deleteNotification,
+  listNotifications,
+  markNotificationsRead,
+} from './api'
 
 // Лента уведомлений — серверный стейт, живёт только в Query.
 //
@@ -21,6 +26,24 @@ export function useMarkNotificationsRead() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: markNotificationsRead,
+    onSuccess: () => qc.invalidateQueries({ queryKey: notificationKeys.feed() }),
+  })
+}
+
+// Удаление инвалидирует ленту по той же причине, что и отметка: счётчик на пункте
+// панели считает её строки.
+export function useDeleteNotification() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (id: string) => deleteNotification(id),
+    onSuccess: () => qc.invalidateQueries({ queryKey: notificationKeys.feed() }),
+  })
+}
+
+export function useDeleteAllNotifications() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: deleteAllNotifications,
     onSuccess: () => qc.invalidateQueries({ queryKey: notificationKeys.feed() }),
   })
 }

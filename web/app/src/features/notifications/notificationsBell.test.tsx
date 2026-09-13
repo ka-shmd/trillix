@@ -19,16 +19,22 @@ import { NotificationsBell } from './NotificationsBell'
 
 const listNotifications = vi.fn<() => Promise<NotificationFeed>>()
 const markNotificationsRead = vi.fn<(body: unknown) => Promise<void>>()
+const deleteNotification = vi.fn<(id: string) => Promise<void>>()
+const deleteAllNotifications = vi.fn<() => Promise<void>>()
 
 vi.mock('./api', () => ({
   listNotifications: () => listNotifications(),
   markNotificationsRead: (body: unknown) => markNotificationsRead(body),
+  deleteNotification: (id: string) => deleteNotification(id),
+  deleteAllNotifications: () => deleteAllNotifications(),
 }))
 
 afterEach(() => {
   cleanup()
   listNotifications.mockReset()
   markNotificationsRead.mockReset()
+  deleteNotification.mockReset()
+  deleteAllNotifications.mockReset()
 })
 
 function row(over: Partial<Notification> = {}): Notification {
@@ -51,6 +57,8 @@ function row(over: Partial<Notification> = {}): Notification {
 async function renderBell(feed: NotificationFeed) {
   listNotifications.mockResolvedValue(feed)
   markNotificationsRead.mockResolvedValue(undefined)
+  deleteNotification.mockResolvedValue(undefined)
+  deleteAllNotifications.mockResolvedValue(undefined)
   const qc = new QueryClient({ defaultOptions: { queries: { retry: false } } })
   const rootRoute = createRootRoute({
     component: () => (
@@ -152,6 +160,33 @@ describe('колокольчик', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }))
     await act(async () => {})
     expect(screen.queryByRole('link', { name: /Заявка — 3 новых ответа/ })).toBeNull()
+  })
+
+  // Удаление — не прочтение: строки не остаётся вовсе.
+  it('крестик строки удаляет её', async () => {
+    await renderBell({ items: [row()], unread: 1 })
+    await openBell()
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить уведомление' }))
+    await act(async () => {})
+    expect(deleteNotification).toHaveBeenCalledWith('n-1')
+    expect(markNotificationsRead).not.toHaveBeenCalled()
+  })
+
+  it('«Удалить все» чистит ленту целиком', async () => {
+    await renderBell({ items: [row(), row({ id: 'n-2' })], unread: 2 })
+    await openBell()
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить все' }))
+    await act(async () => {})
+    expect(deleteAllNotifications).toHaveBeenCalled()
+  })
+
+  // Пустой ленте нечего удалять, и кнопка, которая ничего не делает, — обещание
+  // впустую.
+  it('у пустой ленты нет ни «Прочитать всё», ни «Удалить все»', async () => {
+    await renderBell({ items: [], unread: 0 })
+    await openBell()
+    expect(screen.queryByRole('button', { name: 'Удалить все' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Прочитать всё' })).toBeNull()
   })
 
   it('пустая лента говорит об этом словами', async () => {

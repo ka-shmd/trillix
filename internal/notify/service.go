@@ -35,7 +35,8 @@ type Store interface {
 	CountUnread(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error)
 	MarkRead(ctx context.Context, db postgres.DBTX, userID uuid.UUID, ids []uuid.UUID) (int64, error)
 	MarkAllRead(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error)
-	MarkReadBySubject(ctx context.Context, db postgres.DBTX, userID uuid.UUID, kind string, subjectID uuid.UUID) (int64, error)
+	Delete(ctx context.Context, db postgres.DBTX, userID, id uuid.UUID) (int64, error)
+	DeleteAll(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error)
 	Purge(ctx context.Context, db postgres.DBTX, readBefore, unreadBefore time.Time) (int64, error)
 }
 
@@ -250,12 +251,22 @@ func (s *Service) MarkAllRead(ctx context.Context, userID uuid.UUID) error {
 	return err
 }
 
-// MarkReadBySubject гасит повод о субъекте: человек открыл экран, куда звал повод.
-func (s *Service) MarkReadBySubject(ctx context.Context, userID uuid.UUID, kind Kind, subjectID uuid.UUID) error {
-	if _, ok := registry[kind]; !ok {
-		return fmt.Errorf("notify: неизвестный повод %q", kind)
-	}
-	_, err := s.repo.MarkReadBySubject(ctx, s.db, userID, string(kind), subjectID)
+// Delete убирает строку из ленты насовсем. От прочтения отличается тем, что
+// строки больше нет вовсе: прочитанная остаётся историей до уборщика, удалённая
+// не остаётся ничем.
+//
+// Чужая строка просто не находится (отбор по владельцу в запросе), поэтому ответа
+// «такой нет» здесь не бывает: он рассказал бы о существовании чужой.
+func (s *Service) Delete(ctx context.Context, userID, id uuid.UUID) error {
+	_, err := s.repo.Delete(ctx, s.db, userID, id)
+	return err
+}
+
+// DeleteAll очищает ленту человека целиком, включая непрочитанное: это его
+// решение, а не уборка по возрасту. У других адресатов того же повода свои
+// строки, и они остаются.
+func (s *Service) DeleteAll(ctx context.Context, userID uuid.UUID) error {
+	_, err := s.repo.DeleteAll(ctx, s.db, userID)
 	return err
 }
 
