@@ -211,7 +211,11 @@ function NotificationRow({
       <Button
         variant="ghost"
         size="icon"
-        className="relative z-10 size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
+        // cursor-pointer здесь руками: вендоренный Button его не ставит (Tailwind
+        // сбрасывает курсор кнопкам в default), а строка вокруг — ссылка, над
+        // которой указатель как раз есть, и корзина посреди неё читалась бы
+        // неживой.
+        className="relative z-10 size-6 cursor-pointer opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
         onClick={onDelete}
       >
         <Trash2 className="size-3.5" />
