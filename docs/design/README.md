@@ -39,6 +39,7 @@
 | [`booking.md`](booking.md) | фаза 27 `DEV-PLAN`, запись на время: расписания пространства, слоты, группы, приглашение в письме (**§4.7 частично снята, §12 не строилась**) | закрыта 2026-09-03, тег не поставлен | [`BOOKING.md`](../BOOKING.md), [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
 | [`webhooks.md`](webhooks.md) | фаза 28 `DEV-PLAN` (= остаток фазы 15 `POST-MVP` без Telegram), вебхуки и своя очередь доставки интеграций по целям | **не закрыта** — спека живая | [`INTEGRATIONS.md`](../INTEGRATIONS.md) (раздел пишется), [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
 | [`cabinet-navigation.md`](cabinet-navigation.md) | задача вне плана, навигация кабинета: сайдбар как адрес, переключатель пространств, снос `?w=` | **не закрыта** — спека живая | [`DESIGN-SYSTEM.md`](../DESIGN-SYSTEM.md) §3, [`WORKSPACES.md`](../WORKSPACES.md) |
+| [`notifications.md`](notifications.md) | задача вне плана, уведомления кабинета: лента адресованных событий с коалесингом в непрочитанное, три повода, колокольчик со шторкой | **на согласовании** — код не начат | [`API.md`](../API.md), [`SCHEMA.md`](../SCHEMA.md) |
 
 Разбор по этапам всех этих работ — [`JOURNAL.md`](../JOURNAL.md) (append-only, читается
 грепом по номеру фазы).
