@@ -15,6 +15,8 @@ import { formatRelativeDate } from '../../shared/format'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar'
+// TooltipProvider даёт SidebarProvider выше по дереву — свой здесь не нужен.
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { LoadingRows } from '../../shared/page/states'
 import { cn } from '@/lib/utils'
 
@@ -179,7 +181,13 @@ function NotificationRow({
     <div
       className={cn(
         'group relative flex items-start gap-2 rounded-md px-2 py-2 transition-colors',
-        'hover:bg-accent/60 has-[a:focus-visible]:bg-accent/60',
+        // Подсветка строки висит на наведении НА ССЫЛКУ, а не на строку целиком, и
+        // это не педантизм: ссылка растянута псевдоэлементом на всю строку, но
+        // корзина лежит ВЫШЕ неё по слою, поэтому над корзиной ссылка не
+        // наведена — строка гаснет сама, и светится ровно то, что сейчас нажмётся.
+        // С `hover:` на самой строке корзина оставалась бы внутри подсвеченной
+        // полосы и читалась её частью, а не отдельной кнопкой.
+        'has-[a:hover]:bg-accent/60 has-[a:focus-visible]:bg-accent/60',
       )}
     >
       <span
@@ -207,20 +215,36 @@ function NotificationRow({
       {/* Корзина, а не крестик: крестик в этой же шторке уже занят закрытием, и
         два одинаковых значка рядом означали бы разное — «закрыть окно» и «стереть
         строку». Появляется по наведению и по фокусу: в спокойной ленте она шум, а
-        с клавиатуры до неё иначе было бы не добраться. */}
-      <Button
-        variant="ghost"
-        size="icon"
-        // cursor-pointer здесь руками: вендоренный Button его не ставит (Tailwind
-        // сбрасывает курсор кнопкам в default), а строка вокруг — ссылка, над
-        // которой указатель как раз есть, и корзина посреди неё читалась бы
-        // неживой.
-        className="relative z-10 size-6 cursor-pointer opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
-        onClick={onDelete}
-      >
-        <Trash2 className="size-3.5" />
-        <span className="sr-only">Удалить уведомление</span>
-      </Button>
+        с клавиатуры до неё иначе было бы не добраться.
+
+        ОТДЕЛЕНА ОТ СТРОКИ ТРЕМЯ ВЕЩАМИ, и все три нужны: строка гаснет, пока
+        указатель на ней (правило выше), сама она загорается КРАСНЫМ — деструктивное
+        действие отделяется даже среди иконок строки (DESIGN-SYSTEM §7), — и
+        подсказка называет его словом. Ghost-кнопка со своим `hover:bg-accent`
+        внутри строки с `hover:bg-accent/60` не читалась вовсе: подсветка была почти
+        та же. */}
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <Button
+            variant="ghost"
+            size="icon"
+            // cursor-pointer здесь руками: вендоренный Button его не ставит
+            // (Tailwind сбрасывает курсор кнопкам в default), а строка вокруг —
+            // ссылка, над которой указатель как раз есть, и корзина посреди неё
+            // читалась бы неживой.
+            className={cn(
+              'relative z-10 size-6 cursor-pointer text-muted-foreground opacity-0',
+              'group-hover:opacity-100 focus-visible:opacity-100',
+              'hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20',
+            )}
+            onClick={onDelete}
+          >
+            <Trash2 className="size-3.5" />
+            <span className="sr-only">Удалить уведомление</span>
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent side="left">Удалить</TooltipContent>
+      </Tooltip>
     </div>
   )
 }
