@@ -59,7 +59,9 @@ var registry = map[Kind]spec{
 			return fmt.Sprintf("%s — %s", formTitle(p),
 				domain.Plural(int64(count), "новый ответ", "новых ответа", "новых ответов"))
 		},
-		link: func(p Payload, _ string) string { return "/forms/" + p.FormSlug + "/responses" },
+		// Адрес раздела ответов, а не вкладки: вкладку человек выбирает сам, а
+		// старый /responses — редирект, оставленный ради уже разосланных писем.
+		link: func(p Payload, _ string) string { return "/forms/" + p.FormSlug + "/submissions" },
 	},
 	KindIntegrationBroken: {
 		action:   domain.ActionFormRead,

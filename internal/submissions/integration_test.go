@@ -23,6 +23,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/booking"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/notify"
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
@@ -62,6 +63,19 @@ func resetDB(t *testing.T) {
 // Лимитер пермиссивный (инвариант 6).
 func newServer(t *testing.T) *httptest.Server {
 	t.Helper()
+	h := submissions.NewPublicHandler(newService(t), ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
+
+	mux := http.NewServeMux()
+	h.Routes(mux)
+	srv := httptest.NewServer(mux)
+	t.Cleanup(srv.Close)
+	return srv
+}
+
+// newService — тот же приём ответа без HTTP-обвязки: нужен тестам, которые зовут
+// кабинетные методы сервиса (листинг гасит повод о новых ответах).
+func newService(t *testing.T) *submissions.Service {
+	t.Helper()
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
 		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 			entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173"),
@@ -81,14 +95,14 @@ func newServer(t *testing.T) *httptest.Server {
 		WithBookingGuard(booking.NewGuard(testPool, booking.Repo{})).
 		// Организатор приглашения: без него письма о записи не бывает — приглашение
 		// без ORGANIZER часть клиентов не показывает вовсе.
-		WithBookingMail("Trillix <no-reply@trillix.test>")
-	h := submissions.NewPublicHandler(subSvc, ratelimit.AllowAll{}, testSecret, submissions.DefaultMinFillTime, false)
-
-	mux := http.NewServeMux()
-	h.Routes(mux)
-	srv := httptest.NewServer(mux)
-	t.Cleanup(srv.Close)
-	return srv
+		WithBookingMail("Trillix <no-reply@trillix.test>").
+		// Уведомления кабинета: приём ответа ставит повод о новых ответах, листинг
+		// его гасит. Права адресатов спрашиваются у настоящего workspaces — повод
+		// обязан приходить тем, кому можно видеть формы.
+		WithNotifications(notify.NewService(testPool, notify.Repo{},
+			workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+				entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173")))
+	return subSvc
 }
 
 // publishedForm создаёт пользователя и форму с одним обязательным полем b1, публикует

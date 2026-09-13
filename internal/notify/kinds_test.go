@@ -108,7 +108,7 @@ func TestKindLink(t *testing.T) {
 		slug string
 		want string
 	}{
-		{KindNewSubmissions, Payload{FormSlug: "zayavka"}, "team", "/forms/zayavka/responses"},
+		{KindNewSubmissions, Payload{FormSlug: "zayavka"}, "team", "/forms/zayavka/submissions"},
 		{KindIntegrationBroken, Payload{FormSlug: "zayavka"}, "team", "/forms/zayavka/integrations"},
 		{KindOverQuota, Payload{}, "team", "/w/team/plan"},
 	}

@@ -3281,7 +3281,14 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtyp
 }
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
-SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
+SELECT f.id AS form_id, f.workspace_id, f.title,
+    -- cabinet_name: имя формы В КАБИНЕТЕ (name ?? title). Респонденту не
+    -- отдаётся: его потребитель — уведомление кабинета о новых ответах, где
+    -- форма обязана называться тем же словом, что в списке форм. Едет здесь,
+    -- а не запросом владельца (GetSubmissionOwner): тот джойнит участников и
+    -- пользователей ради письма, которого у формы может не быть вовсе.
+    coalesce(f.name, f.title) AS cabinet_name,
+    fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
     -- notify_respondent: тумблер письма респонденту (0046). Здесь едет только ФЛАГ,
     -- как и у письма владельцу; бланк приезжает с GetSubmissionOwner, то есть
@@ -3343,6 +3350,7 @@ type GetPublicFormBySlugRow struct {
 	FormID             uuid.UUID
 	WorkspaceID        uuid.UUID
 	Title              string
+	CabinetName        string
 	Version            int32
 	Schema             []byte
 	PublishedVersionID pgtype.UUID
@@ -3392,6 +3400,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.FormID,
 		&i.WorkspaceID,
 		&i.Title,
+		&i.CabinetName,
 		&i.Version,
 		&i.Schema,
 		&i.PublishedVersionID,
@@ -3417,7 +3426,8 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 }
 
 const getPublicFormRefBySlug = `-- name: GetPublicFormRefBySlug :one
-SELECT f.id AS form_id, f.workspace_id, fv.version, f.published_version_id,
+SELECT f.id AS form_id, f.workspace_id, coalesce(f.name, f.title) AS cabinet_name,
+    fv.version, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title,
     f.notify_on_submission, f.notify_respondent, f.collect_partial, f.link_preview,
     f.branding, f.progress, f.auto_jump, f.save_locally, f.allow_back,
@@ -3435,6 +3445,7 @@ WHERE f.slug = $1
 type GetPublicFormRefBySlugRow struct {
 	FormID             uuid.UUID
 	WorkspaceID        uuid.UUID
+	CabinetName        string
 	Version            int32
 	PublishedVersionID pgtype.UUID
 	Status             string
@@ -3479,6 +3490,7 @@ func (q *Queries) GetPublicFormRefBySlug(ctx context.Context, slug string) (GetP
 	err := row.Scan(
 		&i.FormID,
 		&i.WorkspaceID,
+		&i.CabinetName,
 		&i.Version,
 		&i.PublishedVersionID,
 		&i.Status,

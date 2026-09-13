@@ -252,7 +252,7 @@ func TestFeed_RendersRows(t *testing.T) {
 	if page.Items[0].Text != "Заявка — 3 новых ответа" {
 		t.Errorf("текст первой строки = %q", page.Items[0].Text)
 	}
-	if page.Items[0].Link != "/forms/zayavka/responses" {
+	if page.Items[0].Link != "/forms/zayavka/submissions" {
 		t.Errorf("ссылка первой строки = %q", page.Items[0].Link)
 	}
 	// Ссылка на тариф собирается из адреса ПРОСТРАНСТВА строки, а не из снимка:

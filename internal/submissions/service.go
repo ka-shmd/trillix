@@ -16,6 +16,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/mail"
+	"github.com/ka-shmd/trillix/internal/notify"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -77,6 +78,20 @@ type Forms interface {
 // с PDF-вложением, у которого в дайджесте нет ответа на вопрос «чей ответ печатать».
 type Mailer interface {
 	EnqueueEmail(ctx context.Context, db postgres.DBTX, msg mail.EmailMessage) error
+}
+
+// Notifications — уведомления кабинета глазами этого модуля (internal/notify).
+// Реализация — *notify.Service.
+//
+// От письма отличаются двумя вещами. Тумблер формы их не гасит: письмо — настройка
+// формы, а лента — вид человека на своё хозяйство, и выключать его автору формы
+// нечем. Адресат у них не один: повод получает каждый участник, кому можно видеть
+// формы, — поэтому здесь уезжает событие, а не сообщение.
+type Notifications interface {
+	Notify(ctx context.Context, db postgres.DBTX, ev notify.Event) error
+	// MarkReadBySubject гасит повод формы у одного человека: он открыл таблицу
+	// ответов, то есть пришёл туда, куда повод звал.
+	MarkReadBySubject(ctx context.Context, userID uuid.UUID, kind notify.Kind, subjectID uuid.UUID) error
 }
 
 // RespondentLimiter — потолок писем РЕСПОНДЕНТАМ на одну форму
@@ -257,6 +272,9 @@ type Service struct {
 	bookings Bookings
 	// bookingGuard — стоп-кран удаления ответа с живой будущей записью (фаза 27).
 	bookingGuard BookingGuard
+	// notes — уведомления кабинета. Тем же сеттером и по той же причине, что files;
+	// nil = уведомлений в сборке нет, и приём ответа этого не замечает.
+	notes Notifications
 	// bookingOrganizer — адрес отправителя контура: он уезжает ORGANIZER'ом в
 	// приглашение календаря. Пусто — письма о записи нет (bookingmail.go).
 	bookingOrganizer string
@@ -332,6 +350,12 @@ func (s *Service) WithBookings(b Bookings) *Service {
 // WithFiles подключает модуль файлов ответов. Без него форма с блоком file
 // отвергает ответ с файлами (см. Submit) — молча принять ссылку, которую некому
 // проверить, нельзя.
+// WithNotifications подключает уведомления кабинета.
+func (s *Service) WithNotifications(n Notifications) *Service {
+	s.notes = n
+	return s
+}
+
 func (s *Service) WithFiles(f AnswerFiles) *Service {
 	s.files = f
 	return s
@@ -546,6 +570,14 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	if inserted && (pf.NotifyOnSubmission || pf.NotifyRespondent) {
 		s.notifyMail(ctx, pf, id, slug, schema, clean)
 	}
+	// Повод кабинета о новых ответах ставится ВСЕГДА: тумблеры выше про письма, а
+	// лента — вид человека на своё хозяйство, и выключать его автору формы нечем.
+	// Сверхлимитный ответ повода не поднимает (ADR §10): в таблице ответов кабинета
+	// такой строки не видно, и обещать её колокольчиком нельзя — про упёршуюся
+	// квоту придёт свой повод.
+	if inserted && !in.OverQuota {
+		s.notifyNewSubmissions(ctx, pf, slug)
+	}
 	// Письмо о записи НЕ зависит от тумблеров уведомлений и от тарифа: без него у
 	// респондента нет ссылки отмены, а значит, место не вернуть в оборот (§4.8 спеки).
 	if inserted && booking.BlockID != "" {
@@ -690,6 +722,48 @@ func (s *Service) SheetRows(ctx context.Context, formID uuid.UUID, ids []uuid.UU
 		})
 	}
 	return page, nil
+}
+
+// notifyNewSubmissions ставит повод кабинета «на форме новые ответы». Повторы
+// склеиваются в одну непрочитанную строку со счётчиком — это делает сам запрос
+// постановки, здесь про склейку знать не надо.
+//
+// Best-effort и ПОСЛЕ приёма, как markVisitSubmitted и письмо владельцу: краш в
+// окне между коммитом ответа и постановкой теряет уведомление, данные целы (ответ
+// лежит в таблице). Название формы и её адрес берём из уже прочитанной публичной
+// формы — отдельного запроса на это не делаем.
+func (s *Service) notifyNewSubmissions(ctx context.Context, pf forms.PublicForm, slug string) {
+	if s.notes == nil {
+		return
+	}
+	err := s.notes.Notify(ctx, s.db, notify.Event{
+		WorkspaceID: pf.WorkspaceID,
+		Kind:        notify.KindNewSubmissions,
+		FormID:      pf.FormID,
+		SubjectID:   pf.FormID,
+		Payload:     notify.Payload{FormTitle: pf.CabinetName, FormSlug: slug},
+	})
+	if err != nil {
+		httpserver.LoggerFrom(ctx).Warn("new submissions notification not stored",
+			slog.String("form_id", pf.FormID.String()), slog.String("error", err.Error()))
+	}
+}
+
+// seenSubmissions гасит повод о новых ответах этой формы: человек открыл таблицу,
+// то есть пришёл туда, куда повод звал. Отметка ставится ему одному — у остальных
+// участников строка остаётся непрочитанной.
+//
+// Зовётся только на ПЕРВОЙ странице (курсора нет): это открытие таблицы, а не
+// прокрутка. Best-effort — не показать таблицу из-за отметки было бы обменом
+// главного на второстепенное.
+func (s *Service) seenSubmissions(ctx context.Context, userID, formID uuid.UUID) {
+	if s.notes == nil {
+		return
+	}
+	if err := s.notes.MarkReadBySubject(ctx, userID, notify.KindNewSubmissions, formID); err != nil {
+		httpserver.LoggerFrom(ctx).Warn("new submissions notification not marked read",
+			slog.String("form_id", formID.String()), slog.String("error", err.Error()))
+	}
 }
 
 // notifyMail ставит письма, поводом для которых стал принятый ответ: владельцу
@@ -1091,6 +1165,9 @@ func (s *Service) ListFeedForForm(ctx context.Context, userID, formID uuid.UUID,
 	if err != nil {
 		return FeedPage{}, err
 	}
+	if after == nil {
+		s.seenSubmissions(ctx, userID, formID)
+	}
 	withPartials, err := s.forms.CollectPartial(ctx, form.WorkspaceID, form.CollectPartial)
 	if err != nil {
 		return FeedPage{}, err
@@ -1246,6 +1323,9 @@ func (s *Service) GetForForm(ctx context.Context, userID, formID, submissionID u
 func (s *Service) ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error) {
 	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
 		return Page{}, err
+	}
+	if after == nil {
+		s.seenSubmissions(ctx, userID, formID)
 	}
 	limit = clampLimit(limit)
 

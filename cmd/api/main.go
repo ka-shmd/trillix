@@ -682,6 +682,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// держат тот же указатель, поэтому присваивать результат не надо.
 	bookingCancelSvc.WithNotifier(submissionsSvc)
 	bookingSvc.WithNotifier(submissionsSvc)
+	// Повод «новые ответы» ставит приём ответа, гасит открытие таблицы. Сеттером, а
+	// не аргументом конструктора: у приёма ответа и так девять коллабораторов.
+	submissionsSvc = submissionsSvc.WithNotifications(notifySvc)
 	integrationsSvc = integrationsSvc.WithDelivery(submissionsSvc)
 
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)

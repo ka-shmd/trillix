@@ -159,6 +159,10 @@ type PublicFormRef struct {
 	// WorkspaceID — владелец формы. Нужен приёму ответа: квота тарифа считается
 	// по воркспейсу (фаза 17). Рендереру не отдаётся.
 	WorkspaceID uuid.UUID
+	// CabinetName — как форма называется В КАБИНЕТЕ (name ?? title). Рендереру не
+	// отдаётся; потребитель один — уведомление о новых ответах, где форма обязана
+	// называться тем же словом, что в списке форм.
+	CabinetName string
 	Version     int32
 	VersionID   uuid.UUID
 	// Статус и живые настройки закрытия (фаза 8.5 шаг 4): вызывающий вычисляет
@@ -855,6 +859,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 		PublicFormRef: PublicFormRef{
 			FormID:             row.FormID,
 			WorkspaceID:        row.WorkspaceID,
+			CabinetName:        row.CabinetName,
 			Version:            row.Version,
 			VersionID:          uuid.UUID(row.PublishedVersionID.Bytes),
 			Status:             row.Status,
@@ -892,6 +897,7 @@ func (Repo) GetPublicFormRefBySlug(ctx context.Context, db postgres.DBTX, slug s
 	return PublicFormRef{
 		FormID:             row.FormID,
 		WorkspaceID:        row.WorkspaceID,
+		CabinetName:        row.CabinetName,
 		Version:            row.Version,
 		VersionID:          uuid.UUID(row.PublishedVersionID.Bytes),
 		Status:             row.Status,
