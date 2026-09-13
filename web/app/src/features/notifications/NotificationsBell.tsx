@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Bell, Trash2, X } from 'lucide-react'
+import { Bell, Check, MoreHorizontal, Trash2, X } from 'lucide-react'
 
 import {
   notificationsQueryOptions,
@@ -15,8 +15,12 @@ import { formatRelativeDate } from '../../shared/format'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar'
-// TooltipProvider даёт SidebarProvider выше по дереву — свой здесь не нужен.
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@/components/ui/dropdown-menu'
 import { LoadingRows } from '../../shared/page/states'
 import { cn } from '@/lib/utils'
 
@@ -150,6 +154,7 @@ export function NotificationsBell() {
                     setOpen(false)
                     if (!item.read) markRead.mutate({ ids: [item.id] })
                   }}
+                  onRead={() => markRead.mutate({ ids: [item.id] })}
                   onDelete={() => removeOne.mutate(item.id)}
                 />
               ))}
@@ -164,80 +169,89 @@ export function NotificationsBell() {
 // NotificationRow — строка ленты. Текст и адрес пришли готовыми с сервера: экран
 // решает только, как их показать.
 //
-// СТРОКА И КОРЗИНА — ДВЕ СОСЕДНИЕ ОБЛАСТИ, а не кнопка внутри строки (решение
-// владельца 2026-09-13). Нажимаемая область события кончается там, где начинается
-// корзина: ссылка растянута псевдоэлементом по ВНУТРЕННЕЙ коробке (`relative` на
-// ней), а корзина стоит снаружи, соседом. Отсюда три свойства, которых не было,
-// пока кнопка лежала внутри: наведение на событие корзину не трогает вовсе,
-// наведение на корзину не подсвечивает событие, и промахнуться одним по другому
-// нельзя.
+// СОБРАНА ПО ОБРАЗЦУ СТРОКИ СПИСКА ФОРМ, и это не подражание, а ответ на ту же
+// задачу: строка нажимается целиком, а действие над ней — разрушающее. Там оно
+// решено «⋯» внутри строки, и здесь решается так же (решение владельца
+// 2026-09-13; до этого корзина стояла внутри строки голой кнопкой, а потом
+// отдельной колонкой снаружи — первое не читалось кнопкой, второе выглядело
+// чужим).
 //
-// Корзина поэтому ВИДНА ВСЕГДА (приглушённой), а не появляется по наведению: за
-// пределами строки ей неоткуда взяться по нему, а невидимая кнопка, которую надо
-// угадать, — не кнопка.
+// Почему «⋯» снимает оба возражения: это знакомая точка входа, а не значок,
+// который надо угадать; она стоит в строке, а не сбоку от неё; и удаление
+// называется СЛОВОМ в меню, где деструктивный пункт отделён чертой.
+//
+// Ссылка растянута псевдоэлементом на всю строку (`after:absolute after:inset-0`),
+// действия стоят выше по слою (`relative z-10`) — иначе накрывающий слой съедал бы
+// клики по ним. Кнопка внутри ссылки недопустима разметкой, поэтому они соседи.
 function NotificationRow({
   item,
   onOpen,
+  onRead,
   onDelete,
 }: {
   item: Notification
   onOpen: () => void
+  onRead: () => void
   onDelete: () => void
 }) {
   return (
-    <div className="flex items-start gap-1">
-      <div
+    <div
+      className={cn(
+        'relative flex items-start gap-2 rounded-md px-2 py-2 transition-colors',
+        'hover:bg-accent/60 has-[a:focus-visible]:bg-accent/60',
+      )}
+    >
+      <span
         className={cn(
-          'relative flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 transition-colors',
-          'has-[a:hover]:bg-accent/60 has-[a:focus-visible]:bg-accent/60',
+          'mt-1.5 size-1.5 shrink-0 rounded-full',
+          item.read ? 'bg-transparent' : 'bg-highlight',
         )}
-      >
-        <span
+        aria-hidden="true"
+      />
+      <span className="min-w-0 flex-1">
+        <Link
+          to={item.link}
+          onClick={onOpen}
           className={cn(
-            'mt-1.5 size-1.5 shrink-0 rounded-full',
-            item.read ? 'bg-transparent' : 'bg-highlight',
+            'block text-sm after:absolute after:inset-0 after:rounded-md focus-visible:outline-none',
+            item.read && 'text-muted-foreground',
           )}
-          aria-hidden="true"
-        />
-        <span className="min-w-0 flex-1">
-          <Link
-            to={item.link}
-            onClick={onOpen}
-            className={cn(
-              'block text-sm after:absolute after:inset-0 after:rounded-md focus-visible:outline-none',
-              item.read && 'text-muted-foreground',
-            )}
-          >
-            {item.text}
-          </Link>
-          <span className="block text-xs text-muted-foreground">
-            {formatRelativeDate(item.lastAt)}
-          </span>
+        >
+          {item.text}
+        </Link>
+        <span className="block text-xs text-muted-foreground">
+          {formatRelativeDate(item.lastAt)}
         </span>
-      </div>
-      {/* Корзина, а не крестик: крестик в этой же шторке занят закрытием, и два
-        одинаковых значка рядом означали бы разное — «закрыть окно» и «стереть
-        строку». Красный по наведению — деструктивное действие отделяется даже
-        среди иконок строки (DESIGN-SYSTEM §7); подсказка называет его словом. */}
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Button
-            variant="ghost"
-            size="icon"
-            // cursor-pointer здесь руками: вендоренный Button его не ставит —
-            // Tailwind сбрасывает курсор кнопкам в default.
-            className={cn(
-              'mt-1.5 size-6 shrink-0 cursor-pointer text-muted-foreground/60',
-              'hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20',
+      </span>
+      <div className="relative z-10 flex items-center text-muted-foreground">
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <Button
+              variant="ghost"
+              size="icon-sm"
+              className="shrink-0 cursor-pointer text-muted-foreground"
+              aria-label="Действия с уведомлением"
+            >
+              <MoreHorizontal className="size-4" />
+            </Button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            {/* Прочесть, не уходя по ссылке: прочтение ставит только нажатие
+              (решение владельца), а нажать на строку значит уйти со шторки — для
+              повода, который человек уже понял и без перехода, нужен этот пункт. */}
+            {!item.read && (
+              <DropdownMenuItem onSelect={onRead}>
+                <Check className="size-4" />
+                Отметить прочитанным
+              </DropdownMenuItem>
             )}
-            onClick={onDelete}
-          >
-            <Trash2 className="size-3.5" />
-            <span className="sr-only">Удалить уведомление</span>
-          </Button>
-        </TooltipTrigger>
-        <TooltipContent side="left">Удалить</TooltipContent>
-      </Tooltip>
+            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
+              <Trash2 className="size-4" />
+              Удалить
+            </DropdownMenuItem>
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </div>
     </div>
   )
 }
