@@ -8,6 +8,7 @@ package forms_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/cookiejar"
@@ -2692,4 +2693,95 @@ func makeTeamWorkspace(t *testing.T, email, name string) string {
 		t.Fatalf("членство владельца: %v", err)
 	}
 	return wsID
+}
+
+// publicFormsSvc — сервис forms поверх того же контейнерного пула, что и стек.
+// Нужен тестам, которые проверяют не HTTP-ручку, а два публичных резолва формы
+// рядом друг с другом.
+func publicFormsSvc(t *testing.T) *forms.Service {
+	t.Helper()
+	return forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
+		workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
+			entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173"),
+		entitlements.NewService(testPool, entitlements.Repo{}, time.Now)).
+		WithSecret(testTokenSecret)
+}
+
+// Узкий резолв публичной формы обязан отвечать ровно то же, что широкий, — во всём,
+// кроме документа (TD-77). Это НЕ украшение теста: запросов теперь два, отборы у них
+// продублированы (черновик, осиротевшее пространство, удалённый владелец), и
+// разойтись они могут молча — в колонке, забытой при правке одного из двух.
+//
+// Сторож — DeepEqual целой встроенной структуры, а не список полей: список пришлось
+// бы дописывать вместе с колонкой, то есть ровно тогда же, когда о нём забудут.
+func TestPublicFormRef_AgreesWithPublicForm(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "owner@example.com")
+	svc := publicFormsSvc(t)
+	ctx := context.Background()
+
+	form := createForm(t, c, srv, "Опрос")
+
+	// Черновик: публичного документа нет, и ОБА резолва обязаны сказать «формы нет»
+	// одинаково — иначе узкий путь раскрыл бы существование неопубликованной формы.
+	if _, err := svc.PublicForm(ctx, form.Slug); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("широкий резолв черновика: ошибка = %v, ждали ErrNotFound", err)
+	}
+	if _, err := svc.PublicFormRef(ctx, form.Slug); !errors.Is(err, domain.ErrNotFound) {
+		t.Fatalf("узкий резолв черновика: ошибка = %v, ждали ErrNotFound", err)
+	}
+
+	detail := getFormDetail(t, c, srv, form.ID, http.StatusOK)
+	patchDraftSchema(t, c, srv, form.ID,
+		`{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Опрос клиентов"}]},`+
+			`{"id":"q1","groupId":"g1","type":"short_text","settings":{}}]}`,
+		detail.UpdatedAt, http.StatusOK)
+	publishForm(t, c, srv, form.ID, http.StatusOK)
+
+	// Все живые колонки уводятся с умолчаний — БЕЗ этого тест почти слеп: у формы по
+	// умолчанию половина полей нулевые, и колонка, потерянная в одном из запросов,
+	// сравнялась бы с нулём другого. Поймано мутацией (убрал notify_respondent из
+	// узкого запроса — тест остался зелёным).
+	//
+	// Пишем прямо в базу, а не ручками кабинета: проверяются два запроса ЧТЕНИЯ, и
+	// путь записи здесь ни при чём — он проверен своими тестами.
+	if _, err := testPool.Exec(ctx, `UPDATE forms SET
+		notify_on_submission = true, notify_respondent = true, collect_partial = true,
+		branding = false, progress = true, auto_jump = true, save_locally = true, allow_back = false,
+		close_at = now() + interval '1 day', response_limit = 500,
+		closed_message = 'всё', closed_title = 'Закрыто',
+		password = '\x0102'::bytea,
+		link_preview = '{"title":"Карточка"}'::jsonb
+		WHERE slug = $1`, form.Slug); err != nil {
+		t.Fatalf("увод колонок с умолчаний: %v", err)
+	}
+
+	// Опубликованная и закрытая — два разных набора значений в тех же колонках
+	// (status, close_at), и оба обязаны совпасть.
+	for _, phase := range []string{"опубликована", "закрыта"} {
+		t.Run(phase, func(t *testing.T) {
+			full, err := svc.PublicForm(ctx, form.Slug)
+			if err != nil {
+				t.Fatalf("широкий резолв: %v", err)
+			}
+			ref, err := svc.PublicFormRef(ctx, form.Slug)
+			if err != nil {
+				t.Fatalf("узкий резолв: %v", err)
+			}
+			if !reflect.DeepEqual(full.PublicFormRef, ref) {
+				t.Fatalf("узкая строка разошлась с широкой:\nширокая = %+v\nузкая   = %+v",
+					full.PublicFormRef, ref)
+			}
+			// И заодно то, ради чего резолвы разделены: документ едет только широким.
+			if len(full.Schema) == 0 || full.ParseErr != nil {
+				t.Fatalf("широкий резолв не привёз разобранный документ: schema=%d байт, err=%v",
+					len(full.Schema), full.ParseErr)
+			}
+			if full.Title != "Опрос клиентов" {
+				t.Fatalf("заголовок = %q, ожидался из документа версии", full.Title)
+			}
+		})
+		unpublishForm(t, c, srv, form.ID, http.StatusOK)
+	}
 }

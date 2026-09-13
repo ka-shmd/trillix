@@ -309,6 +309,13 @@ func (f *fakeStore) SetFormClosed(_ context.Context, _ postgres.DBTX, id, worksp
 	return Form{ID: id, WorkspaceID: workspaceID, Status: "closed"}, nil
 }
 
+func (f *fakeStore) GetPublicFormRefBySlug(_ context.Context, _ postgres.DBTX, _ string) (PublicFormRef, error) {
+	if f.publicErr != nil {
+		return PublicFormRef{}, f.publicErr
+	}
+	return f.publicForm.PublicFormRef, nil
+}
+
 func (f *fakeStore) GetPublicFormBySlug(_ context.Context, _ postgres.DBTX, _ string) (PublicForm, error) {
 	if f.publicErr != nil {
 		return PublicForm{}, f.publicErr
@@ -2279,4 +2286,48 @@ func TestSearch_TooLongRejected(t *testing.T) {
 	if _, err := svc.Search(context.Background(), uuid.New(), long); !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("err = %v, ожидался ErrValidation", err)
 	}
+}
+
+// WithDocument — единственное место, где разбирается документ публичной формы и
+// разрешается её заголовок. Тест сторожит обе половины разом, потому что на них
+// завязаны ВСЕ публичные входы: разбор едет полем (pf.Parsed), и вызывающие больше
+// не разбирают схему сами (TD-77).
+func TestWithDocument(t *testing.T) {
+	const titled = `{"schemaVersion":1,"blocks":[{"id":"ft","groupId":"gft","type":"form_title","text":[{"t":"Из документа"}]}]}`
+
+	t.Run("разбирает документ и берёт заголовок из него", func(t *testing.T) {
+		pf := WithDocument(PublicForm{Title: "из колонки", Schema: json.RawMessage(titled)})
+		if pf.ParseErr != nil {
+			t.Fatalf("схема не разобралась: %v", pf.ParseErr)
+		}
+		if len(pf.Parsed.Blocks) != 1 {
+			t.Fatalf("разбор не доехал полем: блоков %d, ожидался 1", len(pf.Parsed.Blocks))
+		}
+		if pf.Title != "Из документа" {
+			t.Fatalf("заголовок = %q, ожидался из документа версии", pf.Title)
+		}
+	})
+
+	t.Run("версия без блока заголовка оставляет колонку", func(t *testing.T) {
+		pf := WithDocument(PublicForm{Title: "из колонки", Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`)})
+		if pf.ParseErr != nil {
+			t.Fatalf("схема не разобралась: %v", pf.ParseErr)
+		}
+		if pf.Title != "из колонки" {
+			t.Fatalf("заголовок = %q, ожидался фолбэк колонки", pf.Title)
+		}
+	})
+
+	// Битый документ не роняет резолв: отношение к нему у вызывающих разное, и
+	// решают они по ParseErr. Заголовок при этом обязан остаться из колонки —
+	// страница формы и OG-мета рисуются даже по неразобравшейся версии.
+	t.Run("битый документ отдаётся ошибкой полем, а не паникой", func(t *testing.T) {
+		pf := WithDocument(PublicForm{Title: "из колонки", Schema: json.RawMessage(`{"blocks":[],"fieldFromFuture":"x"}`)})
+		if pf.ParseErr == nil {
+			t.Fatal("битая схема разобралась — DisallowUnknownFields не сработал")
+		}
+		if pf.Title != "из колонки" {
+			t.Fatalf("заголовок = %q, ожидался фолбэк колонки", pf.Title)
+		}
+	})
 }

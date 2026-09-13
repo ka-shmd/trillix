@@ -116,10 +116,10 @@ func (s *Service) IssueSlot(ctx context.Context, req SlotRequest) (Slot, error) 
 		return Slot{}, domain.ErrFormClosed
 	}
 
-	schema, err := domain.ValidateSchema(pf.Schema)
-	if err != nil {
-		return Slot{}, fmt.Errorf("parse published schema for %s: %v", req.Slug, err)
+	if pf.ParseErr != nil {
+		return Slot{}, fmt.Errorf("parse published schema for %s: %v", req.Slug, pf.ParseErr)
 	}
+	schema := pf.Parsed
 	block, ok := findFileBlock(schema, req.BlockID)
 	if !ok {
 		// Вопроса нет или он не про файлы — ошибка ввода, а не 404 формы: форма

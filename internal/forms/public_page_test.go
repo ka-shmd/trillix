@@ -27,7 +27,7 @@ func TestPublicHTML_Published_HasOGMeta(t *testing.T) {
 	schema := json.RawMessage(`{"schemaVersion":1,"blocks":[
 		{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Ваше имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text"},
 		{"id":"t_b2","groupId":"g_b2","type":"title","text":[{"t":"Оценка"}]},{"id":"b2","groupId":"g_b2","type":"short_text"}]}`)
-	svc := fakePublicSvc{pf: PublicForm{Title: "Опрос клиентов", Version: 1, Schema: schema, VersionID: uuid.New()}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{Version: 1, VersionID: uuid.New()}, Title: "Опрос клиентов", Schema: schema})}
 
 	rec := getHTMLPage(t, svc, "abc123")
 	if rec.Code != http.StatusOK {
@@ -67,7 +67,7 @@ func TestPublicHTML_Published_HasOGMeta(t *testing.T) {
 // Лишний <link rel="preload"> в фикстуре, о котором Go «не знает», обязан присутствовать:
 // это и есть DoD «добавление ассета в сборку не требует правок Go».
 func TestPublicHTML_PreservesBuiltAssetsVerbatim(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{Title: "Форма", Version: 1, Schema: json.RawMessage(`{"blocks":[]}`), VersionID: uuid.New()}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{Version: 1, VersionID: uuid.New()}, Title: "Форма", Schema: json.RawMessage(`{"blocks":[]}`)})}
 	body := getHTMLPage(t, svc, "abc").Body.String()
 
 	for _, want := range []string{
@@ -85,12 +85,14 @@ func TestPublicHTML_PreservesBuiltAssetsVerbatim(t *testing.T) {
 
 // Инъекция в title не должна прорасти сырым тегом в HTML (html/template экранирует).
 func TestPublicHTML_TitleInjection_Escaped(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:     `Опрос "><script>alert(1)</script>`,
-		Version:   1,
-		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		VersionID: uuid.New(),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:   1,
+			VersionID: uuid.New(),
+		},
+		Title:  `Опрос "><script>alert(1)</script>`,
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 
 	body := getHTMLPage(t, svc, "abc").Body.String()
 	if strings.Contains(body, "<script>alert(1)") {
@@ -106,12 +108,14 @@ func TestPublicHTML_TitleInjection_Escaped(t *testing.T) {
 // описание и брендовую картинку. Описание одно на обе меты — og:description и
 // <meta name="description">; двух значений на одну мысль здесь больше нет.
 func TestPublicHTML_NoCard_UsesDefaults(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:     "Пустая",
-		Version:   1,
-		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Как вам номер?"}]}]}`),
-		VersionID: uuid.New(),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:   1,
+			VersionID: uuid.New(),
+		},
+		Title:  "Пустая",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Как вам номер?"}]}]}`),
+	})}
 	body := getHTMLPage(t, svc, "abc").Body.String()
 
 	for _, want := range []string{
@@ -141,12 +145,14 @@ func TestPublicHTML_NotPublished_Returns404(t *testing.T) {
 
 func TestPublicHTML_RereadsIndexWhenStaticRedeployed(t *testing.T) {
 	path := writeFixtureIndex(t)
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:     "Форма",
-		Version:   1,
-		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		VersionID: uuid.New(),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:   1,
+			VersionID: uuid.New(),
+		},
+		Title:  "Форма",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 
 	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path, allowLimiter{}, false)
 	if err != nil {
@@ -188,12 +194,14 @@ func TestPublicHTML_RereadsIndexWhenStaticRedeployed(t *testing.T) {
 
 func TestPublicHTML_BrokenIndexAfterStart_KeepsLastGood(t *testing.T) {
 	path := writeFixtureIndex(t)
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:     "Форма",
-		Version:   1,
-		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		VersionID: uuid.New(),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:   1,
+			VersionID: uuid.New(),
+		},
+		Title:  "Форма",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 
 	h, err := NewPublicHandler(svc, testSecret, testBaseURL, testOGImage, path, allowLimiter{}, false)
 	if err != nil {
@@ -222,12 +230,14 @@ func TestPublicHTML_BrokenIndexAfterStart_KeepsLastGood(t *testing.T) {
 // регистрируется только когда index прочитан при старте. Если его когда-нибудь
 // нарушат, getHTML не должен разыменовывать nil — паника даёт 500 без объяснения.
 func TestPublicHTML_NoIndexLoaded_Returns500NotPanic(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:     "Форма",
-		Version:   1,
-		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		VersionID: uuid.New(),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:   1,
+			VersionID: uuid.New(),
+		},
+		Title:  "Форма",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 	// Собираем «невозможное» состояние руками: путь задан, документ не загружен.
 	h := &PublicHandler{svc: svc, indexPath: filepath.Join(t.TempDir(), "нет-такого.html"), now: time.Now}
 
@@ -294,7 +304,7 @@ func designedForm(t *testing.T, design string) fakePublicSvc {
 	if _, err := domain.ValidateSchema(schema); err != nil {
 		t.Fatalf("фикстура схемы не проходит валидатор: %v", err)
 	}
-	return fakePublicSvc{pf: PublicForm{Title: "Форма", Version: 1, Schema: schema, VersionID: uuid.New()}}
+	return fakePublicSvc{pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{Version: 1, VersionID: uuid.New()}, Title: "Форма", Schema: schema})}
 }
 
 func TestPublicHTML_DarkTheme_ShellIsThemedFromFirstFrame(t *testing.T) {
@@ -330,12 +340,14 @@ func TestPublicHTML_DarkTheme_ShellIsThemedFromFirstFrame(t *testing.T) {
 // таких форм большинство. Всё остальное в этом списке по-прежнему признак того, что
 // автор что-то настраивал.
 func TestPublicHTML_NoDesign_ShellUnchanged(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:     "Форма",
-		Version:   1,
-		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		VersionID: uuid.New(),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:   1,
+			VersionID: uuid.New(),
+		},
+		Title:  "Форма",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 	body := getHTMLPageWithFonts(t, svc)
 
 	if !strings.Contains(body, "<html lang=\"ru\">\n") {
@@ -532,13 +544,15 @@ func TestPublicHTML_FontsAppearAfterIndex_PreloadRecovers(t *testing.T) {
 // linkPreviewSvc — форма со своей карточкой и подставленным правом тарифа.
 func linkPreviewSvc(card *domain.LinkPreview, allowed bool) fakePublicSvc {
 	return fakePublicSvc{
-		pf: PublicForm{
-			Title:       "Опрос читателей",
-			Version:     1,
-			Schema:      json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-			VersionID:   uuid.New(),
-			LinkPreview: card,
-		},
+		pf: WithDocument(PublicForm{
+			PublicFormRef: PublicFormRef{
+				Version:     1,
+				VersionID:   uuid.New(),
+				LinkPreview: card,
+			},
+			Title:  "Опрос читателей",
+			Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+		}),
 		cardAllowed: allowed,
 	}
 }

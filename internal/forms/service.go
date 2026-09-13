@@ -106,6 +106,7 @@ type Store interface {
 	SetFormPublished(ctx context.Context, db postgres.DBTX, id, workspaceID, versionID uuid.UUID) (Form, error)
 	SetFormClosed(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (Form, error)
 	GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
+	GetPublicFormRefBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicFormRef, error)
 	ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Version, error)
 }
 
@@ -1132,12 +1133,47 @@ func (s *Service) PublicForm(ctx context.Context, slug string) (PublicForm, erro
 	// Разрешаем в одном месте на всех потребителей (страница с OG-метой, JSON
 	// рендерера, тело 410): резолвинг в каждом хендлере по отдельности — это три
 	// шанса разойтись в трактовке «пусто».
-	if parsed, err := domain.ValidateSchema(pf.Schema); err == nil {
-		if title, spoke := domain.FormTitle(parsed); spoke {
+	//
+	// Разбор ОСТАЁТСЯ в строке (pf.Parsed/pf.ParseErr), а не выбрасывается: те же
+	// байты нужны приёму ответа, автосохранению, слоту файла и отдаче тела, и
+	// каждый из них разбирал их во второй раз (TD-77). Отказ разбора не возвращается
+	// ошибкой — вызывающие расходятся в отношении к битой схеме, и оба отношения
+	// законны (см. PublicForm.ParseErr).
+	return WithDocument(pf), nil
+}
+
+// WithDocument разбирает документ формы и разрешает по нему заголовок — единственное
+// место, где это делается. Экспортирована не ради переиспользования в проде (зовёт её
+// только PublicForm выше), а ради ЧУЖИХ ТЕСТОВ: фейки submissions, answerfiles,
+// booking и visits собирают PublicForm литералом, и без этой функции у них Parsed
+// остался бы пустым при непустой Schema. Тест тогда проверял бы форму без вопросов
+// там, где сервис отдаёт форму с вопросами, — и молча зеленел бы.
+func WithDocument(pf PublicForm) PublicForm {
+	pf.Parsed, pf.ParseErr = domain.ValidateSchema(pf.Schema)
+	if pf.ParseErr == nil {
+		if title, spoke := domain.FormTitle(pf.Parsed); spoke {
 			pf.Title = title
 		}
 	}
-	return pf, nil
+	return pf
+}
+
+// PublicFormRef — публичная форма БЕЗ документа: для путей, которым схема не нужна
+// вовсе (бикон визита, свободное время, холд). Отказ «формы нет» — тот же 404, что у
+// PublicForm, и по тем же причинам: черновик, осиротевшее пространство, удалённый
+// владелец.
+//
+// Заголовка здесь нет и быть не может: он живёт в документе. Понадобился заголовок —
+// значит, нужен и документ, и звать надо PublicForm.
+func (s *Service) PublicFormRef(ctx context.Context, slug string) (PublicFormRef, error) {
+	ref, err := s.repo.GetPublicFormRefBySlug(ctx, s.db, slug)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PublicFormRef{}, domain.ErrNotFound
+		}
+		return PublicFormRef{}, err
+	}
+	return ref, nil
 }
 
 // MaxFormPasswordLen — потолок пароля формы в рунах. Минимума нет намеренно: это

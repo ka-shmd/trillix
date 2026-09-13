@@ -18,12 +18,12 @@ import (
 )
 
 type fakeForms struct {
-	form     forms.PublicForm
+	form     forms.PublicFormRef
 	err      error
 	versions []forms.Version
 }
 
-func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error) {
+func (f fakeForms) PublicFormRef(context.Context, string) (forms.PublicFormRef, error) {
 	return f.form, f.err
 }
 
@@ -133,8 +133,8 @@ func (s *fakeStore) UserAgents(_ context.Context, _ postgres.DBTX, _ uuid.UUID, 
 
 var now = time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
 
-func openForm() forms.PublicForm {
-	return forms.PublicForm{
+func openForm() forms.PublicFormRef {
+	return forms.PublicFormRef{
 		FormID:    uuid.New(),
 		VersionID: uuid.New(),
 		Version:   3,
@@ -142,7 +142,7 @@ func openForm() forms.PublicForm {
 	}
 }
 
-func newSvc(f forms.PublicForm, store *fakeStore) *Service {
+func newSvc(f forms.PublicFormRef, store *fakeStore) *Service {
 	svc := NewService(nil, fakeForms{form: f}, openPlans(), store, fakeGeo{}, keySecret)
 	svc.now = func() time.Time { return now }
 	return svc
@@ -205,10 +205,10 @@ func TestRecord_ClosedFormRejected(t *testing.T) {
 	past := now.Add(-time.Hour)
 	limit := int32(10)
 
-	cases := map[string]func(*forms.PublicForm){
-		"снята вручную":   func(f *forms.PublicForm) { f.Status = domain.FormStatusClosed },
-		"дата прошла":     func(f *forms.PublicForm) { f.CloseAt = &past },
-		"лимит достигнут": func(f *forms.PublicForm) { f.ResponseLimit = &limit; f.SubmissionCount = 10 },
+	cases := map[string]func(*forms.PublicFormRef){
+		"снята вручную":   func(f *forms.PublicFormRef) { f.Status = domain.FormStatusClosed },
+		"дата прошла":     func(f *forms.PublicFormRef) { f.CloseAt = &past },
+		"лимит достигнут": func(f *forms.PublicFormRef) { f.ResponseLimit = &limit; f.SubmissionCount = 10 },
 	}
 	for name, mutate := range cases {
 		t.Run(name, func(t *testing.T) {

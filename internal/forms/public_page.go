@@ -292,11 +292,12 @@ func (h *PublicHandler) getHTML(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Схема разбирается ради оформления оболочки и шрифта для preload. Разбор
-	// отказоустойчив — битая схема даёт страницу без оформления, а не 500.
+	// Оформление оболочки и шрифт для preload берутся из уже разобранного документа
+	// (pf.Parsed). Отказоустойчиво, как и было: битая схема даёт страницу без
+	// оформления, а не 500.
 	var design *domain.FormDesign
-	if schema, err := domain.ValidateSchema(pf.Schema); err == nil {
-		design = schema.Design
+	if pf.ParseErr == nil {
+		design = pf.Parsed.Design
 	}
 
 	// Своя карточка ссылки поверх дефолтов. Право тарифа спрашивается ЗДЕСЬ, при
