@@ -35,8 +35,8 @@ import (
 // является, но черновик и несуществующая обязаны давать одинаковый 404.
 type PublicForms interface {
 	// PublicFormRef — форма БЕЗ документа: четыре отказа (нет формы, пароль,
-	// закрыта, нет расписания) решаются по колонкам, а схема здесь не нужна ни на
-	// одном из трёх входов записи (TD-77).
+	// закрыта, нет расписания) решаются по колонкам, а схема не нужна ни свободному
+	// времени, ни холду (TD-77).
 	PublicFormRef(ctx context.Context, slug string) (forms.PublicFormRef, error)
 	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
 	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
