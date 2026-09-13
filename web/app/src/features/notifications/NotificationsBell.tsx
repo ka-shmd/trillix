@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Bell, Check, MoreHorizontal, Trash2, X } from 'lucide-react'
+import { Bell, Check, Trash2, X } from 'lucide-react'
 
 import {
   notificationsQueryOptions,
@@ -15,12 +15,8 @@ import { formatRelativeDate } from '../../shared/format'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar'
-import {
-  DropdownMenu,
-  DropdownMenuContent,
-  DropdownMenuItem,
-  DropdownMenuTrigger,
-} from '@/components/ui/dropdown-menu'
+// TooltipProvider даёт SidebarProvider выше по дереву — свой здесь не нужен.
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { LoadingRows } from '../../shared/page/states'
 import { cn } from '@/lib/utils'
 
@@ -169,16 +165,11 @@ export function NotificationsBell() {
 // NotificationRow — строка ленты. Текст и адрес пришли готовыми с сервера: экран
 // решает только, как их показать.
 //
-// СОБРАНА ПО ОБРАЗЦУ СТРОКИ СПИСКА ФОРМ, и это не подражание, а ответ на ту же
-// задачу: строка нажимается целиком, а действие над ней — разрушающее. Там оно
-// решено «⋯» внутри строки, и здесь решается так же (решение владельца
-// 2026-09-13; до этого корзина стояла внутри строки голой кнопкой, а потом
-// отдельной колонкой снаружи — первое не читалось кнопкой, второе выглядело
-// чужим).
-//
-// Почему «⋯» снимает оба возражения: это знакомая точка входа, а не значок,
-// который надо угадать; она стоит в строке, а не сбоку от неё; и удаление
-// называется СЛОВОМ в меню, где деструктивный пункт отделён чертой.
+// ДЕЙСТВИЯ СТОЯТ ЗНАЧКАМИ В САМОЙ СТРОКЕ, оба сразу видны (решение владельца
+// 2026-09-13, после трёх отвергнутых редакций: корзина внутри строки голой
+// кнопкой, корзина отдельной колонкой снаружи, оба действия в «⋯»). Правило
+// дизайн-системы то же: два-три частых действия — иконками в строке, «⋯» — для
+// многих или редких.
 //
 // Ссылка растянута псевдоэлементом на всю строку (`after:absolute after:inset-0`),
 // действия стоят выше по слою (`relative z-10`) — иначе накрывающий слой съедал бы
@@ -223,34 +214,53 @@ function NotificationRow({
           {formatRelativeDate(item.lastAt)}
         </span>
       </span>
+      {/* ДВА ДЕЙСТВИЯ — ЗНАЧКАМИ В СТРОКЕ, оба видны сразу (решение владельца
+        2026-09-13): по правилу дизайн-системы два-три частых действия стоят
+        иконками, и прятать их в «⋯» значит требовать лишнего нажатия там, где его
+        можно не требовать. Подсказка называет каждое словом — значок галочки над
+        уведомлением сам по себе двусмыслен.
+
+        Стоят выше растянутой ссылки по слою (`relative z-10`), иначе накрывающий
+        слой съедал бы клики; кнопка внутри ссылки недопустима разметкой, поэтому
+        они её соседи. */}
       <div className="relative z-10 flex items-center text-muted-foreground">
-        <DropdownMenu>
-          <DropdownMenuTrigger asChild>
+        {/* У прочитанной строки этого действия нет: оно ничего не сделало бы, а
+          выключенная кнопка на каждой второй строке — шум. Место не держим:
+          корзина сдвигается вправо, и столбик действий остаётся ровным по
+          правому краю. */}
+        {!item.read && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon-sm"
+                className="shrink-0 cursor-pointer"
+                onClick={onRead}
+              >
+                <Check className="size-4" />
+                <span className="sr-only">Отметить прочитанным</span>
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent side="top">Отметить прочитанным</TooltipContent>
+          </Tooltip>
+        )}
+        <Tooltip>
+          <TooltipTrigger asChild>
             <Button
               variant="ghost"
               size="icon-sm"
-              className="shrink-0 cursor-pointer text-muted-foreground"
-              aria-label="Действия с уведомлением"
+              // Красным по наведению: деструктивное действие отделяется и среди
+              // иконок строки (DESIGN-SYSTEM §7), а меню, где его отделяла черта,
+              // здесь больше нет.
+              className="shrink-0 cursor-pointer hover:text-destructive"
+              onClick={onDelete}
             >
-              <MoreHorizontal className="size-4" />
-            </Button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent align="end" className="w-56">
-            {/* Прочесть, не уходя по ссылке: прочтение ставит только нажатие
-              (решение владельца), а нажать на строку значит уйти со шторки — для
-              повода, который человек уже понял и без перехода, нужен этот пункт. */}
-            {!item.read && (
-              <DropdownMenuItem onSelect={onRead}>
-                <Check className="size-4" />
-                Отметить прочитанным
-              </DropdownMenuItem>
-            )}
-            <DropdownMenuItem variant="destructive" onSelect={onDelete}>
               <Trash2 className="size-4" />
-              Удалить
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+              <span className="sr-only">Удалить уведомление</span>
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent side="top">Удалить</TooltipContent>
+        </Tooltip>
       </div>
     </div>
   )

@@ -96,15 +96,6 @@ async function renderBell(feed: NotificationFeed) {
 
 // Радиксовый триггер в тестах открывается Enter'ом, а не кликом (грабли
 // дизайн-системы).
-// Радиксовое МЕНЮ, в отличие от шторки, открывается Enter'ом на триггере (грабли
-// дизайн-системы).
-async function openRowMenu() {
-  fireEvent.keyDown(screen.getByRole('button', { name: 'Действия с уведомлением' }), {
-    key: 'Enter',
-  })
-  await act(async () => {})
-}
-
 async function openBell() {
   // Радиксовый триггер открывается указателем: в happy-dom это pointerDown, а не
   // click — на голый click он не реагирует вовсе.
@@ -171,14 +162,12 @@ describe('колокольчик', () => {
     expect(screen.queryByRole('link', { name: /Заявка — 3 новых ответа/ })).toBeNull()
   })
 
-  // Действия строки живут в «⋯» — так же, как у строки списка форм: строка
-  // нажимается целиком, и разрушающее действие обязано называться словом, а не
-  // значком внутри нажимаемой области.
-  it('«Удалить» из меню строки удаляет её и не отмечает прочтением', async () => {
+  // Оба действия строки видны сразу, без раскрытия: прятать их за «⋯» значило бы
+  // требовать лишнего нажатия там, где его можно не требовать.
+  it('удаление строки не отмечает её прочтением', async () => {
     await renderBell({ items: [row()], unread: 1 })
     await openBell()
-    await openRowMenu()
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Удалить' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить уведомление' }))
     await act(async () => {})
     expect(deleteNotification).toHaveBeenCalledWith('n-1')
     expect(markNotificationsRead).not.toHaveBeenCalled()
@@ -189,19 +178,18 @@ describe('колокольчик', () => {
   it('«Отметить прочитанным» гасит одну строку', async () => {
     await renderBell({ items: [row()], unread: 1 })
     await openBell()
-    await openRowMenu()
-    fireEvent.click(screen.getByRole('menuitem', { name: 'Отметить прочитанным' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Отметить прочитанным' }))
     await act(async () => {})
     expect(markNotificationsRead).toHaveBeenCalledWith({ ids: ['n-1'] })
   })
 
-  // У прочитанной строки этого пункта нет: он ничего не сделал бы.
-  it('у прочитанной строки в меню только удаление', async () => {
+  // У прочитанной строки остаётся только удаление: отметка ничего не сделала бы, а
+  // выключенная кнопка на каждой второй строке — шум.
+  it('у прочитанной строки только удаление', async () => {
     await renderBell({ items: [row({ read: true })], unread: 0 })
     await openBell()
-    await openRowMenu()
-    expect(screen.queryByRole('menuitem', { name: 'Отметить прочитанным' })).toBeNull()
-    expect(screen.getByRole('menuitem', { name: 'Удалить' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Отметить прочитанным' })).toBeNull()
+    expect(screen.getByRole('button', { name: 'Удалить уведомление' })).toBeTruthy()
   })
 
   it('«Удалить все» чистит ленту целиком', async () => {
