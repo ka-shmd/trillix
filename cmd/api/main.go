@@ -659,6 +659,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{}, geoSvc, cfg.FormTokenSecret)
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
+	// Лента уведомлений кабинета. Только чтение и отметка прочтения: ставят и
+	// гасят поводы продюсеры внутри процесса, а не человек из браузера.
+	notifyHandler := notify.NewHandler(notifySvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
@@ -726,7 +729,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
 		integrationsHandler.Routes, bookingHandler.Routes, bookingPublic.Routes,
-		templatesHandler.Routes,
+		templatesHandler.Routes, notifyHandler.Routes,
 	}
 
 	// Печатная страница ответа (ADR §10). Путь задаётся явно на каждом контуре

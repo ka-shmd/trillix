@@ -10,6 +10,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { HeaderSidebarTrigger } from '../features/app-shell/HeaderSidebarTrigger'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
+import { NotificationsBell } from '../features/notifications/NotificationsBell'
 import { AppChromeContext } from '../shared/appChrome'
 import { WorkspaceAddressProvider } from '../shared/workspaceContext'
 
@@ -87,6 +88,10 @@ function AppLayout() {
             <HeaderSidebarTrigger />
             {/* Слева путь страницы, справа её действия. */}
             <div ref={setHeaderLeft} className="flex min-w-0 flex-1 items-center" />
+            {/* Колокольчик стоит ПЕРЕД порталом действий и живёт в оболочке, а не в
+              нём: портал принадлежит экрану, а уведомления — человеку, и порядок в
+              правой части идёт от общего к частному. */}
+            <NotificationsBell />
             <div ref={setHeaderRight} className="flex shrink-0 items-center gap-2" />
           </header>
           {/* Отступы задаёт каждая страница сама: редактору нужен bleed, дашборду/
