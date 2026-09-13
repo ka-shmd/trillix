@@ -114,6 +114,9 @@ type Service struct {
 	// nil означает «сборка без вебхуков» (её нет в тестах связок Таблиц).
 	webhooks WebhookStore
 	egress   Egress
+	// notes — уведомления кабинета о поломке цели. Тем же сеттером и по той же
+	// причине, что webhooks; nil = уведомлений в сборке нет.
+	notes Notifications
 	// now — часы доставки (бэкофф цели, срок хранения очереди); подменяются в
 	// тестах через WithClock.
 	now func() time.Time
@@ -772,7 +775,11 @@ func (s *Service) RecheckForm(ctx context.Context, userID, formID, linkID uuid.U
 		}
 		return fmt.Errorf("%w: %s", domain.ErrValidation, cause)
 	}
-	return s.repo.ClearError(ctx, s.db, link.ID)
+	if err := s.repo.ClearError(ctx, s.db, link.ID); err != nil {
+		return err
+	}
+	s.noticeFixed(ctx, link.ID)
+	return nil
 }
 
 // RefillForm перезаливает лист с нуля: чистит значения, пишет свежую шапку и
@@ -911,7 +918,11 @@ func (s *Service) RetryDelivery(ctx context.Context, userID, formID, linkID, del
 	// устранивший причину, ждал бы до часа, глядя на кнопку, которая «сработала».
 	// Нажатие и означает «причину устранил, попробуй сейчас»: расписание
 	// начинается заново, как после перепроверки.
-	return s.repo.ClearError(ctx, s.db, link.ID)
+	if err := s.repo.ClearError(ctx, s.db, link.ID); err != nil {
+		return err
+	}
+	s.noticeFixed(ctx, link.ID)
+	return nil
 }
 
 // DeliveryTTL — сколько живёт запись журнала. Константа, а не переменная
@@ -959,6 +970,9 @@ func (s *Service) DisconnectForm(ctx context.Context, userID, formID, linkID uui
 	if n == 0 {
 		return domain.ErrNotFound
 	}
+	// Цели больше нет — препятствия тоже: человек сносит сломанную связку именно
+	// потому, что она сломана.
+	s.noticeFixed(ctx, linkID)
 	return nil
 }
 
@@ -1118,7 +1132,7 @@ func (s *Service) retarget(ctx context.Context, userID uuid.UUID, link FormLink,
 // входа в него на экране нет. У переезда на другую цель поломка снимается ещё и
 // записью самой цели, и второй раз она ничего не портит.
 func (s *Service) refillQueue(ctx context.Context, linkID, formID uuid.UUID) error {
-	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+	err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
 		if err := s.repo.ClearError(ctx, tx, linkID); err != nil {
 			return err
 		}
@@ -1128,6 +1142,13 @@ func (s *Service) refillQueue(ctx context.Context, linkID, formID uuid.UUID) err
 		_, err := s.repo.EnqueueSheetBackfill(ctx, tx, linkID, formID)
 		return err
 	})
+	if err != nil {
+		return err
+	}
+	// Отбой — ПОСЛЕ коммита, а не внутри транзакции: откат унёс бы снятие поломки,
+	// но не унёс бы погашенное уведомление.
+	s.noticeFixed(ctx, linkID)
+	return nil
 }
 
 // sameTarget отвечает, указывает ли правка на ту же пару «аккаунт + лист», что

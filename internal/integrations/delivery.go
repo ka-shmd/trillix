@@ -307,6 +307,13 @@ func (s *Service) breakLink(ctx context.Context, link FormLink, ref deliveryRef,
 		httpserver.LoggerFrom(ctx).Error("integration broken mark not stored",
 			slog.String("link_id", link.ID.String()), slog.String("error", err.Error()))
 	}
+	// Поломка молчаливая: доставщик ходит фоном, и без повода автор узнал бы о ней,
+	// только заглянув на таб «Интеграции» нужной формы.
+	s.noticeBroken(ctx, brokenTarget{
+		workspaceID: link.WorkspaceID, formID: link.FormID, targetID: link.ID,
+		kind: "sheet", name: link.Name,
+		formName: link.FormName, formSlug: link.FormSlug, reason: reason,
+	})
 }
 
 func sheetBackoff(failures int32) time.Duration {

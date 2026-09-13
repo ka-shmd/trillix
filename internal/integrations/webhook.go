@@ -107,6 +107,10 @@ type Webhook struct {
 	// ConsecutiveFailures — сколько неудач подряд: по нему считается бэкофф цели.
 	ConsecutiveFailures int32
 	NextAttemptAt       time.Time
+	// FormName и FormSlug — как форма называется в кабинете и где лежит; нужны
+	// поводу о поломке (тот же довод, что у связки Таблиц).
+	FormName string
+	FormSlug string
 }
 
 // webhookHost — хост адреса: единственное, что о нём видит роль без права правки
@@ -330,7 +334,7 @@ func (s *Service) UpdateWebhook(ctx context.Context, userID, formID, webhookID u
 		}
 	}
 
-	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+	if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
 		if patch.Name != nil || patch.Enabled != nil {
 			n, err := s.webhooks.UpdateWebhookSettings(ctx, tx, w.ID, formID, name, enabled)
 			if err != nil {
@@ -364,7 +368,16 @@ func (s *Service) UpdateWebhook(ctx context.Context, userID, formID, webhookID u
 			}
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+	// Новый адрес (даже тот же самый) снимает поломку — значит, снимает и повод о
+	// ней. После коммита, а не внутри транзакции: откат вернул бы поломку, но не
+	// вернул бы погашенное уведомление.
+	if patch.URL != nil {
+		s.noticeFixed(ctx, webhookID)
+	}
+	return nil
 }
 
 // WebhookSecret отдаёт секрет подписи в открытом виде — по нажатию «Показать».
@@ -459,6 +472,8 @@ func (s *Service) DeleteWebhook(ctx context.Context, userID, formID, webhookID u
 	if n == 0 {
 		return domain.ErrNotFound
 	}
+	// Цели больше нет — препятствия тоже.
+	s.noticeFixed(ctx, webhookID)
 	return nil
 }
 

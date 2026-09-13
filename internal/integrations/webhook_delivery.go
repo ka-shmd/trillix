@@ -292,6 +292,13 @@ func (s *Service) breakWebhook(ctx context.Context, w Webhook, submissionID uuid
 		httpserver.LoggerFrom(ctx).Error("webhook broken mark not stored",
 			slog.String("webhook_id", w.ID.String()), slog.String("error", err.Error()))
 	}
+	// Поломка молчаливая: доставщик ходит фоном, и без повода автор узнал бы о ней,
+	// только заглянув на таб «Интеграции» нужной формы.
+	s.noticeBroken(ctx, brokenTarget{
+		workspaceID: w.WorkspaceID, formID: w.FormID, targetID: w.ID,
+		kind: "webhook", name: w.Name,
+		formName: w.FormName, formSlug: w.FormSlug, reason: reason,
+	})
 	return stepStop
 }
 
@@ -529,6 +536,7 @@ func (s *Service) TestWebhook(ctx context.Context, userID, formID, webhookID uui
 		if err := s.webhooks.ReviveWebhook(ctx, s.db, w.ID); err != nil {
 			return WebhookTestResult{}, err
 		}
+		s.noticeFixed(ctx, w.ID)
 		return WebhookTestResult{OK: true, StatusCode: resp.StatusCode, Elapsed: resp.Duration}, nil
 	}
 	if err != nil {

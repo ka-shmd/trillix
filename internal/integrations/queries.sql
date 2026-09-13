@@ -205,7 +205,12 @@ WHERE id = $1;
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
        fi.last_error, fi.last_delivered_at, fi.next_attempt_at, fi.failing_since,
-       fi.consecutive_failures, f.workspace_id, ia.user_id, ia.external_email
+       fi.consecutive_failures, f.workspace_id, ia.user_id, ia.external_email,
+       -- Имя формы в кабинете и её адрес: нужны ПОВОДУ о поломке (internal/notify).
+       -- Едут отсюда, а не отдельным запросом: строка формы уже соединена ради
+       -- workspace_id, и лишняя поездка случилась бы ровно в тот момент, когда у
+       -- нас и так всё плохо.
+       coalesce(f.name, f.title) AS form_name, f.slug AS form_slug
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
 JOIN forms f ON f.id = fi.form_id
@@ -415,7 +420,10 @@ DELETE FROM webhook_queue WHERE webhook_id = $1;
 -- кто задал адрес, всё ещё участник пространства.
 SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,
-       w.next_attempt_at, w.failing_since, w.consecutive_failures, f.workspace_id
+       w.next_attempt_at, w.failing_since, w.consecutive_failures, f.workspace_id,
+       -- Имя формы в кабинете и её адрес — поводу о поломке, по тому же доводу,
+       -- что у DueSheetLinks выше.
+       coalesce(f.name, f.title) AS form_name, f.slug AS form_slug
 FROM form_webhooks w
 JOIN forms f ON f.id = w.form_id
 WHERE w.enabled AND w.status = 'live' AND w.next_attempt_at <= now()
