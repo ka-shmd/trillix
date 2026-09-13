@@ -43,6 +43,16 @@ type Store interface {
 
 var _ Store = Repo{}
 
+// Notifications — уведомления кабинета глазами этого модуля (internal/notify).
+// Объявлен здесь, у потребителя, и НАМЕРЕННО узкий: про поводы и их ключи модуль
+// прав знать не должен, иначе за правами в него приехал бы реестр поводов.
+//
+// nil = уведомлений в сборке нет (так собран модуль в тестах прав).
+type Notifications interface {
+	// ClearOverQuota гасит непрочитанные поводы о превышении квоты пространства.
+	ClearOverQuota(ctx context.Context, workspaceID uuid.UUID) error
+}
+
 // Transactor открывает транзакцию (без знания о конкретном пуле). Реализация —
 // postgres.TxRunner; в тестах — фейк, выполняющий fn без реальной БД.
 type Transactor interface {
@@ -79,6 +89,10 @@ type Service struct {
 	// хранилище настраивается опционально (как и у forms), и без него удаление
 	// сносит только строки — файлов в такой сборке нет и быть не может.
 	files Files
+	// notes — уведомления кабинета. Сеттером, а не аргументом конструктора: связь
+	// обратная (notify спрашивает у нас права), и в конструкторе её было бы не
+	// собрать — сервис уведомлений строится позже нас.
+	notes Notifications
 	// appBaseURL — origin кабинета, из которого строится ссылка приглашения.
 	appBaseURL string
 }
@@ -89,6 +103,13 @@ type Service struct {
 // ПРОИЗВОЛЬНЫЙ адрес с подконтрольным отправителю текстом.
 func NewService(db postgres.DBTX, tx Transactor, repo Store, plans Plans, appBaseURL string) *Service {
 	return &Service{db: db, tx: tx, repo: repo, plans: plans, appBaseURL: appBaseURL}
+}
+
+// WithNotifications подключает уведомления кабинета: передача владения гасит
+// поводы о квоте, адресованные прежнему владельцу.
+func (s *Service) WithNotifications(n Notifications) *Service {
+	s.notes = n
+	return s
 }
 
 // WithFiles подключает модуль файлов ответов (тот же приём, что WithFiles у

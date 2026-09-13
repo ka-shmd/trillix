@@ -72,10 +72,11 @@ type fakeStore struct {
 	// tokenUpdated — шифротекст, перезаписанный после ротации у провайдера.
 	tokenUpdated []byte
 
-	link        integrations.FormLink
-	linkErr     error
-	insertedLnk *integrations.NewFormLink
-	unlinked    bool
+	link         integrations.FormLink
+	linkErr      error
+	accountLinks []uuid.UUID
+	insertedLnk  *integrations.NewFormLink
+	unlinked     bool
 
 	columnsSet []domain.SheetColumn
 	delivered  bool
@@ -251,6 +252,12 @@ func (f *fakeStore) MarkFailed(_ context.Context, _ postgres.DBTX, _ uuid.UUID, 
 func (f *fakeStore) DeleteLink(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) (int64, error) {
 	f.unlinked = true
 	return 1, nil
+}
+
+// LinkIDsByAccount — связки, которые унесёт каскад отключения: по ним идёт отбой
+// поводов о поломке. Пустой список законен (аккаунт без связок).
+func (f *fakeStore) LinkIDsByAccount(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]uuid.UUID, error) {
+	return f.accountLinks, nil
 }
 
 func (f *fakeStore) UpdateLinkTarget(_ context.Context, _ postgres.DBTX, _, _, accountID uuid.UUID, sheet integrations.Spreadsheet, columns []domain.SheetColumn) (int64, error) {

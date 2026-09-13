@@ -244,6 +244,7 @@ type deliveryHarness struct {
 	store *fakeWebhookStore
 	out   *sender
 	subs  *fakeSubmissions
+	notes *fakeNotes
 	now   time.Time
 }
 
@@ -260,13 +261,15 @@ func newDeliveryHarness(t *testing.T, code int) *deliveryHarness {
 				{Key: "b1", Label: "Имя", Type: "short_text", Value: "Кирилл"},
 			},
 		}},
-		now: time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC),
+		notes: &fakeNotes{},
+		now:   time.Date(2026, 9, 12, 12, 0, 0, 0, time.UTC),
 	}
 	h.store.now = h.clock
 	h.svc = integrations.NewService(nil, directTx{}, &fakeStore{}, fakeAccess{},
 		fakeForms{form: formOfTest()}, nil, testKey).
 		WithWebhooks(h.store, h.out).WithClock(h.clock).
-		WithDelivery(h.subs)
+		WithDelivery(h.subs).
+		WithNotifications(h.notes)
 	return h
 }
 

@@ -184,6 +184,11 @@ type FormLink struct {
 	// ConsecutiveFailures — сколько неудач подряд: по нему считается бэкофф.
 	ConsecutiveFailures int32
 	NextAttemptAt       time.Time
+	// FormName и FormSlug — как форма называется в кабинете и где лежит. Нужны
+	// поводу о поломке: человек читает его в ленте, где формы названы так же, как
+	// в списке форм.
+	FormName string
+	FormSlug string
 }
 
 // NewFormLink — что нужно записать при привязке.
@@ -328,6 +333,16 @@ func (Repo) MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) e
 	return nil
 }
 
+// LinkIDsByAccount — связки аккаунта (нужны отбою поводов перед каскадом
+// отключения).
+func (Repo) LinkIDsByAccount(ctx context.Context, db postgres.DBTX, accountID uuid.UUID) ([]uuid.UUID, error) {
+	ids, err := postgres.New(db).LinkIDsByAccount(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("link ids of account %s: %w", accountID, err)
+	}
+	return ids, nil
+}
+
 // ClearError возвращает связку в рабочее состояние: гасит причину и снимает
 // broken. Времени доставки не ставит — её не было.
 func (Repo) ClearError(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {
@@ -425,6 +440,7 @@ func (Repo) DueLinks(ctx context.Context, db postgres.DBTX, limit int32) ([]Form
 		link.FailingSince = row.FailingSince.Time
 		link.ConsecutiveFailures = row.ConsecutiveFailures
 		link.NextAttemptAt = row.NextAttemptAt.Time
+		link.FormName, link.FormSlug = row.FormName, row.FormSlug
 		out = append(out, link)
 	}
 	return out, nil
@@ -848,6 +864,8 @@ func (Repo) DueWebhooks(ctx context.Context, db postgres.DBTX, limit int32) ([]W
 			FailingSince:        r.FailingSince.Time,
 			ConsecutiveFailures: r.ConsecutiveFailures,
 			NextAttemptAt:       r.NextAttemptAt.Time,
+			FormName:            r.FormName,
+			FormSlug:            r.FormSlug,
 		}
 		if r.SetBy.Valid {
 			w.SetBy = r.SetBy.Bytes

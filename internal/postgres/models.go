@@ -186,6 +186,20 @@ type LoginCode struct {
 	CreatedAt pgtype.Timestamptz
 }
 
+type Notification struct {
+	ID          uuid.UUID
+	UserID      uuid.UUID
+	WorkspaceID uuid.UUID
+	Kind        string
+	FormID      pgtype.UUID
+	SubjectID   uuid.UUID
+	Payload     []byte
+	Count       int32
+	FirstAt     pgtype.Timestamptz
+	LastAt      pgtype.Timestamptz
+	ReadAt      pgtype.Timestamptz
+}
+
 type Outbox struct {
 	ID            uuid.UUID
 	Channel       string

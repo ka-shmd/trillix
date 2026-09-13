@@ -51,6 +51,8 @@ type fakeStore struct {
 	promotedUserID  uuid.UUID
 	wsPersonal      bool
 	memberRoleErr   error
+	members         []Member
+	listMembersErr  error
 }
 
 func (f *fakeStore) ListByUser(_ context.Context, _ postgres.DBTX, userID uuid.UUID) ([]WorkspaceAccess, error) {
@@ -121,7 +123,7 @@ func (f *fakeStore) PurgeExpiredJoinLinks(_ context.Context, _ postgres.DBTX) (i
 }
 
 func (f *fakeStore) ListMembers(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Member, error) {
-	return nil, nil
+	return f.members, f.listMembersErr
 }
 
 func (f *fakeStore) ListOwnedTeamsWithMembers(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]string, error) {

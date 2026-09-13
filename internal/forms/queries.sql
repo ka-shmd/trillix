@@ -426,7 +426,14 @@ WHERE id = $1 AND workspace_id = $2;
 -- источник ETag (иммутабелен на версию); f.id (form_id) нужен приёму ответа.
 -- workspace_id — тоже приёму (фаза 17): квота тарифа считается по воркспейсу, и
 -- брать его отсюда дешевле, чем отдельным запросом на горячем пути.
-SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
+SELECT f.id AS form_id, f.workspace_id, f.title,
+    -- cabinet_name: имя формы В КАБИНЕТЕ (name ?? title). Респонденту не
+    -- отдаётся: его потребитель — уведомление кабинета о новых ответах, где
+    -- форма обязана называться тем же словом, что в списке форм. Едет здесь,
+    -- а не запросом владельца (GetSubmissionOwner): тот джойнит участников и
+    -- пользователей ради письма, которого у формы может не быть вовсе.
+    coalesce(f.name, f.title) AS cabinet_name,
+    fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
     -- notify_respondent: тумблер письма респонденту (0046). Здесь едет только ФЛАГ,
     -- как и у письма владельцу; бланк приезжает с GetSubmissionOwner, то есть
@@ -506,7 +513,8 @@ WHERE f.slug = $1;
 -- ⚠ Мина: колонки, добавленные в GetPublicFormBySlug, нужно добавлять и сюда, иначе
 -- узкий путь начнёт решать отказы по неполной строке. Всё, что НЕ про документ,
 -- живёт в PublicFormRef и приезжает обоими запросами.
-SELECT f.id AS form_id, f.workspace_id, fv.version, f.published_version_id,
+SELECT f.id AS form_id, f.workspace_id, coalesce(f.name, f.title) AS cabinet_name,
+    fv.version, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title,
     f.notify_on_submission, f.notify_respondent, f.collect_partial, f.link_preview,
     f.branding, f.progress, f.auto_jump, f.save_locally, f.allow_back,

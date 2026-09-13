@@ -55,6 +55,9 @@ export interface AppSidebarProps {
   // презентационным: собирает его маршрут `_app` (импорт фичи из фичи запрещён,
   // web/CLAUDE.md).
   workspaceNav: React.ReactNode
+  // notifications — пункт уведомлений готовой строкой меню, по тому же доводу, что
+  // workspaceNav: он ходит на сервер за лентой, а сайдбар остаётся презентационным.
+  notifications: React.ReactNode
 }
 
 export function AppSidebar({
@@ -63,6 +66,7 @@ export function AppSidebar({
   onLogout,
   loggingOut,
   workspaceNav,
+  notifications,
 }: AppSidebarProps) {
   const pathname = useRouterState({ select: (s) => s.location.pathname })
 
@@ -101,6 +105,11 @@ export function AppSidebar({
         <SidebarGroup className="p-0">
           <SidebarGroupContent>
             <SidebarMenu>
+              {/* Уведомления — первыми в личном ярусе: это не адрес, а состояние,
+                  и смотрят на них чаще, чем заходят в тариф и настройки. Пункт
+                  открывает шторку, а не страницу, поэтому стоит перед ссылками. */}
+              {notifications}
+
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild

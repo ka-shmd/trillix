@@ -343,6 +343,27 @@ func (q *Queries) ClearSheetQueue(ctx context.Context, linkID uuid.UUID) error {
 	return err
 }
 
+const clearUnreadNotifications = `-- name: ClearUnreadNotifications :execrows
+DELETE FROM notifications
+WHERE kind = $1::text AND subject_id = $2::uuid AND read_at IS NULL
+`
+
+type ClearUnreadNotificationsParams struct {
+	Kind      string
+	SubjectID uuid.UUID
+}
+
+// Отбой: повод-препятствие снят (цель починена, включена или удалена), и
+// непрочитанные строки о нём гаснут. Прочитанные остаются историей — они честно
+// описывают, что тогда было.
+func (q *Queries) ClearUnreadNotifications(ctx context.Context, arg ClearUnreadNotificationsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearUnreadNotifications, arg.Kind, arg.SubjectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearWebhookQueue = `-- name: ClearWebhookQueue :exec
 DELETE FROM webhook_queue WHERE webhook_id = $1
 `
@@ -584,6 +605,22 @@ func (q *Queries) CountSubmissionsInPeriod(ctx context.Context, arg CountSubmiss
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const countUnreadNotifications = `-- name: CountUnreadNotifications :one
+SELECT count(*)
+FROM notifications n
+JOIN workspace_members m ON m.workspace_id = n.workspace_id AND m.user_id = n.user_id
+WHERE n.user_id = $1::uuid AND n.read_at IS NULL
+`
+
+// Число на колокольчике. Тот же сторож членства, что у ленты; идёт по частичному
+// UNIQUE idx_notifications_live.
+func (q *Queries) CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnreadNotifications, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
@@ -1163,6 +1200,21 @@ func (q *Queries) CreateWorkspaceMember(ctx context.Context, arg CreateWorkspace
 	return err
 }
 
+const deleteAllNotifications = `-- name: DeleteAllNotifications :execrows
+DELETE FROM notifications WHERE user_id = $1::uuid
+`
+
+// «Удалить все» — вся лента этого человека, включая непрочитанное: это его
+// решение, а не уборка по возрасту. Чужие строки того же повода не трогаются —
+// у каждого адресата своя.
+func (q *Queries) DeleteAllNotifications(ctx context.Context, userID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAllNotifications, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDeliveredOutboxByTemplate = `-- name: DeleteDeliveredOutboxByTemplate :execrows
 DELETE FROM outbox
 WHERE payload->>'template' = $1::text AND sent_at IS NOT NULL AND sent_at <= $2
@@ -1424,6 +1476,25 @@ type DeleteMemberParams struct {
 // на уровне запроса: владельца не удаляют вовсе, ни своей рукой, ни чужой.
 func (q *Queries) DeleteMember(ctx context.Context, arg DeleteMemberParams) (int64, error) {
 	result, err := q.db.Exec(ctx, deleteMember, arg.WorkspaceID, arg.UserID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const deleteNotification = `-- name: DeleteNotification :execrows
+DELETE FROM notifications WHERE id = $1::uuid AND user_id = $2::uuid
+`
+
+type DeleteNotificationParams struct {
+	ID     uuid.UUID
+	UserID uuid.UUID
+}
+
+// Удаление одной строки ленты человеком. Отбор по владельцу: чужую строку запрос
+// просто не находит, и отвечать на неё отдельно незачем.
+func (q *Queries) DeleteNotification(ctx context.Context, arg DeleteNotificationParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteNotification, arg.ID, arg.UserID)
 	if err != nil {
 		return 0, err
 	}
@@ -1732,7 +1803,12 @@ const dueSheetLinks = `-- name: DueSheetLinks :many
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
        fi.last_error, fi.last_delivered_at, fi.next_attempt_at, fi.failing_since,
-       fi.consecutive_failures, f.workspace_id, ia.user_id, ia.external_email
+       fi.consecutive_failures, f.workspace_id, ia.user_id, ia.external_email,
+       -- Имя формы в кабинете и её адрес: нужны ПОВОДУ о поломке (internal/notify).
+       -- Едут отсюда, а не отдельным запросом: строка формы уже соединена ради
+       -- workspace_id, и лишняя поездка случилась бы ровно в тот момент, когда у
+       -- нас и так всё плохо.
+       coalesce(f.name, f.title) AS form_name, f.slug AS form_slug
 FROM form_integrations fi
 JOIN integration_accounts ia ON ia.id = fi.account_id
 JOIN forms f ON f.id = fi.form_id
@@ -1762,6 +1838,8 @@ type DueSheetLinksRow struct {
 	WorkspaceID         uuid.UUID
 	UserID              uuid.UUID
 	ExternalEmail       string
+	FormName            string
+	FormSlug            string
 }
 
 // Связки, которым есть что везти и чьё время наступило. Сломанные не берутся
@@ -1800,6 +1878,8 @@ func (q *Queries) DueSheetLinks(ctx context.Context, limit int32) ([]DueSheetLin
 			&i.WorkspaceID,
 			&i.UserID,
 			&i.ExternalEmail,
+			&i.FormName,
+			&i.FormSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -1814,7 +1894,10 @@ func (q *Queries) DueSheetLinks(ctx context.Context, limit int32) ([]DueSheetLin
 const dueWebhooks = `-- name: DueWebhooks :many
 SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,
-       w.next_attempt_at, w.failing_since, w.consecutive_failures, f.workspace_id
+       w.next_attempt_at, w.failing_since, w.consecutive_failures, f.workspace_id,
+       -- Имя формы в кабинете и её адрес — поводу о поломке, по тому же доводу,
+       -- что у DueSheetLinks выше.
+       coalesce(f.name, f.title) AS form_name, f.slug AS form_slug
 FROM form_webhooks w
 JOIN forms f ON f.id = w.form_id
 WHERE w.enabled AND w.status = 'live' AND w.next_attempt_at <= now()
@@ -1840,6 +1923,8 @@ type DueWebhooksRow struct {
 	FailingSince        pgtype.Timestamptz
 	ConsecutiveFailures int32
 	WorkspaceID         uuid.UUID
+	FormName            string
+	FormSlug            string
 }
 
 // Цели, которым есть что везти и чьё время наступило. Сломанные не берутся
@@ -1874,6 +1959,8 @@ func (q *Queries) DueWebhooks(ctx context.Context, limit int32) ([]DueWebhooksRo
 			&i.FailingSince,
 			&i.ConsecutiveFailures,
 			&i.WorkspaceID,
+			&i.FormName,
+			&i.FormSlug,
 		); err != nil {
 			return nil, err
 		}
@@ -3244,7 +3331,14 @@ func (q *Queries) GetPersonalWorkspace(ctx context.Context, personalUserID pgtyp
 }
 
 const getPublicFormBySlug = `-- name: GetPublicFormBySlug :one
-SELECT f.id AS form_id, f.workspace_id, f.title, fv.version, fv.schema, f.published_version_id,
+SELECT f.id AS form_id, f.workspace_id, f.title,
+    -- cabinet_name: имя формы В КАБИНЕТЕ (name ?? title). Респонденту не
+    -- отдаётся: его потребитель — уведомление кабинета о новых ответах, где
+    -- форма обязана называться тем же словом, что в списке форм. Едет здесь,
+    -- а не запросом владельца (GetSubmissionOwner): тот джойнит участников и
+    -- пользователей ради письма, которого у формы может не быть вовсе.
+    coalesce(f.name, f.title) AS cabinet_name,
+    fv.version, fv.schema, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title, f.notify_on_submission,
     -- notify_respondent: тумблер письма респонденту (0046). Здесь едет только ФЛАГ,
     -- как и у письма владельцу; бланк приезжает с GetSubmissionOwner, то есть
@@ -3306,6 +3400,7 @@ type GetPublicFormBySlugRow struct {
 	FormID             uuid.UUID
 	WorkspaceID        uuid.UUID
 	Title              string
+	CabinetName        string
 	Version            int32
 	Schema             []byte
 	PublishedVersionID pgtype.UUID
@@ -3355,6 +3450,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.FormID,
 		&i.WorkspaceID,
 		&i.Title,
+		&i.CabinetName,
 		&i.Version,
 		&i.Schema,
 		&i.PublishedVersionID,
@@ -3380,7 +3476,8 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 }
 
 const getPublicFormRefBySlug = `-- name: GetPublicFormRefBySlug :one
-SELECT f.id AS form_id, f.workspace_id, fv.version, f.published_version_id,
+SELECT f.id AS form_id, f.workspace_id, coalesce(f.name, f.title) AS cabinet_name,
+    fv.version, f.published_version_id,
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title,
     f.notify_on_submission, f.notify_respondent, f.collect_partial, f.link_preview,
     f.branding, f.progress, f.auto_jump, f.save_locally, f.allow_back,
@@ -3398,6 +3495,7 @@ WHERE f.slug = $1
 type GetPublicFormRefBySlugRow struct {
 	FormID             uuid.UUID
 	WorkspaceID        uuid.UUID
+	CabinetName        string
 	Version            int32
 	PublishedVersionID pgtype.UUID
 	Status             string
@@ -3442,6 +3540,7 @@ func (q *Queries) GetPublicFormRefBySlug(ctx context.Context, slug string) (GetP
 	err := row.Scan(
 		&i.FormID,
 		&i.WorkspaceID,
+		&i.CabinetName,
 		&i.Version,
 		&i.PublishedVersionID,
 		&i.Status,
@@ -4149,6 +4248,64 @@ func (q *Queries) InsertIntegrationDelivery(ctx context.Context, arg InsertInteg
 	return err
 }
 
+const insertNotifications = `-- name: InsertNotifications :exec
+
+WITH recipients AS (
+    -- Два unnest в одной проекции идут парами (zip), а не декартовым произведением:
+    -- массивы приходят одной длины — id строки на получателя.
+    SELECT unnest($6::uuid[]) AS id, unnest($7::uuid[]) AS user_id
+)
+INSERT INTO notifications (id, user_id, workspace_id, kind, form_id, subject_id, payload)
+SELECT r.id, r.user_id, $1::uuid, $2::text, $3::uuid,
+       $4::uuid, $5::jsonb
+FROM recipients r
+ON CONFLICT (user_id, kind, subject_id) WHERE read_at IS NULL
+DO UPDATE SET
+    count = CASE WHEN notifications.payload->>'period' IS NOT DISTINCT FROM excluded.payload->>'period'
+                 THEN notifications.count + 1 ELSE 1 END,
+    first_at = CASE WHEN notifications.payload->>'period' IS NOT DISTINCT FROM excluded.payload->>'period'
+                    THEN notifications.first_at ELSE now() END,
+    last_at = now(),
+    payload = excluded.payload
+`
+
+type InsertNotificationsParams struct {
+	WorkspaceID uuid.UUID
+	Kind        string
+	FormID      pgtype.UUID
+	SubjectID   uuid.UUID
+	Payload     []byte
+	Ids         []uuid.UUID
+	Users       []uuid.UUID
+}
+
+// Запросы модуля notify. Схема — migrations/0066_notifications. Генерация: `make sqlc`.
+// Постановка повода ВСЕМ адресатам одним утверждением: пары «id строки —
+// получатель» приезжают массивами, и число участников не превращается в число
+// запросов. Идентификаторы генерит Go (UUIDv7, domain.NewID) — gen_random_uuid()
+// дал бы v4 против ADR.
+//
+// ON CONFLICT — коалесинг в непрочитанное (частичный UNIQUE): повтор повода не
+// плодит строку, а растит счётчик и обновляет снимок (форму переименовали —
+// непрочитанная строка догоняет имя на следующем событии).
+//
+// Ветка CASE разрывает склейку на границе ПЕРИОДА: payload.period есть только у
+// over_quota, и непрочитанная строка прошлого месяца не должна копить счётчик
+// дальше. У остальных поводов оба значения NULL, IS NOT DISTINCT FROM даёт true,
+// и склейка обычная — отдельной ветки по kind не нужно.
+func (q *Queries) InsertNotifications(ctx context.Context, arg InsertNotificationsParams) error {
+	_, err := q.db.Exec(ctx, insertNotifications,
+		arg.WorkspaceID,
+		arg.Kind,
+		arg.FormID,
+		arg.SubjectID,
+		arg.Payload,
+		arg.Ids,
+		arg.Users,
+	)
+	return err
+}
+
 const insertSheetQueued = `-- name: InsertSheetQueued :exec
 INSERT INTO sheet_queue (link_id, submission_id) VALUES ($1, $2)
 ON CONFLICT DO NOTHING
@@ -4343,6 +4500,32 @@ func (q *Queries) IsUserAdmin(ctx context.Context, id uuid.UUID) (bool, error) {
 	var is_admin bool
 	err := row.Scan(&is_admin)
 	return is_admin, err
+}
+
+const linkIDsByAccount = `-- name: LinkIDsByAccount :many
+SELECT id FROM form_integrations WHERE account_id = $1
+`
+
+// Связки, которые унесёт каскад при отключении аккаунта. Читаются ДО удаления:
+// после него узнать их уже негде, а поводам о поломке нужен отбой по каждой.
+func (q *Queries) LinkIDsByAccount(ctx context.Context, accountID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, linkIDsByAccount, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const listFeedAfter = `-- name: ListFeedAfter :many
@@ -5162,6 +5345,89 @@ func (q *Queries) ListKnownDevices(ctx context.Context, userID uuid.UUID) ([]Lis
 			&i.Label,
 			&i.CreatedAt,
 			&i.LastSeenAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listNotifications = `-- name: ListNotifications :many
+SELECT n.id, n.workspace_id, w.name AS workspace_name, w.slug AS workspace_slug,
+       n.kind, n.subject_id, n.payload, n.count, n.first_at, n.last_at, n.read_at
+FROM notifications n
+JOIN workspace_members m ON m.workspace_id = n.workspace_id AND m.user_id = n.user_id
+JOIN workspaces w ON w.id = n.workspace_id
+WHERE n.user_id = $1::uuid
+  AND ($2::timestamptz IS NULL
+       OR (n.last_at, n.id) < ($2::timestamptz, $3::uuid))
+ORDER BY n.last_at DESC, n.id DESC
+LIMIT $4::int
+`
+
+type ListNotificationsParams struct {
+	UserID   uuid.UUID
+	CursorAt pgtype.Timestamptz
+	CursorID pgtype.UUID
+	Lim      int32
+}
+
+type ListNotificationsRow struct {
+	ID            uuid.UUID
+	WorkspaceID   uuid.UUID
+	WorkspaceName string
+	WorkspaceSlug string
+	Kind          string
+	SubjectID     uuid.UUID
+	Payload       []byte
+	Count         int32
+	FirstAt       pgtype.Timestamptz
+	LastAt        pgtype.Timestamptz
+	ReadAt        pgtype.Timestamptz
+}
+
+// Лента пользователя: все его пространства разом, свежие сверху.
+//
+// Порядок и курсор — по паре (last_at, id): последнее событие склейки поднимает
+// строку наверх, а id разводит строки с одинаковым last_at (одно событие
+// адресуется всем участникам сразу, и время у их строк совпадает до микросекунды).
+// Сравнение строкой-кортежем, а не двумя условиями: так его берёт индекс
+// idx_notifications_feed.
+//
+// JOIN на workspace_members — не украшение и не оптимизация: строка адресована
+// человеку когда-то, а членство с тех пор могло кончиться, и выгнанный участник не
+// вправе видеть даже названий форм (инвариант 1). Гашение его строк при исключении
+// — уборка, а гарантия — этот JOIN.
+func (q *Queries) ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]ListNotificationsRow, error) {
+	rows, err := q.db.Query(ctx, listNotifications,
+		arg.UserID,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Lim,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNotificationsRow
+	for rows.Next() {
+		var i ListNotificationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.WorkspaceName,
+			&i.WorkspaceSlug,
+			&i.Kind,
+			&i.SubjectID,
+			&i.Payload,
+			&i.Count,
+			&i.FirstAt,
+			&i.LastAt,
+			&i.ReadAt,
 		); err != nil {
 			return nil, err
 		}
@@ -6127,6 +6393,19 @@ func (q *Queries) LockSlot(ctx context.Context, dollar_1 string) error {
 	return err
 }
 
+const markAllNotificationsRead = `-- name: MarkAllNotificationsRead :execrows
+UPDATE notifications SET read_at = now()
+WHERE user_id = $1::uuid AND read_at IS NULL
+`
+
+func (q *Queries) MarkAllNotificationsRead(ctx context.Context, userID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markAllNotificationsRead, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markEmailVerified = `-- name: MarkEmailVerified :exec
 UPDATE users SET email_verified_at = now() WHERE id = $1
 `
@@ -6223,6 +6502,26 @@ type MarkIntegrationAccountAccessLostParams struct {
 func (q *Queries) MarkIntegrationAccountAccessLost(ctx context.Context, arg MarkIntegrationAccountAccessLostParams) error {
 	_, err := q.db.Exec(ctx, markIntegrationAccountAccessLost, arg.ID, arg.AccessLostAt)
 	return err
+}
+
+const markNotificationsRead = `-- name: MarkNotificationsRead :execrows
+UPDATE notifications SET read_at = now()
+WHERE user_id = $1::uuid AND read_at IS NULL AND id = ANY($2::uuid[])
+`
+
+type MarkNotificationsReadParams struct {
+	UserID uuid.UUID
+	Ids    []uuid.UUID
+}
+
+// Прочтение названных строк. Чужие не трогаются (user_id в условии), уже
+// прочитанные не переписываются — иначе повтор сдвигал бы им срок уборки.
+func (q *Queries) MarkNotificationsRead(ctx context.Context, arg MarkNotificationsReadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markNotificationsRead, arg.UserID, arg.Ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const markOutboxFailed = `-- name: MarkOutboxFailed :exec
@@ -6517,6 +6816,28 @@ WHERE expires_at < now() OR revoked_at IS NOT NULL
 // каждое «создать новую» и после отзыва не нужны никому.
 func (q *Queries) PurgeExpiredJoinLinks(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeExpiredJoinLinks)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const purgeNotifications = `-- name: PurgeNotifications :execrows
+DELETE FROM notifications
+WHERE (read_at IS NOT NULL AND read_at < $1::timestamptz)
+   OR (read_at IS NULL AND first_at < $2::timestamptz)
+`
+
+type PurgeNotificationsParams struct {
+	ReadBefore   pgtype.Timestamptz
+	UnreadBefore pgtype.Timestamptz
+}
+
+// Уборка по возрасту: прочитанные живут короче непрочитанных. Индекса под ветку
+// read_at нет — OR всё равно сведёт план к одному проходу, а таблица держится
+// маленькой коалесингом и самой этой уборкой (гоняется раз в час).
+func (q *Queries) PurgeNotifications(ctx context.Context, arg PurgeNotificationsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeNotifications, arg.ReadBefore, arg.UnreadBefore)
 	if err != nil {
 		return 0, err
 	}

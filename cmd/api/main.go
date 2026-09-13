@@ -38,6 +38,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/integrations"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/media"
+	"github.com/ka-shmd/trillix/internal/notify"
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/periodic"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -521,6 +522,15 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// который сохраняют как шаблон, и завести форму из шаблона — оба права
 	// проверяет сам formsSvc. Флаг администратора спрашивается у auth: колонка
 	// живёт у users, и читать чужую таблицу модуль не вправе.
+	// Уведомления кабинета (ADR §10). Права спрашиваются у workspaces: повод
+	// адресуется всем, кому можно ДЕЙСТВИЕ повода. Продюсеров у сервиса пока нет —
+	// слайс A даёт таблицу, реестр и уборщик; ставить поводы начнут следующие
+	// слайсы (приём ответа и доставщики интеграций).
+	notifySvc := notify.NewService(pool, notify.Repo{}, workspacesSvc)
+	// Обратная связь: передача владения пространством гасит поводы о квоте,
+	// адресованные прежнему владельцу. Сеттером, а не аргументом конструктора —
+	// связь взаимная, и в конструкторах её не собрать.
+	workspacesSvc = workspacesSvc.WithNotifications(notifySvc)
 	templatesSvc := templates.NewService(pool, templates.Repo{}, workspacesSvc, formsSvc, authSvc)
 	templatesHandler := templates.NewHandler(templatesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
@@ -544,7 +554,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	})
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey).
-		WithWebhooks(integrations.Repo{}, webhookEgress)
+		WithWebhooks(integrations.Repo{}, webhookEgress).
+		// Поводы о поломке цели: доставщик ставит, починка и удаление снимают.
+		WithNotifications(notifySvc)
 	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
 	// числа расписаний — у entitlements. Транзакция нужна одному действию — переносу
 	// записи: лок слота, счёт мест и правка обязаны быть одной.
@@ -651,6 +663,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{}, geoSvc, cfg.FormTokenSecret)
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
+	// Лента уведомлений кабинета. Только чтение и отметка прочтения: ставят и
+	// гасят поводы продюсеры внутри процесса, а не человек из браузера.
+	notifyHandler := notify.NewHandler(notifySvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 	entitlementsHandler := entitlements.NewHandler(entitlementsSvc, workspacesSvc, authHandler.RequireAuth)
 
 	submitLimiter := ratelimit.NewTokenBucket(submitRatePerSec, submitBurst)
@@ -676,6 +691,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// держат тот же указатель, поэтому присваивать результат не надо.
 	bookingCancelSvc.WithNotifier(submissionsSvc)
 	bookingSvc.WithNotifier(submissionsSvc)
+	// Повод «новые ответы» ставит приём ответа, гасит открытие таблицы. Сеттером, а
+	// не аргументом конструктора: у приёма ответа и так девять коллабораторов.
+	submissionsSvc = submissionsSvc.WithNotifications(notifySvc)
 	integrationsSvc = integrationsSvc.WithDelivery(submissionsSvc)
 
 	submissionsPublic := submissions.NewPublicHandler(submissionsSvc, submitLimiter, cfg.FormTokenSecret, submissions.DefaultMinFillTime, cfg.TrustedProxy)
@@ -715,7 +733,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
 		integrationsHandler.Routes, bookingHandler.Routes, bookingPublic.Routes,
-		templatesHandler.Routes,
+		templatesHandler.Routes, notifyHandler.Routes,
 	}
 
 	// Печатная страница ответа (ADR §10). Путь задаётся явно на каждом контуре
@@ -1005,6 +1023,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("webhook queue rows expired", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	// Уведомления стареют: у ленты, в отличие от производного состояния, нет
+	// способа забыть самой (ADR §10). Сроки — в internal/notify.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "notification-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			n, err := notifySvc.Cleanup(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("notifications purged", slog.Int64("count", n))
 			}
 			return nil
 		},

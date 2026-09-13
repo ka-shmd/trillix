@@ -10,6 +10,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { HeaderSidebarTrigger } from '../features/app-shell/HeaderSidebarTrigger'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
+import { NotificationsBell } from '../features/notifications/NotificationsBell'
 import { AppChromeContext } from '../shared/appChrome'
 import { WorkspaceAddressProvider } from '../shared/workspaceContext'
 
@@ -62,6 +63,7 @@ function AppLayout() {
           userName={displayName(user)}
           onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}
           loggingOut={logout.isPending}
+          notifications={<NotificationsBell />}
           workspaceNav={
             <WorkspaceNav>
               <FormSearch />
