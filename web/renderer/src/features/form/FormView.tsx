@@ -442,11 +442,21 @@ export function FormView({
   // Дебаунс, а не сохранение на каждый символ: иначе форма из двадцати полей
   // отправляла бы сотни запросов на одно заполнение. Последнее сохранение уходит на
   // уходе со страницы биконом — он переживает закрытие вкладки, где fetch отменяется.
+  //
+  // ⚠ СОБИРАЕМ, ТОЛЬКО ПОКА ФОРМА ЗАПОЛНЯЕТСЯ (`phase === 'editing'`). Отправка удаляет
+  // черновик визита на сервере, и любое автосохранение после неё создаёт его заново —
+  // строку, которой в «Незавершённых» взяться неоткуда, с содержимым уже отправленного
+  // ответа.
+  // Само по себе нажатие «Отправить» таймер не гасит: эффект пересобирается на КАЖДЫЙ
+  // рендер (`blocks` — новый массив после splitFormTitle/splitThankYou), поэтому
+  // рендеры отправки заводили бы очередной трёхсекундный таймер, который срабатывал уже
+  // на экране «Спасибо». Уходом из 'editing' cleanup снимает и таймер, и бикон; отказ
+  // сервера возвращает фазу — вместе с ней возвращается и сбор.
   const collectPartial = form.collectPartial && token !== null
 
   useEffect(() => {
     const tracker = visit.current
-    if (!collectPartial || tracker === null) return
+    if (!collectPartial || tracker === null || phase !== 'editing') return
 
     const body = () => ({
       visit_id: tracker.id,
@@ -466,7 +476,7 @@ export function FormView({
       clearTimeout(timer)
       window.removeEventListener('pagehide', onLeave)
     }
-  }, [answers, blocks, collectPartial, tokenValue, form.version, slug])
+  }, [answers, blocks, collectPartial, phase, tokenValue, form.version, slug])
 
   // ВОРОНКА (фаза 19, шаг 5). Переход на страницу — это и есть «дошёл до сюда», то
   // самое наблюдение, которого воронке не хватало с самого начала: касание поля молчит

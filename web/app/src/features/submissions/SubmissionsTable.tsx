@@ -11,8 +11,8 @@ import { ROW_WORDS, rowWords, type AnswerRow } from './rows'
 import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
 import { formatDateTime } from '../../shared/format'
 import { type AnswerFile } from '../../entities/submission'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Table,
   TableBody,
@@ -60,9 +60,12 @@ import { humanError } from '../../shared/api/errors'
 // которое видно целиком. У ДАТЫ ОТПРАВКИ ГЛИФА НЕТ (решение владельца): он различает
 // вопросы между собой, а дата в таблице одна, и путать её не с чем.
 //
-// КОЛОНКИ ОДИНАКОВОЙ ШИРИНЫ: своей ширины не назначено ни одной, и `table-fixed` делит
-// место поровну. Назначенная в пикселях колонка на широком экране остаётся узкой
-// полосой, вокруг которой копится пустота, а на узком — режет соседей.
+// КОЛОНКИ ОДИНАКОВОЙ ШИРИНЫ, и исключение ровно одно — «Версия» (`VERSION_COL`).
+// Остальным ширины не назначено, `table-fixed` делит место поровну: назначенная в
+// пикселях колонка на широком экране остаётся узкой полосой, вокруг которой копится
+// пустота, а на узком — режет соседей. У версии содержимое известно заранее —
+// однозначное-двузначное число, — и равная доля отдавала бы вопросу место под текст,
+// которого там не будет.
 //
 // ТАБЛИЦА ИДЁТ ОТ КРАЯ ДО КРАЯ. Отрицательные боковые поля гасят поля колонки
 // страницы (`-mx-5 sm:-mx-8` — ровно `px-5 sm:px-8` у PageContainer), а рамка
@@ -84,23 +87,54 @@ const DIVIDER = 'border-r last:border-r-0'
 // уступка виду. 70% дают 2,79:1 — там подпись колонки перестаёт читаться на светлой теме.
 const HEAD = 'h-11 font-normal text-muted-foreground/80'
 
+// Ширина колонки «Версия»: число плюс подпись шапки, и ни пикселя сверх — место
+// в таблице принадлежит ответам (решение владельца 2026-09-13). 80px берут «Версия»
+// (≈48px) с полями клетки (2×8px) и оставляют запас на трёхзначный номер.
+const VERSION_COL = 'w-20'
+
 // Боковое поле крайних колонок = поле страницы: текст таблицы стоит на той же
 // линии, что и текст над ней.
 const EDGE_LEFT = 'pl-5 sm:pl-8'
 const EDGE_RIGHT = 'pr-5 sm:pr-8'
 
+// Метка незавершённой строки в смешанной ленте: точка второго акцента, подпись — в
+// тултипе и в `aria-label` (решение владельца 2026-09-14, DESIGN-SYSTEM §6). Цвет тот
+// же, что у метки «ПРО»: строка лежит в ленте ровно потому, что у пространства оплачен
+// сбор незавершённых, и точка говорит это, не занимая места под слово.
+//
+// ⚠ БЕЗ НАВЕДЕНИЯ И ФОКУСА СМЫСЛ НЕДОСТУПЕН — на телефоне остаётся цветная крапинка.
+// Плата известна и принята: дизайн-система разводит кружок и слово по тому, сказано ли
+// состояние словом рядом (§«Состояние: кружок или слово»), а в этой ленте не сказано —
+// колонка даты названа нейтрально как раз потому, что строки двух видов.
+//
+// Кнопка, а не span: тултип обязан открываться и с клавиатуры, а до неинтерактивного
+// узла фокус не доходит (тот же приём, что у точки состояния цели в IntegrationsView).
+// type=button — строка лежит вне формы, но кнопка по умолчанию submit.
+function PartialDot() {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="size-2 shrink-0 cursor-default rounded-full bg-highlight focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          aria-label="Ответ не отправлен"
+        />
+      </TooltipTrigger>
+      <TooltipContent>Ответ не отправлен</TooltipContent>
+    </Tooltip>
+  )
+}
+
 export function SubmissionsTable({
   rows,
   columns,
   files,
-  showVersion,
   formId,
   onOpen,
 }: {
   rows: AnswerRow[]
   columns: AnswerColumn[]
   files: Record<string, AnswerFile>
-  showVersion: boolean
   formId: string
   onOpen: (row: AnswerRow) => void
 }) {
@@ -144,7 +178,12 @@ export function SubmissionsTable({
               <TableHead className={`${HEAD} ${EDGE_LEFT} ${DIVIDER}`}>
                 {words.dateColumn}
               </TableHead>
-              {showVersion && <TableHead className={`${HEAD} ${DIVIDER}`}>Версия</TableHead>}
+              {/* «Версия» стоит ВСЕГДА и во всех трёх вкладках (решение владельца
+                  2026-09-13). Прежде колонка появлялась только при расхождении версий
+                  среди загруженных строк — и вкладки одной формы расходились: у
+                  отправленных версии разные, у черновиков одинаковые, и столбец был
+                  через раз. */}
+              <TableHead className={`${HEAD} ${VERSION_COL} ${DIVIDER}`}>Версия</TableHead>
               {columns.map((c, i) => (
                 <TableHead
                   key={c.block.id}
@@ -167,11 +206,7 @@ export function SubmissionsTable({
                 <TableCell className={`${EDGE_LEFT} ${DIVIDER}`}>
                   <div className="flex items-center gap-2">
                     <span>{formatDateTime(row.at)}</span>
-                    {marked && row.kind === 'partial' && (
-                      <Badge variant="outline" className="font-normal text-muted-foreground">
-                        не отправлен
-                      </Badge>
-                    )}
+                    {marked && row.kind === 'partial' && <PartialDot />}
                     <span className="ml-auto flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                       <Button
                         variant="ghost"
@@ -216,11 +251,11 @@ export function SubmissionsTable({
                     </span>
                   </div>
                 </TableCell>
-                {showVersion && (
-                  <TableCell className={`tabular-nums text-muted-foreground ${DIVIDER}`}>
-                    {row.formVersion}
-                  </TableCell>
-                )}
+                <TableCell
+                  className={`${VERSION_COL} tabular-nums text-muted-foreground ${DIVIDER}`}
+                >
+                  {row.formVersion}
+                </TableCell>
                 {columns.map((c, i) => {
                   const text = formatAnswer(c.block, row.answers[c.block.id], files)
                   return (

@@ -207,8 +207,25 @@ WHERE s.form_id = $1 AND NOT s.over_quota
 -- Условие по form_id — та же защита, что у визитов: visit_id выбирает клиент, а
 -- UUIDv7 угадываем по временнóму префиксу, и без него ручкой одной формы правилась
 -- бы строка другой.
+--
+-- ⚠ ВИЗИТ, УЖЕ ОТПРАВИВШИЙ ОТВЕТ, ЧЕРНОВИКА НЕ ПОЛУЧАЕТ — ноль строк, тишина в ответ.
+-- Приём удаляет черновик, но автосохранение живёт в чужой вкладке, и удалённое оно
+-- присылает заново: запрос, ушедший за миг до кнопки и доехавший после, или старый
+-- закешированный бандл рендерера, который после отправки продолжает сохранять. Строка
+-- родилась бы ПОСЛЕ ответа, с содержимым этого же ответа, и легла бы во вкладку
+-- «Незавершённые» рядом с ним. Порядок в приёме для этого и такой: сначала визит
+-- помечается отправленным, потом удаляется черновик (service.go, submit).
+--
+-- Визита нет вовсе (бикон не дошёл, старый бандл не шлёт visit_id) — сохраняем, как
+-- сохраняли: про такой черновик неизвестно ничего, и терять набранное из-за молчащей
+-- аналитики нельзя.
 INSERT INTO partial_submissions (visit_id, form_id, form_version_id, answers, last_block_id)
-VALUES ($1, $2, $3, $4, $5)
+SELECT sqlc.arg(visit_id)::uuid, sqlc.arg(form_id)::uuid, sqlc.arg(form_version_id)::uuid,
+       sqlc.arg(answers)::jsonb, sqlc.narg(last_block_id)::text
+WHERE NOT EXISTS (
+    SELECT 1 FROM form_visits v
+    WHERE v.id = sqlc.arg(visit_id)::uuid AND v.form_id = sqlc.arg(form_id)::uuid AND v.submitted
+)
 ON CONFLICT (visit_id) DO UPDATE
 SET answers       = EXCLUDED.answers,
     last_block_id = EXCLUDED.last_block_id,

@@ -46,14 +46,3 @@ const PREVIEW_COLUMNS = 2
 export function previewColumns(columns: AnswerColumn[]): AnswerColumn[] {
   return columns.slice(0, PREVIEW_COLUMNS)
 }
-
-// Колонка «Версия» показывается, только когда версии загруженных строк РАЗНЫЕ.
-// Тем же правилом, что бейдж статуса формы (docs/DESIGN-SYSTEM.md §7): подпись
-// вешается на отклонение, а не на норму. У формы, которую ни разу не переиздавали,
-// столбец одинаковых чисел отнимает место у вопросов и не сообщает ничего.
-//
-// Считается по УЖЕ ЗАГРУЖЕННЫМ строкам, поэтому колонка может появиться после
-// «Показать ещё»: это честно — до подгрузки различия действительно не было видно.
-export function versionsDiffer(rows: readonly { formVersion: number }[]): boolean {
-  return rows.length > 1 && rows.some((r) => r.formVersion !== rows[0]!.formVersion)
-}

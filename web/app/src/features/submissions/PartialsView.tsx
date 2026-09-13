@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 
-import { answerColumns, previewColumns, versionsDiffer } from './columns'
+import { answerColumns, previewColumns } from './columns'
 import { partialsListQueryOptions } from './queries'
 import { partialRow, type AnswerRow } from './rows'
 import { SubmissionPanel } from './SubmissionPanel'
@@ -99,7 +99,6 @@ export function PartialsView({ slug }: { slug: string }) {
             // Файлов у незавершённого ответа нет вовсе (спека §10.2): слот файла
             // выдаётся отдельным потоком и черновиком не заявляется.
             files={{}}
-            showVersion={versionsDiffer(partials)}
             formId={formId ?? ''}
             onOpen={(row) => {
               setSelected(row)

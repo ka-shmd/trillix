@@ -295,6 +295,18 @@ func savePartial(t *testing.T, srv *httptest.Server, slug, visitID, text string)
 	return resp.StatusCode
 }
 
+// recordVisit кладёт строку визита — ту, что на живом контуре пишет бикон рендерера.
+// Публичной ручки визитов в этом сервере нет (смонтирован только приём ответа),
+// поэтому строка вставляется напрямую: приёму нужно, что пометить отправленным.
+func recordVisit(t *testing.T, formID, versionID, visitID string) {
+	t.Helper()
+	if _, err := testPool.Exec(context.Background(),
+		`INSERT INTO form_visits (id, form_id, form_version_id) VALUES ($1, $2, $3)`,
+		visitID, formID, versionID); err != nil {
+		t.Fatalf("insert visit: %v", err)
+	}
+}
+
 // submitWithVisit отправляет ответ с тем же visit_id, что и черновик, — так приём
 // узнаёт, какой черновик убрать.
 func submitWithVisit(t *testing.T, srv *httptest.Server, slug, visitID string) int {
@@ -344,6 +356,54 @@ func TestPartial_CollectedAndDroppedOnSubmit(t *testing.T) {
 	}
 	if got := countPartials(t, formID); got != 0 {
 		t.Errorf("черновиков после отправки = %d, ждали 0: ставший ответом удаляется", got)
+	}
+}
+
+// Запоздалое автосохранение не воскрешает черновик отправившего визита. Это
+// СЕРВЕРНАЯ страховка к починке рендерера (он перестал слать черновики после
+// отправки): вкладка со старым закешированным бандлом и запрос, ушедший за миг до
+// кнопки, остаются, и оба создавали строку в «Незавершённых» рядом с её же ответом.
+//
+// Юнитом не покрыть: условие живёт в SQL и читает form_visits.submitted, который
+// ставит приём ответа.
+func TestPartial_LateAutosaveAfterSubmitIgnored(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug, versionID := publishedForm(t, requiredNameSchema)
+	formID := formIDBySlug(t, slug)
+	setCollectPartial(t, formID, true)
+	setPartialGate(t, slug, true)
+
+	visitID := domain.NewID().String()
+	recordVisit(t, formID, versionID.String(), visitID)
+	if code := savePartial(t, srv, slug, visitID, "черновик"); code != http.StatusNoContent {
+		t.Fatalf("автосохранение: статус %d, ждали 204", code)
+	}
+	if code := submitWithVisit(t, srv, slug, visitID); code != http.StatusCreated {
+		t.Fatalf("приём ответа: статус %d, ждали 201", code)
+	}
+	if got := countPartials(t, formID); got != 0 {
+		t.Fatalf("черновиков после отправки = %d, ждали 0", got)
+	}
+
+	// То самое, что шлёт вкладка, оставшаяся на «Спасибо». Ответ 204: клиенту
+	// сообщать нечего, черновик просто не пишется.
+	if code := savePartial(t, srv, slug, visitID, "запоздавшее"); code != http.StatusNoContent {
+		t.Fatalf("запоздалое автосохранение: статус %d, ждали 204", code)
+	}
+	if got := countPartials(t, formID); got != 0 {
+		t.Errorf("черновиков после запоздалого автосохранения = %d, ждали 0: визит уже ответил", got)
+	}
+
+	// Условие узкое: соседний визит той же формы собирается по-прежнему. Иначе
+	// страховка тихо выключила бы сбор целиком.
+	other := domain.NewID().String()
+	recordVisit(t, formID, versionID.String(), other)
+	if code := savePartial(t, srv, slug, other, "чужой черновик"); code != http.StatusNoContent {
+		t.Fatalf("автосохранение соседнего визита: статус %d, ждали 204", code)
+	}
+	if got := countPartials(t, formID); got != 1 {
+		t.Errorf("черновиков соседнего визита = %d, ждали 1", got)
 	}
 }
 
