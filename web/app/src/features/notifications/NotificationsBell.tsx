@@ -164,10 +164,17 @@ export function NotificationsBell() {
 // NotificationRow — строка ленты. Текст и адрес пришли готовыми с сервера: экран
 // решает только, как их показать.
 //
-// Ссылка растянута псевдоэлементом на всю строку (`after:absolute after:inset-0`),
-// а крестик стоит выше по слою (`relative z-10`) — тот же приём, что у строки
-// списка форм: нажимается вся строка, но кнопка внутри неё остаётся кнопкой, а не
-// вложенной в ссылку (такой разметки не бывает).
+// СТРОКА И КОРЗИНА — ДВЕ СОСЕДНИЕ ОБЛАСТИ, а не кнопка внутри строки (решение
+// владельца 2026-09-13). Нажимаемая область события кончается там, где начинается
+// корзина: ссылка растянута псевдоэлементом по ВНУТРЕННЕЙ коробке (`relative` на
+// ней), а корзина стоит снаружи, соседом. Отсюда три свойства, которых не было,
+// пока кнопка лежала внутри: наведение на событие корзину не трогает вовсе,
+// наведение на корзину не подсвечивает событие, и промахнуться одним по другому
+// нельзя.
+//
+// Корзина поэтому ВИДНА ВСЕГДА (приглушённой), а не появляется по наведению: за
+// пределами строки ей неоткуда взяться по нему, а невидимая кнопка, которую надо
+// угадать, — не кнопка.
 function NotificationRow({
   item,
   onOpen,
@@ -178,63 +185,49 @@ function NotificationRow({
   onDelete: () => void
 }) {
   return (
-    <div
-      className={cn(
-        'group relative flex items-start gap-2 rounded-md px-2 py-2 transition-colors',
-        // Подсветка строки висит на наведении НА ССЫЛКУ, а не на строку целиком, и
-        // это не педантизм: ссылка растянута псевдоэлементом на всю строку, но
-        // корзина лежит ВЫШЕ неё по слою, поэтому над корзиной ссылка не
-        // наведена — строка гаснет сама, и светится ровно то, что сейчас нажмётся.
-        // С `hover:` на самой строке корзина оставалась бы внутри подсвеченной
-        // полосы и читалась её частью, а не отдельной кнопкой.
-        'has-[a:hover]:bg-accent/60 has-[a:focus-visible]:bg-accent/60',
-      )}
-    >
-      <span
+    <div className="flex items-start gap-1">
+      <div
         className={cn(
-          'mt-1.5 size-1.5 shrink-0 rounded-full',
-          item.read ? 'bg-transparent' : 'bg-highlight',
+          'relative flex min-w-0 flex-1 items-start gap-2 rounded-md px-2 py-2 transition-colors',
+          'has-[a:hover]:bg-accent/60 has-[a:focus-visible]:bg-accent/60',
         )}
-        aria-hidden="true"
-      />
-      <span className="min-w-0 flex-1">
-        <Link
-          to={item.link}
-          onClick={onOpen}
+      >
+        <span
           className={cn(
-            'block text-sm after:absolute after:inset-0 after:rounded-md focus-visible:outline-none',
-            item.read && 'text-muted-foreground',
+            'mt-1.5 size-1.5 shrink-0 rounded-full',
+            item.read ? 'bg-transparent' : 'bg-highlight',
           )}
-        >
-          {item.text}
-        </Link>
-        <span className="block text-xs text-muted-foreground">
-          {formatRelativeDate(item.lastAt)}
+          aria-hidden="true"
+        />
+        <span className="min-w-0 flex-1">
+          <Link
+            to={item.link}
+            onClick={onOpen}
+            className={cn(
+              'block text-sm after:absolute after:inset-0 after:rounded-md focus-visible:outline-none',
+              item.read && 'text-muted-foreground',
+            )}
+          >
+            {item.text}
+          </Link>
+          <span className="block text-xs text-muted-foreground">
+            {formatRelativeDate(item.lastAt)}
+          </span>
         </span>
-      </span>
-      {/* Корзина, а не крестик: крестик в этой же шторке уже занят закрытием, и
-        два одинаковых значка рядом означали бы разное — «закрыть окно» и «стереть
-        строку». Появляется по наведению и по фокусу: в спокойной ленте она шум, а
-        с клавиатуры до неё иначе было бы не добраться.
-
-        ОТДЕЛЕНА ОТ СТРОКИ ТРЕМЯ ВЕЩАМИ, и все три нужны: строка гаснет, пока
-        указатель на ней (правило выше), сама она загорается КРАСНЫМ — деструктивное
-        действие отделяется даже среди иконок строки (DESIGN-SYSTEM §7), — и
-        подсказка называет его словом. Ghost-кнопка со своим `hover:bg-accent`
-        внутри строки с `hover:bg-accent/60` не читалась вовсе: подсветка была почти
-        та же. */}
+      </div>
+      {/* Корзина, а не крестик: крестик в этой же шторке занят закрытием, и два
+        одинаковых значка рядом означали бы разное — «закрыть окно» и «стереть
+        строку». Красный по наведению — деструктивное действие отделяется даже
+        среди иконок строки (DESIGN-SYSTEM §7); подсказка называет его словом. */}
       <Tooltip>
         <TooltipTrigger asChild>
           <Button
             variant="ghost"
             size="icon"
-            // cursor-pointer здесь руками: вендоренный Button его не ставит
-            // (Tailwind сбрасывает курсор кнопкам в default), а строка вокруг —
-            // ссылка, над которой указатель как раз есть, и корзина посреди неё
-            // читалась бы неживой.
+            // cursor-pointer здесь руками: вендоренный Button его не ставит —
+            // Tailwind сбрасывает курсор кнопкам в default.
             className={cn(
-              'relative z-10 size-6 cursor-pointer text-muted-foreground opacity-0',
-              'group-hover:opacity-100 focus-visible:opacity-100',
+              'mt-1.5 size-6 shrink-0 cursor-pointer text-muted-foreground/60',
               'hover:bg-destructive/10 hover:text-destructive dark:hover:bg-destructive/20',
             )}
             onClick={onDelete}
