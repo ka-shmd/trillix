@@ -63,6 +63,7 @@ function AppLayout() {
           userName={displayName(user)}
           onLogout={() => logout.mutate(undefined, { onSuccess: () => navigate({ to: '/login' }) })}
           loggingOut={logout.isPending}
+          notifications={<NotificationsBell />}
           workspaceNav={
             <WorkspaceNav>
               <FormSearch />
@@ -88,10 +89,6 @@ function AppLayout() {
             <HeaderSidebarTrigger />
             {/* Слева путь страницы, справа её действия. */}
             <div ref={setHeaderLeft} className="flex min-w-0 flex-1 items-center" />
-            {/* Колокольчик стоит ПЕРЕД порталом действий и живёт в оболочке, а не в
-              нём: портал принадлежит экрану, а уведомления — человеку, и порядок в
-              правой части идёт от общего к частному. */}
-            <NotificationsBell />
             <div ref={setHeaderRight} className="flex shrink-0 items-center gap-2" />
           </header>
           {/* Отступы задаёт каждая страница сама: редактору нужен bleed, дашборду/

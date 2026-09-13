@@ -9,12 +9,17 @@ import type { Notification } from '../../entities/notification'
 import { formatRelativeDate } from '../../shared/format'
 import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { SidebarMenuBadge, SidebarMenuButton, SidebarMenuItem } from '@/components/ui/sidebar'
 import { LoadingRows } from '../../shared/page/states'
 import { cn } from '@/lib/utils'
 
-// NotificationsBell — колокольчик верхнего бара. Элемент ОБОЛОЧКИ, а не портал
-// действий страницы: портал принадлежит экрану, а колокольчик — человеку, и виден
-// он на всех экранах разом.
+// NotificationsBell — пункт уведомлений в личном ярусе сайдбара. Именно там, а не
+// в верхнем баре: бар у каждого экрана свой (у формы это путь и её действия, у
+// расписания — почти ничего), и колокольчик посреди чужих кнопок читался бы
+// действием страницы. Уведомления принадлежат ЧЕЛОВЕКУ, поэтому стоят рядом с
+// «Тарифом» и «Аккаунтом» — пункт стоит на том уровне, кому он принадлежит.
+//
+// Рендерится строкой меню, поэтому живёт внутри <SidebarMenu> подвала.
 export function NotificationsBell() {
   const [open, setOpen] = useState(false)
   const feed = useQuery(notificationsQueryOptions)
@@ -29,25 +34,35 @@ export function NotificationsBell() {
 
   return (
     <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button
-          variant="ghost"
-          size="icon"
-          className="relative"
-          aria-label={unread > 0 ? `Уведомления: непрочитанных ${unread}` : 'Уведомления'}
-        >
-          <Bell className="size-4" />
-          {unread > 0 && (
-            // Точка, а не число: в баре важно «есть новое», а сколько именно —
-            // видно в самой шторке, и двузначное число здесь пришлось бы жать.
-            <span
-              className="absolute top-1.5 right-1.5 size-2 rounded-full bg-primary ring-2 ring-background"
-              aria-hidden="true"
-            />
-          )}
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="end" className="w-88 p-0">
+      <SidebarMenuItem>
+        <PopoverTrigger asChild>
+          <SidebarMenuButton
+            tooltip="Уведомления"
+            aria-label={unread > 0 ? `Уведомления: непрочитанных ${unread}` : 'Уведомления'}
+          >
+            <span className="relative flex items-center">
+              <Bell className="size-4" />
+              {/* Точка на значке дублирует число сбоку и нужна ровно в свёрнутой
+                панели: там строка ужимается до значка, а счётчик прячется своим
+                `group-data-[collapsible=icon]:hidden`, и сигнал пропал бы вместе с
+                ним. */}
+              {unread > 0 && (
+                <span
+                  className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary"
+                  aria-hidden="true"
+                />
+              )}
+            </span>
+            <span>Уведомления</span>
+          </SidebarMenuButton>
+        </PopoverTrigger>
+        {/* Число, а не точка: в панели для него есть место, а «сколько именно» —
+          первое, что спрашивают. Трёхзначное жмётся в «99+». */}
+        {unread > 0 && <SidebarMenuBadge>{unread > 99 ? '99+' : unread}</SidebarMenuBadge>}
+      </SidebarMenuItem>
+      {/* Шторка открывается СБОКУ от панели: снизу она упёрлась бы в край окна —
+        личный ярус и так стоит у нижней кромки. */}
+      <PopoverContent side="right" align="end" className="w-88 p-0">
         <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
           <span className="text-sm font-semibold">Уведомления</span>
           {unread > 0 && (

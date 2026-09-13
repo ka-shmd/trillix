@@ -12,6 +12,8 @@ import {
 } from '@tanstack/react-router'
 
 import type { Notification, NotificationFeed } from '../../entities/notification'
+import { SidebarMenu, SidebarProvider } from '@/components/ui/sidebar'
+
 import { groupByWorkspace } from './grouping'
 import { NotificationsBell } from './NotificationsBell'
 
@@ -53,7 +55,14 @@ async function renderBell(feed: NotificationFeed) {
   const rootRoute = createRootRoute({
     component: () => (
       <QueryClientProvider client={qc}>
-        <NotificationsBell />
+        {/* Пункт живёт строкой меню сайдбара, поэтому и в тесте он внутри панели:
+          `SidebarMenuButton` спрашивает состояние панели (свёрнута ли) ради
+          подсказки. */}
+        <SidebarProvider>
+          <SidebarMenu>
+            <NotificationsBell />
+          </SidebarMenu>
+        </SidebarProvider>
         <Outlet />
       </QueryClientProvider>
     ),
@@ -106,6 +115,17 @@ describe('колокольчик', () => {
   it('непрочитанные помечены точкой и названы в имени кнопки', async () => {
     await renderBell({ items: [row()], unread: 1 })
     expect(screen.getByRole('button', { name: 'Уведомления: непрочитанных 1' })).toBeTruthy()
+  })
+
+  // Число видно сразу, не открывая шторку: в панели для него есть место, и «сколько
+  // именно» — первое, что спрашивают. Трёхзначное жмётся, чтобы не рвать строку.
+  it('показывает число непрочитанных значком', async () => {
+    await renderBell({ items: [row()], unread: 7 })
+    expect(screen.getByText('7')).toBeTruthy()
+    cleanup()
+
+    await renderBell({ items: [row()], unread: 140 })
+    expect(screen.getByText('99+')).toBeTruthy()
   })
 
   it('без непрочитанных кнопка не обещает нового', async () => {
