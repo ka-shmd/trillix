@@ -343,6 +343,27 @@ func (q *Queries) ClearSheetQueue(ctx context.Context, linkID uuid.UUID) error {
 	return err
 }
 
+const clearUnreadNotifications = `-- name: ClearUnreadNotifications :execrows
+DELETE FROM notifications
+WHERE kind = $1::text AND subject_id = $2::uuid AND read_at IS NULL
+`
+
+type ClearUnreadNotificationsParams struct {
+	Kind      string
+	SubjectID uuid.UUID
+}
+
+// Отбой: повод-препятствие снят (цель починена, включена или удалена), и
+// непрочитанные строки о нём гаснут. Прочитанные остаются историей — они честно
+// описывают, что тогда было.
+func (q *Queries) ClearUnreadNotifications(ctx context.Context, arg ClearUnreadNotificationsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, clearUnreadNotifications, arg.Kind, arg.SubjectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const clearWebhookQueue = `-- name: ClearWebhookQueue :exec
 DELETE FROM webhook_queue WHERE webhook_id = $1
 `
@@ -584,6 +605,22 @@ func (q *Queries) CountSubmissionsInPeriod(ctx context.Context, arg CountSubmiss
 	var column_1 int64
 	err := row.Scan(&column_1)
 	return column_1, err
+}
+
+const countUnreadNotifications = `-- name: CountUnreadNotifications :one
+SELECT count(*)
+FROM notifications n
+JOIN workspace_members m ON m.workspace_id = n.workspace_id AND m.user_id = n.user_id
+WHERE n.user_id = $1::uuid AND n.read_at IS NULL
+`
+
+// Число на колокольчике. Тот же сторож членства, что у ленты; идёт по частичному
+// UNIQUE idx_notifications_live.
+func (q *Queries) CountUnreadNotifications(ctx context.Context, userID uuid.UUID) (int64, error) {
+	row := q.db.QueryRow(ctx, countUnreadNotifications, userID)
+	var count int64
+	err := row.Scan(&count)
+	return count, err
 }
 
 const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
@@ -4149,6 +4186,64 @@ func (q *Queries) InsertIntegrationDelivery(ctx context.Context, arg InsertInteg
 	return err
 }
 
+const insertNotifications = `-- name: InsertNotifications :exec
+
+WITH recipients AS (
+    -- Два unnest в одной проекции идут парами (zip), а не декартовым произведением:
+    -- массивы приходят одной длины — id строки на получателя.
+    SELECT unnest($6::uuid[]) AS id, unnest($7::uuid[]) AS user_id
+)
+INSERT INTO notifications (id, user_id, workspace_id, kind, form_id, subject_id, payload)
+SELECT r.id, r.user_id, $1::uuid, $2::text, $3::uuid,
+       $4::uuid, $5::jsonb
+FROM recipients r
+ON CONFLICT (user_id, kind, subject_id) WHERE read_at IS NULL
+DO UPDATE SET
+    count = CASE WHEN notifications.payload->>'period' IS NOT DISTINCT FROM excluded.payload->>'period'
+                 THEN notifications.count + 1 ELSE 1 END,
+    first_at = CASE WHEN notifications.payload->>'period' IS NOT DISTINCT FROM excluded.payload->>'period'
+                    THEN notifications.first_at ELSE now() END,
+    last_at = now(),
+    payload = excluded.payload
+`
+
+type InsertNotificationsParams struct {
+	WorkspaceID uuid.UUID
+	Kind        string
+	FormID      pgtype.UUID
+	SubjectID   uuid.UUID
+	Payload     []byte
+	Ids         []uuid.UUID
+	Users       []uuid.UUID
+}
+
+// Запросы модуля notify. Схема — migrations/0066_notifications. Генерация: `make sqlc`.
+// Постановка повода ВСЕМ адресатам одним утверждением: пары «id строки —
+// получатель» приезжают массивами, и число участников не превращается в число
+// запросов. Идентификаторы генерит Go (UUIDv7, domain.NewID) — gen_random_uuid()
+// дал бы v4 против ADR.
+//
+// ON CONFLICT — коалесинг в непрочитанное (частичный UNIQUE): повтор повода не
+// плодит строку, а растит счётчик и обновляет снимок (форму переименовали —
+// непрочитанная строка догоняет имя на следующем событии).
+//
+// Ветка CASE разрывает склейку на границе ПЕРИОДА: payload.period есть только у
+// over_quota, и непрочитанная строка прошлого месяца не должна копить счётчик
+// дальше. У остальных поводов оба значения NULL, IS NOT DISTINCT FROM даёт true,
+// и склейка обычная — отдельной ветки по kind не нужно.
+func (q *Queries) InsertNotifications(ctx context.Context, arg InsertNotificationsParams) error {
+	_, err := q.db.Exec(ctx, insertNotifications,
+		arg.WorkspaceID,
+		arg.Kind,
+		arg.FormID,
+		arg.SubjectID,
+		arg.Payload,
+		arg.Ids,
+		arg.Users,
+	)
+	return err
+}
+
 const insertSheetQueued = `-- name: InsertSheetQueued :exec
 INSERT INTO sheet_queue (link_id, submission_id) VALUES ($1, $2)
 ON CONFLICT DO NOTHING
@@ -5173,6 +5268,76 @@ func (q *Queries) ListKnownDevices(ctx context.Context, userID uuid.UUID) ([]Lis
 	return items, nil
 }
 
+const listNotifications = `-- name: ListNotifications :many
+SELECT n.id, n.workspace_id, w.name AS workspace_name, w.slug AS workspace_slug,
+       n.kind, n.subject_id, n.payload, n.count, n.first_at, n.last_at, n.read_at
+FROM notifications n
+JOIN workspace_members m ON m.workspace_id = n.workspace_id AND m.user_id = n.user_id
+JOIN workspaces w ON w.id = n.workspace_id
+WHERE n.user_id = $1::uuid
+  AND ($2::uuid IS NULL OR n.id < $2::uuid)
+ORDER BY n.id DESC
+LIMIT $3::int
+`
+
+type ListNotificationsParams struct {
+	UserID uuid.UUID
+	Cursor pgtype.UUID
+	Lim    int32
+}
+
+type ListNotificationsRow struct {
+	ID            uuid.UUID
+	WorkspaceID   uuid.UUID
+	WorkspaceName string
+	WorkspaceSlug string
+	Kind          string
+	SubjectID     uuid.UUID
+	Payload       []byte
+	Count         int32
+	FirstAt       pgtype.Timestamptz
+	LastAt        pgtype.Timestamptz
+	ReadAt        pgtype.Timestamptz
+}
+
+// Лента пользователя: все его пространства разом, новые сверху, курсор по id.
+//
+// JOIN на workspace_members — не украшение и не оптимизация: строка адресована
+// человеку когда-то, а членство с тех пор могло кончиться, и выгнанный участник не
+// вправе видеть даже названий форм (инвариант 1). Гашение его строк при исключении
+// — уборка, а гарантия — этот JOIN.
+func (q *Queries) ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]ListNotificationsRow, error) {
+	rows, err := q.db.Query(ctx, listNotifications, arg.UserID, arg.Cursor, arg.Lim)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListNotificationsRow
+	for rows.Next() {
+		var i ListNotificationsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.WorkspaceID,
+			&i.WorkspaceName,
+			&i.WorkspaceSlug,
+			&i.Kind,
+			&i.SubjectID,
+			&i.Payload,
+			&i.Count,
+			&i.FirstAt,
+			&i.LastAt,
+			&i.ReadAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listOrphanSubmissionFiles = `-- name: ListOrphanSubmissionFiles :many
 SELECT id, object_key
 FROM submission_files
@@ -6127,6 +6292,19 @@ func (q *Queries) LockSlot(ctx context.Context, dollar_1 string) error {
 	return err
 }
 
+const markAllNotificationsRead = `-- name: MarkAllNotificationsRead :execrows
+UPDATE notifications SET read_at = now()
+WHERE user_id = $1::uuid AND read_at IS NULL
+`
+
+func (q *Queries) MarkAllNotificationsRead(ctx context.Context, userID uuid.UUID) (int64, error) {
+	result, err := q.db.Exec(ctx, markAllNotificationsRead, userID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const markEmailVerified = `-- name: MarkEmailVerified :exec
 UPDATE users SET email_verified_at = now() WHERE id = $1
 `
@@ -6223,6 +6401,49 @@ type MarkIntegrationAccountAccessLostParams struct {
 func (q *Queries) MarkIntegrationAccountAccessLost(ctx context.Context, arg MarkIntegrationAccountAccessLostParams) error {
 	_, err := q.db.Exec(ctx, markIntegrationAccountAccessLost, arg.ID, arg.AccessLostAt)
 	return err
+}
+
+const markNotificationsRead = `-- name: MarkNotificationsRead :execrows
+UPDATE notifications SET read_at = now()
+WHERE user_id = $1::uuid AND read_at IS NULL AND id = ANY($2::uuid[])
+`
+
+type MarkNotificationsReadParams struct {
+	UserID uuid.UUID
+	Ids    []uuid.UUID
+}
+
+// Прочтение названных строк. Чужие не трогаются (user_id в условии), уже
+// прочитанные не переписываются — иначе повтор сдвигал бы им срок уборки.
+func (q *Queries) MarkNotificationsRead(ctx context.Context, arg MarkNotificationsReadParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markNotificationsRead, arg.UserID, arg.Ids)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const markNotificationsReadBySubject = `-- name: MarkNotificationsReadBySubject :execrows
+UPDATE notifications SET read_at = now()
+WHERE user_id = $1::uuid AND kind = $2::text
+  AND subject_id = $3::uuid AND read_at IS NULL
+`
+
+type MarkNotificationsReadBySubjectParams struct {
+	UserID    uuid.UUID
+	Kind      string
+	SubjectID uuid.UUID
+}
+
+// Прочтение «по субъекту»: человек открыл таблицу ответов формы, и повод о новых
+// ответах именно этой формы гаснет сам. Это единственный вид отметки, который
+// ставит не нажатие в шторке, а приход человека туда, куда повод звал.
+func (q *Queries) MarkNotificationsReadBySubject(ctx context.Context, arg MarkNotificationsReadBySubjectParams) (int64, error) {
+	result, err := q.db.Exec(ctx, markNotificationsReadBySubject, arg.UserID, arg.Kind, arg.SubjectID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const markOutboxFailed = `-- name: MarkOutboxFailed :exec
@@ -6517,6 +6738,28 @@ WHERE expires_at < now() OR revoked_at IS NOT NULL
 // каждое «создать новую» и после отзыва не нужны никому.
 func (q *Queries) PurgeExpiredJoinLinks(ctx context.Context) (int64, error) {
 	result, err := q.db.Exec(ctx, purgeExpiredJoinLinks)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
+const purgeNotifications = `-- name: PurgeNotifications :execrows
+DELETE FROM notifications
+WHERE (read_at IS NOT NULL AND read_at < $1::timestamptz)
+   OR (read_at IS NULL AND first_at < $2::timestamptz)
+`
+
+type PurgeNotificationsParams struct {
+	ReadBefore   pgtype.Timestamptz
+	UnreadBefore pgtype.Timestamptz
+}
+
+// Уборка по возрасту: прочитанные живут короче непрочитанных. Индекса под ветку
+// read_at нет — OR всё равно сведёт план к одному проходу, а таблица держится
+// маленькой коалесингом и самой этой уборкой (гоняется раз в час).
+func (q *Queries) PurgeNotifications(ctx context.Context, arg PurgeNotificationsParams) (int64, error) {
+	result, err := q.db.Exec(ctx, purgeNotifications, arg.ReadBefore, arg.UnreadBefore)
 	if err != nil {
 		return 0, err
 	}

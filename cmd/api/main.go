@@ -38,6 +38,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/integrations"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/media"
+	"github.com/ka-shmd/trillix/internal/notify"
 	"github.com/ka-shmd/trillix/internal/oauth"
 	"github.com/ka-shmd/trillix/internal/periodic"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -521,6 +522,11 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// который сохраняют как шаблон, и завести форму из шаблона — оба права
 	// проверяет сам formsSvc. Флаг администратора спрашивается у auth: колонка
 	// живёт у users, и читать чужую таблицу модуль не вправе.
+	// Уведомления кабинета (ADR §10). Права спрашиваются у workspaces: повод
+	// адресуется всем, кому можно ДЕЙСТВИЕ повода. Продюсеров у сервиса пока нет —
+	// слайс A даёт таблицу, реестр и уборщик; ставить поводы начнут следующие
+	// слайсы (приём ответа и доставщики интеграций).
+	notifySvc := notify.NewService(pool, notify.Repo{}, workspacesSvc)
 	templatesSvc := templates.NewService(pool, templates.Repo{}, workspacesSvc, formsSvc, authSvc)
 	templatesHandler := templates.NewHandler(templatesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
@@ -1005,6 +1011,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			}
 			if n > 0 {
 				log.Info("webhook queue rows expired", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
+	// Уведомления стареют: у ленты, в отличие от производного состояния, нет
+	// способа забыть самой (ADR §10). Сроки — в internal/notify.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "notification-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			n, err := notifySvc.Cleanup(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("notifications purged", slog.Int64("count", n))
 			}
 			return nil
 		},

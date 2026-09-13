@@ -124,8 +124,9 @@ CREATE UNIQUE INDEX idx_notifications_live
 
 -- Лента пользователя: новые сверху, курсор по id (UUIDv7 монотонен по времени).
 CREATE INDEX idx_notifications_feed ON notifications (user_id, id DESC);
--- Счётчик непрочитанных на колокольчике и уборка прочитанных.
-CREATE INDEX idx_notifications_unread ON notifications (user_id) WHERE read_at IS NULL;
+-- Уборка по возрасту. Отдельного индекса под счётчик непрочитанных не нужно: его
+-- обслуживает частичный UNIQUE выше (уточнено при реализации слайса A).
+CREATE INDEX idx_notifications_age ON notifications (first_at);
 ```
 
 **Строка адресована человеку, а не пространству.** «Прочитано» — личное: то, что я посмотрел,
