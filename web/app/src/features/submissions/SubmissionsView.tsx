@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useInfiniteQuery, useQuery } from '@tanstack/react-query'
 import { Download } from 'lucide-react'
 
-import { answerColumns, previewColumns, versionsDiffer } from './columns'
+import { answerColumns, previewColumns } from './columns'
 import { submissionsListQueryOptions } from './queries'
 import { submissionsExportUrl, type SubmissionsKind } from './api'
 import { SubmissionPanel } from './SubmissionPanel'
@@ -104,7 +104,6 @@ export function SubmissionsView({ slug, kind }: { slug: string; kind: Submission
             rows={submissions.map(listRow)}
             columns={previewColumns(columns)}
             files={files}
-            showVersion={versionsDiffer(submissions)}
             formId={formId ?? ''}
             onOpen={openRow}
           />

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import { textFromString, type Block } from '@entities/formSchema'
 
-import { answerColumns, versionsDiffer } from './columns'
+import { answerColumns } from './columns'
 
 const block = (over: Partial<Block>): Block =>
   ({
@@ -48,24 +48,5 @@ describe('answerColumns', () => {
   it('безымянный вопрос называет честно, а не пустой строкой', () => {
     // Пустая шапка колонки читается как поломка вёрстки, а не как «вопрос не назван».
     expect(answerColumns([block({ id: 'blk_e', type: 'email' })])[0]!.label).toBe('(без названия)')
-  })
-})
-
-describe('versionsDiffer', () => {
-  it('одинаковые версии колонку не показывают', () => {
-    // Столбец одинаковых чисел отнимает место у вопросов и не сообщает ничего.
-    expect(versionsDiffer([{ formVersion: 3 }, { formVersion: 3 }])).toBe(false)
-  })
-
-  it('единственная строка колонку не показывает', () => {
-    expect(versionsDiffer([{ formVersion: 3 }])).toBe(false)
-  })
-
-  it('разные версии колонку показывают', () => {
-    expect(versionsDiffer([{ formVersion: 3 }, { formVersion: 2 }])).toBe(true)
-  })
-
-  it('пустой список колонку не показывает', () => {
-    expect(versionsDiffer([])).toBe(false)
   })
 })
