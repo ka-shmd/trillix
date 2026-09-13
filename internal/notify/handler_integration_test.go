@@ -443,3 +443,72 @@ func TestDelete_RequiresCSRF(t *testing.T) {
 		t.Error("лента всё-таки очистилась")
 	}
 }
+
+// Лента сортируется по СВЕЖЕСТИ СОБЫТИЯ, а не по возрасту строки: склеенная строка,
+// получившая новое событие, поднимается наверх. По id она осталась бы внизу —
+// id это момент первого события склейки, — и человек читал бы «минуту назад» под
+// строкой, лежащей ниже вчерашней.
+func TestFeedHTTP_OrdersByLastEvent(t *testing.T) {
+	resetDB(t)
+	srv := feedStack(t)
+	c, user := registered(t, srv, "order@example.com")
+	ws := workspaceOf(t, user)
+	first := formIn(t, ws, "Первая", "first")
+	second := formIn(t, ws, "Вторая", "second")
+
+	raise(t, user, ws, first, "Первая", "first")
+	raise(t, user, ws, second, "Вторая", "second")
+	// Новый ответ по первой форме склеивается в её строку и поднимает её наверх.
+	raise(t, user, ws, first, "Первая", "first")
+
+	body := getFeed(t, c, srv, "")
+	if len(body.Items) != 2 {
+		t.Fatalf("строк %d, ожидалось 2", len(body.Items))
+	}
+	if body.Items[0].Text != "Первая — 2 новых ответа" {
+		t.Fatalf("сверху %q, ожидалась строка с последним событием", body.Items[0].Text)
+	}
+	if body.Items[1].Text != "Вторая — 1 новый ответ" {
+		t.Errorf("вторая строка = %q", body.Items[1].Text)
+	}
+}
+
+// Курсор продолжает ленту ровно с того места, где кончилась страница, — и не
+// зацикливает её на первой странице.
+func TestFeedHTTP_CursorContinuesByLastEvent(t *testing.T) {
+	resetDB(t)
+	srv := feedStack(t)
+	c, user := registered(t, srv, "order2@example.com")
+	ws := workspaceOf(t, user)
+	for _, name := range []string{"a", "b", "c"} {
+		raise(t, user, ws, formIn(t, ws, name, name), name, name)
+	}
+
+	first := getFeed(t, c, srv, "?limit=2")
+	if len(first.Items) != 2 || first.NextCursor == "" {
+		t.Fatalf("первая страница = %+v", first)
+	}
+	second := getFeed(t, c, srv, "?limit=2&cursor="+url.QueryEscape(first.NextCursor))
+	if len(second.Items) != 1 {
+		t.Fatalf("вторая страница = %+v", second)
+	}
+	if second.Items[0].ID == first.Items[0].ID || second.Items[0].ID == first.Items[1].ID {
+		t.Error("вторая страница повторила строку первой — курсор не двигается")
+	}
+}
+
+// Неразбираемый курсор — 422, а не тихая первая страница.
+func TestFeedHTTP_BadCursor(t *testing.T) {
+	resetDB(t)
+	srv := feedStack(t)
+	c, _ := registered(t, srv, "badcursor@example.com")
+
+	resp, err := c.Get(srv.URL + "/api/v1/notifications?cursor=вчера")
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("статус %d, ожидалось 422", resp.StatusCode)
+	}
+}

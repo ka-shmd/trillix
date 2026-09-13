@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"time"
 
 	"github.com/google/uuid"
@@ -11,6 +12,7 @@ import (
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
+	"github.com/ka-shmd/trillix/internal/httpserver"
 )
 
 // Member — участник пространства.
@@ -151,7 +153,7 @@ func (s *Service) TransferOwnership(ctx context.Context, actorID, workspaceID, n
 	// уникальный индекс (0016) не даёт второго владельца, поэтому повышать до
 	// понижения нельзя. Ноль строк на любой половине откатывает обе — состояние
 	// «пространство без владельца» невыразимо индексом и недопустимо по TD-53.
-	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+	if err := s.tx.WithTx(ctx, func(tx pgx.Tx) error {
 		n, e := s.repo.DemoteOwner(ctx, tx, workspaceID, actorID)
 		if e != nil {
 			return e
@@ -169,5 +171,22 @@ func (s *Service) TransferOwnership(ctx context.Context, actorID, workspaceID, n
 			return fmt.Errorf("%w: этот человек не состоит в пространстве", domain.ErrValidation)
 		}
 		return nil
-	})
+	}); err != nil {
+		return err
+	}
+
+	// Поводы о превышении квоты адресованы тому, кому можно видеть тариф, а это
+	// право только что переехало. Гасим их у ВСЕХ адресатов разом: у прежнего
+	// владельца строка стала чужой новостью, а новому она и не приходила — следующий
+	// сверхлимитный ответ поднимет повод заново, уже ему.
+	//
+	// После коммита и best-effort: откат вернул бы владение, но не вернул бы
+	// погашенные строки, а ронять передачу владения из-за уведомления нельзя.
+	if s.notes != nil {
+		if err := s.notes.ClearOverQuota(ctx, workspaceID); err != nil {
+			httpserver.LoggerFrom(ctx).Warn("over quota notifications not cleared after transfer",
+				slog.String("workspace_id", workspaceID.String()), slog.String("error", err.Error()))
+		}
+	}
+	return nil
 }

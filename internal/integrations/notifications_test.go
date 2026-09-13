@@ -2,6 +2,7 @@ package integrations_test
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"strings"
 	"testing"
@@ -205,5 +206,50 @@ func TestDelivery_WithoutNotifications(t *testing.T) {
 
 	if store.brokenWith == "" {
 		t.Fatal("связка не сломалась — сценарий не тот")
+	}
+}
+
+// Переезд связки на другую таблицу лечит поломку записью самой цели — значит,
+// снимает и повод. Без переноса накопленных (тумблер по умолчанию выключен) —
+// то есть самым обычным путём починки.
+func TestRetargetWithoutBackfill_ClearsNotice(t *testing.T) {
+	link := noticedSheet()
+	link.SpreadsheetID, link.SheetID = "ss-old", 5
+	store := &fakeStore{link: link, conn: sealedConn(t)}
+	notes := &fakeNotes{}
+	svc := newFormService(fakeAccess{}, store,
+		fakeForms{form: linkedForm(), version: json.RawMessage(oneQuestionSchema)}, &fakeProvider{}).
+		WithNotifications(notes)
+
+	err := svc.UpdateConnection(context.Background(), testUser, testForm, link.ID,
+		integrations.ConnectionPatch{
+			Name:   "Новый лист",
+			Target: integrations.ConnectOptions{SpreadsheetID: "", Backfill: false},
+		})
+	if err != nil {
+		t.Fatalf("переезд: %v", err)
+	}
+	if store.retargeted == nil {
+		t.Fatal("связка не переехала — сценарий не тот")
+	}
+	if len(notes.cleared) != 1 || notes.cleared[0] != link.ID {
+		t.Fatalf("отбой не сработал: %v", notes.cleared)
+	}
+}
+
+// Отключение аккаунта уносит связки каскадом БД — поводы о них гаснут явно: у
+// строки уведомления внешнего ключа на цель нет, и сама она не ушла бы.
+func TestDisconnectAccount_ClearsNoticesOfItsLinks(t *testing.T) {
+	first, second := uuid.New(), uuid.New()
+	store := &fakeStore{conn: sealedConn(t), accountLinks: []uuid.UUID{first, second}}
+	notes := &fakeNotes{}
+	svc := newFormService(fakeAccess{}, store, fakeForms{}, &fakeProvider{}).
+		WithNotifications(notes)
+
+	if err := svc.Disconnect(context.Background(), testUser, uuid.New()); err != nil {
+		t.Fatalf("отключение аккаунта: %v", err)
+	}
+	if len(notes.cleared) != 2 || notes.cleared[0] != first || notes.cleared[1] != second {
+		t.Fatalf("погашены поводы %v, ожидались обе связки аккаунта", notes.cleared)
 	}
 }

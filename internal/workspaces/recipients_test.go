@@ -69,3 +69,43 @@ func TestRecipients_StoreError(t *testing.T) {
 		t.Fatal("ошибка состава обязана дойти до вызывающего")
 	}
 }
+
+// fakeNotes — уведомления кабинета в тестах прав.
+type fakeNotes struct {
+	clearedQuota []uuid.UUID
+	err          error
+}
+
+func (f *fakeNotes) ClearOverQuota(_ context.Context, workspaceID uuid.UUID) error {
+	f.clearedQuota = append(f.clearedQuota, workspaceID)
+	return f.err
+}
+
+// Передача владения гасит поводы о квоте: право видеть тариф только что переехало,
+// и счёт за него у прежнего владельца — чужая новость.
+func TestTransferOwnership_ClearsQuotaNotices(t *testing.T) {
+	ws, newOwner := uuid.New(), uuid.New()
+	store := &fakeStore{demotedRows: 1, promotedRows: 1}
+	notes := &fakeNotes{}
+	svc, _ := newTestService(store, &fakePlans{allowed: true})
+	svc = svc.WithNotifications(notes)
+
+	if err := svc.TransferOwnership(context.Background(), uuid.New(), ws, newOwner); err != nil {
+		t.Fatalf("передача владения: %v", err)
+	}
+	if len(notes.clearedQuota) != 1 || notes.clearedQuota[0] != ws {
+		t.Fatalf("отбой поводов о квоте не сработал: %+v", notes.clearedQuota)
+	}
+}
+
+// Сбой отбоя передачу владения не роняет: владение уже переехало, и откатывать его
+// из-за уведомления нельзя.
+func TestTransferOwnership_NoticeFailureDoesNotFail(t *testing.T) {
+	store := &fakeStore{demotedRows: 1, promotedRows: 1}
+	svc, _ := newTestService(store, &fakePlans{allowed: true})
+	svc = svc.WithNotifications(&fakeNotes{err: errors.New("боль")})
+
+	if err := svc.TransferOwnership(context.Background(), uuid.New(), uuid.New(), uuid.New()); err != nil {
+		t.Fatalf("сбой отбоя уронил передачу владения: %v", err)
+	}
+}

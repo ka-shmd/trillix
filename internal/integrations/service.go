@@ -40,6 +40,9 @@ type Store interface {
 	InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error
 	ListLinks(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]FormLink, error)
 	DeleteLink(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
+	// LinkIDsByAccount — связки аккаунта: нужны отбою поводов перед тем, как их
+	// унесёт каскад отключения.
+	LinkIDsByAccount(ctx context.Context, db postgres.DBTX, accountID uuid.UUID) ([]uuid.UUID, error)
 	UpdateLinkSettings(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, name string, enabled bool) (int64, error)
 	UpdateLinkTarget(ctx context.Context, db postgres.DBTX, id, formID, accountID uuid.UUID, sheet Spreadsheet, columns []domain.SheetColumn) (int64, error)
 	GetLinkByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (FormLink, error)
@@ -334,6 +337,17 @@ func (s *Service) Disconnect(ctx context.Context, userID, accountID uuid.UUID) e
 		return domain.ErrNotFound
 	}
 
+	// Id связок читаются ДО удаления: каскад БД унесёт их вместе с аккаунтом, а у
+	// строки уведомления внешнего ключа на цель нет (субъект разного вида), и без
+	// этого списка поводы о несуществующих связках висели бы до уборщика.
+	// Прав здесь не проверяем — это делает сам Delete ниже, и до отбоя дело дойдёт
+	// только после его успеха.
+	linkIDs, linksErr := s.repo.LinkIDsByAccount(ctx, s.db, accountID)
+	if linksErr != nil {
+		httpserver.LoggerFrom(ctx).Warn("links of account not listed before disconnect",
+			slog.String("account_id", accountID.String()), slog.String("error", linksErr.Error()))
+	}
+
 	sealed, err := s.repo.Delete(ctx, s.db, accountID, userID)
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Отключать нечего — уже отключено (или аккаунт чужой, что снаружи
@@ -343,6 +357,10 @@ func (s *Service) Disconnect(ctx context.Context, userID, accountID uuid.UUID) e
 	}
 	if err != nil {
 		return fmt.Errorf("disconnect integration: %w", err)
+	}
+	// Связок больше нет — нет и препятствия: человек отключил аккаунт сам.
+	for _, id := range linkIDs {
+		s.noticeFixed(ctx, id)
 	}
 
 	refresh, err := openToken(s.key, sealed)
@@ -1109,6 +1127,11 @@ func (s *Service) retarget(ctx context.Context, userID uuid.UUID, link FormLink,
 	if _, err := s.repo.UpdateLinkTarget(ctx, s.db, link.ID, formID, conn.ID, sheet, columns); err != nil {
 		return err
 	}
+	// Запись цели снимает поломку (status='live' в самом утверждении) — значит,
+	// снимает и повод о ней. Отбой стоит ЗДЕСЬ, а не только в refillQueue ниже:
+	// перенос накопленных у существующей связки по умолчанию выключен, то есть
+	// самый обычный путь починки «выбрать другую таблицу» проходил мимо него.
+	s.noticeFixed(ctx, link.ID)
 	if !target.Backfill {
 		// Ответы, ждавшие прежнюю цель, остаются в очереди и поедут в новую: они
 		// не доставлены никуда, и терять их переезд не повод. «Не переносить

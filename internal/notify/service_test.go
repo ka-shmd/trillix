@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strconv"
 	"testing"
 	"time"
 
@@ -31,13 +32,14 @@ type clearCall struct {
 }
 
 type fakeStore struct {
-	inserted  []Insertion
-	insertErr error
-	cleared   []clearCall
-	rows      []Stored
-	listLimit int32
-	listErr   error
-	unread    int64
+	inserted   []Insertion
+	insertErr  error
+	cleared    []clearCall
+	rows       []Stored
+	listLimit  int32
+	listCursor Cursor
+	listErr    error
+	unread     int64
 
 	markedIDs  []uuid.UUID
 	markedAll  int
@@ -58,7 +60,8 @@ func (f *fakeStore) ClearUnread(_ context.Context, _ postgres.DBTX, kind string,
 	return 1, nil
 }
 
-func (f *fakeStore) List(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, limit int32) ([]Stored, error) {
+func (f *fakeStore) List(_ context.Context, _ postgres.DBTX, _ uuid.UUID, cursor Cursor, limit int32) ([]Stored, error) {
+	f.listCursor = cursor
 	f.listLimit = limit
 	if f.listErr != nil {
 		return nil, f.listErr
@@ -248,7 +251,7 @@ func TestFeed_RendersRows(t *testing.T) {
 	}
 	svc := newTestService(&fakeAccess{}, store)
 
-	page, err := svc.Feed(context.Background(), uuid.New(), uuid.Nil, 20)
+	page, err := svc.Feed(context.Background(), uuid.New(), "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -272,7 +275,7 @@ func TestFeed_RendersRows(t *testing.T) {
 	if page.Unread != 2 {
 		t.Errorf("непрочитанных %d, ожидалось 2", page.Unread)
 	}
-	if page.NextCursor != uuid.Nil {
+	if page.NextCursor != "" {
 		t.Error("страница последняя — курсора быть не должно")
 	}
 }
@@ -285,7 +288,7 @@ func TestFeed_SkipsUnknownKind(t *testing.T) {
 	good := storedRow(KindNewSubmissions, Payload{FormTitle: "Заявка", FormSlug: "z"}, 1)
 	svc := newTestService(&fakeAccess{}, &fakeStore{rows: []Stored{bad, good}})
 
-	page, err := svc.Feed(context.Background(), uuid.New(), uuid.Nil, 20)
+	page, err := svc.Feed(context.Background(), uuid.New(), "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -305,7 +308,7 @@ func TestFeed_Pagination(t *testing.T) {
 	store := &fakeStore{rows: rows}
 	svc := newTestService(&fakeAccess{}, store)
 
-	page, err := svc.Feed(context.Background(), uuid.New(), uuid.Nil, 2)
+	page, err := svc.Feed(context.Background(), uuid.New(), "", 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -315,8 +318,41 @@ func TestFeed_Pagination(t *testing.T) {
 	if len(page.Items) != 2 {
 		t.Fatalf("показано %d строк, ожидалось 2", len(page.Items))
 	}
-	if page.NextCursor != rows[1].ID {
-		t.Errorf("курсор = %s, ожидался id последней показанной строки", page.NextCursor)
+	// Курсор — пара «время последнего события и id»: по ней следующая страница
+	// продолжается ровно с того места, где кончилась эта.
+	want := strconv.FormatInt(rows[1].LastAt.UnixNano(), 10) + ":" + rows[1].ID.String()
+	if page.NextCursor != want {
+		t.Errorf("курсор = %q, ожидался %q", page.NextCursor, want)
+	}
+}
+
+// Неразбираемый курсор — отказ, а не тихая первая страница: молча показать начало
+// вместо запрошенного места значит зациклить листание.
+func TestFeed_BadCursorRejected(t *testing.T) {
+	store := &fakeStore{}
+	svc := newTestService(&fakeAccess{}, store)
+
+	if _, err := svc.Feed(context.Background(), uuid.New(), "вчера", 20); err == nil {
+		t.Fatal("ожидался отказ на неразбираемом курсоре")
+	}
+	if _, err := svc.Feed(context.Background(), uuid.New(), "123:не-uuid", 20); err == nil {
+		t.Fatal("ожидался отказ на курсоре с негодным id")
+	}
+}
+
+// Разобранный курсор доезжает до хранилища парой, а не половиной.
+func TestFeed_CursorReachesStore(t *testing.T) {
+	store := &fakeStore{}
+	svc := newTestService(&fakeAccess{}, store)
+	at := time.Date(2026, 9, 13, 12, 0, 0, 0, time.UTC)
+	id := uuid.New()
+
+	cursor := strconv.FormatInt(at.UnixNano(), 10) + ":" + id.String()
+	if _, err := svc.Feed(context.Background(), uuid.New(), cursor, 20); err != nil {
+		t.Fatal(err)
+	}
+	if !store.listCursor.At.Equal(at) || store.listCursor.ID != id {
+		t.Fatalf("до хранилища доехал курсор %+v", store.listCursor)
 	}
 }
 
@@ -324,7 +360,7 @@ func TestFeed_LimitClamped(t *testing.T) {
 	store := &fakeStore{}
 	svc := newTestService(&fakeAccess{}, store)
 
-	if _, err := svc.Feed(context.Background(), uuid.New(), uuid.Nil, 5000); err != nil {
+	if _, err := svc.Feed(context.Background(), uuid.New(), "", 5000); err != nil {
 		t.Fatal(err)
 	}
 	if store.listLimit != MaxPageSize+1 {

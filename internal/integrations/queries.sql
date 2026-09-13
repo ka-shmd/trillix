@@ -96,6 +96,11 @@ JOIN forms f ON f.id = fi.form_id
 WHERE fi.form_id = $1
 ORDER BY fi.id;
 
+-- name: LinkIDsByAccount :many
+-- Связки, которые унесёт каскад при отключении аккаунта. Читаются ДО удаления:
+-- после него узнать их уже негде, а поводам о поломке нужен отбой по каждой.
+SELECT id FROM form_integrations WHERE account_id = $1;
+
 -- name: DeleteFormIntegration :execrows
 -- Удаление ОДНОЙ связки. form_id в условии не украшение: id связки приезжает из
 -- адреса, и связка обязана принадлежать той форме, к которой спрашивают доступ

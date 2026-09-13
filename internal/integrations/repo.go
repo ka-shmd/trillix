@@ -333,6 +333,16 @@ func (Repo) MarkDelivered(ctx context.Context, db postgres.DBTX, id uuid.UUID) e
 	return nil
 }
 
+// LinkIDsByAccount — связки аккаунта (нужны отбою поводов перед каскадом
+// отключения).
+func (Repo) LinkIDsByAccount(ctx context.Context, db postgres.DBTX, accountID uuid.UUID) ([]uuid.UUID, error) {
+	ids, err := postgres.New(db).LinkIDsByAccount(ctx, accountID)
+	if err != nil {
+		return nil, fmt.Errorf("link ids of account %s: %w", accountID, err)
+	}
+	return ids, nil
+}
+
 // ClearError возвращает связку в рабочее состояние: гасит причину и снимает
 // broken. Времени доставки не ставит — её не было.
 func (Repo) ClearError(ctx context.Context, db postgres.DBTX, id uuid.UUID) error {

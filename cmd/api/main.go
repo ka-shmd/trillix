@@ -527,6 +527,10 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// слайс A даёт таблицу, реестр и уборщик; ставить поводы начнут следующие
 	// слайсы (приём ответа и доставщики интеграций).
 	notifySvc := notify.NewService(pool, notify.Repo{}, workspacesSvc)
+	// Обратная связь: передача владения пространством гасит поводы о квоте,
+	// адресованные прежнему владельцу. Сеттером, а не аргументом конструктора —
+	// связь взаимная, и в конструкторах её не собрать.
+	workspacesSvc = workspacesSvc.WithNotifications(notifySvc)
 	templatesSvc := templates.NewService(pool, templates.Repo{}, workspacesSvc, formsSvc, authSvc)
 	templatesHandler := templates.NewHandler(templatesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 

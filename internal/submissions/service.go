@@ -344,15 +344,15 @@ func (s *Service) WithBookings(b Bookings) *Service {
 	return s
 }
 
-// WithFiles подключает модуль файлов ответов. Без него форма с блоком file
-// отвергает ответ с файлами (см. Submit) — молча принять ссылку, которую некому
-// проверить, нельзя.
 // WithNotifications подключает уведомления кабинета.
 func (s *Service) WithNotifications(n Notifications) *Service {
 	s.notes = n
 	return s
 }
 
+// WithFiles подключает модуль файлов ответов. Без него форма с блоком file
+// отвергает ответ с файлами (см. Submit) — молча принять ссылку, которую некому
+// проверить, нельзя.
 func (s *Service) WithFiles(f AnswerFiles) *Service {
 	s.files = f
 	return s

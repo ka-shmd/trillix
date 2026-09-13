@@ -4502,6 +4502,32 @@ func (q *Queries) IsUserAdmin(ctx context.Context, id uuid.UUID) (bool, error) {
 	return is_admin, err
 }
 
+const linkIDsByAccount = `-- name: LinkIDsByAccount :many
+SELECT id FROM form_integrations WHERE account_id = $1
+`
+
+// Связки, которые унесёт каскад при отключении аккаунта. Читаются ДО удаления:
+// после него узнать их уже негде, а поводам о поломке нужен отбой по каждой.
+func (q *Queries) LinkIDsByAccount(ctx context.Context, accountID uuid.UUID) ([]uuid.UUID, error) {
+	rows, err := q.db.Query(ctx, linkIDsByAccount, accountID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []uuid.UUID
+	for rows.Next() {
+		var id uuid.UUID
+		if err := rows.Scan(&id); err != nil {
+			return nil, err
+		}
+		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const listFeedAfter = `-- name: ListFeedAfter :many
 (
     SELECT 'submission'::text AS kind, s.id AS row_id, s.created_at AS at,
@@ -5337,15 +5363,17 @@ FROM notifications n
 JOIN workspace_members m ON m.workspace_id = n.workspace_id AND m.user_id = n.user_id
 JOIN workspaces w ON w.id = n.workspace_id
 WHERE n.user_id = $1::uuid
-  AND ($2::uuid IS NULL OR n.id < $2::uuid)
-ORDER BY n.id DESC
-LIMIT $3::int
+  AND ($2::timestamptz IS NULL
+       OR (n.last_at, n.id) < ($2::timestamptz, $3::uuid))
+ORDER BY n.last_at DESC, n.id DESC
+LIMIT $4::int
 `
 
 type ListNotificationsParams struct {
-	UserID uuid.UUID
-	Cursor pgtype.UUID
-	Lim    int32
+	UserID   uuid.UUID
+	CursorAt pgtype.Timestamptz
+	CursorID pgtype.UUID
+	Lim      int32
 }
 
 type ListNotificationsRow struct {
@@ -5362,14 +5390,25 @@ type ListNotificationsRow struct {
 	ReadAt        pgtype.Timestamptz
 }
 
-// Лента пользователя: все его пространства разом, новые сверху, курсор по id.
+// Лента пользователя: все его пространства разом, свежие сверху.
+//
+// Порядок и курсор — по паре (last_at, id): последнее событие склейки поднимает
+// строку наверх, а id разводит строки с одинаковым last_at (одно событие
+// адресуется всем участникам сразу, и время у их строк совпадает до микросекунды).
+// Сравнение строкой-кортежем, а не двумя условиями: так его берёт индекс
+// idx_notifications_feed.
 //
 // JOIN на workspace_members — не украшение и не оптимизация: строка адресована
 // человеку когда-то, а членство с тех пор могло кончиться, и выгнанный участник не
 // вправе видеть даже названий форм (инвариант 1). Гашение его строк при исключении
 // — уборка, а гарантия — этот JOIN.
 func (q *Queries) ListNotifications(ctx context.Context, arg ListNotificationsParams) ([]ListNotificationsRow, error) {
-	rows, err := q.db.Query(ctx, listNotifications, arg.UserID, arg.Cursor, arg.Lim)
+	rows, err := q.db.Query(ctx, listNotifications,
+		arg.UserID,
+		arg.CursorAt,
+		arg.CursorID,
+		arg.Lim,
+	)
 	if err != nil {
 		return nil, err
 	}

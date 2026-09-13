@@ -40,7 +40,13 @@ DELETE FROM notifications
 WHERE kind = @kind::text AND subject_id = @subject_id::uuid AND read_at IS NULL;
 
 -- name: ListNotifications :many
--- Лента пользователя: все его пространства разом, новые сверху, курсор по id.
+-- Лента пользователя: все его пространства разом, свежие сверху.
+--
+-- Порядок и курсор — по паре (last_at, id): последнее событие склейки поднимает
+-- строку наверх, а id разводит строки с одинаковым last_at (одно событие
+-- адресуется всем участникам сразу, и время у их строк совпадает до микросекунды).
+-- Сравнение строкой-кортежем, а не двумя условиями: так его берёт индекс
+-- idx_notifications_feed.
 --
 -- JOIN на workspace_members — не украшение и не оптимизация: строка адресована
 -- человеку когда-то, а членство с тех пор могло кончиться, и выгнанный участник не
@@ -52,8 +58,9 @@ FROM notifications n
 JOIN workspace_members m ON m.workspace_id = n.workspace_id AND m.user_id = n.user_id
 JOIN workspaces w ON w.id = n.workspace_id
 WHERE n.user_id = @user_id::uuid
-  AND (sqlc.narg(cursor)::uuid IS NULL OR n.id < sqlc.narg(cursor)::uuid)
-ORDER BY n.id DESC
+  AND (sqlc.narg(cursor_at)::timestamptz IS NULL
+       OR (n.last_at, n.id) < (sqlc.narg(cursor_at)::timestamptz, sqlc.narg(cursor_id)::uuid))
+ORDER BY n.last_at DESC, n.id DESC
 LIMIT @lim::int;
 
 -- name: CountUnreadNotifications :one

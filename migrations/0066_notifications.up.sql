@@ -43,8 +43,12 @@ CREATE TABLE notifications (
 CREATE UNIQUE INDEX idx_notifications_live
     ON notifications (user_id, kind, subject_id) WHERE read_at IS NULL;
 
--- Лента пользователя: новые сверху, курсор по id (UUIDv7 монотонен по времени).
-CREATE INDEX idx_notifications_feed ON notifications (user_id, id DESC);
+-- Лента пользователя: свежие сверху. Порядок по last_at, а не по id: id — момент
+-- ПЕРВОГО события склейки, и строка, получившая двенадцатый ответ минуту назад,
+-- лежала бы ниже давно молчащей. Показываем мы тоже last_at, и расходиться порядку
+-- с показанным временем нельзя. id вторым ключом — tie-break курсора: у двух строк
+-- last_at совпадает чаще, чем кажется (одно событие адресуется всем участникам).
+CREATE INDEX idx_notifications_feed ON notifications (user_id, last_at DESC, id DESC);
 
 -- Уборка по возрасту (30 суток прочитанным, 90 непрочитанным): у ленты, в отличие
 -- от производного состояния, нет способа забыть самой.

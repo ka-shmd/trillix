@@ -24,7 +24,7 @@ type Middleware = func(http.Handler) http.Handler
 // feedService — часть сервиса, нужная транспорту. Постановки и отбоя здесь нет:
 // их зовут продюсеры внутри процесса, а не человек из браузера.
 type feedService interface {
-	Feed(ctx context.Context, userID, cursor uuid.UUID, limit int32) (Page, error)
+	Feed(ctx context.Context, userID uuid.UUID, cursor string, limit int32) (Page, error)
 	MarkRead(ctx context.Context, userID uuid.UUID, ids []uuid.UUID) error
 	MarkAllRead(ctx context.Context, userID uuid.UUID) error
 	Delete(ctx context.Context, userID, id uuid.UUID) error
@@ -85,15 +85,9 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return
 	}
-	var cursor uuid.UUID
-	if raw := r.URL.Query().Get("cursor"); raw != "" {
-		id, err := uuid.Parse(raw)
-		if err != nil {
-			httpserver.WriteError(w, r, fmt.Errorf("%w: неверный курсор", domain.ErrValidation))
-			return
-		}
-		cursor = id
-	}
+	// Курсор для транспорта непрозрачен: его формат — дело сервиса, и разбирать
+	// его здесь значило бы знать про порядок ленты в двух местах.
+	cursor := r.URL.Query().Get("cursor")
 	var limit int32
 	if raw := r.URL.Query().Get("limit"); raw != "" {
 		n, err := strconv.Atoi(raw)
@@ -118,11 +112,8 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			FirstAt: it.FirstAt, LastAt: it.LastAt, Read: it.Read,
 		}
 	}
-	resp := feedResponse{Items: items, Unread: page.Unread}
-	if page.NextCursor != uuid.Nil {
-		resp.NextCursor = page.NextCursor.String()
-	}
-	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+	httpserver.WriteJSON(w, r, http.StatusOK,
+		feedResponse{Items: items, Unread: page.Unread, NextCursor: page.NextCursor})
 }
 
 type readRequest struct {

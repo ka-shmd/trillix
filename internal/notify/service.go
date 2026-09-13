@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"fmt"
 	"log/slog"
+	"strconv"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -31,7 +33,7 @@ type Access interface {
 type Store interface {
 	Insert(ctx context.Context, db postgres.DBTX, in Insertion) error
 	ClearUnread(ctx context.Context, db postgres.DBTX, kind string, subjectID uuid.UUID) (int64, error)
-	List(ctx context.Context, db postgres.DBTX, userID, cursor uuid.UUID, limit int32) ([]Stored, error)
+	List(ctx context.Context, db postgres.DBTX, userID uuid.UUID, cursor Cursor, limit int32) ([]Stored, error)
 	CountUnread(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error)
 	MarkRead(ctx context.Context, db postgres.DBTX, userID uuid.UUID, ids []uuid.UUID) (int64, error)
 	MarkAllRead(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (int64, error)
@@ -87,8 +89,10 @@ type Item struct {
 type Page struct {
 	Items  []Item
 	Unread int64
-	// NextCursor — uuid.Nil означает, что страница последняя.
-	NextCursor uuid.UUID
+	// NextCursor — непрозрачная для клиента строка «<наносекунды>:<uuid>»; пустая
+	// означает, что страница последняя. Формат тот же, что у списка форм: ключ
+	// сортировки числом, id разводит равные.
+	NextCursor string
 }
 
 // Service — постановка, отбой и чтение уведомлений.
@@ -174,21 +178,35 @@ func (s *Service) Clear(ctx context.Context, db postgres.DBTX, kind Kind, subjec
 	return nil
 }
 
-// Feed — страница ленты пользователя со счётчиком непрочитанных. cursor uuid.Nil
-// означает первую страницу.
-func (s *Service) Feed(ctx context.Context, userID, cursor uuid.UUID, limit int32) (Page, error) {
+// ClearOverQuota — отбой повода о квоте у пространства. Отдельный метод, а не
+// Clear с ключом: зовёт его workspaces (передача владения), и знать про тип Kind
+// ему для этого не нужно — иначе модуль прав потащил бы за собой реестр поводов.
+func (s *Service) ClearOverQuota(ctx context.Context, workspaceID uuid.UUID) error {
+	return s.Clear(ctx, s.db, KindOverQuota, workspaceID)
+}
+
+// Feed — страница ленты пользователя со счётчиком непрочитанных. Пустой cursor
+// означает первую страницу; неразбираемый — ошибка валидации, а не тихий откат к
+// началу: молча показать первую страницу вместо запрошенной значит зациклить
+// листание.
+func (s *Service) Feed(ctx context.Context, userID uuid.UUID, cursor string, limit int32) (Page, error) {
 	if limit <= 0 || limit > MaxPageSize {
 		limit = MaxPageSize
 	}
+	from, err := parseCursor(cursor)
+	if err != nil {
+		return Page{}, err
+	}
 	// limit+1: по «лишней» строке видно, есть ли следующая страница — тот же приём,
 	// что у списка форм.
-	rows, err := s.repo.List(ctx, s.db, userID, cursor, limit+1)
+	rows, err := s.repo.List(ctx, s.db, userID, from, limit+1)
 	if err != nil {
 		return Page{}, err
 	}
 	page := Page{}
 	if int32(len(rows)) > limit {
-		page.NextCursor = rows[limit-1].ID
+		last := rows[limit-1]
+		page.NextCursor = formatCursor(Cursor{At: last.LastAt, ID: last.ID})
 		rows = rows[:limit]
 	}
 	page.Items = make([]Item, 0, len(rows))
@@ -275,4 +293,29 @@ func (s *Service) DeleteAll(ctx context.Context, userID uuid.UUID) error {
 func (s *Service) Cleanup(ctx context.Context) (int64, error) {
 	now := s.now()
 	return s.repo.Purge(ctx, s.db, now.Add(-ReadRetention), now.Add(-UnreadRetention))
+}
+
+// formatCursor и parseCursor — непрозрачный курсор «<наносекунды>:<uuid>». Формат
+// тот же, что у списка форм: время ключом сортировки, id разводит равные значения.
+func formatCursor(c Cursor) string {
+	return strconv.FormatInt(c.At.UnixNano(), 10) + ":" + c.ID.String()
+}
+
+func parseCursor(raw string) (Cursor, error) {
+	if raw == "" {
+		return Cursor{}, nil
+	}
+	at, id, ok := strings.Cut(raw, ":")
+	if !ok {
+		return Cursor{}, fmt.Errorf("%w: неверный курсор", domain.ErrValidation)
+	}
+	nanos, err := strconv.ParseInt(at, 10, 64)
+	if err != nil {
+		return Cursor{}, fmt.Errorf("%w: неверный курсор", domain.ErrValidation)
+	}
+	rowID, err := uuid.Parse(id)
+	if err != nil {
+		return Cursor{}, fmt.Errorf("%w: неверный курсор", domain.ErrValidation)
+	}
+	return Cursor{At: time.Unix(0, nanos), ID: rowID}, nil
 }

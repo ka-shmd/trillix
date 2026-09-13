@@ -41,6 +41,14 @@ type Stored struct {
 	ReadAt time.Time
 }
 
+// Cursor — место, с которого продолжается лента: пара «время последнего события и
+// id строки». Пары, а не id: порядок ленты идёт по last_at, а он у строк одного
+// события совпадает — id разводит их между собой.
+type Cursor struct {
+	At time.Time
+	ID uuid.UUID
+}
+
 // Repo — доступ к данным уведомлений поверх sqlc. Методы принимают исполнителя
 // (postgres.DBTX): постановка идёт на исполнителе вызывающего, чтение — на пуле.
 type Repo struct{}
@@ -75,13 +83,14 @@ func (Repo) ClearUnread(ctx context.Context, db postgres.DBTX, kind string, subj
 	return n, nil
 }
 
-// List — страница ленты пользователя: до limit строк, новые сверху; cursor
-// uuid.Nil означает первую страницу.
-func (Repo) List(ctx context.Context, db postgres.DBTX, userID, cursor uuid.UUID, limit int32) ([]Stored, error) {
+// List — страница ленты пользователя: до limit строк, свежие сверху. Нулевой
+// cursor.At означает первую страницу.
+func (Repo) List(ctx context.Context, db postgres.DBTX, userID uuid.UUID, cursor Cursor, limit int32) ([]Stored, error) {
 	rows, err := postgres.New(db).ListNotifications(ctx, postgres.ListNotificationsParams{
-		UserID: userID,
-		Cursor: pgtype.UUID{Bytes: cursor, Valid: cursor != uuid.Nil},
-		Lim:    limit,
+		UserID:   userID,
+		CursorAt: pgtype.Timestamptz{Time: cursor.At, Valid: !cursor.At.IsZero()},
+		CursorID: pgtype.UUID{Bytes: cursor.ID, Valid: !cursor.At.IsZero()},
+		Lim:      limit,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("list notifications of %s: %w", userID, err)

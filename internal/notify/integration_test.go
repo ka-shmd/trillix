@@ -246,7 +246,7 @@ func TestFeed_DropsRowsOfFormerMember(t *testing.T) {
 	ctx := context.Background()
 	w.newSubmissions(t)
 
-	page, err := w.svc.Feed(ctx, w.editor, uuid.Nil, 20)
+	page, err := w.svc.Feed(ctx, w.editor, "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -264,7 +264,7 @@ func TestFeed_DropsRowsOfFormerMember(t *testing.T) {
 		`DELETE FROM workspace_members WHERE workspace_id = $1 AND user_id = $2`, w.ws, w.editor); err != nil {
 		t.Fatal(err)
 	}
-	page, err = w.svc.Feed(ctx, w.editor, uuid.Nil, 20)
+	page, err = w.svc.Feed(ctx, w.editor, "", 20)
 	if err != nil {
 		t.Fatal(err)
 	}
