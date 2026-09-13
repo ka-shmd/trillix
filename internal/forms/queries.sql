@@ -411,6 +411,10 @@ DELETE FROM forms
 WHERE id = $1 AND workspace_id = $2;
 
 -- name: GetPublicFormBySlug :one
+-- Публичная выдача формы по slug ВМЕСТЕ С ДОКУМЕНТОМ. Путям, которым документ не
+-- нужен, отвечает GetPublicFormRefBySlug ниже — у него те же отборы и та же мина
+-- про добавленные колонки.
+--
 -- Публичная выдача формы по slug: title + схема последней опубликованной версии +
 -- статус и живые настройки закрытия (фаза 8.5 шаг 4). INNER JOIN по
 -- published_version_id отсекает черновик (у него версии нет) → 0 строк → 404,
@@ -480,6 +484,38 @@ JOIN form_versions fv ON fv.id = f.published_version_id
 -- разбирать. Ноль строк → 404 — тот же ответ, что у черновика, инвариант 5 не
 -- трогается. Джойн INNER и по этой же причине отправляет в 404 формы
 -- осиротевшего пространства (без владельца) — они и так недостижимы (TD-53).
+JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
+JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
+WHERE f.slug = $1;
+
+-- name: GetPublicFormRefBySlug :one
+-- ТА ЖЕ публичная форма, что у соседнего GetPublicFormBySlug, но БЕЗ её документа:
+-- ни схемы версии, ни заголовка (заголовок живёт в документе — см. Service.PublicForm).
+-- Отборы, джойны и смысл колонок совпадают дословно, и расходиться им нельзя: оба
+-- запроса обязаны одинаково отвечать «формы нет» на черновик, на осиротевшее
+-- пространство и на удалённого владельца.
+--
+-- Зачем отдельный запрос (TD-77). `fv.schema` — это JSONB документа формы, то есть
+-- чтение из TOAST на каждый вызов. Вызовов на одного респондента десятки: бикон
+-- визита шлётся на открытие, на каждый переход страницы и на каждое переключение
+-- вкладки, а выдача свободного времени и холд — на каждое движение в пикере. Ни
+-- одному из них схема не нужна: они решают четыре отказа (нет формы, пароль,
+-- закрыта, переиздана) и работают с id. Раньше все они платили за документ, который
+-- тут же выбрасывали.
+--
+-- ⚠ Мина: колонки, добавленные в GetPublicFormBySlug, нужно добавлять и сюда, иначе
+-- узкий путь начнёт решать отказы по неполной строке. Всё, что НЕ про документ,
+-- живёт в PublicFormRef и приезжает обоими запросами.
+SELECT f.id AS form_id, f.workspace_id, fv.version, f.published_version_id,
+    f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title,
+    f.notify_on_submission, f.notify_respondent, f.collect_partial, f.link_preview,
+    f.branding, f.progress, f.auto_jump, f.save_locally, f.allow_back,
+    f.password, f.schedule_id,
+    CASE WHEN f.response_limit IS NOT NULL
+         THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
+         ELSE 0 END::bigint AS submission_count
+FROM forms f
+JOIN form_versions fv ON fv.id = f.published_version_id
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
 WHERE f.slug = $1;

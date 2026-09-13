@@ -376,10 +376,10 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 	// внутренним текстом наружу — респондент видел бы «не удалось разобрать схему:
 	// json: unknown field ...». Обрыв цепочки роняет ошибку в default → 500: текст
 	// скрыт от клиента и залогирован с request_id.
-	schema, err := domain.ValidateSchema(pf.Schema)
-	if err != nil {
-		return fmt.Errorf("parse published schema for %s: %v", slug, err)
+	if pf.ParseErr != nil {
+		return fmt.Errorf("parse published schema for %s: %v", slug, pf.ParseErr)
 	}
+	schema := pf.Parsed
 	// Нормализация вместо голой проверки (фаза 21): условная логика решает, какие
 	// вопросы респондент видел, поэтому обязательность спрашивается только у видимых, а
 	// ответы на скрытое отбрасываются молча — они не попадают ни в базу, ни в CSV, ни в
@@ -994,10 +994,10 @@ func (s *Service) SavePartial(ctx context.Context, slug string, p PartialInput) 
 		return fmt.Errorf("%w: форма переиздана", domain.ErrValidation)
 	}
 
-	schema, err := domain.ValidateSchema(pf.Schema)
-	if err != nil {
-		return fmt.Errorf("parse published schema of %s: %v", slug, err)
+	if pf.ParseErr != nil {
+		return fmt.Errorf("parse published schema of %s: %v", slug, pf.ParseErr)
 	}
+	schema := pf.Parsed
 	answers := domain.FilterDraftAnswers(schema, p.Answers)
 	raw, err := json.Marshal(answers)
 	if err != nil {

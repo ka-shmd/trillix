@@ -145,14 +145,21 @@ type ListRow struct {
 // опубликованной версии. VersionID (id этой версии) иммутабелен и служит ETag'ом.
 // FormID — id самой формы: рендереру не отдаётся, но нужен приёму ответа (модуль
 // submissions привязывает submission к form_id и form_version_id).
-type PublicForm struct {
+// PublicFormRef — публичная форма БЕЗ её документа: всё, чем решаются четыре
+// отказа публичного пути (формы нет → 404, пароль, приём закрыт, форму переиздали),
+// и ничего, что выводится из схемы. Заголовка здесь нет намеренно: он живёт в
+// документе версии (Service.PublicForm), и «заголовок из колонки» был бы вторым,
+// расходящимся ответом на тот же вопрос.
+//
+// Отдельно от документа — потому что схема это JSONB в TOAST, а публичных входов,
+// которым она не нужна, больше, чем тех, кому нужна: бикон визита, выдача
+// свободного времени, холд (TD-77). Их запрос — GetPublicFormRefBySlug.
+type PublicFormRef struct {
 	FormID uuid.UUID
 	// WorkspaceID — владелец формы. Нужен приёму ответа: квота тарифа считается
 	// по воркспейсу (фаза 17). Рендереру не отдаётся.
 	WorkspaceID uuid.UUID
-	Title       string
 	Version     int32
-	Schema      json.RawMessage
 	VersionID   uuid.UUID
 	// Статус и живые настройки закрытия (фаза 8.5 шаг 4): вызывающий вычисляет
 	// FormClosed(Status, CloseAt, ResponseLimit, SubmissionCount, now) и решает —
@@ -214,6 +221,33 @@ type PublicForm struct {
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
 	LinkPreview *domain.LinkPreview
+}
+
+// PublicForm — та же форма ВМЕСТЕ с документом: сырая схема опубликованной версии,
+// её разбор и выведенный из неё заголовок. Встраивает PublicFormRef, поэтому
+// обращения вида pf.FormID работают одинаково на обеих строках.
+type PublicForm struct {
+	PublicFormRef
+	// Title — заголовок, уже разрешённый сервисом: из блока form_title документа,
+	// а при его отсутствии — из колонки forms.title (версии, снятые до фазы 15,
+	// блока не несут).
+	Title string
+	// Schema — сырой JSONB документа опубликованной версии, как он лежит в базе.
+	Schema json.RawMessage
+	// Parsed — тот же документ, уже разобранный. Едет отсюда, а не разбирается
+	// заново у каждого вызывающего: сервис всё равно разбирает схему, чтобы
+	// разрешить Title, и второй разбор тех же байтов был чистой потерей на самом
+	// горячем публичном пути (TD-77).
+	//
+	// ⚠ Значим только вместе с ParseErr: у неразобравшейся схемы Parsed нулевой.
+	Parsed domain.FormSchema
+	// ParseErr — почему документ не разобрался; nil = разобрался. Ошибка едет
+	// полем, а не возвращается из PublicForm, потому что вызывающие расходятся в
+	// отношении к битой схеме, и оба отношения законны: страница формы и OG-мета
+	// деградируют (страница без оформления лучше 500), а приём ответа, слот файла
+	// и автосохранение обязаны отказать — они бы иначе писали в базу по документу,
+	// которого не поняли.
+	ParseErr error
 }
 
 // Version — опубликованный снапшот схемы формы: номер версии и её JSONB-схема.
@@ -818,11 +852,47 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 	}
 	// published_version_id — ключ INNER JOIN, всегда валиден на вернувшейся строке.
 	return PublicForm{
+		PublicFormRef: PublicFormRef{
+			FormID:             row.FormID,
+			WorkspaceID:        row.WorkspaceID,
+			Version:            row.Version,
+			VersionID:          uuid.UUID(row.PublishedVersionID.Bytes),
+			Status:             row.Status,
+			CloseAt:            ptrTime(row.CloseAt),
+			ResponseLimit:      ptrInt32(row.ResponseLimit),
+			ClosedMessage:      ptrStr(row.ClosedMessage),
+			ClosedTitle:        ptrStr(row.ClosedTitle),
+			SubmissionCount:    row.SubmissionCount,
+			NotifyOnSubmission: row.NotifyOnSubmission,
+			NotifyRespondent:   row.NotifyRespondent,
+			CollectPartial:     row.CollectPartial,
+			Branding:           row.Branding,
+			Progress:           row.Progress,
+			AutoJump:           row.AutoJump,
+			SaveLocally:        row.SaveLocally,
+			AllowBack:          row.AllowBack,
+			PasswordSealed:     row.Password,
+			ScheduleID:         ptrUUID(row.ScheduleID),
+			LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
+		},
+		Title:  row.Title,
+		Schema: json.RawMessage(row.Schema),
+	}, nil
+}
+
+// GetPublicFormRefBySlug — та же строка без документа (TD-77): для путей, которым
+// схема не нужна. Отказы те же и по тем же причинам, что у широкого соседа:
+// черновик/нет формы/осиротевшее пространство/удалённый владелец → pgx.ErrNoRows →
+// service вернёт 404.
+func (Repo) GetPublicFormRefBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicFormRef, error) {
+	row, err := postgres.New(db).GetPublicFormRefBySlug(ctx, slug)
+	if err != nil {
+		return PublicFormRef{}, fmt.Errorf("get public form ref by slug: %w", err)
+	}
+	return PublicFormRef{
 		FormID:             row.FormID,
 		WorkspaceID:        row.WorkspaceID,
-		Title:              row.Title,
 		Version:            row.Version,
-		Schema:             json.RawMessage(row.Schema),
 		VersionID:          uuid.UUID(row.PublishedVersionID.Bytes),
 		Status:             row.Status,
 		CloseAt:            ptrTime(row.CloseAt),

@@ -417,16 +417,16 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// стоит ПОСЛЕ ветки 304: это самая дорогая операция пути (документ формы
 	// целиком), и повторному запросу с тем же ETag она не нужна вовсе.
 	//
-	// ЧЕСТНО ПРО ОБЩИЙ СЧЁТ: на отдаче тела разборов всё равно два — первый делает
-	// PublicForm, разрешая заголовок из документа версии (service.go). Чинится это
-	// тем, что сервис отдавал бы уже разобранную схему, а не сырую, — правка
-	// контракта ради микросекунд, поэтому не сделана.
-	parsed, perr := domain.ValidateSchema(pf.Schema)
-	if perr != nil {
-		httpserver.WriteError(w, r, fmt.Errorf("canonical public schema %s: %w", r.PathValue("slug"), perr))
+	// Разбор приезжает из сервиса (pf.Parsed): он всё равно разбирает документ,
+	// разрешая заголовок, и второй разбор тех же байтов здесь был чистой потерей.
+	// Довод «правка контракта ради микросекунд», которым этот разбор когда-то был
+	// оставлен, считал один путь — отдачу тела; путей же шесть, и на четырёх из них
+	// вызовов на респондента десятки (TD-77, закрыт).
+	if pf.ParseErr != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("canonical public schema %s: %w", r.PathValue("slug"), pf.ParseErr))
 		return
 	}
-	schema, err := json.Marshal(parsed)
+	schema, err := json.Marshal(pf.Parsed)
 	if err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("marshal public schema %s: %w", r.PathValue("slug"), err))
 		return

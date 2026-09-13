@@ -146,12 +146,12 @@ func (m *fakeMailer) EnqueueEmail(_ context.Context, _ postgres.DBTX, msg mail.E
 // (thankYouText/redirectUrl) — DisallowUnknownFields не разобрал снапшот, и
 // техническая строка доехала до экрана формы.
 func TestSubmit_UnparsableVersionSchema_IsInternalNotValidation(t *testing.T) {
-	svc := NewService(nil, nil, fakeForms{pf: forms.PublicForm{
+	svc := NewService(nil, nil, fakeForms{pf: forms.WithDocument(forms.PublicForm{
 		// Опубликованная и открытая (иначе Submit отклонит как закрытую до разбора схемы).
-		Status: domain.FormStatusPublished,
+		PublicFormRef: forms.PublicFormRef{Status: domain.FormStatusPublished},
 		// Поле из будущего формата: DisallowUnknownFields такую схему отвергнет.
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[],"fieldFromFuture":"x"}`),
-	}}, nil, nil, okPlans(), nil, "")
+	})}, nil, nil, okPlans(), nil, "")
 
 	err := svc.Submit(context.Background(), "slug1", uuid.New(), map[string]json.RawMessage{}, Meta{})
 	if err == nil {
@@ -170,12 +170,14 @@ func TestSubmit_UnparsableVersionSchema_IsInternalNotValidation(t *testing.T) {
 // validPublishedForm — опубликованная открытая форма без полей (пустые ответы
 // валидны), с заданным тумблером уведомлений. Для проверок гейта уведомления.
 func validPublishedForm(notify bool) forms.PublicForm {
-	return forms.PublicForm{
-		FormID:             uuid.New(),
-		Status:             domain.FormStatusPublished,
-		Schema:             json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		NotifyOnSubmission: notify,
-	}
+	return forms.WithDocument(forms.PublicForm{
+		PublicFormRef: forms.PublicFormRef{
+			FormID:             uuid.New(),
+			Status:             domain.FormStatusPublished,
+			NotifyOnSubmission: notify,
+		},
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})
 }
 
 func TestSubmit_NotifyOn_EnqueuesOwnerLetter(t *testing.T) {
@@ -449,12 +451,14 @@ func TestSubmit_NotifyEmail_AttachPDF_GatedByPlan(t *testing.T) {
 // респонденту. Тумблер владельца выключен: письма разные, и тест про одно не
 // должен считать другое.
 func respondentForm() forms.PublicForm {
-	return forms.PublicForm{
-		FormID:           uuid.New(),
-		Status:           domain.FormStatusPublished,
-		Schema:           json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"mail","groupId":"g1","type":"email","settings":{}}]}`),
-		NotifyRespondent: true,
-	}
+	return forms.WithDocument(forms.PublicForm{
+		PublicFormRef: forms.PublicFormRef{
+			FormID:           uuid.New(),
+			Status:           domain.FormStatusPublished,
+			NotifyRespondent: true,
+		},
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"mail","groupId":"g1","type":"email","settings":{}}]}`),
+	})
 }
 
 // respondentOwner — владелец с бланком письма респонденту, где источником адреса

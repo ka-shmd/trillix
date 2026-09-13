@@ -34,7 +34,10 @@ import (
 // интерфейс, что у submissions и answerfiles: доступ к публичной форме правом не
 // является, но черновик и несуществующая обязаны давать одинаковый 404.
 type PublicForms interface {
-	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// PublicFormRef — форма БЕЗ документа: четыре отказа (нет формы, пароль,
+	// закрыта, нет расписания) решаются по колонкам, а схема не нужна ни свободному
+	// времени, ни холду (TD-77).
+	PublicFormRef(ctx context.Context, slug string) (forms.PublicFormRef, error)
 	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
 	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
 }
@@ -270,31 +273,31 @@ func errSlotTaken(left int) error {
 }
 
 // formSchedule — форма по slug плюс её расписание, со всеми четырьмя отказами.
-func (s *PublicService) formSchedule(ctx context.Context, slug, unlock string) (forms.PublicForm, Schedule, error) {
-	pf, err := s.forms.PublicForm(ctx, slug)
+func (s *PublicService) formSchedule(ctx context.Context, slug, unlock string) (forms.PublicFormRef, Schedule, error) {
+	pf, err := s.forms.PublicFormRef(ctx, slug)
 	if err != nil {
 		// Черновик и несуществующая одинаково дают 404 — это делает сам forms.
-		return forms.PublicForm{}, Schedule{}, err
+		return forms.PublicFormRef{}, Schedule{}, err
 	}
 	// Пароль — тот самый закрытый список входов. Проверяется ДО всего остального:
 	// иначе ручка рассказывала бы о закрытой форме тому, кто пароля не знает.
 	if err := s.forms.VerifyUnlock(pf.FormID, pf.PasswordSealed, unlock); err != nil {
-		return forms.PublicForm{}, Schedule{}, err
+		return forms.PublicFormRef{}, Schedule{}, err
 	}
 	if domain.FormClosed(pf.Status, pf.CloseAt, pf.ResponseLimit, pf.SubmissionCount, s.now()) {
-		return forms.PublicForm{}, Schedule{}, domain.ErrFormClosed
+		return forms.PublicFormRef{}, Schedule{}, domain.ErrFormClosed
 	}
 	if pf.ScheduleID == nil {
 		// Записи у формы нет — вопроса о времени не существует, и говорить о нём
 		// нечего: 404, как о несуществующей форме.
-		return forms.PublicForm{}, Schedule{}, domain.ErrNotFound
+		return forms.PublicFormRef{}, Schedule{}, domain.ErrNotFound
 	}
 	sch, err := s.repo.GetSchedule(ctx, s.db, *pf.ScheduleID)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return forms.PublicForm{}, Schedule{}, domain.ErrNotFound
+			return forms.PublicFormRef{}, Schedule{}, domain.ErrNotFound
 		}
-		return forms.PublicForm{}, Schedule{}, err
+		return forms.PublicFormRef{}, Schedule{}, err
 	}
 	return pf, sch, nil
 }

@@ -192,13 +192,15 @@ func newPublicHTMLMux(t *testing.T, svc publicFormService) *http.ServeMux {
 
 func TestPublicGet_Published_ReturnsSchemaAndValidToken(t *testing.T) {
 	vid := uuid.New()
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:     "Опрос",
-		Version:   2,
-		Schema:    json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		VersionID: vid,
-		Status:    domain.FormStatusPublished,
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:   2,
+			VersionID: vid,
+			Status:    domain.FormStatusPublished,
+		},
+		Title:  "Опрос",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
 
@@ -243,13 +245,15 @@ func TestPublicGet_Draft_Returns404(t *testing.T) {
 // черновик 404).
 func TestPublicGet_ClosedManually_Returns410WithOwnMessage(t *testing.T) {
 	msg := "Регистрация окончена, до встречи!"
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:         "Опрос",
-		Schema:        json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		VersionID:     uuid.New(),
-		Status:        domain.FormStatusClosed,
-		ClosedMessage: &msg,
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			VersionID:     uuid.New(),
+			Status:        domain.FormStatusClosed,
+			ClosedMessage: &msg,
+		},
+		Title:  "Опрос",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
 
@@ -272,14 +276,16 @@ func TestPublicGet_ClosedManually_Returns410WithOwnMessage(t *testing.T) {
 // вычисляется), с дефолтным текстом (свой не задан).
 func TestPublicGet_LimitReached_Returns410Default(t *testing.T) {
 	limit := int32(100)
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:           "Опрос",
-		Schema:          json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		VersionID:       uuid.New(),
-		Status:          domain.FormStatusPublished,
-		ResponseLimit:   &limit,
-		SubmissionCount: 100,
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			VersionID:       uuid.New(),
+			Status:          domain.FormStatusPublished,
+			ResponseLimit:   &limit,
+			SubmissionCount: 100,
+		},
+		Title:  "Опрос",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
 
@@ -300,7 +306,7 @@ func TestPublicGet_LimitReached_Returns410Default(t *testing.T) {
 
 func TestPublicGet_IfNoneMatch_Returns304(t *testing.T) {
 	vid := uuid.New()
-	svc := fakePublicSvc{pf: PublicForm{Title: "x", Version: 1, Schema: json.RawMessage(`{}`), VersionID: vid, Status: domain.FormStatusPublished}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{Version: 1, VersionID: vid, Status: domain.FormStatusPublished}, Title: "x", Schema: json.RawMessage(`{}`)})}
 	req := httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil)
 	req.Header.Set("If-None-Match", `"`+vid.String()+`+b`+`"`)
 
@@ -328,13 +334,15 @@ func brandingForm(t *testing.T, removed bool, allowed bool) fakePublicSvc {
 		t.Fatalf("фикстура схемы не проходит валидатор: %v", err)
 	}
 	return fakePublicSvc{
-		pf: PublicForm{
-			Title: "Опрос", Version: 1, Schema: json.RawMessage(schema),
-			VersionID: uuid.New(), Status: domain.FormStatusPublished,
-			// Схема о бейдже не знает вовсе: намерение живёт колонкой, поэтому
-			// снятый бейдж — это `Branding: false`, а не ключ в документе.
-			Branding: !removed,
-		},
+		pf: WithDocument(PublicForm{
+			PublicFormRef: PublicFormRef{
+				Version: 1, VersionID: uuid.New(), Status: domain.FormStatusPublished,
+				// Схема о бейдже не знает вовсе: намерение живёт колонкой, поэтому
+				// снятый бейдж — это `Branding: false`, а не ключ в документе.
+				Branding: !removed,
+			},
+			Title: "Опрос", Schema: json.RawMessage(schema),
+		}),
 		badgeAllowed: allowed,
 	}
 }
@@ -504,7 +512,7 @@ func TestPublicGet_PlanLookupFails_KeepsBadgeAndServes(t *testing.T) {
 
 // В dev (indexHTMLPath пуст) Go не обслуживает /r — форму отдаёт vite-dev.
 func TestPublicHTML_NoIndex_DoesNotServeR(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{Title: "x", Version: 1, Schema: json.RawMessage(`{}`), VersionID: uuid.New()}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{Version: 1, VersionID: uuid.New()}, Title: "x", Schema: json.RawMessage(`{}`)})}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/r/abc", nil))
 	if rec.Code != http.StatusNotFound {
@@ -607,14 +615,16 @@ func TestFormToken_RateLimited_Returns429(t *testing.T) {
 
 // Форма под паролем не отдаёт схему: в теле 401 только название и бейдж.
 func TestPublicGet_Locked_HidesSchema(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:          "Опрос про доставку",
-		Version:        1,
-		VersionID:      uuid.New(),
-		Schema:         json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Секретный вопрос"}]}]}`),
-		Status:         "published",
-		PasswordSealed: []byte("шифротекст"),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:        1,
+			VersionID:      uuid.New(),
+			Status:         "published",
+			PasswordSealed: []byte("шифротекст"),
+		},
+		Title:  "Опрос про доставку",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Секретный вопрос"}]}]}`),
+	})}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil))
 
@@ -646,14 +656,16 @@ func TestPublicGet_Locked_HidesSchema(t *testing.T) {
 
 // С годным токеном форма отдаётся как обычно — но по-прежнему без публичного кэша.
 func TestPublicGet_Unlocked_ReturnsSchemaUncached(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:          "Опрос",
-		Version:        1,
-		VersionID:      uuid.New(),
-		Schema:         json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Вопрос"}]}]}`),
-		Status:         "published",
-		PasswordSealed: []byte("шифротекст"),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:        1,
+			VersionID:      uuid.New(),
+			Status:         "published",
+			PasswordSealed: []byte("шифротекст"),
+		},
+		Title:  "Опрос",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"label","text":[{"t":"Вопрос"}]}]}`),
+	})}
 	req := httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil)
 	req.Header.Set(UnlockHeader, testUnlockToken)
 	rec := httptest.NewRecorder()
@@ -673,15 +685,17 @@ func TestPublicGet_Unlocked_ReturnsSchemaUncached(t *testing.T) {
 // Пароль — ПЕРВЫЙ барьер: текст экрана «приём закрыт» тоже написал автор, и до
 // пароля его показывать не за что.
 func TestPublicGet_LockedBeatsClosed(t *testing.T) {
-	svc := fakePublicSvc{pf: PublicForm{
-		Title:          "Опрос",
-		Version:        1,
-		VersionID:      uuid.New(),
-		Schema:         json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
-		Status:         "closed",
-		ClosedMessage:  ptr("Мы набрали участников, спасибо"),
-		PasswordSealed: []byte("шифротекст"),
-	}}
+	svc := fakePublicSvc{pf: WithDocument(PublicForm{
+		PublicFormRef: PublicFormRef{
+			Version:        1,
+			VersionID:      uuid.New(),
+			Status:         "closed",
+			ClosedMessage:  ptr("Мы набрали участников, спасибо"),
+			PasswordSealed: []byte("шифротекст"),
+		},
+		Title:  "Опрос",
+		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
+	})}
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/public/v1/forms/s", nil))
 
@@ -694,7 +708,7 @@ func TestPublicGet_LockedBeatsClosed(t *testing.T) {
 }
 
 func TestPublicUnlock(t *testing.T) {
-	svc := fakePublicSvc{password: "правильный", pf: PublicForm{PasswordSealed: []byte("шифротекст")}}
+	svc := fakePublicSvc{password: "правильный", pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{PasswordSealed: []byte("шифротекст")}})}
 	mux := newPublicMux(t, svc)
 
 	post := func(body string) *httptest.ResponseRecorder {
@@ -731,7 +745,7 @@ func TestPublicUnlock(t *testing.T) {
 // ГЛАВНОЕ у лимита: ведро списывается ДО сравнения, поэтому исчерпавший его не
 // проходит и с ВЕРНЫМ паролем. Иначе подбор стоил бы ровно столько же.
 func TestPublicUnlock_LimitBeatsCorrectPassword(t *testing.T) {
-	svc := fakePublicSvc{password: "правильный", pf: PublicForm{PasswordSealed: []byte("шифротекст")}}
+	svc := fakePublicSvc{password: "правильный", pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{PasswordSealed: []byte("шифротекст")}})}
 	mux := newPublicMuxWithUnlock(t, svc, denyLimiter{})
 
 	req := httptest.NewRequest(http.MethodPost, "/public/v1/forms/"+testSlug+"/unlock", strings.NewReader(`{"password":"правильный"}`))
@@ -746,7 +760,7 @@ func TestPublicUnlock_LimitBeatsCorrectPassword(t *testing.T) {
 // Slug неправдоподобной длины отвергается ДО ведра и до базы: иначе ключ парного
 // лимитера («IP|slug») задаёт клиент, и карта растёт вместе с длиной адреса.
 func TestPublicUnlock_RejectsImplausibleSlug(t *testing.T) {
-	svc := fakePublicSvc{password: "правильный", pf: PublicForm{PasswordSealed: []byte("шифротекст")}}
+	svc := fakePublicSvc{password: "правильный", pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{PasswordSealed: []byte("шифротекст")}})}
 	mux := newPublicMux(t, svc)
 
 	for _, slug := range []string{"s", strings.Repeat("x", 4096)} {

@@ -30,7 +30,10 @@ var utmKeys = [...]string{"utm_source", "utm_medium", "utm_campaign", "utm_conte
 // визита) и авторизует доступ автора к форме (чтение воронки). Реализация —
 // *forms.Service; общение через интерфейс сервиса (не чужой repo).
 type Forms interface {
-	PublicForm(ctx context.Context, slug string) (forms.PublicForm, error)
+	// PublicFormRef — форма БЕЗ документа: биконy нужны только id, номер версии и
+	// настройки закрытия, а схема это JSONB в TOAST, и на самом частом публичном
+	// запросе она читалась вхолостую (TD-77).
+	PublicFormRef(ctx context.Context, slug string) (forms.PublicFormRef, error)
 	// Get авторизует доступ автора к форме и отдаёт её — воронке нужен
 	// workspace_id, чтобы спросить у тарифа право на просмотр (фаза 17).
 	Get(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error)
@@ -126,7 +129,7 @@ func NewService(db postgres.DBTX, forms Forms, plans Plans, repo Store, geoSvc G
 // принимать по ней то, чего не бывает в жизни, значит открывать способ портить
 // владельцу конверсию визитами, которые ответом закончиться не могли.
 func (s *Service) Record(ctx context.Context, slug string, v Visit) error {
-	pf, err := s.forms.PublicForm(ctx, slug)
+	pf, err := s.forms.PublicFormRef(ctx, slug)
 	if err != nil {
 		return err
 	}
