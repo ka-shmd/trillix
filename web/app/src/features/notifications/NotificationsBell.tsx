@@ -79,7 +79,15 @@ export function NotificationsBell() {
       </SidebarMenuItem>
       {/* Шторка открывается СБОКУ от панели: снизу она упёрлась бы в край окна —
         личный ярус и так стоит у нижней кромки. */}
-      <PopoverContent side="right" align="end" className="w-88 p-0">
+      <PopoverContent
+        side="right"
+        align="end"
+        // 28rem вместо прежних 22: строки поводов длинные («Заявка — CRM:
+        // получатель не отвечает»), и на узкой шторке каждая вторая переносилась
+        // на три строки. Потолок — доступная ширина от Radix: на узком экране
+        // шторка сжимается, а не уезжает за край.
+        className="w-112 max-w-(--radix-popover-content-available-width) p-0"
+      >
         <div className="flex items-center gap-1 border-b px-3 py-2">
           <span className="flex-1 text-sm font-semibold">Уведомления</span>
           {unread > 0 && (
