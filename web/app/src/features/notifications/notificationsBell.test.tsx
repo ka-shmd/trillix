@@ -142,6 +142,18 @@ describe('колокольчик', () => {
     expect(link.getAttribute('href')).toBe('/forms/zayavka/submissions')
   })
 
+  // Крестик нужен именно в панели: промах мимо шторки попадает в соседнюю строку
+  // меню, и вместо закрытия человек уходит в «Тариф».
+  it('крестик закрывает шторку', async () => {
+    await renderBell({ items: [row()], unread: 1 })
+    await openBell()
+    expect(screen.getByRole('link', { name: /Заявка — 3 новых ответа/ })).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Закрыть' }))
+    await act(async () => {})
+    expect(screen.queryByRole('link', { name: /Заявка — 3 новых ответа/ })).toBeNull()
+  })
+
   it('пустая лента говорит об этом словами', async () => {
     await renderBell({ items: [], unread: 0 })
     await openBell()

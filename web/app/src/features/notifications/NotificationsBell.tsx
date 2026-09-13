@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Bell } from 'lucide-react'
+import { Bell, X } from 'lucide-react'
 
 import { notificationsQueryOptions, useMarkNotificationsRead } from './queries'
 import { groupByWorkspace } from './grouping'
@@ -48,7 +48,7 @@ export function NotificationsBell() {
                 ним. */}
               {unread > 0 && (
                 <span
-                  className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-primary"
+                  className="absolute -top-0.5 -right-0.5 size-1.5 rounded-full bg-highlight"
                   aria-hidden="true"
                 />
               )}
@@ -57,14 +57,24 @@ export function NotificationsBell() {
           </SidebarMenuButton>
         </PopoverTrigger>
         {/* Число, а не точка: в панели для него есть место, а «сколько именно» —
-          первое, что спрашивают. Трёхзначное жмётся в «99+». */}
-        {unread > 0 && <SidebarMenuBadge>{unread > 99 ? '99+' : unread}</SidebarMenuBadge>}
+          первое, что спрашивают. Трёхзначное жмётся в «99+».
+
+          Цвет — ФУКСИЯ (решение владельца 2026-09-13), и пара взята та же, что у
+          метки платной возможности: `--highlight-soft` под чернила
+          `--highlight-bright`. Синий здесь обещал бы второе действие в строке,
+          которая и так вся нажимается, а замеренный контраст пары держит AA —
+          заливка на пике насыщенности под белым текстом его не держит. */}
+        {unread > 0 && (
+          <SidebarMenuBadge className="bg-highlight-soft text-highlight-bright">
+            {unread > 99 ? '99+' : unread}
+          </SidebarMenuBadge>
+        )}
       </SidebarMenuItem>
       {/* Шторка открывается СБОКУ от панели: снизу она упёрлась бы в край окна —
         личный ярус и так стоит у нижней кромки. */}
       <PopoverContent side="right" align="end" className="w-88 p-0">
-        <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
-          <span className="text-sm font-semibold">Уведомления</span>
+        <div className="flex items-center gap-1 border-b px-3 py-2">
+          <span className="flex-1 text-sm font-semibold">Уведомления</span>
           {unread > 0 && (
             <Button
               variant="ghost"
@@ -75,6 +85,13 @@ export function NotificationsBell() {
               Прочитать всё
             </Button>
           )}
+          {/* Крестик рядом с «Прочитать всё»: шторка закрывается и щелчком мимо, и
+            Escape, но у пункта в панели промах мимо шторки попадает в соседнюю
+            строку меню — и вместо закрытия человек уходит в «Тариф». */}
+          <Button variant="ghost" size="icon" className="size-7" onClick={() => setOpen(false)}>
+            <X className="size-4" />
+            <span className="sr-only">Закрыть</span>
+          </Button>
         </div>
         <div className="max-h-96 overflow-y-auto p-2">
           {feed.isPending && <LoadingRows rows={2} />}
