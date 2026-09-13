@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { Bell, X } from 'lucide-react'
+import { Bell, Trash2, X } from 'lucide-react'
 
 import {
   notificationsQueryOptions,
@@ -204,15 +204,17 @@ function NotificationRow({
           {formatRelativeDate(item.lastAt)}
         </span>
       </span>
-      {/* Крестик появляется по наведению и по фокусу: в спокойной ленте он шум, а
-        с клавиатуры до него иначе было бы не добраться. */}
+      {/* Корзина, а не крестик: крестик в этой же шторке уже занят закрытием, и
+        два одинаковых значка рядом означали бы разное — «закрыть окно» и «стереть
+        строку». Появляется по наведению и по фокусу: в спокойной ленте она шум, а
+        с клавиатуры до неё иначе было бы не добраться. */}
       <Button
         variant="ghost"
         size="icon"
         className="relative z-10 size-6 opacity-0 group-hover:opacity-100 focus-visible:opacity-100"
         onClick={onDelete}
       >
-        <X className="size-3.5" />
+        <Trash2 className="size-3.5" />
         <span className="sr-only">Удалить уведомление</span>
       </Button>
     </div>
