@@ -7,6 +7,7 @@ import { answerColumns, previewColumns } from './columns'
 import { SubmissionsTable } from './SubmissionsTable'
 import { listRow, partialRow } from './rows'
 import { type PartialSubmission, type Submission } from '../../entities/submission'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 afterEach(cleanup)
 
@@ -56,13 +57,15 @@ const PARTIALS: PartialSubmission[] = [
 
 function renderTable(onOpen = vi.fn()) {
   render(
-    <SubmissionsTable
-      rows={ROWS.map(listRow)}
-      columns={previewColumns(answerColumns(BLOCKS))}
-      files={{}}
-      formId="f1"
-      onOpen={onOpen}
-    />,
+    <TooltipProvider>
+      <SubmissionsTable
+        rows={ROWS.map(listRow)}
+        columns={previewColumns(answerColumns(BLOCKS))}
+        files={{}}
+        formId="f1"
+        onOpen={onOpen}
+      />
+    </TooltipProvider>,
   )
   return onOpen
 }
@@ -133,43 +136,51 @@ describe('таблица ответов', () => {
     // черновиком, который никто не отправлял, — прямое враньё, поэтому колонка
     // называется нейтрально, а вид строки говорит метка рядом с датой.
     render(
-      <SubmissionsTable
-        rows={[...ROWS.map(listRow), ...PARTIALS.map(partialRow)]}
-        columns={previewColumns(answerColumns(BLOCKS))}
-        files={{}}
-        formId="f1"
-        onOpen={vi.fn()}
-      />,
+      <TooltipProvider>
+        <SubmissionsTable
+          rows={[...ROWS.map(listRow), ...PARTIALS.map(partialRow)]}
+          columns={previewColumns(answerColumns(BLOCKS))}
+          files={{}}
+          formId="f1"
+          onOpen={vi.fn()}
+        />
+      </TooltipProvider>,
     )
     expect(screen.getAllByRole('columnheader')[0]!.textContent).toBe('Дата')
-    expect(screen.getAllByText('не отправлен')).toHaveLength(PARTIALS.length)
+    expect(screen.getAllByRole('button', { name: 'Ответ не отправлен' })).toHaveLength(
+      PARTIALS.length,
+    )
   })
 
   it('в однородной таблице метки вида нет', () => {
     // На «Частичных» все строки черновики, и повторять это в каждой — шум.
     render(
-      <SubmissionsTable
-        rows={PARTIALS.map(partialRow)}
-        columns={previewColumns(answerColumns(BLOCKS))}
-        files={{}}
-        formId="f1"
-        onOpen={vi.fn()}
-      />,
+      <TooltipProvider>
+        <SubmissionsTable
+          rows={PARTIALS.map(partialRow)}
+          columns={previewColumns(answerColumns(BLOCKS))}
+          files={{}}
+          formId="f1"
+          onOpen={vi.fn()}
+        />
+      </TooltipProvider>,
     )
-    expect(screen.queryByText('не отправлен')).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Ответ не отправлен' })).toBeNull()
   })
 
   it('у отправленного ответа есть кнопка печати, у черновика её нет', () => {
     // Лист печатается по версии, с которой ответ пришёл, и подписан «отправлен» —
     // у черновика нет ни того, ни другого, поэтому кнопки у него быть не должно.
     render(
-      <SubmissionsTable
-        rows={[...ROWS.map(listRow), ...PARTIALS.map(partialRow)]}
-        columns={previewColumns(answerColumns(BLOCKS))}
-        files={{}}
-        formId="f1"
-        onOpen={vi.fn()}
-      />,
+      <TooltipProvider>
+        <SubmissionsTable
+          rows={[...ROWS.map(listRow), ...PARTIALS.map(partialRow)]}
+          columns={previewColumns(answerColumns(BLOCKS))}
+          files={{}}
+          formId="f1"
+          onOpen={vi.fn()}
+        />
+      </TooltipProvider>,
     )
     expect(screen.getAllByRole('button', { name: /Скачать PDF/ })).toHaveLength(ROWS.length)
   })
@@ -178,13 +189,15 @@ describe('таблица ответов', () => {
     // Столбец стоит всегда и одинаково на всех трёх вкладках: колонка «через раз»
     // читалась как потерянные данные, а не как «версии совпали».
     render(
-      <SubmissionsTable
-        rows={PARTIALS.map(partialRow)}
-        columns={previewColumns(answerColumns(BLOCKS))}
-        files={{}}
-        formId="f1"
-        onOpen={vi.fn()}
-      />,
+      <TooltipProvider>
+        <SubmissionsTable
+          rows={PARTIALS.map(partialRow)}
+          columns={previewColumns(answerColumns(BLOCKS))}
+          files={{}}
+          formId="f1"
+          onOpen={vi.fn()}
+        />
+      </TooltipProvider>,
     )
     expect(screen.getAllByRole('columnheader')[1]!.textContent).toBe('Версия')
     expect(within(screen.getAllByRole('row')[1]!).getByText('3')).toBeTruthy()
@@ -195,13 +208,15 @@ describe('таблица ответов', () => {
     // берутся из kind строки. Скажи она «Дата отправки» над черновиком — владелец
     // прочитал бы неотправленное как отправленное.
     render(
-      <SubmissionsTable
-        rows={PARTIALS.map(partialRow)}
-        columns={previewColumns(answerColumns(BLOCKS))}
-        files={{}}
-        formId="f1"
-        onOpen={vi.fn()}
-      />,
+      <TooltipProvider>
+        <SubmissionsTable
+          rows={PARTIALS.map(partialRow)}
+          columns={previewColumns(answerColumns(BLOCKS))}
+          files={{}}
+          formId="f1"
+          onOpen={vi.fn()}
+        />
+      </TooltipProvider>,
     )
     expect(screen.getAllByRole('columnheader')[0]!.textContent).toBe('Последняя правка')
     expect(screen.getByRole('button', { name: /Удалить незавершённый ответ от/ })).toBeTruthy()

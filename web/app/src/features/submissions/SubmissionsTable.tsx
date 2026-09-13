@@ -11,8 +11,8 @@ import { ROW_WORDS, rowWords, type AnswerRow } from './rows'
 import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
 import { formatDateTime } from '../../shared/format'
 import { type AnswerFile } from '../../entities/submission'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import {
   Table,
   TableBody,
@@ -97,6 +97,34 @@ const VERSION_COL = 'w-20'
 const EDGE_LEFT = 'pl-5 sm:pl-8'
 const EDGE_RIGHT = 'pr-5 sm:pr-8'
 
+// Метка незавершённой строки в смешанной ленте: точка второго акцента, подпись — в
+// тултипе и в `aria-label` (решение владельца 2026-09-14, DESIGN-SYSTEM §6). Цвет тот
+// же, что у метки «ПРО»: строка лежит в ленте ровно потому, что у пространства оплачен
+// сбор незавершённых, и точка говорит это, не занимая места под слово.
+//
+// ⚠ БЕЗ НАВЕДЕНИЯ И ФОКУСА СМЫСЛ НЕДОСТУПЕН — на телефоне остаётся цветная крапинка.
+// Плата известна и принята: дизайн-система разводит кружок и слово по тому, сказано ли
+// состояние словом рядом (§«Состояние: кружок или слово»), а в этой ленте не сказано —
+// колонка даты названа нейтрально как раз потому, что строки двух видов.
+//
+// Кнопка, а не span: тултип обязан открываться и с клавиатуры, а до неинтерактивного
+// узла фокус не доходит (тот же приём, что у точки состояния цели в IntegrationsView).
+// type=button — строка лежит вне формы, но кнопка по умолчанию submit.
+function PartialDot() {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <button
+          type="button"
+          className="size-2 shrink-0 cursor-default rounded-full bg-highlight focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-none"
+          aria-label="Ответ не отправлен"
+        />
+      </TooltipTrigger>
+      <TooltipContent>Ответ не отправлен</TooltipContent>
+    </Tooltip>
+  )
+}
+
 export function SubmissionsTable({
   rows,
   columns,
@@ -178,11 +206,7 @@ export function SubmissionsTable({
                 <TableCell className={`${EDGE_LEFT} ${DIVIDER}`}>
                   <div className="flex items-center gap-2">
                     <span>{formatDateTime(row.at)}</span>
-                    {marked && row.kind === 'partial' && (
-                      <Badge variant="outline" className="font-normal text-muted-foreground">
-                        не отправлен
-                      </Badge>
-                    )}
+                    {marked && row.kind === 'partial' && <PartialDot />}
                     <span className="ml-auto flex items-center opacity-0 transition-opacity group-hover/row:opacity-100 group-focus-within/row:opacity-100">
                       <Button
                         variant="ghost"
