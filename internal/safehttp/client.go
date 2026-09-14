@@ -47,6 +47,8 @@ var (
 	ErrForbiddenAddress = errors.New("safehttp: адрес во внутренней сети")
 	// ErrNotFound — имя не резолвится.
 	ErrNotFound = errors.New("safehttp: имя не резолвится")
+	// ErrBodyTooLarge — тело ответа больше потолка, который задал вызывающий Get.
+	ErrBodyTooLarge = errors.New("safehttp: тело ответа больше потолка")
 )
 
 // Resolver — резолв имени при сохранении адреса; *net.Resolver его реализует.
@@ -214,6 +216,46 @@ func (c *Client) Post(ctx context.Context, rawURL string, header http.Header, bo
 	_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, BodyLimit))
 	_ = resp.Body.Close()
 	return Response{StatusCode: resp.StatusCode, Duration: time.Since(start)}, nil
+}
+
+// Get скачивает тело по адресу с потолком limit байт — для случая, когда нужно само
+// содержимое (картинка обложки по ссылке автора), а не только исход. Не-2xx — не
+// ошибка, а исход, как у Post: тело тогда не возвращается. Тело длиннее limit — ошибка
+// ErrBodyTooLarge, дочитывать его до конца незачем.
+func (c *Client) Get(ctx context.Context, rawURL string, limit int64) (Response, []byte, error) {
+	u, err := c.parse(rawURL)
+	if err != nil {
+		return Response{}, nil, err
+	}
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	if err != nil {
+		return Response{}, nil, fmt.Errorf("%w: %s", ErrMalformed, u.Hostname())
+	}
+	start := time.Now()
+	resp, err := c.http.Do(req)
+	if err != nil {
+		// ⚠ Мина та же, что у Post: *url.Error печатает адрес целиком вместе с путём.
+		var ue *url.Error
+		if errors.As(err, &ue) {
+			err = ue.Err
+		}
+		return Response{}, nil, fmt.Errorf("get %s: %w", u.Hostname(), err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	out := Response{StatusCode: resp.StatusCode, Duration: time.Since(start)}
+	if resp.StatusCode < 200 || resp.StatusCode > 299 {
+		_, _ = io.Copy(io.Discard, io.LimitReader(resp.Body, BodyLimit))
+		return out, nil, nil
+	}
+	// limit+1: иначе тело ровно в limit байт не отличить от обрезанного.
+	body, err := io.ReadAll(io.LimitReader(resp.Body, limit+1))
+	if err != nil {
+		return out, nil, fmt.Errorf("get %s: read body: %w", u.Hostname(), err)
+	}
+	if int64(len(body)) > limit {
+		return out, nil, fmt.Errorf("%w: %s", ErrBodyTooLarge, u.Hostname())
+	}
+	return out, body, nil
 }
 
 // parse — разбор без сети: схема, форма, логин в адресе, свои хосты.

@@ -8,6 +8,7 @@ package media_test
 import (
 	"bytes"
 	"context"
+	"crypto/x509"
 	"encoding/json"
 	"fmt"
 	"image"
@@ -32,6 +33,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
+	"github.com/ka-shmd/trillix/internal/safehttp"
 	"github.com/ka-shmd/trillix/internal/workspaces"
 )
 
@@ -117,8 +119,14 @@ func resetDB(t *testing.T) {
 }
 
 // newStack собирает реальную вертикаль auth+forms+media поверх контейнерных
-// Postgres и MinIO. Лимитер auth — пермиссивный (инвариант 6).
+// Postgres и MinIO. Лимитеры — пермиссивные (инвариант 6).
 func newStack(t *testing.T) *httptest.Server {
+	t.Helper()
+	return newStackWithFetcher(t, nil)
+}
+
+// newStackWithFetcher — та же вертикаль с клиентом загрузки по ссылке. nil — без него.
+func newStackWithFetcher(t *testing.T, egress *safehttp.Client) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
@@ -130,7 +138,10 @@ func newStack(t *testing.T) *httptest.Server {
 	formsH := forms.NewHandler(formsSvc, authH.RequireAuth, authH.RequireCSRF)
 
 	mediaSvc := media.NewService(formsSvc, blob.New(testS3), testBucket)
-	mediaH := media.NewHandler(mediaSvc, authH.RequireAuth, authH.RequireCSRF)
+	if egress != nil {
+		mediaSvc = mediaSvc.WithFetcher(egress)
+	}
+	mediaH := media.NewHandler(mediaSvc, authH.RequireAuth, authH.RequireCSRF, ratelimit.AllowAll{})
 
 	mux := http.NewServeMux()
 	authH.Routes(mux)
@@ -209,7 +220,77 @@ func TestMedia_RejectsOversizedBody(t *testing.T) {
 	_ = r.Body.Close()
 }
 
+// Загрузка по ссылке: сервер скачивает картинку с чужого https-сайта и кладёт её в
+// бакет тем же путём, что файл. Guard разрешающий (сайт-источник — httptest на
+// loopback), сертификат источника — доверенный корень клиента.
+func TestMedia_UploadFromURL(t *testing.T) {
+	resetDB(t)
+	pic := makePNG(t, 6, 3)
+	source := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/pic.png" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		_, _ = w.Write(pic)
+	}))
+	t.Cleanup(source.Close)
+	roots := x509.NewCertPool()
+	roots.AddCert(source.Certificate())
+	srv := newStackWithFetcher(t, safehttp.New(safehttp.AllowAll{}, safehttp.Options{RootCAs: roots}))
+	c := registerUser(t, srv, "author@example.com")
+	formID := createForm(t, c, srv)
+
+	r := uploadURL(t, c, srv, formID, source.URL+"/pic.png")
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("по ссылке: статус %d, ожидался 201", r.StatusCode)
+	}
+	var out struct {
+		ImageKey string `json:"imageKey"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&out); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	_ = r.Body.Close()
+	data, _, err := blob.New(testS3).GetObject(context.Background(), testBucket, out.ImageKey)
+	if err != nil {
+		t.Fatalf("GetObject %q: %v", out.ImageKey, err)
+	}
+	img, err := png.Decode(bytes.NewReader(data))
+	if err != nil || img.Bounds().Dx() != 6 {
+		t.Fatalf("в бакете не та картинка: %v", err)
+	}
+
+	// Нет картинки по адресу — 422 с причиной, а не 500.
+	r = uploadURL(t, c, srv, formID, source.URL+"/missing.png")
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("нет картинки: статус %d, ожидался 422", r.StatusCode)
+	}
+	_ = r.Body.Close()
+
+	// Чужой форме — 404, как у файла: до сети дело не доходит.
+	bob := registerUser(t, srv, "bob@example.com")
+	r = uploadURL(t, bob, srv, formID, source.URL+"/pic.png")
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("чужая форма: статус %d, ожидался 404", r.StatusCode)
+	}
+	_ = r.Body.Close()
+}
+
 // --- helpers ---
+
+func uploadURL(t *testing.T, c *http.Client, srv *httptest.Server, formID, link string) *http.Response {
+	t.Helper()
+	body, _ := json.Marshal(map[string]string{"url": link, "purpose": "cover"})
+	req, _ := http.NewRequest(http.MethodPost, srv.URL+"/api/v1/forms/"+formID+"/media", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	req.Header.Set("X-CSRF-Token", csrf(t, c, srv))
+	r, err := c.Do(req)
+	if err != nil {
+		t.Fatalf("upload url: %v", err)
+	}
+	return r
+}
 
 func makePNG(t *testing.T, w, h int) []byte {
 	t.Helper()

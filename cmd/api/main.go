@@ -297,6 +297,11 @@ const (
 	// было бы стучать в чужой сервер с нашего IP.
 	webhookTestRatePerSec = 0.1
 	webhookTestBurst      = 6
+	// Ведро загрузки картинки по ссылке: каждая — исходящий запрос к чужому сайту с
+	// нашего IP. Двадцать в минуту на человека с запасом покрывают подбор обложки и
+	// не дают превратить ручку в качалку по списку адресов.
+	mediaURLRatePerSec = 1.0 / 3
+	mediaURLBurst      = 10
 
 	// Периодический сбор простаивающих вёдер лимитеров (TD-5): ключ ведра — реальный
 	// IP (после TD-1) либо id пользователя, поэтому карта иначе растёт неограниченно.
@@ -546,15 +551,15 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 			cfg.AppOrigin+"/api/v1/integrations/google/callback",
 		)
 	}
-	// Вебхуки (фаза 28): запрос по адресу пользователя идёт только через safehttp
-	// с боевым Guard (ADR §10). Свои хосты запрещены отдельно: они публичные, и
-	// Guard их пропустил бы.
-	webhookEgress := safehttp.New(safehttp.PublicOnly{}, safehttp.Options{
+	// Запрос по адресу пользователя (вебхуки фазы 28, картинка обложки по ссылке)
+	// идёт только через safehttp с боевым Guard (ADR §10). Свои хосты запрещены
+	// отдельно: они публичные, и Guard их пропустил бы.
+	userURLEgress := safehttp.New(safehttp.PublicOnly{}, safehttp.Options{
 		OwnHosts: []string{hostOf(cfg.AppOrigin), hostOf(cfg.PublicRendererBaseURL)},
 	})
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey).
-		WithWebhooks(integrations.Repo{}, webhookEgress).
+		WithWebhooks(integrations.Repo{}, userURLEgress).
 		// Поводы о поломке цели: доставщик ставит, починка и удаление снимают.
 		WithNotifications(notifySvc)
 	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
@@ -610,8 +615,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		SecretKey: cfg.S3SecretKey,
 		PathStyle: cfg.S3PathStyle,
 	})
-	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket)
-	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
+	mediaSvc := media.NewService(formsSvc, blobClient, cfg.S3MediaBucket).WithFetcher(userURLEgress)
+	mediaURLLimiter := ratelimit.NewTokenBucket(mediaURLRatePerSec, mediaURLBurst)
+	mediaHandler := media.NewHandler(mediaSvc, authHandler.RequireAuth, authHandler.RequireCSRF, mediaURLLimiter)
 	// Аватар пишет auth (колонка users.avatar_key его), а картинку хранит media.
 	// Связь подключается здесь, а не импортом: media стоит на RequireAuth из
 	// auth — тот же случай, что WithTeams выше.
@@ -1055,7 +1061,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 				verifyLimiter.GC() + resendLimiter.GC() + loginTwoFactorLimiter.GC() +
 				passwordChangeLimiter.GC() + twoFactorLimiter.GC() + deleteAccountLimiter.GC() + avatarLimiter.GC() +
 				respondentMailLimiter.GC() + unlockLimiter.GC() + unlockIPLimiter.GC() +
-				uploadLimiter.GC() + webhookTestLimiter.GC()
+				uploadLimiter.GC() + webhookTestLimiter.GC() + mediaURLLimiter.GC()
 			if removed > 0 {
 				log.Debug("rate-limit buckets evicted", slog.Int("count", removed))
 			}
