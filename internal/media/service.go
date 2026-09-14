@@ -11,8 +11,11 @@ import (
 	"image/jpeg" // именованный импорт регистрирует JPEG-декодер для image.Decode/DecodeConfig
 	"image/png"  // и PNG-декодер
 	"math"
+	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/image/draw"
@@ -20,6 +23,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/blob"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/safehttp"
 )
 
 const (
@@ -175,15 +179,31 @@ type blobStore interface {
 	GetObject(ctx context.Context, bucket, key string) (data []byte, contentType string, err error)
 }
 
+// imageFetcher — узкий интерфейс над safehttp.Client: скачать картинку по адресу,
+// который дал автор. Защита от SSRF живёт в клиенте (ADR §10), сюда в тестах
+// подставляется фейк.
+type imageFetcher interface {
+	Validate(ctx context.Context, raw string) (*url.URL, error)
+	Get(ctx context.Context, rawURL string, limit int64) (safehttp.Response, []byte, error)
+}
+
 // Service — приём картинок. Хранилище скрыто за blobPutter, авторизация — за Forms.
 type Service struct {
 	forms  Forms
 	blob   blobStore
 	bucket string
+	fetch  imageFetcher
 }
 
 func NewService(f Forms, b blobStore, bucket string) *Service {
 	return &Service{forms: f, blob: b, bucket: bucket}
+}
+
+// WithFetcher подключает загрузку картинки по ссылке. Без него UploadFromURL
+// отвечает недоступностью (503), а не пустым ключом.
+func (s *Service) WithFetcher(f imageFetcher) *Service {
+	s.fetch = f
+	return s
 }
 
 // keyPattern — что вообще может быть ключом картинки: `workspaceID/<sha256>.<ext>`.
@@ -224,6 +244,72 @@ func (s *Service) Upload(ctx context.Context, userID, formID uuid.UUID, data []b
 	}
 
 	return s.put(ctx, form.WorkspaceID.String(), data, purpose)
+}
+
+// UploadFromURL — та же загрузка картинки формы, что Upload, но байты сервер берёт по
+// адресу, который дал автор (вкладка «Ссылка» окна обложки). Чужой адрес в схему не
+// пишется: CSP страницы формы пускает картинки только со своего origin, а схема
+// хранит ключ, а не URL (docs/S3.md), — поэтому картинка ложится в бакет, как файл.
+//
+// Порядок тот же, что у Upload: сначала право (инвариант 1), потом сеть. Отказ адреса
+// или ответа — 422 с человеческой причиной; сам адрес в текст ошибки не попадает —
+// в пути ссылки бывают токены.
+func (s *Service) UploadFromURL(ctx context.Context, userID, formID uuid.UUID, rawURL string, purpose Purpose) (string, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return "", err
+	}
+	if s.fetch == nil {
+		return "", fmt.Errorf("%w: загрузка по ссылке не настроена", domain.ErrUnavailable)
+	}
+	// Validate — ради внятного отказа до соединения; защищает соединение само (control).
+	if _, err := s.fetch.Validate(ctx, rawURL); err != nil {
+		return "", urlImportError(err)
+	}
+	resp, data, err := s.fetch.Get(ctx, rawURL, MaxImageBytes)
+	if err != nil {
+		return "", urlImportError(err)
+	}
+	switch {
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		// Редирект клиент не выполняет (ADR §10): публичный адрес уводил бы во
+		// внутреннюю сеть. Короткие ссылки и «поделиться» у фотостоков — ровно этот случай.
+		return "", fmt.Errorf("%w: ссылка перенаправляет на другой адрес — вставьте прямую ссылку на картинку", domain.ErrValidation)
+	case resp.StatusCode != http.StatusOK:
+		return "", fmt.Errorf("%w: по ссылке нет картинки — сайт ответил кодом %d", domain.ErrValidation, resp.StatusCode)
+	}
+	return s.put(ctx, form.WorkspaceID.String(), data, purpose)
+}
+
+// urlImportError переводит отказ адреса или соединения в человеческую причину (422).
+func urlImportError(err error) error {
+	var text string
+	switch {
+	case errors.Is(err, safehttp.ErrBodyTooLarge):
+		text = fmt.Sprintf("картинка по ссылке больше %d МБ", MaxImageBytes>>20)
+	case errors.Is(err, safehttp.ErrScheme):
+		text = "ссылка должна начинаться с https://"
+	case errors.Is(err, safehttp.ErrUserInfo):
+		text = "уберите логин и пароль из ссылки"
+	case errors.Is(err, safehttp.ErrMalformed):
+		text = "это не похоже на ссылку — проверьте, что она скопирована целиком"
+	case errors.Is(err, safehttp.ErrOwnHost):
+		text = "это адрес самого Trillix — загрузите картинку файлом"
+	default:
+		switch safehttp.Classify(err) {
+		case safehttp.FailureForbidden:
+			text = "ссылка ведёт во внутреннюю сеть — оттуда картинки не загружаются"
+		case safehttp.FailureNotFound:
+			text = "сайт с таким адресом не найден — проверьте ссылку"
+		case safehttp.FailureTimeout:
+			text = fmt.Sprintf("сайт не отдал картинку за %d секунд", int(safehttp.DefaultTimeout/time.Second))
+		case safehttp.FailureTLS:
+			text = "сертификат сайта не прошёл проверку"
+		default:
+			text = "не удалось скачать картинку по ссылке"
+		}
+	}
+	return fmt.Errorf("%w: %s", domain.ErrValidation, text)
 }
 
 // PutAvatar кладёт аватар и возвращает его ключ avatars/<sha256>.<ext>.

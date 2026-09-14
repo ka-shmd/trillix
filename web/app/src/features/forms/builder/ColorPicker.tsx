@@ -160,10 +160,12 @@ export interface ColorPickerProps {
   // Зовётся на каждое движение: выделение под поповером перекрашивается сразу, и автор
   // выбирает по результату, а не вслепую.
   onChange: (hex: string) => void
-  onRemove: () => void
+  // Снятие цвета — кнопкой рядом с полем hex. Без onRemove кнопки нет: у окна обложки
+  // удаление своё, в углу окна, и второе рядом с полем повторяло бы его.
+  onRemove?: () => void
   swatches: readonly string[]
   // Подпись кнопки снятия цвета: у текста и фона она разная.
-  removeLabel: string
+  removeLabel?: string
 }
 
 export function ColorPicker({
@@ -287,7 +289,7 @@ export function ColorPicker({
       <div className="flex items-center gap-1">
         <span
           aria-hidden="true"
-          className="size-7 shrink-0 rounded-md border"
+          className="size-7 shrink-0 rounded-lg border"
           style={{ backgroundColor: current }}
         />
         <Input
@@ -303,16 +305,18 @@ export function ColorPicker({
           onMouseDown={(e) => e.stopPropagation()}
           className="h-7 flex-1 font-mono text-sm"
         />
-        <Button
-          variant="ghost"
-          size="icon"
-          aria-label={removeLabel}
-          title={removeLabel}
-          className="size-7 text-muted-foreground"
-          onClick={onRemove}
-        >
-          <Ban className="size-3.5" />
-        </Button>
+        {onRemove && (
+          <Button
+            variant="ghost"
+            size="icon"
+            aria-label={removeLabel}
+            title={removeLabel}
+            className="size-7 text-muted-foreground"
+            onClick={onRemove}
+          >
+            <Ban className="size-3.5" />
+          </Button>
+        )}
       </div>
     </div>
   )

@@ -1,15 +1,15 @@
 import { useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { ImageIcon, ImagePlus, MoveVertical, Palette, RefreshCw, Trash2 } from 'lucide-react'
+import { ImageIcon, ImagePlus, MoveVertical, Palette, Save } from 'lucide-react'
 
 import { coverY } from '@entities/formSchema'
 import { CoverBand, LogoMark } from '@fields/pageChrome'
 
-import { ColorPicker } from './ColorPicker'
+import { CoverDialog, LogoDialog } from './CoverDialog'
 import { coverOverflowPx, nextCoverY } from './coverDrag'
-import { COVER_COLORS, DEFAULT_COVER_COLOR } from './designEdit'
+import { DEFAULT_COVER_COLOR } from './designEdit'
 import { uploadImage, type FormIdSource } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Button } from '@/components/ui/button'
 import { humanError } from '../../../shared/api/errors'
 
 // Хром страницы в РЕДАКТОРЕ: та же обложка и тот же логотип, что увидит респондент
@@ -17,79 +17,15 @@ import { humanError } from '../../../shared/api/errors'
 // правила ВИДА обложки здесь нет — разъехавшийся редактор это WYSIWYG, который врёт.
 // Всё, что добавляет этот файл, — оверлеи с кнопками, загрузка и перетаскивание.
 
-// Кнопка оверлея: общий вид «плашка поверх картинки» из ImageField, вынесенный сюда,
-// чтобы пять кнопок не повторяли одну и ту же строку классов.
-function OverlayButton({
-  onClick,
-  danger = false,
-  children,
-}: {
-  onClick?: () => void
-  danger?: boolean
-  children: React.ReactNode
-}) {
+// Кнопка оверлея поверх картинки автора — белая кнопка кабинета (`outline`), а не
+// плашка в цветах темы формы (решение владельца 2026-09-14): это служебный контрол
+// редактора, и выглядит он так же, как остальной хром. Тот же вид у картинки блока
+// (ImageField).
+function OverlayButton({ onClick, children }: { onClick?: () => void; children: React.ReactNode }) {
   return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium transition-colors ${
-        danger
-          ? 'text-[var(--rf-danger)] hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-danger))]'
-          : 'text-[var(--rf-text)] hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-text))]'
-      }`}
-    >
+    <Button type="button" variant="outline" size="sm" onClick={onClick}>
       {children}
-    </button>
-  )
-}
-
-// Выбор цвета обложки: палитра плюс полноценный выборщик. Цвет применяется
-// непрерывно, пока автор возит мышью, — выбирает он по результату, а не вслепую;
-// история от этого не дробится (стор коалесит непрерывный подбор одним тегом).
-function ColorButton({ current }: { current: string }) {
-  const setCover = useBuilderStore((s) => s.setCover)
-  const [open, setOpen] = useState(false)
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium text-[var(--rf-text)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-text))]"
-        >
-          <Palette className="size-3.5" /> Цвет
-        </button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-64">
-        <ColorPicker
-          initial={current}
-          swatches={COVER_COLORS}
-          removeLabel="Убрать обложку"
-          onChange={(hex) => setCover({ color: hex })}
-          onRemove={() => {
-            setCover(undefined)
-            setOpen(false)
-          }}
-        />
-      </PopoverContent>
-    </Popover>
-  )
-}
-
-// Полоса прогресса поверх обложки на время загрузки — та же плашка, что у картинки
-// блока (ImageField): загрузка выглядит одинаково, где бы её ни начали. className —
-// под форму того, что накрываем: у логотипа она круглая (см. LogoArea).
-function ProgressOverlay({ pct, className = '' }: { pct: number; className?: string }) {
-  return (
-    <div
-      className={`absolute inset-0 flex items-center justify-center bg-background/60 ${className}`}
-    >
-      <div className="w-2/3 max-w-40">
-        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-          <div className="h-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
-        </div>
-        <p className="mt-1 text-center text-xs text-muted-foreground">Загрузка… {pct}%</p>
-      </div>
-    </div>
+    </Button>
   )
 }
 
@@ -98,17 +34,15 @@ function ProgressOverlay({ pct, className = '' }: { pct: number; className?: str
 // коробки с максимальной шириной, а логотип — уже внутри неё (см. SlashEditor).
 export function CoverArea({ formId }: { formId: FormIdSource }) {
   const cover = useBuilderStore((s) => s.cover)
-  const setCover = useBuilderStore((s) => s.setCover)
   const setCoverY = useBuilderStore((s) => s.setCoverY)
 
-  const fileRef = useRef<HTMLInputElement>(null)
   const bandRef = useRef<HTMLDivElement>(null)
-  const [progress, setProgress] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  // Режим «изменить положение» и черновик сдвига. Жест ведётся в ЛОКАЛЬНОМ состоянии
-  // и коммитится в стор ОДИН раз, на отпускании: запись на каждый кадр
-  // перерисовывала бы всё полотно шестьдесят раз в секунду — ровно та ошибка,
-  // которой выборщик цвета нагрузил TD-32, и повторять её вторым потребителем незачем.
+  // Режим «изменить положение» и черновик сдвига. Сдвиг ведётся в ЛОКАЛЬНОМ состоянии
+  // весь режим — через сколько угодно протяжек — и уходит в стор ОДИН раз, по «Сохранить»;
+  // «Отменить» черновик выбрасывает (решение владельца 2026-09-14). Запись на каждый
+  // кадр перерисовывала бы всё полотно шестьдесят раз в секунду — ровно та ошибка,
+  // которой выборщик цвета нагрузил TD-32, — а запись на каждое отпускание оставила бы
+  // «Отменить» нечего отменять.
   const [moving, setMoving] = useState(false)
   const [draftY, setDraftY] = useState<number | null>(null)
   // overflow — ход жеста в пикселях (на сколько картинка перерастает полосу). Меряется
@@ -120,36 +54,17 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
 
   if (!cover) return null
 
-  const uploading = progress !== null
-
-  function pick() {
-    fileRef.current?.click()
-  }
-
-  function onFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = '' // позволить выбрать тот же файл повторно
-    if (!file) return
-    setError(null)
-    setProgress(0)
-    // Назначение cover: сервер оставит обложке её ширину (2000), а не ширину колонки.
-    uploadImage(formId, file, { onProgress: setProgress }, 'cover')
-      // Новая картинка приходит без сдвига: точка фокуса прежней ей не подходит —
-      // это другое изображение с другой композицией.
-      .then((imageKey) => setCover({ imageKey }))
-      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
-      .finally(() => setProgress(null))
-  }
-
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (!moving || !cover?.imageKey) return
     const band = bandRef.current
     const img = band?.querySelector('img')
     e.currentTarget.setPointerCapture(e.pointerId)
+    // Следующая протяжка продолжает черновик, а не начинает от сохранённого.
+    const from = draftY ?? coverY(cover)
     drag.current = {
       pointerY: e.clientY,
-      startY: coverY(cover),
-      y: coverY(cover),
+      startY: from,
+      y: from,
       overflow: coverOverflowPx(
         img?.naturalWidth ?? 0,
         img?.naturalHeight ?? 0,
@@ -157,7 +72,7 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
         band?.offsetHeight ?? 0,
       ),
     }
-    setDraftY(coverY(cover))
+    setDraftY(from)
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
@@ -167,31 +82,35 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
     setDraftY(d.y)
   }
 
-  // Коммит берёт значение из РЕФА, а не из состояния: между последним pointermove и
-  // pointerup React может не успеть перерисоваться, и состояние отстанет на кадр —
-  // жест тогда сохранил бы предпоследнее положение. Отставание состояния от жеста —
-  // тот же класс дефектов, что нашёлся в фазе 14 на выделении текста.
-  //
-  // Округление — ровно здесь: схема принимает только целые проценты, а во время жеста
-  // значение дробное, чтобы картинка ехала плавно.
+  // Черновик на отпускании берётся из РЕФА, а не из состояния: между последним
+  // pointermove и pointerup React может не успеть перерисоваться, и состояние отстанет
+  // на кадр — «Сохранить» тогда сохранил бы предпоследнее положение. Отставание состояния
+  // от жеста — тот же класс дефектов, что нашёлся в фазе 14 на выделении текста.
   function onPointerUp() {
     const d = drag.current
     if (!d) return
     drag.current = null
-    setCoverY(Math.round(d.y))
+    setDraftY(d.y)
+  }
+
+  // В схему уходит сотая процента, а не целое: целый процент стоит несколько пикселей,
+  // и округление до него сдвигало картинку после сохранения. Сотые — только чтобы не
+  // писать в документ хвост двоичной дроби; сдвига от них меньше полупикселя. Без
+  // протяжки сохранять нечего — и шага истории не появляется.
+  function finishMoving() {
+    if (draftY !== null) setCoverY(Math.round(draftY * 100) / 100)
     setDraftY(null)
+    setMoving(false)
+  }
+
+  function cancelMoving() {
+    drag.current = null
+    setDraftY(null)
+    setMoving(false)
   }
 
   return (
     <div className="group/cover relative">
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/png,image/jpeg"
-        className="hidden"
-        onChange={onFile}
-      />
-
       <div
         ref={bandRef}
         onPointerDown={onPointerDown}
@@ -208,113 +127,81 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
         <CoverBand cover={draftY === null ? cover : { ...cover, y: draftY }} />
       </div>
 
-      {uploading && <ProgressOverlay pct={progress} />}
-
-      {!uploading && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cover:opacity-100">
-          <div className="pointer-events-auto flex items-center gap-2">
-            {moving ? (
-              <OverlayButton onClick={() => setMoving(false)}>
-                <MoveVertical className="size-3.5" /> Готово
-              </OverlayButton>
-            ) : (
-              <>
-                <OverlayButton onClick={pick}>
-                  <RefreshCw className="size-3.5" />
-                  {cover.imageKey ? 'Заменить' : 'Картинка'}
-                </OverlayButton>
-                <ColorButton current={cover.color ?? DEFAULT_COVER_COLOR} />
-                {/* Двигать можно только картинку: у цвета двигать нечего, и схема
-                    такой документ отвергает. */}
-                {cover.imageKey && (
-                  <OverlayButton onClick={() => setMoving(true)}>
-                    <MoveVertical className="size-3.5" /> Положение
-                  </OverlayButton>
-                )}
-                <OverlayButton danger onClick={() => setCover(undefined)}>
-                  <Trash2 className="size-3.5" /> Удалить
-                </OverlayButton>
-              </>
-            )}
-          </div>
+      {/* Подсказка режима положения — посередине полосы и видна весь режим, а не по
+          наведению (решение владельца 2026-09-14). pointer-events-none: протяжка идёт
+          сквозь неё по самой картинке. Чёрная полупрозрачная плашка задана цветом, а не
+          токеном: лежит на картинке автора любого цвета, и тема кабинета её контраст
+          не определяет. */}
+      {moving && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
+          <span className="rounded-lg bg-black/60 px-4 py-2 text-center text-sm text-white">
+            Перетащите картинку, чтобы изменить её положение
+          </span>
         </div>
       )}
 
-      {error && (
-        <p className="mt-1.5 text-sm text-destructive">
-          {error} ·{' '}
-          <button type="button" onClick={pick} className="underline hover:no-underline">
-            Повторить
-          </button>
-        </p>
-      )}
+      {/* Кнопок две (решение владельца 2026-09-14): «Положение» и «Изменить». Всё, чем
+          полосу заливают и убирают — файл, ссылка, цвет, удаление, — живёт в окне
+          CoverDialog, общем с строкой «Обложка» шторки оформления.
+
+          Кнопки — в правом нижнем углу полосы (решение владельца 2026-09-14): центр
+          закрывал саму картинку, а левый нижний угол занят логотипом, наезжающим на
+          обложку (.rf-logo--over). */}
+      <div className="pointer-events-none absolute inset-0 flex items-end justify-end p-4 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cover:opacity-100">
+        <div className="pointer-events-auto flex items-center gap-2">
+          {moving ? (
+            <>
+              <OverlayButton onClick={finishMoving}>
+                <Save /> Сохранить
+              </OverlayButton>
+              <OverlayButton onClick={cancelMoving}>Отменить</OverlayButton>
+            </>
+          ) : (
+            <>
+              {/* Двигать можно только картинку: у цвета двигать нечего, и схема
+                  такой документ отвергает. */}
+              {cover.imageKey && (
+                <OverlayButton onClick={() => setMoving(true)}>
+                  <MoveVertical /> Положение
+                </OverlayButton>
+              )}
+              <CoverDialog formId={formId}>
+                <Button type="button" variant="outline" size="sm">
+                  <ImageIcon /> Изменить
+                </Button>
+              </CoverDialog>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   )
 }
 
-// LogoArea — логотип на полотне со своим оверлеем. Стоит ВНУТРИ колонки (в отличие
-// от обложки), поэтому и компонент отдельный: они соседи по смыслу, но не по DOM.
+// LogoArea — логотип на полотне. Стоит ВНУТРИ колонки (в отличие от обложки), поэтому
+// и компонент отдельный: они соседи по смыслу, но не по DOM.
+//
+// Кнопок на знаке нет (решение владельца 2026-09-14): нажатие на сам логотип открывает
+// окно логотипа (LogoDialog) — загрузка, ссылка, удаление.
 export function LogoArea({ formId, over }: { formId: FormIdSource; over: boolean }) {
   const logo = useBuilderStore((s) => s.logo)
-  const setLogo = useBuilderStore((s) => s.setLogo)
-  const fileRef = useRef<HTMLInputElement>(null)
-  const [progress, setProgress] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
 
   if (!logo) return null
 
-  function pick() {
-    fileRef.current?.click()
-  }
-
-  function onFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setError(null)
-    setProgress(0)
-    uploadImage(formId, file, { onProgress: setProgress }, 'logo')
-      .then((imageKey) => setLogo({ imageKey }))
-      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
-      .finally(() => setProgress(null))
-  }
-
   return (
-    <div className="group/logo relative w-fit">
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/png,image/jpeg"
-        className="hidden"
-        onChange={onFile}
-      />
+    <div className="relative w-fit">
       <LogoMark logo={logo} over={over} />
-      {/* Оверлеи скруглены ПО ЛОГОТИПУ (--rf-logo-radius), а не по контролам
-          (--rf-radius): скругление логотипа задаёт автор, и при круглом знаке
-          квадратное затемнение вылезает углами за его край. */}
-      {progress !== null ? (
-        <ProgressOverlay pct={progress} className="rounded-[var(--rf-logo-radius)]" />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center gap-1 rounded-[var(--rf-logo-radius)] bg-black/45 opacity-0 transition-opacity focus-within:opacity-100 group-hover/logo:opacity-100">
-          <button
-            type="button"
-            onClick={pick}
-            title="Заменить логотип"
-            className="rounded p-1.5 text-white hover:bg-white/20"
-          >
-            <RefreshCw className="size-4" />
-          </button>
-          <button
-            type="button"
-            onClick={() => setLogo(undefined)}
-            title="Удалить логотип"
-            className="rounded p-1.5 text-white hover:bg-white/20"
-          >
-            <Trash2 className="size-4" />
-          </button>
-        </div>
-      )}
-      {error && <p className="mt-1.5 text-sm text-destructive">{error}</p>}
+      {/* Нажимаемый слой ПОВЕРХ знака, а не кнопка-обёртка: LogoMark — блочный div с
+          отступами нахлёста, и внутри <button> его раскладка разошлась бы с превью и
+          рендерером. Слой скруглён ПО ЛОГОТИПУ (--rf-logo-radius): скругление задаёт
+          автор, и при круглом знаке квадратная подсветка вылезала бы углами. */}
+      <LogoDialog formId={formId}>
+        <button
+          type="button"
+          aria-label="Изменить логотип"
+          className="absolute inset-0 cursor-pointer rounded-[var(--rf-logo-radius)] outline-none transition-colors hover:bg-foreground/10 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        />
+      </LogoDialog>
     </div>
   )
 }
@@ -367,48 +254,58 @@ export function AddChrome({
         кнопкам, на середине пути покидал бы group/title (там ничего нет) и наведение
         гасло раньше, чем курсор доходил.
 
-        pb-3/sm:pb-4 — не наугад: коробка растёт вверх от заголовка внутри промежутка
+        pb-2/sm:pb-3 — не наугад: коробка растёт вверх от заголовка внутри промежутка
         «обложка → заголовок» (SlashEditor, pt-15/sm:pt-17 = 60/68px), а этот отступ
-        держит строку кнопок (20px, text-sm) БЛИЗКО к заголовку — 12/16px. Остаток
-        промежутка, 28/32px, достаётся обложке сверху: воздуха там заметно больше,
-        чем до заголовка, — так и задумано. Меняешь верхний отступ в SlashEditor/
-        fields.css — держи pb здесь заметно меньше половины, иначе перекос обратно
-        уедет к обложке. */}
-      <div className="absolute bottom-0 left-0 flex items-center gap-4 whitespace-nowrap pb-3 sm:pb-4 text-sm text-muted-foreground opacity-0 transition-opacity focus-within:opacity-100 group-hover/title:opacity-100">
+        держит строку ТЕКСТА кнопок БЛИЗКО к заголовку — 12/16px: малая кнопка
+        высотой 28 добавляет под текстом свои 4. Остаток промежутка достаётся
+        обложке сверху: воздуха там заметно больше, чем до заголовка, — так и
+        задумано. Меняешь верхний отступ в SlashEditor/fields.css — держи pb здесь
+        заметно меньше половины, иначе перекос обратно уедет к обложке.
+
+        -ml-2 возвращает значок первой кнопки к левому краю заголовка: у ghost-кнопки
+        видимая граница — значок и текст, а её поля (8 при значке) сдвигали бы их
+        вправо. Кнопки стоят без gap — поля и есть зазор. */}
+      <div className="absolute bottom-0 left-0 -ml-2 flex items-center whitespace-nowrap pb-2 sm:pb-3 opacity-0 transition-opacity focus-within:opacity-100 group-hover/title:opacity-100">
         {!cover && (
           // Обложка заводится ЦВЕТОМ, а не диалогом выбора файла: один клик — и она
           // уже есть, а картинка ставится следующим жестом с той же полосы. Пустой
           // обложки-заглушки в схеме не бывает, поэтому «завести и выбрать потом»
           // выразить нечем.
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
             onClick={() => setCover({ color: DEFAULT_COVER_COLOR })}
-            className="flex items-center gap-1.5 hover:text-foreground"
           >
-            <ImageIcon className="size-4" /> Добавить обложку
-          </button>
+            <ImageIcon /> Добавить обложку
+          </Button>
         )}
         {!logo && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
             onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-1.5 hover:text-foreground"
           >
-            <ImagePlus className="size-4" /> Добавить логотип
-          </button>
+            <ImagePlus /> Добавить логотип
+          </Button>
         )}
         {/* «Оформление» — тот же вход, что кнопка-палитра в шапке: шторка одна, и
             второго её состояния здесь не заводится. Стоит рядом с обложкой и
             логотипом потому, что размеры того и другого настраиваются как раз в
             ней — жест «дотянуться до вида страницы» начинается в одном месте. */}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground"
           onClick={onOpenDesign}
-          className="flex items-center gap-1.5 hover:text-foreground"
         >
-          <Palette className="size-4" /> Оформление
-        </button>
-        {error && <span className="text-destructive">{error}</span>}
+          <Palette /> Оформление
+        </Button>
+        {error && <span className="ml-2 text-sm text-destructive">{error}</span>}
       </div>
     </div>
   )

@@ -77,11 +77,11 @@ export function AppSidebar({
     // имя раздела приезжает подсказкой. Заводишь раздел без значка — полоса на нём
     // становится пустым местом.
     <Sidebar collapsible="icon">
-      {/* Высота шапки панели равна высоте верхнего бара (56px), а поля совпадают
+      {/* Высота шапки панели равна высоте верхнего бара (48px), а поля совпадают
           с его левым полем: логотип и крошки обязаны стоять на одной линии — они
           соседи по верхнему краю экрана, и разница в пару пикселей читается как
           съехавшая вёрстка. */}
-      <SidebarHeader className="h-14 justify-center px-3 py-0 group-data-[collapsible=icon]:px-0">
+      <SidebarHeader className="h-12 justify-center px-3 py-0 group-data-[collapsible=icon]:px-0">
         <div className="flex items-center justify-center gap-2">
           <span className="flex-1 text-base font-bold tracking-tight group-data-[collapsible=icon]:hidden">
             Trillix

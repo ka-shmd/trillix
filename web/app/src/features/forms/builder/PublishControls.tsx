@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
-import { Link, useNavigate } from '@tanstack/react-router'
-import { Link2, X } from 'lucide-react'
+import { useNavigate } from '@tanstack/react-router'
+import { X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { type FormDesign } from '@entities/formSchema'
@@ -32,7 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 // у уже опубликованной формы она уносит на живую форму накопленные правки.
 //   • черновик (ещё не публиковали) → публикует и уводит на /share, где ссылка;
 //   • уже публиковавшаяся (published/closed) → публикует и ОСТАВЛЯЕТ в редакторе
-//     (автор правит форму, а не ищет ссылку), а рядом появляется иконка на /share;
+//     (автор правит форму, а не ищет ссылку; значок ссылки — в баре, BuilderScreen);
 //   • закрытая форма той же кнопкой открывается снова (publish снимает closed).
 //
 // ГЕЙТ ТАРИФА КНОПКУ НЕ ГАСИТ (фаза 22): своё оформление можно настраивать и
@@ -142,22 +142,9 @@ export function PublishControls({
   const everPublished = form.publishedVersion !== null
 
   return (
-    <div className="flex flex-col items-end gap-1">
-      <div className="flex items-center gap-2">
-        {/* Подсказка стоит В СТРОКЕ шапки, а не под ней: строка под кнопкой
-            разъезжает бар по высоте (кнопка портирована в общую полосу). */}
-        {everPublished && (
-          <Button
-            variant="ghost"
-            size="icon-sm"
-            className="text-muted-foreground"
-            onClick={() => void goShare(form.slug)}
-            aria-label="Ссылка на форму"
-            title="Ссылка на форму"
-          >
-            <Link2 className="size-4" />
-          </Button>
-        )}
+    // Ни одной строки ПОД кнопкой: она портирована в бар высотой 48px, и всё, что стоит
+    // ниже, растягивает бар. Отказ публикации поэтому уходит в окно или тост (onError).
+    <div className="flex items-center gap-2">
         <PublishButton reasons={reasons}>
           <Button
             size="sm"
@@ -172,10 +159,17 @@ export function PublishControls({
               // автора незачем.
               void ensureForm()
                 .then(({ id, slug }) =>
-                  publish.mutate(
-                    id,
-                    everPublished ? undefined : { onSuccess: () => void goShare(slug) },
-                  ),
+                  publish.mutate(id, {
+                    onSuccess: everPublished ? undefined : () => void goShare(slug),
+                    // Отказ по тарифу — не сбой: повторять его бессмысленно, а ЧТО
+                    // мешает, автор обязан прочитать. Сервер перечисляет мешающие
+                    // настройки в сообщении 402, и его показывает то же окно, что и
+                    // проверка до запроса. Прочий отказ — тостом.
+                    onError: (err) => {
+                      if (planRequiredMessage(err) !== null) setRefused(true)
+                      else toast.error('Не удалось опубликовать. Обновите страницу и попробуйте ещё раз.')
+                    },
+                  }),
                 )
                 // Провалиться здесь может только создание формы (публикация свои ошибки
                 // показывает сама, ниже): нажали «Опубликовать» на нетронутом черновике,
@@ -186,7 +180,6 @@ export function PublishControls({
             {publish.isPending ? 'Публикуем…' : 'Опубликовать'}
           </Button>
         </PublishButton>
-      </div>
 
       {/* Диалог, а не строка под кнопкой и не тост: строка разъезжала шапку (кнопка
           живёт в общем баре), а тост уезжает сам и уносит с собой единственную
@@ -211,7 +204,11 @@ export function PublishControls({
           <AlertDialogHeader>
             <AlertDialogTitle>В форме есть элементы платной подписки</AlertDialogTitle>
             <AlertDialogDescription>
-              Чтобы опубликовать эту форму, нужна подписка. Задействовано: {blocked.join(', ')}.
+              {/* Окно открывают две дороги: проверка до запроса (перечень известен
+                  здесь) и отказ сервера 402 (перечень — в его сообщении). */}
+              {blocked.length > 0
+                ? `Чтобы опубликовать эту форму, нужна подписка. Задействовано: ${blocked.join(', ')}.`
+                : planMessage}{' '}
               Черновик сохраняется и правится на любом тарифе — платной остаётся только публикация.
             </AlertDialogDescription>
           </AlertDialogHeader>
@@ -229,40 +226,26 @@ export function PublishControls({
                 Кнопка не публикует сама. Публикация — снапшот СЕРВЕРНОГО черновика, а
                 снятое ещё не доехало автосейвом; нажатая тут же, она отправила бы на
                 сервер прежний документ и получила тот же 402. */}
-            <Button
-              variant="outline"
-              onClick={() => {
-                setDesign(dropPaid(design, allowCustom, allowCSS))
-                setRefused(false)
-                toast.success('Платное оформление снято. Вернуть — Ctrl+Z')
-              }}
-            >
-              Убрать платное оформление
-            </Button>
+            {/* После отказа сервера клиент платного не видит (blocked пуст), и снимать
+                ему нечего — кнопка без действия читалась бы выходом, которого нет. */}
+            {blocked.length > 0 && (
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setDesign(dropPaid(design, allowCustom, allowCSS))
+                  setRefused(false)
+                  toast.success('Платное оформление снято. Вернуть — Ctrl+Z')
+                }}
+              >
+                Убрать платное оформление
+              </Button>
+            )}
             <AlertDialogAction onClick={() => navigate({ to: '/settings/plan' })}>
               Оформить подписку
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-      {publish.isError && (
-        <p className="text-right text-xs text-destructive" role="alert">
-          {/* Отказ по тарифу — не сбой: повторять его бессмысленно, а вот ЧТО
-              мешает, автор обязан прочитать. Сервер перечисляет мешающие
-              настройки в сообщении (402 plan_required), и подменять его общей
-              фразой значит заставить автора гадать. */}
-          {planMessage !== null ? (
-            <>
-              {planMessage}{' '}
-              <Link to="/settings/plan" className="underline underline-offset-2">
-                Тариф
-              </Link>
-            </>
-          ) : (
-            'Не удалось опубликовать. Обновите страницу и попробуйте ещё раз.'
-          )}
-        </p>
-      )}
     </div>
   )
 }

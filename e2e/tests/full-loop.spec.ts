@@ -135,7 +135,7 @@ test('регистрация → форма → публикация → отв�
   // связка: ниже заполняется «Заголовок вопроса».
   await page
     .getByRole('group', { name: 'Вопросы' })
-    .getByRole('button', { name: 'Шкала', exact: true })
+    .getByRole('option', { name: 'Шкала', exact: true })
     .click()
   await page.getByRole('button', { name: 'Добавить', exact: true }).click()
   // Имя подписи общее с первым вопросом — берём последний добавленный.

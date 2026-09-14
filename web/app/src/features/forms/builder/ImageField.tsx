@@ -5,6 +5,7 @@ import { mediaSrc } from '@fields/media'
 import { useBuilderStore } from './storeContext'
 import { uploadImage, type FormIdSource } from './mediaUpload'
 import { humanError } from '../../../shared/api/errors'
+import { Button } from '@/components/ui/button'
 
 // ImageField — редактор image-блока: пустой блок показывает зону загрузки, при
 // выборе файла — оптимистичный локальный превью (createObjectURL) с прогресс-баром,
@@ -62,21 +63,21 @@ export function ImageField({ block, formId }: { block: Block; formId: FormIdSour
           <img className="rf-image" src={shownSrc} alt="" />
           {uploading && <ProgressOverlay pct={progress} />}
           {imageKey && !uploading && (
-            <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-[var(--rf-radius)] bg-black/35 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-              <button
+            // Кнопки поверх картинки — белые кнопки кабинета, как у обложки
+            // (CoverEditor, OverlayButton): служебный контрол редактора, а не часть формы.
+            <div className="absolute inset-0 flex items-center justify-center gap-2 rounded-[var(--rf-radius)] bg-foreground/35 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
+              <Button type="button" variant="outline" size="sm" onClick={pick}>
+                <RefreshCw /> Заменить
+              </Button>
+              <Button
                 type="button"
-                onClick={pick}
-                className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium text-[var(--rf-text)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-text))]"
-              >
-                <RefreshCw className="size-3.5" /> Заменить
-              </button>
-              <button
-                type="button"
+                variant="outline"
+                size="sm"
+                className="text-destructive hover:text-destructive"
                 onClick={() => updateBlock(block.id, { settings: {} })}
-                className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium text-[var(--rf-danger)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-danger))]"
               >
-                <Trash2 className="size-3.5" /> Удалить
-              </button>
+                <Trash2 /> Удалить
+              </Button>
             </div>
           )}
         </div>

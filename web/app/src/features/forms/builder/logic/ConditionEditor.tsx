@@ -372,7 +372,7 @@ function LeafRow({
 // «печатать ИЛИ выбрать» в одном поле. Собран он из тех же токенов и классов, что
 // Input; рамка, тень и кольцо фокуса переехали на обёртку через focus-within.
 const FIELD_BOX =
-  'flex h-7 w-44 max-w-full items-center rounded-md border border-input bg-muted shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-muted'
+  'flex h-7 w-44 max-w-full items-center rounded-lg border border-input bg-muted shadow-xs transition-[color,box-shadow] focus-within:border-ring focus-within:ring-[3px] focus-within:ring-ring/50 dark:bg-muted'
 
 // Левая половина, когда она кнопка: значение выбирается только списком (варианты,
 // шкала) либо уже занято ссылкой. Своей рамки у неё нет — рамка одна, у обёртки.

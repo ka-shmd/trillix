@@ -16,6 +16,11 @@ import { humanError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import {
+  RAISED_INPUT,
+  RAISED_ROW_BUTTON,
+  RAISED_ROW_ICON,
+} from '../../shared/raisedField'
 import { Label } from '@/components/ui/label'
 
 // Окно вебхука — полноэкранный оверлей, как у Google Таблиц: решения о том,
@@ -153,7 +158,7 @@ export function WebhookOverlay({
                 inputMode="url"
                 autoFocus
                 placeholder="https://hooks.zapier.com/hooks/catch/…"
-                className="h-10 md:text-base"
+                className={RAISED_INPUT}
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
               />
@@ -164,7 +169,7 @@ export function WebhookOverlay({
               <Input
                 id="webhook-name"
                 placeholder="CRM"
-                className="h-10 md:text-base"
+                className={RAISED_INPUT}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
@@ -293,13 +298,18 @@ function SecretField({
         <Input
           id="webhook-secret"
           autoFocus
-          className="h-10 flex-1 font-mono md:text-base"
+          className={`flex-1 ${RAISED_INPUT}`}
           placeholder={signed ? 'Не менять' : `От ${MIN_SECRET} символов`}
           value={secret}
           onChange={(e) => onSecret(e.target.value)}
         />
         {signed && !known && onShow && (
-          <Button variant="outline" disabled={showing} onClick={onShow}>
+          <Button
+            variant="outline"
+            className={RAISED_ROW_BUTTON}
+            disabled={showing}
+            onClick={onShow}
+          >
             <Eye className="size-4" aria-hidden />
             Показать
           </Button>
@@ -310,6 +320,7 @@ function SecretField({
         <Button
           variant="ghost"
           size="icon"
+          className={RAISED_ROW_ICON}
           aria-label="Убрать подпись"
           onClick={onOff}
         >
@@ -368,20 +379,21 @@ function HeadersField({
           <Input
             aria-label={`Имя заголовка ${i + 1}`}
             placeholder="Имя"
-            className="h-10 w-2/5 font-mono md:text-base"
+            className={`w-2/5 ${RAISED_INPUT}`}
             value={row.name}
             onChange={(e) => onPatch(row.id, { name: e.target.value })}
           />
           <Input
             aria-label={`Значение заголовка ${i + 1}`}
             placeholder="Значение"
-            className="h-10 flex-1 font-mono md:text-base"
+            className={`flex-1 ${RAISED_INPUT}`}
             value={row.value}
             onChange={(e) => onPatch(row.id, { value: e.target.value })}
           />
           <Button
             variant="ghost"
             size="icon"
+            className={RAISED_ROW_ICON}
             aria-label={`Убрать заголовок ${i + 1}`}
             onClick={() => onRemove(row.id)}
           >

@@ -2,9 +2,11 @@ package media
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -18,9 +20,15 @@ import (
 // хендлер (тот же приём, что в forms).
 type Middleware = func(http.Handler) http.Handler
 
+// RateLimiter — ведро на загрузку по ссылке; ratelimit.TokenBucket его реализует.
+type RateLimiter interface {
+	Allow(key string) bool
+}
+
 // mediaService — потребляемый интерфейс сервиса (объявлен на стороне транспорта).
 type mediaService interface {
 	Upload(ctx context.Context, userID, formID uuid.UUID, data []byte, purpose Purpose) (string, error)
+	UploadFromURL(ctx context.Context, userID, formID uuid.UUID, rawURL string, purpose Purpose) (string, error)
 	Fetch(ctx context.Context, key string) (data []byte, contentType string, err error)
 }
 
@@ -29,10 +37,16 @@ type Handler struct {
 	svc         mediaService
 	requireAuth Middleware
 	requireCSRF Middleware
+	// urlLimiter — ведро на загрузку по ссылке: каждая — исходящий запрос к чужому
+	// сайту с нашего IP длиной до safehttp.DefaultTimeout. Без ведра ручкой можно было
+	// бы качать по списку адресов или стучать в чужой сервер.
+	urlLimiter RateLimiter
 }
 
-func NewHandler(svc mediaService, requireAuth, requireCSRF Middleware) *Handler {
-	return &Handler{svc: svc, requireAuth: requireAuth, requireCSRF: requireCSRF}
+// urlLimiter — ОБЯЗАТЕЛЬНЫЙ параметр, а не сеттер: «лимита нет» не должно
+// получаться забытым вызовом (тесты передают ratelimit.AllowAll, инвариант 6).
+func NewHandler(svc mediaService, requireAuth, requireCSRF Middleware, urlLimiter RateLimiter) *Handler {
+	return &Handler{svc: svc, requireAuth: requireAuth, requireCSRF: requireCSRF, urlLimiter: urlLimiter}
 }
 
 // Routes регистрирует эндпоинты media на общем mux. Загрузка привязана к форме:
@@ -51,6 +65,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 // sha256 содержимого, то есть неизменяем: одна и та же ссылка навсегда означает одни
 // и те же байты.
 const printMediaMaxAge = "public, max-age=31536000, immutable"
+
+// maxURLBodyBytes — потолок JSON-тела загрузки по ссылке (инвариант 3): адрес
+// (safehttp.MaxURLLength) и назначение.
+const maxURLBodyBytes = 4 << 10
 
 // printMedia отдаёт картинку формы браузеру принтера. Прав не спрашивает — по тем же
 // основаниям, что и Fetch: картинки формы публичны, и этот путь лишь заменяет
@@ -72,6 +90,12 @@ type uploadResponse struct {
 	ImageKey string `json:"imageKey"`
 }
 
+// urlUploadRequest — загрузка по ссылке: тело JSON вместо multipart на том же адресе.
+type urlUploadRequest struct {
+	URL     string `json:"url"`
+	Purpose string `json:"purpose"`
+}
+
 func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	u, ok := auth.UserFromContext(r.Context())
 	if !ok {
@@ -82,6 +106,12 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	formID, err := uuid.Parse(r.PathValue("id"))
 	if err != nil {
 		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+
+	// Вид загрузки различается типом тела: JSON — ссылка, остальное — файл.
+	if mt, _, _ := mime.ParseMediaType(r.Header.Get("Content-Type")); mt == "application/json" {
+		h.uploadFromURL(w, r, u.ID, formID)
 		return
 	}
 
@@ -110,6 +140,38 @@ func (h *Handler) upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	key, err := h.svc.Upload(r.Context(), u.ID, formID, data, purpose)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusCreated, uploadResponse{ImageKey: key})
+}
+
+func (h *Handler) uploadFromURL(w http.ResponseWriter, r *http.Request, userID, formID uuid.UUID) {
+	// Ведро на человека, до разбора тела: отказ по лимиту не должен стоить работы.
+	if !h.urlLimiter.Allow(userID.String()) {
+		httpserver.WriteError(w, r, domain.ErrRateLimited)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxURLBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req urlUploadRequest
+	if err := dec.Decode(&req); err != nil {
+		var tooLarge *http.MaxBytesError
+		if errors.As(err, &tooLarge) {
+			httpserver.WriteError(w, r, domain.ErrTooLarge)
+			return
+		}
+		httpserver.WriteError(w, r, fmt.Errorf("%w: ожидается JSON с полем url", domain.ErrValidation))
+		return
+	}
+	purpose, err := ParsePurpose(req.Purpose)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	key, err := h.svc.UploadFromURL(r.Context(), userID, formID, req.URL, purpose)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
