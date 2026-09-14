@@ -67,6 +67,7 @@ type formsService interface {
 	UpdateNotifyEmail(ctx context.Context, userID, formID uuid.UUID, n *domain.NotifyEmail) (Form, error)
 	UpdateLinkPreview(ctx context.Context, userID, formID uuid.UUID, p *domain.LinkPreview) (Form, error)
 	UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUID, rawSchema json.RawMessage, expectedUpdatedAt time.Time) (Form, error)
+	DiscardDraft(ctx context.Context, userID, formID uuid.UUID, expectedUpdatedAt time.Time) (Form, error)
 	Delete(ctx context.Context, userID, formID uuid.UUID) error
 	Publish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
 	Unpublish(ctx context.Context, userID, formID uuid.UUID) (Form, error)
@@ -153,6 +154,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/forms/{id}/publish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.publish))))
 	mux.Handle("POST /api/v1/forms/{id}/unpublish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.unpublish))))
 	mux.Handle("POST /api/v1/forms/{id}/reopen", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.reopen))))
+	mux.Handle("POST /api/v1/forms/{id}/discard-draft", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.discardDraft))))
 }
 
 // --- DTO ---
@@ -931,6 +933,36 @@ func (h *Handler) delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// discardDraft возвращает черновик к опубликованной версии. Тело — {"updatedAt"}:
+// токен той же оптимистичной блокировки, что у автосейва. Ответ — деталь целиком, как
+// у GET: у кабинета нет опубликованной схемы, чтобы собрать черновик самому.
+func (h *Handler) discardDraft(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxFormBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req struct {
+		UpdatedAt *time.Time `json:"updatedAt"`
+	}
+	if err := dec.Decode(&req); err != nil || req.UpdatedAt == nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: нужен updatedAt черновика", domain.ErrValidation))
+		return
+	}
+	form, err := h.svc.DiscardDraft(r.Context(), userID, formID, *req.UpdatedAt)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, h.formDetail(r.Context(), form))
 }
 
 // publish снимает снапшот черновика в новую версию и публикует форму. Тела нет.

@@ -28,7 +28,7 @@ import {
   updateFormPassword,
   updateNotifyOnSubmission,
 } from './api'
-import { saveDraftSchema } from './builder/api'
+import { discardDraft, saveDraftSchema } from './builder/api'
 import {
   type CloseSettingsInput,
   type FormDetail,
@@ -387,6 +387,20 @@ export function useDeleteForm() {
   return useMutation({
     mutationFn: (id: string) => deleteForm(id),
     onSuccess: () => qc.invalidateQueries({ queryKey: formKeys.list() }),
+  })
+}
+
+// Откат черновика к опубликованной версии. Ответ ложится в detail ЦЕЛИКОМ: в нём
+// новый черновик и новый токен блокировки, с которым пойдёт следующий автосейв.
+export function useDiscardDraft() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, updatedAt }: { id: string; updatedAt: string }) =>
+      discardDraft(id, updatedAt),
+    onSuccess: (form) => {
+      qc.invalidateQueries({ queryKey: formKeys.list() })
+      qc.setQueryData<FormDetail>(formKeys.detail(form.slug), form)
+    },
   })
 }
 
