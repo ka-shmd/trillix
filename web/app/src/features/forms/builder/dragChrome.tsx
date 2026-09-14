@@ -190,17 +190,3 @@ export function FootDropZone({ id, hot, gutter }: { id: string; hot: boolean; gu
 
 const RAIL_OUT = 8
 
-// CellDropZone — та же зона на строке подписи (§6.6 EDITOR.md): дроп собирает ряд ВНУТРИ
-// вопроса. Вид и правила те же, что у SideDropZone, — жест один, уровень разный, и
-// выглядеть они обязаны одинаково. Сторона всегда правая: пара внутри вопроса
-// направленная (слева подпись, справа поле).
-//
-// Своей линии не рисует никогда: зона второго уровня живёт ТОЛЬКО в блочном драге (её
-// зажигает поле, уносимое из своей мульти-группы), а в нём жёлоб пуст у всех — см.
-// zoneRailOff в SlashEditor.
-export function CellDropZone({ id, hot }: { id: string; hot: boolean }) {
-  const { setNodeRef } = useDroppable({ id })
-  return (
-    <div ref={setNodeRef} aria-hidden="true" className={`${zoneFill(hot)} ${ZONE_SIDE.right}`} />
-  )
-}

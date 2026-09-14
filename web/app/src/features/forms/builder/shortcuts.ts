@@ -373,20 +373,14 @@ export interface ShortcutFilters {
   hasAnswer?: boolean
   movesRow?: boolean
   needsCaption?: boolean
-  // insideQuestion — строка НЕ первая в своей группе. Тогда Mod+Alt+→ работает на
-  // втором уровне (фаза 15, §6.6): собирает ряд со своей подписью, а не с предыдущим
-  // вопросом. Клавиша та же, действие другое — значит, и подпись в карте другая,
-  // иначе карта врёт (демо-критерий 13.5).
-  insideQuestion?: boolean
-  // row — позиция ПЕРВОЙ строки вопроса на оси колонок (§11.6, считает rowPosition).
+  // row — позиция строки на оси колонок (§11.6, считает rowPosition).
   // Одна клавиша Mod+Alt+→ значит на ней разное — от «встать в ряд с предыдущим» до
   // «шага нет вовсе», — и карта обязана называть то, что случится здесь.
   //
   // К СТРОКЕ ВАРИАНТА не применяется: там те же клавиши работают на своей оси — ряды
   // ВАРИАНТОВ внутри choice-блока (`placeOptionInRow`/`takeOptionOwnRow`), и позиция
   // вопроса о них ничего не говорит. Фильтруется по контексту в shortcutsFor, а не
-  // доверием к вызывающему: строка варианта не знает про `insideQuestion` и прислала бы
-  // позицию своего блока.
+  // доверием к вызывающему: строка варианта прислала бы позицию своего блока.
   row?: RowPosition
 }
 
@@ -398,6 +392,13 @@ export interface ShortcutFilters {
 // они разъедутся, карта соврёт, а это баг, а не косметика (13.5).
 function rowHints(pos: RowPosition): { right?: string; left?: string } {
   if (pos.kind === 'solo') return {}
+  // Строка ответа собранного вопроса: шаг выводит её из вопроса колонкой рядом. Ряд
+  // вопроса на потолке колонок — шага нет ни в одну сторону.
+  if (pos.kind === 'leave') {
+    return pos.room
+      ? { right: 'Из вопроса колонкой справа', left: 'Из вопроса колонкой слева' }
+      : {}
+  }
   if (pos.kind === 'enter') {
     return { right: 'В ряд с предыдущим вопросом', left: 'В первую колонку ряда' }
   }
@@ -424,14 +425,9 @@ function rowHints(pos: RowPosition): { right?: string; left?: string } {
 export function shortcutsFor(ctx: ShortcutContext, opts: ShortcutFilters = {}): Shortcut[] {
   let list = SHORTCUTS[ctx]
   if (opts.movesRow === false) list = list.filter((s) => s.match !== chords.moveItem)
-  if (opts.insideQuestion) {
-    list = list.map((s) =>
-      s.match === chords.rowRight ? { ...s, hint: 'В ряд со своим заголовком' } : s,
-    )
-  } else if (opts.row && ctx !== 'option' && ctx !== 'newOption') {
+  if (opts.row && ctx !== 'option' && ctx !== 'newOption') {
     // Позиция на оси известна — переписываем обе подписи и выбрасываем шаг, которого из
-    // этой позиции нет. Взаимоисключающе с insideQuestion: ось колонок — про вопрос
-    // целиком, а строка внутри вопроса ведёт себя по своей, короткой (§6.6).
+    // этой позиции нет.
     const hints = rowHints(opts.row)
     list = list.flatMap((s) => {
       if (s.match === chords.rowRight) return hints.right ? [{ ...s, hint: hints.right }] : []

@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render } from '@testing-library/react'
 
-import { type FormSchema, SCHEMA_VERSION, textFromString } from '@entities/formSchema'
+import { type FormSchema, SCHEMA_VERSION } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -96,24 +96,6 @@ describe('доли колонок доезжают до разметки', () =>
     expect(previewGrow(preview(fresh))).toEqual(['', '', ''])
   })
 
-  it('ряд внутри вопроса несёт свои доли', () => {
-    const form = preview(
-      schema(
-        {
-          id: 't',
-          groupId: 'g',
-          type: 'title',
-          text: textFromString('Индекс'),
-          settings: { column: 1, columnWidth: 35 },
-        },
-        { id: 'f', groupId: 'g', type: 'short_text', settings: { column: 2, columnWidth: 65 } },
-      ),
-    )
-    const cells = form.querySelectorAll(':scope > .rf-group > .rf-row > .rf-cell')
-    expect(
-      [...cells].map((c) => (c as HTMLElement).style.getPropertyValue('--rf-cell-grow')),
-    ).toEqual(['35', '65'])
-  })
 })
 
 // РУЧКА ЖЕСТА в разметке полотна: где она есть и где её нет. Само перетаскивание в
@@ -162,15 +144,6 @@ describe('ручка ширины на полотне', () => {
     expect(handles(container)).toHaveLength(0)
   })
 
-  it('ряд внутри вопроса несёт свою ручку', () => {
-    const container = canvas(
-      schema(
-        { id: 't', groupId: 'g', type: 'title', text: textFromString('Индекс') },
-        { id: 'f', groupId: 'g', type: 'short_text', settings: { column: 2 } },
-      ),
-    )
-    expect(handles(container)).toHaveLength(1)
-  })
 })
 
 // СКВОЗНОЙ ЖЕСТ: ручка → DOM → стор. Формулы проверены отдельно (columnResize.test.ts),

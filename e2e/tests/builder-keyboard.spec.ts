@@ -22,8 +22,8 @@ import { login, seedAccount } from './helpers/session'
 //      как обычная строка полотна (разметка `Mod+B`, откат `Mod+Z` тем же стеком) и
 //      доезжает до респондента, а `<title>` остаётся плоским; двухколоночная СЕКЦИЯ
 //      собирается осью `Mod+Alt+←/→` и держит стопку в колонке; `Enter` из колонки
-//      кладёт новую строку ПОД секцией, а не между колонками; подпись и поле встают в
-//      ряд ВНУТРИ вопроса. Всё это модель проверяет юнитами, но «доехало до прод-сборки
+//      кладёт новую строку ПОД секцией, а не между колонками; поле вопроса уходит из него
+//      колонкой рядом с подписью. Всё это модель проверяет юнитами, но «доехало до прод-сборки
 //      и нарисовано» — только здесь.
 //
 // СЕССИЯ — не UI-регистрацией: `registerBurst` расходуется тремя старыми сценариями
@@ -229,10 +229,10 @@ test('билдер без мыши: форма собирается клавиа
   await page.keyboard.type('Реклама')
   await expect(page.getByLabel('Вариант 2')).toHaveValue('Реклама')
 
-  // 7b. РЯД ВНУТРИ ВОПРОСА (этап 15.4): та же клавиша на не первой строке группы
-  // собирает ряд не с предыдущим вопросом, а СО СВОЕЙ ПОДПИСЬЮ — уровень задаёт место
-  // строки в группе. Единственный вход к нему с клавиатуры — поверхность самого поля
-  // (инпут плейсхолдера), поэтому сперва Mod+Enter с заголовка.
+  // 7b. ПОЛЕ УХОДИТ ИЗ ВОПРОСА В РЯД (ADR §10, 2026-09-14): та же клавиша на строке ответа
+  // выводит поле из вопроса колонкой справа от подписи — дальше это два отдельных
+  // элемента. Вход к нему с клавиатуры — поверхность самого поля (инпут плейсхолдера),
+  // поэтому сперва Mod+Enter с заголовка.
   // Выход из списка — двумя Enter: первый заводит пустой последний вариант, второй
   // (в пустом) удаляет его и открывает строку ниже (§3.2, контракт фокуса §12).
   await page.keyboard.press('Enter')
@@ -314,11 +314,13 @@ test('билдер без мыши: форма собирается клавиа
   expect(await formPage.title()).toContain(formTitle)
   expect(await formPage.title()).not.toMatch(/<span|rf-b/)
 
-  // СЕКЦИЯ (этап 15.6): обёртка ряда достаётся только ряду из двоих, и она одна на
-  // поток вопросов — второй `.rf-row` в форме есть, но он ВНУТРИ вопроса «Город»
-  // (уровень ниже, §13 EDITOR.md). Проверяем оба, разведя их по родителю.
-  const section = formPage.locator('.rf-form > .rf-row')
-  await expect(section).toHaveCount(1)
+  // СЕКЦИИ (этап 15.6): обёртка ряда достаётся только ряду из двоих. Их в форме две:
+  // «имя | почта + телефон» и «Город», чьё поле ушло из вопроса колонкой рядом с
+  // подписью (ADR §10, 2026-09-14). Рядов внутри вопроса нет вовсе.
+  const sections = formPage.locator('.rf-form > .rf-row')
+  await expect(sections).toHaveCount(2)
+  await expect(formPage.locator('.rf-group > .rf-row')).toHaveCount(0)
+  const section = sections.first()
   const cells = section.locator(':scope > .rf-cell')
   await expect(cells).toHaveCount(2)
   // Слева один вопрос, справа СТОПКА из двух — то, ради чего этап и делался.
@@ -327,9 +329,11 @@ test('билдер без мыши: форма собирается клавиа
   await expect(section.getByText(nameQ)).toBeVisible()
   await expect(section.getByText(phoneQ)).toBeVisible()
 
-  // Ряд ВНУТРИ вопроса (этап 15.4): подпись и поле в одной строке, обёртка — своя.
-  await expect(formPage.locator('.rf-group > .rf-row')).toHaveCount(1)
-  expect(await sideBySide(formPage.getByText(cityQ), formPage.getByLabel(cityQ))).toBe(true)
+  // Подпись «Город» и ушедшее из вопроса поле — колонки одной секции: одна высота, поле
+  // правее. По подписи поле не находится: оно голое.
+  const citySection = sections.nth(1)
+  const cityField = citySection.locator(':scope > .rf-cell').nth(1).locator('input')
+  expect(await sideBySide(citySection.getByText(cityQ), cityField)).toBe(true)
 
   expect(await sideBySide(nameField, mailField)).toBe(true)
   // Стопка справа: телефон под почтой и в той же колонке.
@@ -381,9 +385,10 @@ test('билдер без мыши: форма собирается клавиа
   const mobileName = (await mobilePage.getByLabel(nameQ).boundingBox())!
   const mobileMail = (await mobilePage.getByLabel(mailQ).boundingBox())!
   expect(mobileMail.y).toBeGreaterThan(mobileName.y + mobileName.height)
-  // Ряд ВНУТРИ вопроса разваливается тем же правилом: подпись над своим полем.
-  const mobileCity = (await mobilePage.getByText(cityQ).boundingBox())!
-  const mobileCityField = (await mobilePage.getByLabel(cityQ).boundingBox())!
+  // Секция «Город» разваливается тем же правилом: подпись над полем.
+  const mobileCitySection = mobilePage.locator('.rf-form > .rf-row').nth(1)
+  const mobileCity = (await mobileCitySection.getByText(cityQ).boundingBox())!
+  const mobileCityField = (await mobileCitySection.locator('input').boundingBox())!
   expect(mobileCityField.y).toBeGreaterThan(mobileCity.y)
   await mobile.close()
 

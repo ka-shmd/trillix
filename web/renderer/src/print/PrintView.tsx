@@ -7,12 +7,10 @@ import { customStyleSheet } from '@fields/customCss'
 import { designClasses, DESIGN_VAR_NAMES, designToVars } from '@fields/design'
 import { KnownFilesProvider } from '@fields/fileUpload'
 import {
-  blockRowWidths,
   cellVars,
   groupBlocks,
   groupMeta,
   groupRowWidths,
-  packGroupRows,
   packRows,
   splitFormTitle,
 } from '@fields/groups'
@@ -81,35 +79,17 @@ export function PrintView({ data }: { data: PrintData }) {
               {packRows(groupBlocks(rest)).map((row) => {
                 const renderGroup = (group: (typeof row)[number][number]) => (
                   <div key={group.id} className={groupClass(group.blocks)}>
-                    {packGroupRows(group.blocks).map((innerRow) => {
-                      const render = (block: (typeof innerRow)[number][number]) => (
-                        <BlockField
-                          key={block.id}
-                          block={block}
-                          captionText={groups.get(block.groupId)?.caption}
-                          captionRequired={groups.get(block.groupId)?.required}
-                          value={answers[block.id]}
-                          disabled
-                          readOnly
-                        />
-                      )
-                      const innerWidths = blockRowWidths(innerRow)
-                      return innerRow.length > 1 ? (
-                        <div key={innerRow[0]![0]!.id} className="rf-row">
-                          {innerRow.map((cell, i) => (
-                            <div
-                              key={cell[0]!.id}
-                              className="rf-cell"
-                              style={cellVars(innerWidths, i)}
-                            >
-                              {cell.map(render)}
-                            </div>
-                          ))}
-                        </div>
-                      ) : (
-                        render(innerRow[0]![0]!)
-                      )
-                    })}
+                    {group.blocks.map((block) => (
+                      <BlockField
+                        key={block.id}
+                        block={block}
+                        captionText={groups.get(block.groupId)?.caption}
+                        captionRequired={groups.get(block.groupId)?.required}
+                        value={answers[block.id]}
+                        disabled
+                        readOnly
+                      />
+                    ))}
                   </div>
                 )
                 const first = row[0]?.[0]

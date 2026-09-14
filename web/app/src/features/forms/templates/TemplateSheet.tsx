@@ -5,12 +5,10 @@ import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import { designClasses, designToVars } from '@fields/design'
 import {
-  blockRowWidths,
   cellVars,
   groupBlocks,
   groupMeta,
   groupRowWidths,
-  packGroupRows,
   packRows,
 } from '@fields/groups'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
@@ -143,37 +141,19 @@ export function TemplateSheet({
                     // Ступень воздуха перед вопросом — по типу его первого блока
                     // (@fields/space), тем же кодом, что у рендерера и полотна.
                     <div key={group.id} className={groupClass(group.blocks)}>
-                      {packGroupRows(group.blocks).map((innerRow) => {
-                        const render = (block: (typeof innerRow)[number][number]) => (
-                          <BlockField
-                            key={block.id}
-                            block={block}
-                            captionText={groups.get(block.groupId)?.caption}
-                            captionRequired={groups.get(block.groupId)?.required}
-                            value={answers[block.id]}
-                            onChange={(value: Answer) =>
-                              setAnswers((prev) => ({ ...prev, [block.id]: value }))
-                            }
-                            disabled={false}
-                          />
-                        )
-                        const innerWidths = blockRowWidths(innerRow)
-                        return innerRow.length > 1 ? (
-                          <div key={innerRow[0]![0]!.id} className="rf-row">
-                            {innerRow.map((cell, i) => (
-                              <div
-                                key={cell[0]!.id}
-                                className="rf-cell"
-                                style={cellVars(innerWidths, i)}
-                              >
-                                {cell.map(render)}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          render(innerRow[0]![0]!)
-                        )
-                      })}
+                      {group.blocks.map((block) => (
+                        <BlockField
+                          key={block.id}
+                          block={block}
+                          captionText={groups.get(block.groupId)?.caption}
+                          captionRequired={groups.get(block.groupId)?.required}
+                          value={answers[block.id]}
+                          onChange={(value: Answer) =>
+                            setAnswers((prev) => ({ ...prev, [block.id]: value }))
+                          }
+                          disabled={false}
+                        />
+                      ))}
                     </div>
                   )
                   const first = row[0]?.[0]

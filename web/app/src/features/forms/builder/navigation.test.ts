@@ -7,7 +7,7 @@ function blk(id: string, groupId: string, type: Block['type']): Block {
   return { id, groupId, type }
 }
 
-// Вопрос с подписью: [подпись | поле]. Поле — лист (поток его перескакивает).
+// Вопрос с подписью: [подпись, поле]. Поле — лист (поток его перескакивает).
 const captioned = [blk('c1', 'g1', 'label'), blk('f1', 'g1', 'short_text')]
 // Голое поле (группа без подписи) — НЕ лист, обычная остановка.
 const bare = [blk('f2', 'g2', 'email')]

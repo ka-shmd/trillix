@@ -3,7 +3,7 @@ import { useEffect, useState } from 'react'
 import { type Block, DEFAULT_THANK_YOU_TITLE } from '@entities/formSchema'
 
 import { BlockField } from '@fields/BlockField'
-import { groupBlocks, packGroupRows, packRows } from '@fields/groups'
+import { groupBlocks, packRows } from '@fields/groups'
 import { pageClass } from '@fields/pageChrome'
 
 import { Badge } from '@fields/Badge'
@@ -123,7 +123,7 @@ export function ThankYou({
 //
 // Свой обход, а не общий с FormView: тот тянет за собой ответы, ошибки, блокировку и
 // репортёр фокуса — шесть пропов на блок, ни один из которых здесь не существует.
-// Раскладчик при этом ОБЩИЙ (packRows/packGroupRows), поэтому ряды и колонки на этом
+// Раскладчик при этом ОБЩИЙ (packRows), поэтому ряды и колонки на этом
 // экране считаются теми же правилами, что на любой странице формы.
 function BlockRows({ blocks }: { blocks: Block[] }) {
   return (
@@ -131,21 +131,9 @@ function BlockRows({ blocks }: { blocks: Block[] }) {
       {packRows(groupBlocks(blocks)).map((row) => {
         const renderGroup = (group: { id: string; blocks: Block[] }) => (
           <div key={group.id} className="rf-group">
-            {packGroupRows(group.blocks).map((innerRow) =>
-              innerRow.length > 1 ? (
-                <div key={innerRow[0]![0]!.id} className="rf-row">
-                  {innerRow.map((cell) => (
-                    <div key={cell[0]!.id} className="rf-cell">
-                      {cell.map((b) => (
-                        <BlockField key={b.id} block={b} />
-                      ))}
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <BlockField key={innerRow[0]![0]!.id} block={innerRow[0]![0]!} />
-              ),
-            )}
+            {group.blocks.map((b) => (
+              <BlockField key={b.id} block={b} />
+            ))}
           </div>
         )
         const first = row[0]?.[0]

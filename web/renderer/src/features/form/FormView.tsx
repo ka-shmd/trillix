@@ -14,10 +14,8 @@ import { BlockField } from '@fields/BlockField'
 import {
   groupBlocks,
   groupMeta,
-  blockRowWidths,
   cellVars,
   groupRowWidths,
-  packGroupRows,
   packRows,
   splitFormTitle,
   splitThankYou,
@@ -710,47 +708,26 @@ export function FormView({
               // спека §5); обёртка ряда — только у ряда из двоих.
               const renderGroup = (group: (typeof row)[number][number]) => (
                 <div key={group.id} className={groupClass(group.blocks)}>
-                  {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
-                  бок той же обёрткой .rf-row, что и два вопроса. Ряд из одного
-                  остаётся прямым ребёнком .rf-group. */}
-                  {packGroupRows(group.blocks).map((innerRow) => {
-                    const render = (block: (typeof innerRow)[number][number]) => (
-                      // Индекс блока в ПОЛНОМ потоке: группировка порядок не меняет.
-                      <FocusReporter
-                        key={block.id}
-                        index={blocks.indexOf(block)}
-                        onReach={markFurthest}
-                      >
-                        <BlockField
-                          // Скрытые условием варианты в список не попадают (фаза 21).
-                          block={withVisibleOptions(block, plan)}
-                          captionText={groups.get(block.groupId)?.caption}
-                          captionRequired={groups.get(block.groupId)?.required}
-                          value={answers[block.id]}
-                          onChange={(value: Answer) => onChange(block.id, value)}
-                          onBlur={() => onBlur(block.id)}
-                          error={errors[block.id]}
-                          disabled={locked}
-                        />
-                      </FocusReporter>
-                    )
-                    const innerWidths = blockRowWidths(innerRow)
-                    return innerRow.length > 1 ? (
-                      <div key={innerRow[0]![0]!.id} className="rf-row">
-                        {innerRow.map((cell, i) => (
-                          <div
-                            key={cell[0]!.id}
-                            className="rf-cell"
-                            style={cellVars(innerWidths, i)}
-                          >
-                            {cell.map(render)}
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      render(innerRow[0]![0]!)
-                    )
-                  })}
+                  {group.blocks.map((block) => (
+                    // Индекс блока в ПОЛНОМ потоке: группировка порядок не меняет.
+                    <FocusReporter
+                      key={block.id}
+                      index={blocks.indexOf(block)}
+                      onReach={markFurthest}
+                    >
+                      <BlockField
+                        // Скрытые условием варианты в список не попадают (фаза 21).
+                        block={withVisibleOptions(block, plan)}
+                        captionText={groups.get(block.groupId)?.caption}
+                        captionRequired={groups.get(block.groupId)?.required}
+                        value={answers[block.id]}
+                        onChange={(value: Answer) => onChange(block.id, value)}
+                        onBlur={() => onBlur(block.id)}
+                        error={errors[block.id]}
+                        disabled={locked}
+                      />
+                    </FocusReporter>
+                  ))}
                 </div>
               )
               // В колонке ряда может стоять СТОПКА вопросов (§5): при длинном блоке слева
