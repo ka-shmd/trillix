@@ -1,6 +1,6 @@
 import { useState, type ReactNode } from 'react'
 import { useNavigate } from '@tanstack/react-router'
-import { Link2, X } from 'lucide-react'
+import { X } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { type FormDesign } from '@entities/formSchema'
@@ -32,7 +32,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 // у уже опубликованной формы она уносит на живую форму накопленные правки.
 //   • черновик (ещё не публиковали) → публикует и уводит на /share, где ссылка;
 //   • уже публиковавшаяся (published/closed) → публикует и ОСТАВЛЯЕТ в редакторе
-//     (автор правит форму, а не ищет ссылку), а рядом появляется иконка на /share;
+//     (автор правит форму, а не ищет ссылку; значок ссылки — в баре, BuilderScreen);
 //   • закрытая форма той же кнопкой открывается снова (publish снимает closed).
 //
 // ГЕЙТ ТАРИФА КНОПКУ НЕ ГАСИТ (фаза 22): своё оформление можно настраивать и
@@ -78,8 +78,6 @@ function paidInUse(
   if (!allowCSS && design?.css?.trim()) out.push('свой CSS')
   return out
 }
-
-const SHARE_LABEL = 'Ссылка на форму'
 
 // PublishButton — обёртка кнопки тултипом с причиной запрета.
 //
@@ -144,25 +142,9 @@ export function PublishControls({
   const everPublished = form.publishedVersion !== null
 
   return (
-    // Ни одной строки ПОД кнопкой: она портирована в бар высотой 56px, и всё, что стоит
+    // Ни одной строки ПОД кнопкой: она портирована в бар высотой 48px, и всё, что стоит
     // ниже, растягивает бар. Отказ публикации поэтому уходит в окно или тост (onError).
     <div className="flex items-center gap-2">
-        {everPublished && (
-          <Tooltip>
-            <TooltipTrigger asChild>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="text-muted-foreground"
-                onClick={() => void goShare(form.slug)}
-                aria-label={SHARE_LABEL}
-              >
-                <Link2 className="size-4" />
-              </Button>
-            </TooltipTrigger>
-            <TooltipContent>{SHARE_LABEL}</TooltipContent>
-          </Tooltip>
-        )}
         <PublishButton reasons={reasons}>
           <Button
             size="sm"

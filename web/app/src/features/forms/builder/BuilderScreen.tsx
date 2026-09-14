@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
 import { useStore } from 'zustand'
-import { Eye, Palette, Redo2, Settings, Undo2 } from 'lucide-react'
+import { Link2, Plug, Redo2, Settings, Undo2 } from 'lucide-react'
 
 import { showFormBadge } from '@fields/design'
 
@@ -26,6 +26,7 @@ import { ChatDrawer } from '../chat/ChatDrawer'
 import { useAutosave, type DraftCreation } from './useAutosave'
 import { useGlobalChord } from './useGlobalChord'
 import { chords, formatLabel, labelFor } from './shortcuts'
+import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -149,6 +150,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
   const dirty = useStore(store, (s) => s.dirty)
   const canPublish = status === 'saved' && !dirty
 
+  const everPublished = detail.publishedVersion !== null
   const canUndo = useStore(store, (s) => s.past.length > 0)
   const canRedo = useStore(store, (s) => s.future.length > 0)
 
@@ -197,16 +199,60 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
       <PageCrumbs items={[workspaceCrumb, displayFormName(detail)]} />
       {/* Кнопки редактора — в правую половину верхнего бара. */}
       <PageActions>
-        {/* Плашка «Есть изменения» — первой в ряду, перед историей (решение владельца
-            2026-09-14). Условие отката — то же, что у публикации: черновик догнал
-            редактор, иначе откат гонится с автосейвом за один токен блокировки. */}
-        <DiscardChanges form={detail} canDiscard={canPublish} />
+        {/* Статус — первым в ряду, перед историей (решение владельца 2026-09-14): у
+            публиковавшейся формы — плашка «Есть изменения» с откатом, у ни разу не
+            публиковавшейся — бейдж «Черновик». Условие отката — то же, что у
+            публикации: черновик догнал редактор, иначе откат гонится с автосейвом за
+            один токен блокировки. */}
+        {everPublished ? (
+          <DiscardChanges form={detail} canDiscard={canPublish} />
+        ) : (
+          <Badge variant="secondary">Черновик</Badge>
+        )}
         {/* Отмена/повтор — история документа, ближе всего к полотну,
             которое они правят. Пара значков стоит своей коробкой без gap
             (DESIGN-SYSTEM §7): поля ghost-кнопок уже дают воздух между ними. */}
         <div className="flex items-center">
           <BarIcon icon={Undo2} label={undoLabel} disabled={!canUndo} onClick={undo} />
           <BarIcon icon={Redo2} label={redoLabel} disabled={!canRedo} onClick={redo} />
+        </div>
+        {/* Разделы формы — значками ПЕРЕД просмотром, в порядке табов формы: ссылка,
+            интеграции, настройки (решение владельца 2026-09-14). Ссылка и интеграции —
+            только у публиковавшейся формы: у черновика нет ни публичной страницы, ни
+            ответов, которые можно доставлять. Коробка без gap, как у истории.
+
+            Настройки — УХОД из редактора в раздел формы, а не режим внутри него. У
+            НЕСОЗДАННОЙ формы адреса ещё нет (ленивое создание, features/forms/draft.ts),
+            поэтому клик её заводит: настройки живут по настоящему slug'у, и вести туда
+            `new` некуда. */}
+        <div className="flex items-center">
+          {everPublished && (
+            <>
+              <BarIcon
+                icon={Link2}
+                label="Ссылка на форму"
+                onClick={() =>
+                  void navigate({ to: '/forms/$slug/share', params: { slug: detail.slug } })
+                }
+              />
+              <BarIcon
+                icon={Plug}
+                label="Интеграции"
+                onClick={() =>
+                  void navigate({ to: '/forms/$slug/integrations', params: { slug: detail.slug } })
+                }
+              />
+            </>
+          )}
+          <BarIcon
+            icon={Settings}
+            label="Настройки формы"
+            onClick={() => {
+              void ensureForm()
+                .then(({ slug }) => navigate({ to: '/forms/$slug/settings', params: { slug } }))
+                .catch(() => undefined)
+            }}
+          />
         </div>
         {/* Просмотр — только ВХОД, не тумблер: слой закрывает шапку целиком,
             и кнопки, которой можно было бы нажать второй раз, под ним нет.
@@ -217,16 +263,15 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
           className="text-muted-foreground"
           onClick={() => setPreviewOpen(true)}
         >
-          <Eye className="size-4" /> Просмотр
+          Просмотр
         </Button>
         {/* Оформление — ТУМБЛЕР шторки, а не вход в режим (в отличие от
             настроек ниже): она выезжает сбоку, ОТОДВИГАЯ оболочку, а не
             закрывая полотно, и второго выхода мимо чего-либо тут нет —
             закрывать нечему. Отдельно от настроек ещё и потому, что
             сохраняется иначе: тема применяется сразу и уезжает автосейвом,
-            настройки — явной кнопкой. Подписана текстом (а не только иконкой,
-            как «Настройки»): рядом с «Просмотр» безымянная иконка палитры
-            читалась бы двусмысленно. */}
+            настройки — явной кнопкой. «Просмотр» и «Оформление» — словами без
+            значков (решение владельца 2026-09-14). */}
         <Button
           variant="ghost"
           size="sm"
@@ -234,26 +279,8 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
           aria-pressed={drawers.designOpen}
           onClick={() => drawers.openDesign(!drawers.designOpen)}
         >
-          <Palette className="size-4" /> Оформление
+          Оформление
         </Button>
-        {/* Настройки — УХОД из редактора в раздел формы, а не режим внутри него.
-            Иконка, а не текст: место в шапке кончается, а страница подписана
-            собственным табом.
-
-            У НЕСОЗДАННОЙ формы адреса ещё нет (ленивое создание,
-            features/forms/draft.ts), поэтому клик её заводит: настройки живут по
-            настоящему slug'у, и вести туда `new` некуда. Форма появляется на
-            сервере на один клик раньше, чем прежде, — цена того, что у настроек
-            есть адрес. */}
-        <BarIcon
-          icon={Settings}
-          label="Настройки формы"
-          onClick={() => {
-            void ensureForm()
-              .then(({ slug }) => navigate({ to: '/forms/$slug/settings', params: { slug } }))
-              .catch(() => undefined)
-          }}
-        />
         {/* Статус автосейва стоит у самой публикации: именно он решает,
             активна ли кнопка «Опубликовать» (canPublish). */}
         <SaveIndicator status={status} onRetry={saveNow} />

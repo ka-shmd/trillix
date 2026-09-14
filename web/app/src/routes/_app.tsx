@@ -83,7 +83,7 @@ function AppLayout() {
           {/* Шапка зафиксирована (sticky): вся страница скроллится, а верхний бар
             остаётся на месте. z-20 — над контентом редактора, bg — чтобы контент
             не просвечивал под ней. */}
-          <header className="sticky top-0 z-20 flex h-14 shrink-0 items-center gap-2 border-b bg-background pr-2 pl-3">
+          <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background pr-2 pl-3">
             {/* Кнопка панели появляется здесь, только когда в самой панели её нажать
               негде: свёрнутая уезжает за экран, мобильная шторка закрыта. */}
             <HeaderSidebarTrigger />
