@@ -39,6 +39,10 @@ function withChord(text: string, match: Parameters<typeof labelFor>[0]): string 
 
 // Значок бара: подсказка обязательна, и текст у неё общий с aria-label — одна строка
 // на оба (DESIGN-SYSTEM §7, образец — RowAction в IntegrationsView).
+//
+// size="sm", а не icon-sm: у малой кнопки со значком поле 8 (has-[>svg]:px-2) при
+// высоте 28 — ровно столько же, сколько у текстовых кнопок ряда (px-2). Квадрат
+// icon-sm давал значку поле 6, и зазоры в ряду расходились на глаз.
 function BarIcon({
   icon: Icon,
   label,
@@ -58,7 +62,7 @@ function BarIcon({
         <span className="inline-flex">
           <Button
             variant="ghost"
-            size="icon-sm"
+            size="sm"
             className="text-muted-foreground"
             disabled={disabled}
             onClick={onClick}
@@ -209,13 +213,14 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         ) : (
           <Badge variant="secondary">Черновик</Badge>
         )}
-        {/* Отмена/повтор — история документа, ближе всего к полотну,
-            которое они правят. Пара значков стоит своей коробкой без gap
-            (DESIGN-SYSTEM §7): поля ghost-кнопок уже дают воздух между ними. */}
+        {/* Отмена/повтор — история документа, ближе всего к полотну, которое они
+            правят. Весь ряд до «Оформление» — ОДНА коробка без gap с равным видимым
+            зазором 16 (решение владельца 2026-09-14): у каждого элемента поле 8 —
+            у значков (BarIcon) и у текстовых кнопок (px-2), — и зазор меряется по
+            нарисованному, а не по разметке (DESIGN-SYSTEM §8). */}
         <div className="flex items-center">
           <BarIcon icon={Undo2} label={undoLabel} disabled={!canUndo} onClick={undo} />
           <BarIcon icon={Redo2} label={redoLabel} disabled={!canRedo} onClick={redo} />
-        </div>
         {/* Разделы формы — значками ПЕРЕД просмотром, в порядке табов формы: ссылка,
             интеграции, настройки (решение владельца 2026-09-14). Ссылка и интеграции —
             только у публиковавшейся формы: у черновика нет ни публичной страницы, ни
@@ -225,7 +230,6 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
             НЕСОЗДАННОЙ формы адреса ещё нет (ленивое создание, features/forms/draft.ts),
             поэтому клик её заводит: настройки живут по настоящему slug'у, и вести туда
             `new` некуда. */}
-        <div className="flex items-center">
           {everPublished && (
             <>
               <BarIcon
@@ -253,18 +257,13 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
                 .catch(() => undefined)
             }}
           />
-        {/* Значки, «Просмотр» и «Оформление» — одной коробкой без gap, с РАВНЫМ видимым
-            зазором 20px (решение владельца 2026-09-14). Зазор меряется по нарисованному:
-            у значка (28 при глифе 16) поле 6, у текстовой ghost-кнопки — 10. Текст к
-            тексту даёт 10 + 10, значок к тексту — 6 + 10, отсюда ml-1 у «Просмотр».
-            Тот же зазор, 6 + gap 8 + 6, стоит между историей и значками. */}
         {/* Просмотр — только ВХОД, не тумблер: слой закрывает шапку целиком,
             и кнопки, которой можно было бы нажать второй раз, под ним нет.
             Выход подписан словами на самом слое. */}
         <Button
           variant="ghost"
           size="sm"
-          className="ml-1 text-muted-foreground"
+          className="px-2 text-muted-foreground"
           onClick={() => setPreviewOpen(true)}
         >
           Просмотр
@@ -279,7 +278,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         <Button
           variant="ghost"
           size="sm"
-          className={drawers.designOpen ? undefined : 'text-muted-foreground'}
+          className={drawers.designOpen ? 'px-2' : 'px-2 text-muted-foreground'}
           aria-pressed={drawers.designOpen}
           onClick={() => drawers.openDesign(!drawers.designOpen)}
         >
