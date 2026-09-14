@@ -16,7 +16,12 @@ import { humanError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { RAISED_INPUT, RAISED_ROW_BUTTON, RAISED_ROW_ICON } from '../../shared/raisedField'
+import {
+  RAISED_INPUT,
+  RAISED_MONO,
+  RAISED_ROW_BUTTON,
+  RAISED_ROW_ICON,
+} from '../../shared/raisedField'
 import { Label } from '@/components/ui/label'
 
 // Окно вебхука — полноэкранный оверлей, как у Google Таблиц: решения о том,
@@ -294,7 +299,7 @@ function SecretField({
         <Input
           id="webhook-secret"
           autoFocus
-          className={`flex-1 font-mono ${RAISED_INPUT}`}
+          className={`flex-1 ${RAISED_INPUT} ${RAISED_MONO}`}
           placeholder={signed ? 'Не менять' : `От ${MIN_SECRET} символов`}
           value={secret}
           onChange={(e) => onSecret(e.target.value)}
@@ -375,14 +380,14 @@ function HeadersField({
           <Input
             aria-label={`Имя заголовка ${i + 1}`}
             placeholder="Имя"
-            className={`w-2/5 font-mono ${RAISED_INPUT}`}
+            className={`w-2/5 ${RAISED_INPUT} ${RAISED_MONO}`}
             value={row.name}
             onChange={(e) => onPatch(row.id, { name: e.target.value })}
           />
           <Input
             aria-label={`Значение заголовка ${i + 1}`}
             placeholder="Значение"
-            className={`flex-1 font-mono ${RAISED_INPUT}`}
+            className={`flex-1 ${RAISED_INPUT} ${RAISED_MONO}`}
             value={row.value}
             onChange={(e) => onPatch(row.id, { value: e.target.value })}
           />
