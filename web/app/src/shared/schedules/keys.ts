@@ -3,6 +3,7 @@
 export const scheduleKeys = {
   // Список ключуется пространством: у каждого свой кэш, иначе переход между
   // пространствами показал бы чужие расписания.
+  lists: () => ['schedules', 'list'] as const,
   list: (workspaceId: string) => ['schedules', 'list', workspaceId] as const,
   detail: (scheduleId: string) => ['schedules', 'detail', scheduleId] as const,
   blocks: (scheduleId: string) => ['schedules', 'blocks', scheduleId] as const,

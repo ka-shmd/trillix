@@ -1,11 +1,7 @@
-import { lazy, Suspense, type ComponentProps } from 'react'
+import { lazy, useState, type ComponentProps } from 'react'
 
-// Тип, а не значение: `import type` стирается сборкой, а обычный импорт остался бы
-// СТАТИЧЕСКИМ и молча вернул бы FullCalendar в общий чанк — ленивая граница исчезла
-// бы, не сломав ничего видимого (сборка говорит об этом предупреждением
-// INEFFECTIVE_DYNAMIC_IMPORT, и оно единственное, что об этом сообщает).
 import type { ScheduleCanvas } from './ScheduleCanvas'
-import { Skeleton } from '@/components/ui/skeleton'
+import { loadedScheduleCanvas, preloadScheduleCanvas } from './canvasChunk'
 
 // ГРАНИЦА ЗАГРУЗКИ FullCalendar — та же мера и по тому же доводу, что у recharts и
 // react-day-picker (web/CLAUDE.md). Библиотека тяжёлая, а нужна на ОДНОМ экране
@@ -13,16 +9,20 @@ import { Skeleton } from '@/components/ui/skeleton'
 //
 // Импортируй полотно ОТСЮДА, а не из ./ScheduleCanvas напрямую.
 //
-// Заглушка ростом с само полотно: оно занимает главную часть экрана, и скачок её
-// размера на глазах у автора дороже сотни байт разметки.
-const CanvasImpl = lazy(() =>
-  import('./ScheduleCanvas').then((m) => ({ default: m.ScheduleCanvas })),
-)
+// Своей заглушки у полотна НЕТ (решение владельца 2026-09-14): страница расписания
+// появляется одним кадром — полоса и полотно вместе, без скелетов по частям. Чанк
+// грузится заранее (`preloadScheduleCanvas`: список расписаний и loader страницы), а
+// ждёт полотно общая граница Suspense страницы.
+const CanvasImpl = lazy(() => preloadScheduleCanvas().then((component) => ({ default: component })))
 
+// LazyScheduleCanvas рисует полотно СИНХРОННО, если чанк уже загружен, и
+// приостанавливается до общей границы страницы, если нет. Даже загруженный заранее
+// `lazy` на первом рендере приостанавливается на такт, а React придерживает показ
+// выпавшей границы — отсюда синхронная ветка.
+//
+// ⚠ Выбор фиксируется на МОНТИРОВАНИЕ: смена типа компонента между рендерами
+// перемонтировала бы полотно, и оно потеряло бы неделю, вид и открытые попапы.
 export function LazyScheduleCanvas(props: ComponentProps<typeof ScheduleCanvas>) {
-  return (
-    <Suspense fallback={<Skeleton className="h-[36rem] w-full" />}>
-      <CanvasImpl {...props} />
-    </Suspense>
-  )
+  const [Impl] = useState(() => loadedScheduleCanvas() ?? CanvasImpl)
+  return <Impl {...props} />
 }

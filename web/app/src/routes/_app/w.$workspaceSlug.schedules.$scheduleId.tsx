@@ -1,18 +1,21 @@
-import { useState } from 'react'
+import { Suspense, useState } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
-import { useQuery } from '@tanstack/react-query'
+import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { Settings2, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import {
+  listedSchedule,
   scheduleQueryOptions,
   useDeleteSchedule,
   useUpdateSchedule,
 } from '../../shared/schedules/queries'
+import { preloadCalendar } from '../../shared/calendarChunk'
 import { ScheduleEditor } from '../../features/schedules/ScheduleEditor'
 import { SchedulePanel } from '../../features/schedules/SchedulePanel'
 import { CancelBookingDialog } from '../../features/schedules/CancelBookingDialog'
 import { LazyScheduleCanvas } from '../../features/schedules/lazyCanvas'
+import { preloadScheduleCanvas } from '../../features/schedules/canvasChunk'
 import { BookingDetails } from '../../features/schedules/BookingDetails'
 import { SETTINGS_TITLE } from '../../features/schedules/settingNames'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
@@ -66,16 +69,37 @@ import {
 // Расписание адресуется ID, а не slug'ом: slug'ов у него нет — публичной сущностью
 // оно не является, наружу уезжает только свободное время формы. Пространство при этом
 // стоит в пути (см. соседний index): так адрес не может умолчать, чьё это расписание.
+//
+// СТРАНИЦА ПОЯВЛЯЕТСЯ ОДНИМ КАДРОМ, БЕЗ СКЕЛЕТОВ (решение владельца 2026-09-14): полоса и
+// полотно рисуются вместе, а записи и занятое время доезжают поверх готовой сетки.
+// Скелеты по частям были не данными, а догрузкой библиотек (FullCalendar и
+// react-day-picker живут за ленивыми границами), поэтому:
+//
+//  • чанки грузятся заранее — на списке расписаний и в loader этой страницы, который
+//    роутер ждёт до перехода;
+//  • документ расписания со списка берётся из его кэша (`listedSchedule`), и свежий
+//    доезжает запросом поверх;
+//  • на случай, когда чанк всё же не готов, половины ждут ОДНОЙ границей без заглушки.
 export const Route = createFileRoute('/_app/w/$workspaceSlug/schedules/$scheduleId')({
+  loader: async () => {
+    await Promise.all([preloadScheduleCanvas(), preloadCalendar()])
+  },
   component: SchedulePage,
 })
 
 function SchedulePage() {
   const { workspaceSlug, scheduleId } = Route.useParams()
   const navigate = useNavigate()
+  const qc = useQueryClient()
   const workspaces = useQuery(workspacesQueryOptions)
   const workspace = workspaces.data?.find((w) => w.slug === workspaceSlug)
-  const query = useQuery(scheduleQueryOptions(scheduleId))
+  const query = useQuery({
+    ...scheduleQueryOptions(scheduleId),
+    initialData: () => listedSchedule(qc, scheduleId),
+    // Данные списка считаются устаревшими сразу: они стоят на экране, пока едет
+    // свежий документ, а не заменяют его.
+    initialDataUpdatedAt: 0,
+  })
   const workspaceId = query.data?.workspaceId ?? ''
   const update = useUpdateSchedule(scheduleId, workspaceId)
   const remove = useDeleteSchedule(scheduleId, workspaceId)
@@ -105,19 +129,19 @@ function SchedulePage() {
     </Link>,
   ]
 
-  if (query.isPending || query.isError) {
+  // Пока документа нет (прямой заход по ссылке), страница пуста, а не мигает скелетом:
+  // следующим кадром она появляется целиком.
+  if (query.isPending) return <PageCrumbs items={crumbs} />
+
+  if (query.isError) {
     return (
       <>
         <PageCrumbs items={crumbs} />
         <div className="p-6">
-          {query.isError ? (
-            <ErrorState
-              title="Расписание не найдено."
-              description="Возможно, его удалили или ссылка ведёт не туда."
-            />
-          ) : (
-            <LoadingRows rows={3} />
-          )}
+          <ErrorState
+            title="Расписание не найдено."
+            description="Возможно, его удалили или ссылка ведёт не туда."
+          />
         </div>
       </>
     )
@@ -135,6 +159,7 @@ function SchedulePage() {
         </Button>
       </PageActions>
 
+      <Suspense fallback={null}>
       <div className="flex h-full min-h-0">
         {/* Полоса прячется на узком экране целиком: мини-календарь и список рядом с
             сеткой требуют ширины, которой там нет, а сетка на телефоне и так
@@ -160,6 +185,7 @@ function SchedulePage() {
           />
         </div>
       </div>
+      </Suspense>
 
       {/* ОКНО ОТВЕТА — ТОТ ЖЕ КОМПОНЕНТ, ЧТО НА СТРАНИЦЕ ОТВЕТОВ (решение владельца
           2026-09-04). Живёт на СТРАНИЦЕ, а не в полотне: компонент окна принадлежит
