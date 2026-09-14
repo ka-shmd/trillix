@@ -51,6 +51,7 @@ describe('положение обложки', () => {
   it('протяжка не пишет в стор, «Готово» сохраняет последний сдвиг одним шагом', () => {
     const { store, drag } = setup()
     const history = store.getState().past.length
+    expect(screen.getByText('Перетащите картинку, чтобы изменить положение')).toBeTruthy()
 
     drag(30)
     drag(72)
@@ -60,6 +61,7 @@ describe('положение обложки', () => {
     expect(store.getState().cover?.y).toBe(72)
     expect(store.getState().past.length).toBe(history + 1)
     expect(screen.getByRole('button', { name: 'Положение' })).toBeTruthy()
+    expect(screen.queryByText('Перетащите картинку, чтобы изменить положение')).toBeNull()
   })
 
   it('«Отменить» выбрасывает черновик', () => {

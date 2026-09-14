@@ -126,6 +126,19 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
         <CoverBand cover={draftY === null ? cover : { ...cover, y: draftY }} />
       </div>
 
+      {/* Подсказка режима положения — посередине полосы и видна весь режим, а не по
+          наведению (решение владельца 2026-09-14). pointer-events-none: протяжка идёт
+          сквозь неё по самой картинке. Чёрная полупрозрачная плашка задана цветом, а не
+          токеном: лежит на картинке автора любого цвета, и тема кабинета её контраст
+          не определяет. */}
+      {moving && (
+        <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
+          <span className="rounded-lg bg-black/60 px-4 py-2 text-center text-sm text-white">
+            Перетащите картинку, чтобы изменить положение
+          </span>
+        </div>
+      )}
+
       {/* Кнопок две (решение владельца 2026-09-14): «Положение» и «Изменить». Всё, чем
           полосу заливают и убирают — файл, ссылка, цвет, удаление, — живёт в окне
           CoverDialog, общем с строкой «Обложка» шторки оформления.
