@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { ImageIcon, ImagePlus, MoveVertical, Palette } from 'lucide-react'
+import { ImageIcon, ImagePlus, MoveVertical, Palette, Save } from 'lucide-react'
 
 import { coverY } from '@entities/formSchema'
 import { CoverBand, LogoMark } from '@fields/pageChrome'
@@ -38,7 +38,7 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
 
   const bandRef = useRef<HTMLDivElement>(null)
   // Режим «изменить положение» и черновик сдвига. Сдвиг ведётся в ЛОКАЛЬНОМ состоянии
-  // весь режим — через сколько угодно протяжек — и уходит в стор ОДИН раз, по «Готово»;
+  // весь режим — через сколько угодно протяжек — и уходит в стор ОДИН раз, по «Сохранить»;
   // «Отменить» черновик выбрасывает (решение владельца 2026-09-14). Запись на каждый
   // кадр перерисовывала бы всё полотно шестьдесят раз в секунду — ровно та ошибка,
   // которой выборщик цвета нагрузил TD-32, — а запись на каждое отпускание оставила бы
@@ -84,7 +84,7 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
 
   // Черновик на отпускании берётся из РЕФА, а не из состояния: между последним
   // pointermove и pointerup React может не успеть перерисоваться, и состояние отстанет
-  // на кадр — «Готово» тогда сохранил бы предпоследнее положение. Отставание состояния
+  // на кадр — «Сохранить» тогда сохранил бы предпоследнее положение. Отставание состояния
   // от жеста — тот же класс дефектов, что нашёлся в фазе 14 на выделении текста.
   function onPointerUp() {
     const d = drag.current
@@ -151,7 +151,7 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
           {moving ? (
             <>
               <OverlayButton onClick={finishMoving}>
-                <MoveVertical /> Готово
+                <Save /> Сохранить
               </OverlayButton>
               <OverlayButton onClick={cancelMoving}>Отменить</OverlayButton>
             </>

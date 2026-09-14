@@ -15,7 +15,7 @@ vi.mock('./coverDrag', () => ({
   nextCoverY: (_start: number, _from: number, to: number) => to,
 }))
 
-// Режим положения: сдвиг копится черновиком и уходит в стор только по «Готово»;
+// Режим положения: сдвиг копится черновиком и уходит в стор только по «Сохранить»;
 // «Отменить» возвращает сохранённое положение и шага истории не оставляет.
 
 beforeAll(() => {
@@ -48,7 +48,7 @@ function setup() {
 }
 
 describe('положение обложки', () => {
-  it('протяжка не пишет в стор, «Готово» сохраняет последний сдвиг одним шагом', () => {
+  it('протяжка не пишет в стор, «Сохранить» сохраняет последний сдвиг одним шагом', () => {
     const { store, drag } = setup()
     const history = store.getState().past.length
     expect(screen.getByText('Перетащите картинку, чтобы изменить её положение')).toBeTruthy()
@@ -57,7 +57,7 @@ describe('положение обложки', () => {
     drag(72)
     expect(store.getState().cover?.y).toBe(50)
 
-    fireEvent.click(screen.getByRole('button', { name: 'Готово' }))
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
     expect(store.getState().cover?.y).toBe(72)
     expect(store.getState().past.length).toBe(history + 1)
     expect(screen.getByRole('button', { name: 'Положение' })).toBeTruthy()
@@ -72,6 +72,6 @@ describe('положение обложки', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Отменить' }))
     expect(store.getState().cover?.y).toBe(50)
     expect(store.getState().past.length).toBe(history)
-    expect(screen.queryByRole('button', { name: 'Готово' })).toBeNull()
+    expect(screen.queryByRole('button', { name: 'Сохранить' })).toBeNull()
   })
 })
