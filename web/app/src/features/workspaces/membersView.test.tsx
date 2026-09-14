@@ -199,6 +199,9 @@ it('передача владения называет смену платель
   // владение вправе только новый владелец.
   await screen.findByRole('heading', { name: 'Передать владение: Пётр?' })
   expect(screen.getByText(/тарифу этого человека/)).toBeTruthy()
+  // Выход без решения — крестик в углу, а не «Отмена» в подвале.
+  expect(screen.getByRole('button', { name: 'Закрыть' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Отмена' })).toBeNull()
   expect(writes()).toEqual([])
 
   fireEvent.click(screen.getByRole('button', { name: 'Передать владение' }))

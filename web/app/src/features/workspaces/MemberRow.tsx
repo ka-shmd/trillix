@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { Crown, MoreHorizontal, UserMinus } from 'lucide-react'
+import { Crown, MoreHorizontal, UserMinus, X } from 'lucide-react'
 
 import type { Member } from '../../entities/member'
 import { displayName } from '../../entities/user'
@@ -201,6 +201,18 @@ function TransferOwnershipDialog({
   return (
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
+        {/* Крестик в углу вместо «Отмены» в подвале (решение владельца 2026-09-14),
+            устроен как в PublishControls. Cancel, а не свой обработчик: на нём же
+            висят Escape и возврат фокуса. */}
+        <AlertDialogCancel asChild variant="ghost" size="icon-sm">
+          <button
+            type="button"
+            aria-label="Закрыть"
+            className="text-muted-foreground absolute top-4 right-4"
+          >
+            <X className="size-4" />
+          </button>
+        </AlertDialogCancel>
         <AlertDialogHeader>
           <AlertDialogTitle>Передать владение: {name}?</AlertDialogTitle>
           {/* Три следствия названы поимённо, потому что назад их не отыграть:
@@ -217,7 +229,6 @@ function TransferOwnershipDialog({
           </p>
         )}
         <AlertDialogFooter>
-          <AlertDialogCancel>Отмена</AlertDialogCancel>
           <AlertDialogAction
             disabled={transfer.isPending}
             onClick={(e) => {
