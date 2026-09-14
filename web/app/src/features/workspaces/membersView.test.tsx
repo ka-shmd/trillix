@@ -176,16 +176,16 @@ it('владельца снять нельзя: у его строки нет м
   expect(screen.getByRole('button', { name: 'Действия: Пётр' })).toBeTruthy()
 })
 
-it('снятие доступа спрашивает подтверждение до запроса', async () => {
+it('удаление участника спрашивает подтверждение до запроса', async () => {
   await renderMembers({ members: [OWNER, MATE] })
 
   openRowMenu('Пётр')
-  fireEvent.click(await screen.findByRole('menuitem', { name: 'Снять доступ' }))
+  fireEvent.click(await screen.findByRole('menuitem', { name: 'Удалить участника' }))
 
-  await screen.findByRole('heading', { name: 'Снять доступ: Пётр?' })
+  await screen.findByRole('heading', { name: 'Удалить участника: Пётр?' })
   expect(writes()).toEqual([])
 
-  fireEvent.click(screen.getByRole('button', { name: 'Снять доступ' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Удалить' }))
   await waitFor(() => expect(writes()).toEqual(['DELETE /api/v1/workspaces/ws-team/members/u-mate']))
 })
 
@@ -199,6 +199,9 @@ it('передача владения называет смену платель
   // владение вправе только новый владелец.
   await screen.findByRole('heading', { name: 'Передать владение: Пётр?' })
   expect(screen.getByText(/тарифу этого человека/)).toBeTruthy()
+  // Выход без решения — крестик в углу, а не «Отмена» в подвале.
+  expect(screen.getByRole('button', { name: 'Закрыть' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Отмена' })).toBeNull()
   expect(writes()).toEqual([])
 
   fireEvent.click(screen.getByRole('button', { name: 'Передать владение' }))
@@ -243,6 +246,9 @@ it('живая ссылка показана целиком и отключае�
 
   fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))
   await screen.findByRole('heading', { name: 'Отключить ссылку?' })
+  // Выход без решения — крестик в углу, а не «Отмена» в подвале.
+  expect(screen.getByRole('button', { name: 'Закрыть' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Отмена' })).toBeNull()
   expect(writes()).toEqual([])
 
   fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))
