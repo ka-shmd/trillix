@@ -68,7 +68,9 @@ function BarIcon({
             onClick={onClick}
             aria-label={label}
           >
-            <Icon className="size-4" />
+            {/* Глиф 18, а не штатные 16 (решение владельца 2026-09-14): поле по бокам
+                остаётся 8, и зазоры ряда не меняются. */}
+            <Icon className="size-4.5" />
           </Button>
         </span>
       </TooltipTrigger>
