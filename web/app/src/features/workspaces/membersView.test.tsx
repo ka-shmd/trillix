@@ -246,6 +246,9 @@ it('живая ссылка показана целиком и отключае�
 
   fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))
   await screen.findByRole('heading', { name: 'Отключить ссылку?' })
+  // Выход без решения — крестик в углу, а не «Отмена» в подвале.
+  expect(screen.getByRole('button', { name: 'Закрыть' })).toBeTruthy()
+  expect(screen.queryByRole('button', { name: 'Отмена' })).toBeNull()
   expect(writes()).toEqual([])
 
   fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))

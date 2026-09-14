@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Copy, Link2, RotateCw } from 'lucide-react'
+import { Copy, Link2, RotateCw, X } from 'lucide-react'
 
 import { humanError } from '../../shared/api/errors'
 import { formatDateTime } from '../../shared/format'
@@ -146,6 +146,18 @@ export function JoinLinkSection({
 
       <AlertDialog open={revoking} onOpenChange={setRevoking}>
         <AlertDialogContent>
+          {/* Крестик в углу вместо «Отмены» в подвале (решение владельца 2026-09-14),
+              устроен как в PublishControls. Cancel, а не свой обработчик: на нём же
+              висят Escape и возврат фокуса. */}
+          <AlertDialogCancel asChild variant="ghost" size="icon-sm">
+            <button
+              type="button"
+              aria-label="Закрыть"
+              className="text-muted-foreground absolute top-4 right-4"
+            >
+              <X className="size-4" />
+            </button>
+          </AlertDialogCancel>
           <AlertDialogHeader>
             <AlertDialogTitle>Отключить ссылку?</AlertDialogTitle>
             <AlertDialogDescription>
@@ -159,7 +171,6 @@ export function JoinLinkSection({
             </p>
           )}
           <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-white hover:bg-destructive/90"
               disabled={revoke.isPending}
