@@ -1,5 +1,6 @@
-// Поле в окнах интеграций (вебхук, Google Таблицы): выше общего — 40 вместо 32 — и с
-// заметной тенью, которая на наведении чуть растёт (решения владельца 2026-09-14).
+// Приподнятое поле — окна интеграций (вебхук, Google Таблицы) и ссылка на форму на экране
+// «Поделиться»: выше общего — 40 вместо 32 — и с тёмной малой тенью, которая на наведении
+// чуть растёт (решения владельца 2026-09-14). Остальные поля кабинета — штатные 32.
 //
 // Тень — малая и тёмная: ступень `shadow-xs` (1px вниз, размытие 2px) при цвете
 // `shadow-black/35` вместо штатных 5%; на наведении — ступень `shadow-sm` тем же цветом.
@@ -10,8 +11,8 @@
 // Высота и кегль перебиваются ТЕМИ ЖЕ вариантами, что у вендора: у списка высота —
 // `data-[size=default]:h-8`, у Input кегль — `md:text-sm`.
 const SHADOW = 'shadow-xs shadow-black/35 hover:shadow-sm hover:shadow-black/35'
-export const INTEGRATION_INPUT = `h-10 py-0 md:text-base ${SHADOW}`
-export const INTEGRATION_SELECT = `data-[size=default]:h-10 py-0 text-base ${SHADOW}`
+export const RAISED_INPUT = `h-10 py-0 md:text-base ${SHADOW}`
+export const RAISED_SELECT = `data-[size=default]:h-10 py-0 text-base ${SHADOW}`
 // Кнопки в одном ряду с таким полем — его роста: ряд ровняется по нарисованному.
-export const INTEGRATION_ROW_BUTTON = 'h-10'
-export const INTEGRATION_ROW_ICON = 'size-10'
+export const RAISED_ROW_BUTTON = 'h-10'
+export const RAISED_ROW_ICON = 'size-10'
