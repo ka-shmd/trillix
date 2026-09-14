@@ -96,7 +96,7 @@ function ChromeButton({
       aria-label={title}
       {...rest}
       className={cn(
-        `hover:bg-accent flex items-center justify-center overflow-hidden rounded-md border ${CONTROL} ${CONTROL_SHELL}`,
+        `hover:bg-accent flex items-center justify-center overflow-hidden rounded-lg border ${CONTROL} ${CONTROL_SHELL}`,
         className,
       )}
     >

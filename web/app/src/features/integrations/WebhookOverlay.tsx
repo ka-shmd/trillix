@@ -16,7 +16,7 @@ import { humanError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
-import { INTEGRATION_INPUT } from './field'
+import { INTEGRATION_INPUT, INTEGRATION_ROW_BUTTON, INTEGRATION_ROW_ICON } from './field'
 import { Label } from '@/components/ui/label'
 
 // Окно вебхука — полноэкранный оверлей, как у Google Таблиц: решения о том,
@@ -300,7 +300,12 @@ function SecretField({
           onChange={(e) => onSecret(e.target.value)}
         />
         {signed && !known && onShow && (
-          <Button variant="outline" disabled={showing} onClick={onShow}>
+          <Button
+            variant="outline"
+            className={INTEGRATION_ROW_BUTTON}
+            disabled={showing}
+            onClick={onShow}
+          >
             <Eye className="size-4" aria-hidden />
             Показать
           </Button>
@@ -311,6 +316,7 @@ function SecretField({
         <Button
           variant="ghost"
           size="icon"
+          className={INTEGRATION_ROW_ICON}
           aria-label="Убрать подпись"
           onClick={onOff}
         >
@@ -383,6 +389,7 @@ function HeadersField({
           <Button
             variant="ghost"
             size="icon"
+            className={INTEGRATION_ROW_ICON}
             aria-label={`Убрать заголовок ${i + 1}`}
             onClick={() => onRemove(row.id)}
           >

@@ -1,11 +1,16 @@
-// Поле в окнах интеграций (вебхук, Google Таблицы): рамка кабинета плюс заметная тень
-// `shadow-sm` вместо штатной `shadow-xs` (решение владельца 2026-09-14) и кегль 16.
+// Поле в окнах интеграций (вебхук, Google Таблицы): выше общего — 40 вместо 32 — и с
+// заметной тенью, которая на наведении чуть растёт (решения владельца 2026-09-14).
 //
-// `py-0` — не вкус. Высота поля 32, и штатный вертикальный паддинг (`py-1` у Input,
-// `py-2` у списка) оставляет тексту меньше строки кегля 16 (24px): набранное и
-// подсказка съезжали вниз. Без паддинга текст центрируется в поле сам.
+// Тень темнее штатной за счёт цвета (`shadow-black/20`), а не другой ступени: ступень
+// меняет и размер, и на наведении растёт уже она (`shadow-sm` → `shadow-md`). Переход
+// анимирует штатный `transition-[color,box-shadow]` компонентов.
 //
-// Кегль перебивается ТЕМ ЖЕ вариантом, что у вендора: у Input он задан `md:text-sm`,
-// у списка — плоским `text-sm` (иначе класс на элементе есть, а вида нет).
-export const INTEGRATION_INPUT = 'py-0 shadow-sm md:text-base'
-export const INTEGRATION_SELECT = 'py-0 text-base shadow-sm'
+// Вертикальный паддинг снят: высоту держит h-10, а текст кегля 16 центрируется сам.
+// Высота и кегль перебиваются ТЕМИ ЖЕ вариантами, что у вендора: у списка высота —
+// `data-[size=default]:h-8`, у Input кегль — `md:text-sm`.
+const SHADOW = 'shadow-sm shadow-black/20 hover:shadow-md hover:shadow-black/20'
+export const INTEGRATION_INPUT = `h-10 py-0 md:text-base ${SHADOW}`
+export const INTEGRATION_SELECT = `data-[size=default]:h-10 py-0 text-base ${SHADOW}`
+// Кнопки в одном ряду с таким полем — его роста: ряд ровняется по нарисованному.
+export const INTEGRATION_ROW_BUTTON = 'h-10'
+export const INTEGRATION_ROW_ICON = 'size-10'

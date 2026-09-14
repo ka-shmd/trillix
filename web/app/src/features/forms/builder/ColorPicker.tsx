@@ -289,7 +289,7 @@ export function ColorPicker({
       <div className="flex items-center gap-1">
         <span
           aria-hidden="true"
-          className="size-7 shrink-0 rounded-md border"
+          className="size-7 shrink-0 rounded-lg border"
           style={{ backgroundColor: current }}
         />
         <Input

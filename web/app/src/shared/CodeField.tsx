@@ -68,7 +68,7 @@ export function CodeField({
   return (
     <div
       className={cn(
-        'border-code-border bg-code focus-within:border-ring focus-within:ring-ring/50 relative overflow-hidden rounded-md border transition-[color,box-shadow] focus-within:ring-[3px]',
+        'border-code-border bg-code focus-within:border-ring focus-within:ring-ring/50 relative overflow-hidden rounded-lg border transition-[color,box-shadow] focus-within:ring-[3px]',
         className,
       )}
     >
