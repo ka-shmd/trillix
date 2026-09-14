@@ -253,14 +253,18 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
                 .catch(() => undefined)
             }}
           />
-        </div>
+        {/* Значки, «Просмотр» и «Оформление» — одной коробкой без gap, с РАВНЫМ видимым
+            зазором 20px (решение владельца 2026-09-14). Зазор меряется по нарисованному:
+            у значка (28 при глифе 16) поле 6, у текстовой ghost-кнопки — 10. Текст к
+            тексту даёт 10 + 10, значок к тексту — 6 + 10, отсюда ml-1 у «Просмотр».
+            Тот же зазор, 6 + gap 8 + 6, стоит между историей и значками. */}
         {/* Просмотр — только ВХОД, не тумблер: слой закрывает шапку целиком,
             и кнопки, которой можно было бы нажать второй раз, под ним нет.
             Выход подписан словами на самом слое. */}
         <Button
           variant="ghost"
           size="sm"
-          className="text-muted-foreground"
+          className="ml-1 text-muted-foreground"
           onClick={() => setPreviewOpen(true)}
         >
           Просмотр
@@ -281,6 +285,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         >
           Оформление
         </Button>
+        </div>
         {/* Статус автосейва стоит у самой публикации: именно он решает,
             активна ли кнопка «Опубликовать» (canPublish). */}
         <SaveIndicator status={status} onRetry={saveNow} />
