@@ -10,6 +10,10 @@ import { formDetailQueryOptions } from '../../features/forms/queries'
 import { type DraftCreation } from '../../features/forms/builder/useAutosave'
 import { BuilderScreen } from '../../features/forms/builder/BuilderScreen'
 import { resolveWorkspaceId, useCurrentWorkspace } from '../../features/workspaces/current'
+import { useWorkspaceCrumb } from '../../features/workspaces/crumb'
+import { PageContainer } from '../../shared/page/PageContainer'
+import { PageCrumbs } from '../../shared/page/headerPortals'
+import { ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 
 // Редактор формы (/forms/$slug/edit): грузит форму по slug через Query и отдаёт
@@ -54,6 +58,7 @@ function FormEditor() {
   // заводится ровно туда, куда указывает адрес. У существующей поле уже пришло с
   // сервера и не трогается.
   const workspace = useCurrentWorkspace()
+  const workspaceCrumb = useWorkspaceCrumb()
   const detail = useMemo(() => {
     const base = query.data ?? draftDetail
     if (!base || base.workspaceId !== '' || !workspace) return base
@@ -115,23 +120,29 @@ function FormEditor() {
       }
     : undefined
 
+  // Состояния ДО полотна — страница кабинета: колонка, крошки и примитивы отказа и
+  // загрузки, как у оболочки экранов формы (`forms.$slug._manage.tsx`).
   if (!detail) {
-    if (query.isError) {
-      return (
-        <div
-          role="alert"
-          className="m-6 rounded-lg border border-destructive/40 bg-destructive/5 p-6"
-        >
-          <p className="mb-3 text-sm">Форма не найдена.</p>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/w/$workspaceSlug/forms" params={{ workspaceSlug }}>
-              Вернуться к списку
-            </Link>
-          </Button>
-        </div>
-      )
-    }
-    return <p className="p-6 text-sm text-muted-foreground">Загрузка…</p>
+    return (
+      <PageContainer>
+        <PageCrumbs items={[workspaceCrumb, 'Форма']} />
+        {query.isError ? (
+          <>
+            <ErrorState
+              title="Форма не найдена."
+              description="Возможно, её удалили или ссылка устарела."
+            />
+            <Button asChild variant="outline" size="sm" className="mt-4">
+              <Link to="/w/$workspaceSlug/forms" params={{ workspaceSlug }}>
+                Вернуться к списку
+              </Link>
+            </Button>
+          </>
+        ) : (
+          <LoadingRows />
+        )}
+      </PageContainer>
+    )
   }
 
   // Свежий стор билдера на каждую форму; у черновика ключ заморожен (см. хук).
