@@ -9,7 +9,9 @@ import { coverOverflowPx, nextCoverY } from './coverDrag'
 import { COVER_COLORS, DEFAULT_COVER_COLOR } from './designEdit'
 import { uploadImage, type FormIdSource } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
+import { Button } from '@/components/ui/button'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { humanError } from '../../../shared/api/errors'
 
 // Хром страницы в РЕДАКТОРЕ: та же обложка и тот же логотип, что увидит респондент
@@ -17,8 +19,12 @@ import { humanError } from '../../../shared/api/errors'
 // правила ВИДА обложки здесь нет — разъехавшийся редактор это WYSIWYG, который врёт.
 // Всё, что добавляет этот файл, — оверлеи с кнопками, загрузка и перетаскивание.
 
-// Кнопка оверлея: общий вид «плашка поверх картинки» из ImageField, вынесенный сюда,
-// чтобы пять кнопок не повторяли одну и ту же строку классов.
+// Кнопка оверлея поверх картинки автора — белая кнопка кабинета (`outline`), а не
+// плашка в цветах темы формы (решение владельца 2026-09-14): это служебный контрол
+// редактора, и выглядит он так же, как остальной хром. Тот же вид у картинки блока
+// (ImageField).
+const OVERLAY_DANGER = 'text-destructive hover:text-destructive'
+
 function OverlayButton({
   onClick,
   danger = false,
@@ -29,17 +35,15 @@ function OverlayButton({
   children: React.ReactNode
 }) {
   return (
-    <button
+    <Button
       type="button"
+      variant="outline"
+      size="sm"
       onClick={onClick}
-      className={`flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium transition-colors ${
-        danger
-          ? 'text-[var(--rf-danger)] hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-danger))]'
-          : 'text-[var(--rf-text)] hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-text))]'
-      }`}
+      className={danger ? OVERLAY_DANGER : undefined}
     >
       {children}
-    </button>
+    </Button>
   )
 }
 
@@ -52,12 +56,9 @@ function ColorButton({ current }: { current: string }) {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button
-          type="button"
-          className="flex items-center gap-1.5 rounded-[var(--rf-radius)] bg-[var(--rf-field-bg)] px-3 py-1.5 text-sm font-medium text-[var(--rf-text)] transition-colors hover:bg-[color-mix(in_oklab,var(--rf-field-bg)_92%,var(--rf-text))]"
-        >
-          <Palette className="size-3.5" /> Цвет
-        </button>
+        <Button type="button" variant="outline" size="sm">
+          <Palette /> Цвет
+        </Button>
       </PopoverTrigger>
       <PopoverContent align="start" className="w-64">
         <ColorPicker
@@ -215,12 +216,12 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
           <div className="pointer-events-auto flex items-center gap-2">
             {moving ? (
               <OverlayButton onClick={() => setMoving(false)}>
-                <MoveVertical className="size-3.5" /> Готово
+                <MoveVertical /> Готово
               </OverlayButton>
             ) : (
               <>
                 <OverlayButton onClick={pick}>
-                  <RefreshCw className="size-3.5" />
+                  <RefreshCw />
                   {cover.imageKey ? 'Заменить' : 'Картинка'}
                 </OverlayButton>
                 <ColorButton current={cover.color ?? DEFAULT_COVER_COLOR} />
@@ -228,11 +229,11 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
                     такой документ отвергает. */}
                 {cover.imageKey && (
                   <OverlayButton onClick={() => setMoving(true)}>
-                    <MoveVertical className="size-3.5" /> Положение
+                    <MoveVertical /> Положение
                   </OverlayButton>
                 )}
                 <OverlayButton danger onClick={() => setCover(undefined)}>
-                  <Trash2 className="size-3.5" /> Удалить
+                  <Trash2 /> Удалить
                 </OverlayButton>
               </>
             )}
@@ -249,6 +250,38 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
         </p>
       )}
     </div>
+  )
+}
+
+// Значок на логотипе: знак бывает мельче подписи, поэтому действие — значком, а
+// подсказка обязательна и берёт текст у aria-label (DESIGN-SYSTEM §7).
+function LogoAction({
+  icon: Icon,
+  label,
+  className,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  className?: string
+  onClick: () => void
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button
+          type="button"
+          variant="outline"
+          size="icon-sm"
+          className={className}
+          aria-label={label}
+          onClick={onClick}
+        >
+          <Icon className="size-4" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }
 
@@ -295,23 +328,14 @@ export function LogoArea({ formId, over }: { formId: FormIdSource; over: boolean
       {progress !== null ? (
         <ProgressOverlay pct={progress} className="rounded-[var(--rf-logo-radius)]" />
       ) : (
-        <div className="absolute inset-0 flex items-center justify-center gap-1 rounded-[var(--rf-logo-radius)] bg-black/45 opacity-0 transition-opacity focus-within:opacity-100 group-hover/logo:opacity-100">
-          <button
-            type="button"
-            onClick={pick}
-            title="Заменить логотип"
-            className="rounded p-1.5 text-white hover:bg-white/20"
-          >
-            <RefreshCw className="size-4" />
-          </button>
-          <button
-            type="button"
+        <div className="absolute inset-0 flex items-center justify-center gap-1 rounded-[var(--rf-logo-radius)] bg-foreground/35 opacity-0 transition-opacity focus-within:opacity-100 group-hover/logo:opacity-100">
+          <LogoAction icon={RefreshCw} label="Заменить логотип" onClick={pick} />
+          <LogoAction
+            icon={Trash2}
+            label="Удалить логотип"
+            className={OVERLAY_DANGER}
             onClick={() => setLogo(undefined)}
-            title="Удалить логотип"
-            className="rounded p-1.5 text-white hover:bg-white/20"
-          >
-            <Trash2 className="size-4" />
-          </button>
+          />
         </div>
       )}
       {error && <p className="mt-1.5 text-sm text-destructive">{error}</p>}
@@ -367,48 +391,58 @@ export function AddChrome({
         кнопкам, на середине пути покидал бы group/title (там ничего нет) и наведение
         гасло раньше, чем курсор доходил.
 
-        pb-3/sm:pb-4 — не наугад: коробка растёт вверх от заголовка внутри промежутка
+        pb-2/sm:pb-3 — не наугад: коробка растёт вверх от заголовка внутри промежутка
         «обложка → заголовок» (SlashEditor, pt-15/sm:pt-17 = 60/68px), а этот отступ
-        держит строку кнопок (20px, text-sm) БЛИЗКО к заголовку — 12/16px. Остаток
-        промежутка, 28/32px, достаётся обложке сверху: воздуха там заметно больше,
-        чем до заголовка, — так и задумано. Меняешь верхний отступ в SlashEditor/
-        fields.css — держи pb здесь заметно меньше половины, иначе перекос обратно
-        уедет к обложке. */}
-      <div className="absolute bottom-0 left-0 flex items-center gap-4 whitespace-nowrap pb-3 sm:pb-4 text-sm text-muted-foreground opacity-0 transition-opacity focus-within:opacity-100 group-hover/title:opacity-100">
+        держит строку ТЕКСТА кнопок БЛИЗКО к заголовку — 12/16px: малая кнопка
+        высотой 28 добавляет под текстом свои 4. Остаток промежутка достаётся
+        обложке сверху: воздуха там заметно больше, чем до заголовка, — так и
+        задумано. Меняешь верхний отступ в SlashEditor/fields.css — держи pb здесь
+        заметно меньше половины, иначе перекос обратно уедет к обложке.
+
+        -ml-2 возвращает значок первой кнопки к левому краю заголовка: у ghost-кнопки
+        видимая граница — значок и текст, а её поля (8 при значке) сдвигали бы их
+        вправо. Кнопки стоят без gap — поля и есть зазор. */}
+      <div className="absolute bottom-0 left-0 -ml-2 flex items-center whitespace-nowrap pb-2 sm:pb-3 opacity-0 transition-opacity focus-within:opacity-100 group-hover/title:opacity-100">
         {!cover && (
           // Обложка заводится ЦВЕТОМ, а не диалогом выбора файла: один клик — и она
           // уже есть, а картинка ставится следующим жестом с той же полосы. Пустой
           // обложки-заглушки в схеме не бывает, поэтому «завести и выбрать потом»
           // выразить нечем.
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
             onClick={() => setCover({ color: DEFAULT_COVER_COLOR })}
-            className="flex items-center gap-1.5 hover:text-foreground"
           >
-            <ImageIcon className="size-4" /> Добавить обложку
-          </button>
+            <ImageIcon /> Добавить обложку
+          </Button>
         )}
         {!logo && (
-          <button
+          <Button
             type="button"
+            variant="ghost"
+            size="sm"
+            className="text-muted-foreground"
             onClick={() => fileRef.current?.click()}
-            className="flex items-center gap-1.5 hover:text-foreground"
           >
-            <ImagePlus className="size-4" /> Добавить логотип
-          </button>
+            <ImagePlus /> Добавить логотип
+          </Button>
         )}
         {/* «Оформление» — тот же вход, что кнопка-палитра в шапке: шторка одна, и
             второго её состояния здесь не заводится. Стоит рядом с обложкой и
             логотипом потому, что размеры того и другого настраиваются как раз в
             ней — жест «дотянуться до вида страницы» начинается в одном месте. */}
-        <button
+        <Button
           type="button"
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground"
           onClick={onOpenDesign}
-          className="flex items-center gap-1.5 hover:text-foreground"
         >
-          <Palette className="size-4" /> Оформление
-        </button>
-        {error && <span className="text-destructive">{error}</span>}
+          <Palette /> Оформление
+        </Button>
+        {error && <span className="ml-2 text-sm text-destructive">{error}</span>}
       </div>
     </div>
   )
