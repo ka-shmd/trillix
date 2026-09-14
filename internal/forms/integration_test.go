@@ -1202,6 +1202,51 @@ func TestForms_HasUnpublishedChanges(t *testing.T) {
 	}
 }
 
+// Откат черновика к опубликованной версии: черновик становится снапшотом, бейдж
+// гаснет. Отказы: у формы нет версии → 422, устаревший токен → 409, чужая форма → 404.
+func TestForms_DiscardDraft(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	c := registerUser(t, srv, "discard@example.com")
+
+	form := createForm(t, c, srv, "Анкета")
+	schemaA := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
+	saved := patchDraftSchema(t, c, srv, form.ID, schemaA, form.UpdatedAt, http.StatusOK)
+
+	// Не публиковали — откатывать не к чему.
+	discardDraft(t, c, srv, form.ID, saved.UpdatedAt, http.StatusUnprocessableEntity)
+
+	publishForm(t, c, srv, form.ID, http.StatusOK)
+	cur := getFormDetail(t, c, srv, form.ID, http.StatusOK)
+	schemaB := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя и фамилия"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
+	edited := patchDraftSchema(t, c, srv, form.ID, schemaB, cur.UpdatedAt, http.StatusOK)
+
+	// Токен до правки устарел → 409, черновик остаётся правленым.
+	discardDraft(t, c, srv, form.ID, cur.UpdatedAt, http.StatusConflict)
+	if !getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
+		t.Fatal("отказанный откат не должен трогать черновик")
+	}
+
+	// Чужой пользователь формы не видит → 404, существование не раскрываем.
+	stranger := registerUser(t, srv, "stranger@example.com")
+	discardDraft(t, stranger, srv, form.ID, edited.UpdatedAt, http.StatusNotFound)
+
+	got := discardDraft(t, c, srv, form.ID, edited.UpdatedAt, http.StatusOK)
+	if got.HasUnpublishedChanges {
+		t.Fatal("ответ отката: черновик всё ещё расходится с версией")
+	}
+	if got.UpdatedAt == edited.UpdatedAt {
+		t.Fatal("откат не сдвинул updated_at — следующий автосейв ушёл бы с тем же токеном")
+	}
+	blocks := parseSchema(t, got.DraftSchema).Blocks
+	if len(blocks) != 3 || domain.PlainText(blocks[1].Text) != "Имя" {
+		t.Fatalf("черновик не вернулся к опубликованной версии: %+v", blocks)
+	}
+	if getFormDetail(t, c, srv, form.ID, http.StatusOK).HasUnpublishedChanges {
+		t.Fatal("после отката GET всё ещё показывает неопубликованные изменения")
+	}
+}
+
 // Публикация чужой формы недоступна: B публикует/закрывает форму A → 404, форма A
 // остаётся черновиком.
 func TestForms_PublishIsolation(t *testing.T) {
@@ -1928,6 +1973,23 @@ func patchDraftSchema(t *testing.T, c *http.Client, srv *httptest.Server, id, sc
 	var f formDTO
 	decode(t, r, &f)
 	return f
+}
+
+// discardDraft шлёт POST discard-draft с токеном оптимистичной блокировки.
+func discardDraft(t *testing.T, c *http.Client, srv *httptest.Server, id, updatedAt string, wantStatus int) formDetailDTO {
+	t.Helper()
+	r := do(t, c, http.MethodPost, srv.URL+"/api/v1/forms/"+id+"/discard-draft",
+		`{"updatedAt":"`+updatedAt+`"}`, csrf(t, c, srv.URL))
+	if r.StatusCode != wantStatus {
+		t.Fatalf("POST discard-draft: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	if wantStatus != http.StatusOK {
+		closeBody(t, r)
+		return formDetailDTO{}
+	}
+	var d formDetailDTO
+	decode(t, r, &d)
+	return d
 }
 
 // setBrandingGate открывает или закрывает право снимать бейдж на плане владельца

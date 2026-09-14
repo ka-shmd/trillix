@@ -866,22 +866,7 @@ func (s *Service) UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUI
 		return Form{}, err
 	}
 
-	// Зеркало заголовка (фаза 15, спека §3.3): источник — блок form_title документа,
-	// колонка forms.title производна от него. Документ не высказался (схема снята до
-	// фазы) → nil, колонку не трогаем. Высказался пустым (автор стёр заголовок) →
-	// колонка получает служебное имя: она NOT NULL, и дашборду нужно чем-то назвать
-	// строку списка. Респонденту это имя не достаётся — публичный путь спрашивает
-	// документ (FormTitle), а не колонку.
-	var mirror *string
-	if title, spoke := domain.FormTitle(parsed); spoke {
-		t := strings.TrimSpace(title)
-		if t == "" {
-			t = defaultFormTitle
-		}
-		mirror = &t
-	}
-
-	updated, err := s.repo.UpdateFormDraftSchema(ctx, s.db, form.ID, form.WorkspaceID, canonical, mirror, expectedUpdatedAt)
+	updated, err := s.repo.UpdateFormDraftSchema(ctx, s.db, form.ID, form.WorkspaceID, canonical, titleMirror(parsed), expectedUpdatedAt)
 	if err != nil {
 		// Доступ уже подтверждён выше — 0 строк означает, что updated_at сдвинули
 		// параллельно (другая вкладка), а не отсутствие/чужую форму.
@@ -891,6 +876,71 @@ func (s *Service) UpdateDraftSchema(ctx context.Context, userID, formID uuid.UUI
 		return Form{}, err
 	}
 	return updated, nil
+}
+
+// DiscardDraft возвращает черновик к опубликованной версии (плашка «Есть изменения»
+// в шапке редактора): схема снапшота переписывает draft_schema с той же
+// оптимистичной блокировкой, что у автосейва, — расхождение updated_at → ErrConflict.
+// Форма без опубликованной версии → ErrValidation. Зеркало заголовка двигается вместе
+// со схемой, как в UpdateDraftSchema.
+//
+// Возвращает форму, перечитанную целиком: RETURNING обновления не несёт настроек
+// формы, и кабинет, положив такой ответ в кэш детали, затёр бы их.
+func (s *Service) DiscardDraft(ctx context.Context, userID, formID uuid.UUID, expectedUpdatedAt time.Time) (Form, error) {
+	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
+	if err != nil {
+		return Form{}, err
+	}
+	if form.PublishedVersion == nil {
+		return Form{}, fmt.Errorf("%w: у формы нет опубликованной версии", domain.ErrValidation)
+	}
+
+	versions, err := s.repo.ListFormVersions(ctx, s.db, form.ID)
+	if err != nil {
+		return Form{}, err
+	}
+	var snapshot json.RawMessage
+	for _, v := range versions {
+		if v.Number == *form.PublishedVersion {
+			snapshot = v.Schema
+			break
+		}
+	}
+	if snapshot == nil {
+		return Form{}, fmt.Errorf("discard draft of form %s: published version %d not found", form.ID, *form.PublishedVersion)
+	}
+	parsed, err := domain.ValidateSchema(snapshot)
+	if err != nil {
+		return Form{}, err
+	}
+
+	if _, err := s.repo.UpdateFormDraftSchema(ctx, s.db, form.ID, form.WorkspaceID, snapshot, titleMirror(parsed), expectedUpdatedAt); err != nil {
+		// Доступ подтверждён выше — 0 строк означает сдвинутый updated_at: автосейв,
+		// другая вкладка или публикация между чтением версии и записью.
+		if errors.Is(err, pgx.ErrNoRows) {
+			return Form{}, domain.ErrConflict
+		}
+		return Form{}, err
+	}
+	return s.Get(ctx, userID, formID)
+}
+
+// titleMirror — зеркало заголовка (фаза 15, спека §3.3): источник — блок form_title
+// документа, колонка forms.title производна от него. Документ не высказался (схема
+// снята до фазы) → nil, колонку не трогаем. Высказался пустым (автор стёр заголовок) →
+// колонка получает служебное имя: она NOT NULL, и дашборду нужно чем-то назвать
+// строку списка. Респонденту это имя не достаётся — публичный путь спрашивает
+// документ (FormTitle), а не колонку.
+func titleMirror(parsed domain.FormSchema) *string {
+	title, spoke := domain.FormTitle(parsed)
+	if !spoke {
+		return nil
+	}
+	t := strings.TrimSpace(title)
+	if t == "" {
+		t = defaultFormTitle
+	}
+	return &t
 }
 
 // BookingGuard — сколько живых будущих записей держит форма (фаза 27). Реализация —

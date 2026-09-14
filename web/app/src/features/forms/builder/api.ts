@@ -1,6 +1,11 @@
 import { type FormSchema } from '@entities/formSchema'
 
-import { formSchema, type Form } from '../../../entities/form'
+import {
+  formDetailSchema,
+  formSchema,
+  type Form,
+  type FormDetail,
+} from '../../../entities/form'
 import { apiRequest } from '../../../shared/api/client'
 
 // Автосейв черновика: PATCH /forms/{id} с draftSchema + updatedAt (оптимистичная
@@ -15,5 +20,15 @@ export function saveDraftSchema(
     method: 'PATCH',
     body: { draftSchema, updatedAt },
     schema: formSchema,
+  })
+}
+
+// Откат черновика к опубликованной версии: POST /forms/{id}/discard-draft с токеном
+// той же блокировки. Ответ — деталь целиком: новый черновик и новый токен.
+export function discardDraft(id: string, updatedAt: string): Promise<FormDetail> {
+  return apiRequest(`/forms/${id}/discard-draft`, {
+    method: 'POST',
+    body: { updatedAt },
+    schema: formDetailSchema,
   })
 }

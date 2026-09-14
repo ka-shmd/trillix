@@ -445,6 +445,7 @@ PATCH  /forms/{id}                    обновить name / title / draft_sche
 DELETE /forms/{id}
 POST   /forms/{id}/publish            снапшот черновика → новая версия
 POST   /forms/{id}/unpublish
+POST   /forms/{id}/discard-draft      черновик ← опубликованная версия (блокировка по updatedAt, как у автосейва)
 
 GET    /forms/{id}/submissions        ответы (курсорная пагинация по UUIDv7-id)
 GET    /forms/{id}/submissions/export CSV (стриминг, encoding/csv прямо в ResponseWriter)
