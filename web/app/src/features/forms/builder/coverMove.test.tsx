@@ -54,11 +54,13 @@ describe('положение обложки', () => {
     expect(screen.getByText('Перетащите картинку, чтобы изменить её положение')).toBeTruthy()
 
     drag(30)
-    drag(72)
+    drag(72.346)
     expect(store.getState().cover?.y).toBe(50)
 
+    // Сохраняется сотая процента, а не целое: округление до целого и было сдвигом
+    // картинки после сохранения.
     fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
-    expect(store.getState().cover?.y).toBe(72)
+    expect(store.getState().cover?.y).toBe(72.35)
     expect(store.getState().past.length).toBe(history + 1)
     expect(screen.getByRole('button', { name: 'Положение' })).toBeTruthy()
     expect(screen.queryByText('Перетащите картинку, чтобы изменить её положение')).toBeNull()

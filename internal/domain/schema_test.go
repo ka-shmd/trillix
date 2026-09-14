@@ -456,6 +456,7 @@ func TestValidateSchema_CoverAndLogo(t *testing.T) {
 		"обложка картинкой":       `{"schemaVersion":1,"blocks":[],"cover":{"imageKey":"ws/deadbeef.jpg"}}`,
 		"обложка со сдвигом":      `{"schemaVersion":1,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":20}}`,
 		"сдвиг у верхней границы": `{"schemaVersion":1,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":100}}`,
+		"дробный сдвиг":           `{"schemaVersion":1,"blocks":[],"cover":{"imageKey":"ws/x.jpg","y":12.35}}`,
 		"логотип":                 `{"schemaVersion":1,"blocks":[],"logo":{"imageKey":"ws/logo.png"}}`,
 		"логотип с размером": `{"schemaVersion":1,"blocks":[],` +
 			`"logo":{"imageKey":"ws/logo.png","width":140,"height":80,"radius":0}}`,
@@ -521,7 +522,7 @@ func TestValidateSchema_CoverYZeroSurvives(t *testing.T) {
 		t.Fatal("y:0 потерян при разборе")
 	}
 	if got := s.Cover.CoverY(); got != 0 {
-		t.Fatalf("CoverY() = %d, ожидалось 0", got)
+		t.Fatalf("CoverY() = %v, ожидалось 0", got)
 	}
 
 	s, err = ValidateSchema(json.RawMessage(`{"schemaVersion":1,"blocks":[],"cover":{"imageKey":"ws/x.jpg"}}`))
@@ -529,7 +530,7 @@ func TestValidateSchema_CoverYZeroSurvives(t *testing.T) {
 		t.Fatalf("схема должна быть валидной: %v", err)
 	}
 	if got := s.Cover.CoverY(); got != DefaultCoverY {
-		t.Fatalf("CoverY() без ключа = %d, ожидалось %d", got, DefaultCoverY)
+		t.Fatalf("CoverY() без ключа = %v, ожидалось %v", got, DefaultCoverY)
 	}
 }
 

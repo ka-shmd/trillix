@@ -787,6 +787,12 @@ describe('обложка и логотип', () => {
       blocks: [],
       cover: { imageKey: 'ws/x.jpg', y: COVER_Y_MAX },
     },
+    // Дробный: округление до целого процента сдвигало картинку после сохранения.
+    'дробный сдвиг': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [],
+      cover: { imageKey: 'ws/x.jpg', y: 12.35 },
+    },
     логотип: { schemaVersion: SCHEMA_VERSION, blocks: [], logo: { imageKey: 'ws/logo.png' } },
     'логотип с размером': {
       schemaVersion: SCHEMA_VERSION,
@@ -862,11 +868,6 @@ describe('обложка и логотип', () => {
       schemaVersion: SCHEMA_VERSION,
       blocks: [],
       cover: { imageKey: 'ws/x.jpg', y: COVER_Y_MIN - 1 },
-    },
-    'дробный сдвиг': {
-      schemaVersion: SCHEMA_VERSION,
-      blocks: [],
-      cover: { imageKey: 'ws/x.jpg', y: 12.5 },
     },
     'слишком длинный ключ': {
       schemaVersion: SCHEMA_VERSION,
