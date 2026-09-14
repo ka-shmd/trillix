@@ -58,10 +58,12 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
   const setCoverY = useBuilderStore((s) => s.setCoverY)
 
   const bandRef = useRef<HTMLDivElement>(null)
-  // Режим «изменить положение» и черновик сдвига. Жест ведётся в ЛОКАЛЬНОМ состоянии
-  // и коммитится в стор ОДИН раз, на отпускании: запись на каждый кадр
-  // перерисовывала бы всё полотно шестьдесят раз в секунду — ровно та ошибка,
-  // которой выборщик цвета нагрузил TD-32, и повторять её вторым потребителем незачем.
+  // Режим «изменить положение» и черновик сдвига. Сдвиг ведётся в ЛОКАЛЬНОМ состоянии
+  // весь режим — через сколько угодно протяжек — и уходит в стор ОДИН раз, по «Готово»;
+  // «Отменить» черновик выбрасывает (решение владельца 2026-09-14). Запись на каждый
+  // кадр перерисовывала бы всё полотно шестьдесят раз в секунду — ровно та ошибка,
+  // которой выборщик цвета нагрузил TD-32, — а запись на каждое отпускание оставила бы
+  // «Отменить» нечего отменять.
   const [moving, setMoving] = useState(false)
   const [draftY, setDraftY] = useState<number | null>(null)
   // overflow — ход жеста в пикселях (на сколько картинка перерастает полосу). Меряется
@@ -78,10 +80,12 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
     const band = bandRef.current
     const img = band?.querySelector('img')
     e.currentTarget.setPointerCapture(e.pointerId)
+    // Следующая протяжка продолжает черновик, а не начинает от сохранённого.
+    const from = draftY ?? coverY(cover)
     drag.current = {
       pointerY: e.clientY,
-      startY: coverY(cover),
-      y: coverY(cover),
+      startY: from,
+      y: from,
       overflow: coverOverflowPx(
         img?.naturalWidth ?? 0,
         img?.naturalHeight ?? 0,
@@ -89,7 +93,7 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
         band?.offsetHeight ?? 0,
       ),
     }
-    setDraftY(coverY(cover))
+    setDraftY(from)
   }
 
   function onPointerMove(e: ReactPointerEvent<HTMLDivElement>) {
@@ -99,19 +103,30 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
     setDraftY(d.y)
   }
 
-  // Коммит берёт значение из РЕФА, а не из состояния: между последним pointermove и
-  // pointerup React может не успеть перерисоваться, и состояние отстанет на кадр —
-  // жест тогда сохранил бы предпоследнее положение. Отставание состояния от жеста —
-  // тот же класс дефектов, что нашёлся в фазе 14 на выделении текста.
-  //
-  // Округление — ровно здесь: схема принимает только целые проценты, а во время жеста
-  // значение дробное, чтобы картинка ехала плавно.
+  // Черновик на отпускании берётся из РЕФА, а не из состояния: между последним
+  // pointermove и pointerup React может не успеть перерисоваться, и состояние отстанет
+  // на кадр — «Готово» тогда сохранил бы предпоследнее положение. Отставание состояния
+  // от жеста — тот же класс дефектов, что нашёлся в фазе 14 на выделении текста.
   function onPointerUp() {
     const d = drag.current
     if (!d) return
     drag.current = null
-    setCoverY(Math.round(d.y))
+    setDraftY(d.y)
+  }
+
+  // Округление — ровно здесь: схема принимает только целые проценты, а во время жеста
+  // значение дробное, чтобы картинка ехала плавно. Без протяжки сохранять нечего — и
+  // шага истории не появляется.
+  function finishMoving() {
+    if (draftY !== null) setCoverY(Math.round(draftY))
     setDraftY(null)
+    setMoving(false)
+  }
+
+  function cancelMoving() {
+    drag.current = null
+    setDraftY(null)
+    setMoving(false)
   }
 
   return (
@@ -142,9 +157,12 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
       <div className="pointer-events-none absolute inset-0 flex items-end justify-end p-4 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cover:opacity-100">
         <div className="pointer-events-auto flex items-center gap-2">
           {moving ? (
-            <OverlayButton onClick={() => setMoving(false)}>
-              <MoveVertical /> Готово
-            </OverlayButton>
+            <>
+              <OverlayButton onClick={cancelMoving}>Отменить</OverlayButton>
+              <OverlayButton onClick={finishMoving}>
+                <MoveVertical /> Готово
+              </OverlayButton>
+            </>
           ) : (
             <>
               {/* Двигать можно только картинку: у цвета двигать нечего, и схема
