@@ -19,14 +19,8 @@ import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { cn } from '@/lib/utils'
 
-import { ColorPicker } from './ColorPicker'
-import {
-  COVER_COLORS,
-  DEFAULT_COVER_COLOR,
-  coverFill,
-  patchCoverHeight,
-  patchLogo,
-} from './designEdit'
+import { CoverDialog } from './CoverDialog'
+import { patchCoverHeight, patchLogo } from './designEdit'
 import { uploadImage, type FormIdSource, type UploadPurpose } from './mediaUpload'
 import { CONTROL, CONTROL_BOX, CONTROL_SHELL, LABEL } from './designControl'
 import { NumberRow } from './NumberRow'
@@ -261,62 +255,35 @@ export function LogoRow({ formId }: { formId: FormIdSource }) {
 
 // CoverRow — обложка: кнопка наполнения плюс высота полосы в процентах окна.
 //
-// Кнопка ведёт в меню и при пустой обложке тоже — в отличие от логотипа: у обложки
-// два способа появиться (цвет и картинка), и выбирать между ними всё равно придётся.
+// Кнопка открывает окно обложки и при пустой обложке тоже — в отличие от логотипа: у
+// обложки три способа появиться (файл, ссылка, цвет), и выбирать между ними всё равно
+// придётся. Окно то же, что у кнопки «Изменить» на полотне (CoverDialog).
 export function CoverRow({ formId }: { formId: FormIdSource }) {
   const cover = useBuilderStore((s) => s.cover)
   const setCover = useBuilderStore((s) => s.setCover)
-  const [open, setOpen] = useState(false)
-  const upload = useChromeUpload(formId, 'cover', (imageKey) =>
-    setCover(coverFill(cover, { imageKey })),
-  )
 
   return (
-    <ChromeRow error={upload.error}>
+    <ChromeRow error={null}>
       {/* Кнопка обложки — ПРЯМОУГОЛЬНИК В ПОЛОВИНУ ШТОРКИ (решение владельца
           2026-08-16): обложка и на странице полоса во всю ширину, и квадрат 32px её
           не показывал — по нему нельзя было понять, что за картинка выбрана. */}
       <Cell id="chrome-cover" label="Обложка" className="w-1/2 shrink-0">
-        <Popover open={open} onOpenChange={setOpen}>
-          <PopoverTrigger asChild>
-            <ChromeButton
-              id="chrome-cover"
-              title={cover ? 'Обложка' : 'Добавить обложку'}
-              busy={upload.progress !== null}
-              className="w-full"
-            >
-              {cover?.imageKey ? (
-                <img src={mediaSrc(cover.imageKey)} alt="" className="size-full object-cover" />
-              ) : cover?.color ? (
-                <span className="size-full" style={{ backgroundColor: cover.color }} />
-              ) : (
-                <ImageIcon className="text-muted-foreground size-4" />
-              )}
-            </ChromeButton>
-          </PopoverTrigger>
-          <PopoverContent align="start" className="w-64">
-            <MenuItem
-              onClick={() => {
-                setOpen(false)
-                upload.pick()
-              }}
-            >
-              <ImagePlus className="size-4" /> {cover?.imageKey ? 'Заменить картинку' : 'Картинка…'}
-            </MenuItem>
-            {/* Тот же выборщик, что на полотне и у цветов оформления: обложка красится
-              одним жестом и той же палитрой, где бы её ни красили. */}
-            <ColorPicker
-              initial={cover?.color ?? DEFAULT_COVER_COLOR}
-              swatches={COVER_COLORS}
-              removeLabel="Убрать обложку"
-              onChange={(hex) => setCover(coverFill(cover, { color: hex }))}
-              onRemove={() => {
-                setOpen(false)
-                setCover(undefined)
-              }}
-            />
-          </PopoverContent>
-        </Popover>
+        <CoverDialog formId={formId}>
+          <ChromeButton
+            id="chrome-cover"
+            title={cover ? 'Обложка' : 'Добавить обложку'}
+            busy={false}
+            className="w-full"
+          >
+            {cover?.imageKey ? (
+              <img src={mediaSrc(cover.imageKey)} alt="" className="size-full object-cover" />
+            ) : cover?.color ? (
+              <span className="size-full" style={{ backgroundColor: cover.color }} />
+            ) : (
+              <ImageIcon className="text-muted-foreground size-4" />
+            )}
+          </ChromeButton>
+        </CoverDialog>
       </Cell>
       <Cell id="chrome-cover-h" label="Высота, % экрана">
         <NumberRow

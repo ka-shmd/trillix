@@ -1,16 +1,15 @@
 import { useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { ImageIcon, ImagePlus, MoveVertical, Palette, RefreshCw, Trash2 } from 'lucide-react'
+import { ImageIcon, ImagePlus, MoveVertical, Palette, Pencil, RefreshCw, Trash2 } from 'lucide-react'
 
 import { coverY } from '@entities/formSchema'
 import { CoverBand, LogoMark } from '@fields/pageChrome'
 
-import { ColorPicker } from './ColorPicker'
+import { CoverDialog } from './CoverDialog'
 import { coverOverflowPx, nextCoverY } from './coverDrag'
-import { COVER_COLORS, DEFAULT_COVER_COLOR } from './designEdit'
+import { DEFAULT_COVER_COLOR } from './designEdit'
 import { uploadImage, type FormIdSource } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Button } from '@/components/ui/button'
-import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { humanError } from '../../../shared/api/errors'
 
@@ -25,54 +24,11 @@ import { humanError } from '../../../shared/api/errors'
 // (ImageField).
 const OVERLAY_DANGER = 'text-destructive hover:text-destructive'
 
-function OverlayButton({
-  onClick,
-  danger = false,
-  children,
-}: {
-  onClick?: () => void
-  danger?: boolean
-  children: React.ReactNode
-}) {
+function OverlayButton({ onClick, children }: { onClick?: () => void; children: React.ReactNode }) {
   return (
-    <Button
-      type="button"
-      variant="outline"
-      size="sm"
-      onClick={onClick}
-      className={danger ? OVERLAY_DANGER : undefined}
-    >
+    <Button type="button" variant="outline" size="sm" onClick={onClick}>
       {children}
     </Button>
-  )
-}
-
-// Выбор цвета обложки: палитра плюс полноценный выборщик. Цвет применяется
-// непрерывно, пока автор возит мышью, — выбирает он по результату, а не вслепую;
-// история от этого не дробится (стор коалесит непрерывный подбор одним тегом).
-function ColorButton({ current }: { current: string }) {
-  const setCover = useBuilderStore((s) => s.setCover)
-  const [open, setOpen] = useState(false)
-  return (
-    <Popover open={open} onOpenChange={setOpen}>
-      <PopoverTrigger asChild>
-        <Button type="button" variant="outline" size="sm">
-          <Palette /> Цвет
-        </Button>
-      </PopoverTrigger>
-      <PopoverContent align="start" className="w-64">
-        <ColorPicker
-          initial={current}
-          swatches={COVER_COLORS}
-          removeLabel="Убрать обложку"
-          onChange={(hex) => setCover({ color: hex })}
-          onRemove={() => {
-            setCover(undefined)
-            setOpen(false)
-          }}
-        />
-      </PopoverContent>
-    </Popover>
   )
 }
 
@@ -99,13 +55,9 @@ function ProgressOverlay({ pct, className = '' }: { pct: number; className?: str
 // коробки с максимальной шириной, а логотип — уже внутри неё (см. SlashEditor).
 export function CoverArea({ formId }: { formId: FormIdSource }) {
   const cover = useBuilderStore((s) => s.cover)
-  const setCover = useBuilderStore((s) => s.setCover)
   const setCoverY = useBuilderStore((s) => s.setCoverY)
 
-  const fileRef = useRef<HTMLInputElement>(null)
   const bandRef = useRef<HTMLDivElement>(null)
-  const [progress, setProgress] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
   // Режим «изменить положение» и черновик сдвига. Жест ведётся в ЛОКАЛЬНОМ состоянии
   // и коммитится в стор ОДИН раз, на отпускании: запись на каждый кадр
   // перерисовывала бы всё полотно шестьдесят раз в секунду — ровно та ошибка,
@@ -120,27 +72,6 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
   )
 
   if (!cover) return null
-
-  const uploading = progress !== null
-
-  function pick() {
-    fileRef.current?.click()
-  }
-
-  function onFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = '' // позволить выбрать тот же файл повторно
-    if (!file) return
-    setError(null)
-    setProgress(0)
-    // Назначение cover: сервер оставит обложке её ширину (2000), а не ширину колонки.
-    uploadImage(formId, file, { onProgress: setProgress }, 'cover')
-      // Новая картинка приходит без сдвига: точка фокуса прежней ей не подходит —
-      // это другое изображение с другой композицией.
-      .then((imageKey) => setCover({ imageKey }))
-      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
-      .finally(() => setProgress(null))
-  }
 
   function onPointerDown(e: ReactPointerEvent<HTMLDivElement>) {
     if (!moving || !cover?.imageKey) return
@@ -185,14 +116,6 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
 
   return (
     <div className="group/cover relative">
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/png,image/jpeg"
-        className="hidden"
-        onChange={onFile}
-      />
-
       <div
         ref={bandRef}
         onPointerDown={onPointerDown}
@@ -209,46 +132,33 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
         <CoverBand cover={draftY === null ? cover : { ...cover, y: draftY }} />
       </div>
 
-      {uploading && <ProgressOverlay pct={progress} />}
-
-      {!uploading && (
-        <div className="pointer-events-none absolute inset-0 flex items-center justify-center gap-2 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cover:opacity-100">
-          <div className="pointer-events-auto flex items-center gap-2">
-            {moving ? (
-              <OverlayButton onClick={() => setMoving(false)}>
-                <MoveVertical /> Готово
-              </OverlayButton>
-            ) : (
-              <>
-                <OverlayButton onClick={pick}>
-                  <RefreshCw />
-                  {cover.imageKey ? 'Заменить' : 'Картинка'}
+      {/* Кнопок две (решение владельца 2026-09-14): «Положение» и «Изменить». Всё, чем
+          полосу заливают и убирают — файл, ссылка, цвет, удаление, — живёт в окне
+          CoverDialog, общем с строкой «Обложка» шторки оформления. */}
+      <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity focus-within:opacity-100 group-hover/cover:opacity-100">
+        <div className="pointer-events-auto flex items-center gap-2">
+          {moving ? (
+            <OverlayButton onClick={() => setMoving(false)}>
+              <MoveVertical /> Готово
+            </OverlayButton>
+          ) : (
+            <>
+              {/* Двигать можно только картинку: у цвета двигать нечего, и схема
+                  такой документ отвергает. */}
+              {cover.imageKey && (
+                <OverlayButton onClick={() => setMoving(true)}>
+                  <MoveVertical /> Положение
                 </OverlayButton>
-                <ColorButton current={cover.color ?? DEFAULT_COVER_COLOR} />
-                {/* Двигать можно только картинку: у цвета двигать нечего, и схема
-                    такой документ отвергает. */}
-                {cover.imageKey && (
-                  <OverlayButton onClick={() => setMoving(true)}>
-                    <MoveVertical /> Положение
-                  </OverlayButton>
-                )}
-                <OverlayButton danger onClick={() => setCover(undefined)}>
-                  <Trash2 /> Удалить
-                </OverlayButton>
-              </>
-            )}
-          </div>
+              )}
+              <CoverDialog formId={formId}>
+                <Button type="button" variant="outline" size="sm">
+                  <Pencil /> Изменить
+                </Button>
+              </CoverDialog>
+            </>
+          )}
         </div>
-      )}
-
-      {error && (
-        <p className="mt-1.5 text-sm text-destructive">
-          {error} ·{' '}
-          <button type="button" onClick={pick} className="underline hover:no-underline">
-            Повторить
-          </button>
-        </p>
-      )}
+      </div>
     </div>
   )
 }

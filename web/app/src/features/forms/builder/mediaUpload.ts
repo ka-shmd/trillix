@@ -3,6 +3,9 @@
 // docs/design/s3-media.md §6a). Синхронный HTTP-путь: ответ 201 и есть завершение,
 // статус-поллинга нет.
 
+import { z } from 'zod'
+
+import { apiRequest } from '../../../shared/api/client'
 import { CSRF_HEADER, csrfToken } from '../../../shared/api/csrf'
 
 export interface UploadHandlers {
@@ -36,6 +39,28 @@ export function uploadImage(
   purpose: UploadPurpose = 'block',
 ): Promise<string> {
   return resolveFormId(form).then((formId) => sendImage(formId, file, h, purpose))
+}
+
+const uploadResponseSchema = z.object({ imageKey: z.string().min(1) })
+
+// importImage — картинка по ссылке автора: байты скачивает сервер (через safehttp) и
+// кладёт в хранилище тем же путём, что файл, отвечая тем же imageKey. Чужой адрес в
+// схему не пишется — CSP формы пускает картинки только со своего origin.
+// Тот же адрес, что у файла, но тело — JSON; отказ сервера несёт человеческую причину.
+export function importImage(
+  form: FormIdSource,
+  url: string,
+  purpose: UploadPurpose = 'block',
+): Promise<string> {
+  return resolveFormId(form)
+    .then((formId) =>
+      apiRequest(`/forms/${formId}/media`, {
+        method: 'POST',
+        body: { url, purpose },
+        schema: uploadResponseSchema,
+      }),
+    )
+    .then((r) => r.imageKey)
 }
 
 function sendImage(
