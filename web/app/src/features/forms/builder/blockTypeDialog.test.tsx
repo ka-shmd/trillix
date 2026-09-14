@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 
 import { DialogBody } from './BlockTypeDialog'
+import { Dialog } from '@/components/ui/dialog'
 import { type MenuItem } from './blockTypes'
 
 // Окно «+» собрано на Command ради клавиатуры: стрелки из поля поиска двигают выбор,
@@ -13,7 +14,12 @@ afterEach(cleanup)
 
 function setup() {
   const onPick = vi.fn<(item: MenuItem) => void>()
-  render(<DialogBody onPick={onPick} />)
+  // Dialog — ради контекста крестика (DialogClose) в шапке тела окна.
+  render(
+    <Dialog open>
+      <DialogBody onPick={onPick} />
+    </Dialog>,
+  )
   const search = screen.getByRole('textbox', { name: 'Поиск по названию' })
   return { onPick, search }
 }
