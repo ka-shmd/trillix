@@ -1,16 +1,15 @@
 import { useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { ImageIcon, ImagePlus, MoveVertical, Palette, RefreshCw, Trash2 } from 'lucide-react'
+import { ImageIcon, ImagePlus, MoveVertical, Palette } from 'lucide-react'
 
 import { coverY } from '@entities/formSchema'
 import { CoverBand, LogoMark } from '@fields/pageChrome'
 
-import { CoverDialog } from './CoverDialog'
+import { CoverDialog, LogoDialog } from './CoverDialog'
 import { coverOverflowPx, nextCoverY } from './coverDrag'
 import { DEFAULT_COVER_COLOR } from './designEdit'
 import { uploadImage, type FormIdSource } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Button } from '@/components/ui/button'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { humanError } from '../../../shared/api/errors'
 
 // Хром страницы в РЕДАКТОРЕ: та же обложка и тот же логотип, что увидит респондент
@@ -22,31 +21,11 @@ import { humanError } from '../../../shared/api/errors'
 // плашка в цветах темы формы (решение владельца 2026-09-14): это служебный контрол
 // редактора, и выглядит он так же, как остальной хром. Тот же вид у картинки блока
 // (ImageField).
-const OVERLAY_DANGER = 'text-destructive hover:text-destructive'
-
 function OverlayButton({ onClick, children }: { onClick?: () => void; children: React.ReactNode }) {
   return (
     <Button type="button" variant="outline" size="sm" onClick={onClick}>
       {children}
     </Button>
-  )
-}
-
-// Полоса прогресса поверх обложки на время загрузки — та же плашка, что у картинки
-// блока (ImageField): загрузка выглядит одинаково, где бы её ни начали. className —
-// под форму того, что накрываем: у логотипа она круглая (см. LogoArea).
-function ProgressOverlay({ pct, className = '' }: { pct: number; className?: string }) {
-  return (
-    <div
-      className={`absolute inset-0 flex items-center justify-center bg-background/60 ${className}`}
-    >
-      <div className="w-2/3 max-w-40">
-        <div className="h-1.5 overflow-hidden rounded-full bg-muted">
-          <div className="h-full bg-primary transition-[width]" style={{ width: `${pct}%` }} />
-        </div>
-        <p className="mt-1 text-center text-xs text-muted-foreground">Загрузка… {pct}%</p>
-      </div>
-    </div>
   )
 }
 
@@ -185,92 +164,30 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
   )
 }
 
-// Значок на логотипе: знак бывает мельче подписи, поэтому действие — значком, а
-// подсказка обязательна и берёт текст у aria-label (DESIGN-SYSTEM §7).
-function LogoAction({
-  icon: Icon,
-  label,
-  className,
-  onClick,
-}: {
-  icon: React.ComponentType<{ className?: string }>
-  label: string
-  className?: string
-  onClick: () => void
-}) {
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          type="button"
-          variant="outline"
-          size="icon-sm"
-          className={className}
-          aria-label={label}
-          onClick={onClick}
-        >
-          <Icon className="size-4" />
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
-  )
-}
-
-// LogoArea — логотип на полотне со своим оверлеем. Стоит ВНУТРИ колонки (в отличие
-// от обложки), поэтому и компонент отдельный: они соседи по смыслу, но не по DOM.
+// LogoArea — логотип на полотне. Стоит ВНУТРИ колонки (в отличие от обложки), поэтому
+// и компонент отдельный: они соседи по смыслу, но не по DOM.
+//
+// Кнопок на знаке нет (решение владельца 2026-09-14): нажатие на сам логотип открывает
+// окно логотипа (LogoDialog) — загрузка, ссылка, удаление.
 export function LogoArea({ formId, over }: { formId: FormIdSource; over: boolean }) {
   const logo = useBuilderStore((s) => s.logo)
-  const setLogo = useBuilderStore((s) => s.setLogo)
-  const fileRef = useRef<HTMLInputElement>(null)
-  const [progress, setProgress] = useState<number | null>(null)
-  const [error, setError] = useState<string | null>(null)
 
   if (!logo) return null
 
-  function pick() {
-    fileRef.current?.click()
-  }
-
-  function onFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
-    setError(null)
-    setProgress(0)
-    uploadImage(formId, file, { onProgress: setProgress }, 'logo')
-      .then((imageKey) => setLogo({ imageKey }))
-      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
-      .finally(() => setProgress(null))
-  }
-
   return (
-    <div className="group/logo relative w-fit">
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/png,image/jpeg"
-        className="hidden"
-        onChange={onFile}
-      />
+    <div className="relative w-fit">
       <LogoMark logo={logo} over={over} />
-      {/* Оверлеи скруглены ПО ЛОГОТИПУ (--rf-logo-radius), а не по контролам
-          (--rf-radius): скругление логотипа задаёт автор, и при круглом знаке
-          квадратное затемнение вылезает углами за его край. */}
-      {progress !== null ? (
-        <ProgressOverlay pct={progress} className="rounded-[var(--rf-logo-radius)]" />
-      ) : (
-        <div className="absolute inset-0 flex items-center justify-center gap-1 rounded-[var(--rf-logo-radius)] bg-foreground/35 opacity-0 transition-opacity focus-within:opacity-100 group-hover/logo:opacity-100">
-          <LogoAction icon={RefreshCw} label="Заменить логотип" onClick={pick} />
-          <LogoAction
-            icon={Trash2}
-            label="Удалить логотип"
-            className={OVERLAY_DANGER}
-            onClick={() => setLogo(undefined)}
-          />
-        </div>
-      )}
-      {error && <p className="mt-1.5 text-sm text-destructive">{error}</p>}
+      {/* Нажимаемый слой ПОВЕРХ знака, а не кнопка-обёртка: LogoMark — блочный div с
+          отступами нахлёста, и внутри <button> его раскладка разошлась бы с превью и
+          рендерером. Слой скруглён ПО ЛОГОТИПУ (--rf-logo-radius): скругление задаёт
+          автор, и при круглом знаке квадратная подсветка вылезала бы углами. */}
+      <LogoDialog formId={formId}>
+        <button
+          type="button"
+          aria-label="Изменить логотип"
+          className="absolute inset-0 cursor-pointer rounded-[var(--rf-logo-radius)] outline-none transition-colors hover:bg-foreground/10 focus-visible:ring-[3px] focus-visible:ring-ring/50"
+        />
+      </LogoDialog>
     </div>
   )
 }

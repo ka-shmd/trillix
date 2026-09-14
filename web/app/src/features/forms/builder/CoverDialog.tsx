@@ -1,10 +1,10 @@
-import { useRef, useState, type ReactElement } from 'react'
+import { useRef, useState, type ReactElement, type ReactNode } from 'react'
 import { Trash2, Upload } from 'lucide-react'
 
 import { humanError } from '../../../shared/api/errors'
 import { ColorPicker } from './ColorPicker'
 import { COVER_COLORS, DEFAULT_COVER_COLOR, coverFill } from './designEdit'
-import { importImage, uploadImage, type FormIdSource } from './mediaUpload'
+import { importImage, uploadImage, type FormIdSource, type UploadPurpose } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Button } from '@/components/ui/button'
 import {
@@ -24,25 +24,104 @@ import { cn } from '@/lib/utils'
 // удаление. Одно на оба входа — кнопку «Изменить» на полотне и строку «Обложка» в
 // шторке оформления (решение владельца 2026-09-14): обложка меняется одинаково,
 // откуда бы её ни открыли.
+export function CoverDialog({ formId, children }: { formId: FormIdSource; children: ReactElement }) {
+  const cover = useBuilderStore((s) => s.cover)
+  const setCover = useBuilderStore((s) => s.setCover)
+
+  return (
+    <ImageDialog
+      label="Обложка"
+      formId={formId}
+      purpose="cover"
+      hint="Рекомендуемая ширина — от 1500 пикселей"
+      removable={cover !== undefined}
+      // Новая картинка приходит без сдвига: точка фокуса прежней ей не подходит — это
+      // другое изображение с другой композицией. Высота полосы сохраняется (coverFill).
+      onImage={(imageKey) => setCover(coverFill(cover, { imageKey }))}
+      onRemove={() => setCover(undefined)}
+      // Обложку цветом открывают на её цвете: скорее всего, его и подбирают.
+      initialTab={cover?.color && !cover.imageKey ? 'color' : 'upload'}
+      color={
+        // Цвет применяется на каждое движение и окна не закрывает: подбирают по
+        // результату на полосе. История не дробится — стор коалесит подбор одним тегом.
+        <div className="w-64">
+          <ColorPicker
+            initial={cover?.color ?? DEFAULT_COVER_COLOR}
+            swatches={COVER_COLORS}
+            onChange={(hex) => setCover(coverFill(cover, { color: hex }))}
+          />
+        </div>
+      }
+    >
+      {children}
+    </ImageDialog>
+  )
+}
+
+// LogoDialog — окно логотипа: файл или ссылка и удаление, без цвета. Открывается
+// нажатием на сам знак на полотне (решение владельца 2026-09-14).
+export function LogoDialog({ formId, children }: { formId: FormIdSource; children: ReactElement }) {
+  const logo = useBuilderStore((s) => s.logo)
+  const setLogo = useBuilderStore((s) => s.setLogo)
+
+  return (
+    <ImageDialog
+      label="Логотип"
+      formId={formId}
+      purpose="logo"
+      hint="Рекомендуемый размер — от 300 × 300 пикселей"
+      removable={logo !== undefined}
+      // Размеры переживают замену картинки: автор настраивал их под место на странице,
+      // а не под конкретный файл (так же в шторке, DesignChrome).
+      onImage={(imageKey) => setLogo({ ...logo, imageKey })}
+      onRemove={() => setLogo(undefined)}
+    >
+      {children}
+    </ImageDialog>
+  )
+}
+
+type ImageTab = 'upload' | 'link' | 'color'
+
+// ImageDialog — общий вид окна картинки хрома страницы.
 //
 // Вид — по референсу владельца: заголовка нет, шапка окна — ряд вкладок с чертой под
 // активной, «Удалить» в том же ряду у правого края ВМЕСТО крестика; окно закрывается
 // выбором, кликом мимо или Esc.
-export function CoverDialog({ formId, children }: { formId: FormIdSource; children: ReactElement }) {
+function ImageDialog({
+  label,
+  children,
+  ...body
+}: ImageBodyProps & { label: string; children: ReactElement }) {
   const [open, setOpen] = useState(false)
 
   return (
     <Dialog open={open} onOpenChange={setOpen}>
       <DialogTrigger asChild>{children}</DialogTrigger>
       <DialogContent showCloseButton={false} className="gap-0 p-0 sm:max-w-2xl">
-        <DialogTitle className="sr-only">Обложка</DialogTitle>
+        <DialogTitle className="sr-only">{label}</DialogTitle>
         <DialogDescription className="sr-only">
-          Загрузите картинку, вставьте ссылку на неё или выберите цвет.
+          {body.color
+            ? 'Загрузите картинку, вставьте ссылку на неё или выберите цвет.'
+            : 'Загрузите картинку или вставьте ссылку на неё.'}
         </DialogDescription>
-        <CoverTabs formId={formId} onDone={() => setOpen(false)} />
+        <ImageTabs {...body} onDone={() => setOpen(false)} />
       </DialogContent>
     </Dialog>
   )
+}
+
+interface ImageBodyProps {
+  formId: FormIdSource
+  purpose: UploadPurpose
+  // Первая строка подсказки зоны загрузки: рекомендуемый размер под назначение.
+  hint: string
+  removable: boolean
+  onImage: (imageKey: string) => void
+  onRemove: () => void
+  initialTab?: ImageTab
+  // Содержимое вкладки «Цвет»; нет — нет и вкладки.
+  color?: ReactNode
 }
 
 // Вкладка шапки: текст с чертой под активной. Черта — `after` вендоренного варианта
@@ -53,16 +132,20 @@ const TAB =
 
 // Тело окна — отдельный компонент внутри Content: Radix размонтирует его при закрытии,
 // поэтому вкладка, адрес и ошибка сбрасываются к умолчанию сами.
-function CoverTabs({ formId, onDone }: { formId: FormIdSource; onDone: () => void }) {
-  const cover = useBuilderStore((s) => s.cover)
-  const setCover = useBuilderStore((s) => s.setCover)
-  // Обложку цветом открывают на её цвете: скорее всего, его и подбирают.
-  const [tab, setTab] = useState(cover?.color && !cover.imageKey ? 'color' : 'upload')
-
-  // Новая картинка приходит без сдвига: точка фокуса прежней ей не подходит — это
-  // другое изображение с другой композицией. Высота полосы сохраняется (coverFill).
+function ImageTabs({
+  formId,
+  purpose,
+  hint,
+  removable,
+  onImage,
+  onRemove,
+  initialTab = 'upload',
+  color,
+  onDone,
+}: ImageBodyProps & { onDone: () => void }) {
+  const [tab, setTab] = useState<string>(initialTab)
   const applyImage = (imageKey: string) => {
-    setCover(coverFill(cover, { imageKey }))
+    onImage(imageKey)
     onDone()
   }
 
@@ -79,20 +162,22 @@ function CoverTabs({ formId, onDone }: { formId: FormIdSource; onDone: () => voi
           <TabsTrigger value="link" className={TAB}>
             Ссылка
           </TabsTrigger>
-          <TabsTrigger value="color" className={TAB}>
-            Цвет
-          </TabsTrigger>
+          {color !== undefined && (
+            <TabsTrigger value="color" className={TAB}>
+              Цвет
+            </TabsTrigger>
+          )}
         </TabsList>
-        {/* У пустой обложки удалять нечего — место пустует. Деструктивное приглушено
-            и краснеет на наведении (DESIGN-SYSTEM §7). */}
-        {cover && (
+        {/* Удалять нечего — место пустует. Деструктивное приглушено и краснеет на
+            наведении (DESIGN-SYSTEM §7). */}
+        {removable && (
           <Button
             type="button"
             variant="ghost"
             size="sm"
             className="-mr-2 text-muted-foreground hover:text-destructive"
             onClick={() => {
-              setCover(undefined)
+              onRemove()
               onDone()
             }}
           >
@@ -104,23 +189,16 @@ function CoverTabs({ formId, onDone }: { formId: FormIdSource; onDone: () => voi
           переключении. */}
       <div className="p-6">
         <TabsContent value="upload">
-          <UploadTab formId={formId} onUploaded={applyImage} />
+          <UploadTab formId={formId} purpose={purpose} hint={hint} onUploaded={applyImage} />
         </TabsContent>
         <TabsContent value="link" className="min-h-90">
-          <LinkTab formId={formId} onUploaded={applyImage} />
+          <LinkTab formId={formId} purpose={purpose} onUploaded={applyImage} />
         </TabsContent>
-        <TabsContent value="color" className="min-h-90">
-          {/* Цвет применяется на каждое движение и окна не закрывает: подбирают по
-              результату на полосе. История не дробится — стор коалесит подбор одним
-              тегом. */}
-          <div className="w-64">
-            <ColorPicker
-              initial={cover?.color ?? DEFAULT_COVER_COLOR}
-              swatches={COVER_COLORS}
-              onChange={(hex) => setCover(coverFill(cover, { color: hex }))}
-            />
-          </div>
-        </TabsContent>
+        {color !== undefined && (
+          <TabsContent value="color" className="min-h-90">
+            {color}
+          </TabsContent>
+        )}
       </div>
     </Tabs>
   )
@@ -128,16 +206,16 @@ function CoverTabs({ formId, onDone }: { formId: FormIdSource; onDone: () => voi
 
 const IMAGE_LIMIT = 'PNG или JPEG, до 5 МБ'
 
+interface SourceTabProps {
+  formId: FormIdSource
+  purpose: UploadPurpose
+  onUploaded: (imageKey: string) => void
+}
+
 // Зона загрузки: файл перетаскивают на неё или выбирают кликом. Пунктирная рамка —
 // решение владельца по референсу: это жанр «сюда бросают файл», а не блок страницы,
 // поэтому правило «плоскость вместо рамки» (DESIGN-SYSTEM §7) на неё не распространяется.
-function UploadTab({
-  formId,
-  onUploaded,
-}: {
-  formId: FormIdSource
-  onUploaded: (imageKey: string) => void
-}) {
+function UploadTab({ formId, purpose, hint, onUploaded }: SourceTabProps & { hint: string }) {
   const inputRef = useRef<HTMLInputElement>(null)
   const [over, setOver] = useState(false)
   const [progress, setProgress] = useState<number | null>(null)
@@ -147,8 +225,8 @@ function UploadTab({
     if (!file || progress !== null) return
     setError(null)
     setProgress(0)
-    // Назначение cover: сервер оставит обложке её ширину (2000), а не ширину колонки.
-    uploadImage(formId, file, { onProgress: setProgress }, 'cover')
+    // Назначение решает потолок ширины на сервере: обложке 2000, логотипу 512.
+    uploadImage(formId, file, { onProgress: setProgress }, purpose)
       .then(onUploaded)
       .catch((err: unknown) => setError(humanError(err, 'Не удалось загрузить картинку')))
       .finally(() => setProgress(null))
@@ -197,7 +275,7 @@ function UploadTab({
               Нажмите, чтобы выбрать файл, или перетащите его сюда
             </span>
             <span className="mt-4 flex flex-col gap-2 text-xs text-muted-foreground">
-              <span>Рекомендуемая ширина — от 1500 пикселей</span>
+              <span>{hint}</span>
               <span>{IMAGE_LIMIT}</span>
             </span>
           </>
@@ -214,13 +292,7 @@ function UploadTab({
 
 // Картинка по ссылке. Скачивает её сервер и кладёт к себе (mediaUpload.importImage),
 // поэтому причина отказа приходит от него словами — её и показываем.
-function LinkTab({
-  formId,
-  onUploaded,
-}: {
-  formId: FormIdSource
-  onUploaded: (imageKey: string) => void
-}) {
+function LinkTab({ formId, purpose, onUploaded }: SourceTabProps) {
   const [link, setLink] = useState('')
   const [pending, setPending] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -234,7 +306,7 @@ function LinkTab({
         if (trimmed === '' || pending) return
         setPending(true)
         setError(null)
-        importImage(formId, trimmed, 'cover')
+        importImage(formId, trimmed, purpose)
           .then(onUploaded)
           .catch((err: unknown) =>
             setError(humanError(err, 'Не удалось загрузить картинку по ссылке')),
@@ -242,12 +314,12 @@ function LinkTab({
           .finally(() => setPending(false))
       }}
     >
-      <Label htmlFor="cover-link">Ссылка на картинку</Label>
+      <Label htmlFor={`${purpose}-link`}>Ссылка на картинку</Label>
       <div className="flex gap-2">
         {/* type="text", а не "url": у "url" браузер показывает свою подсказку
             проверки — латиницей и не нашими словами. Адрес проверяет сервер. */}
         <Input
-          id="cover-link"
+          id={`${purpose}-link`}
           type="text"
           inputMode="url"
           autoComplete="off"
