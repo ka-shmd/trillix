@@ -544,7 +544,7 @@ export function DesignDrawer({
                     хватает трёх знаков, чекбоксу — слова. `items-end` равняет их по
                     нижнему краю: у трёх настроек над контролом стоит подпись, у
                     чекбокса её нет, и по верху они разъехались бы. */}
-                <div className="grid grid-cols-[1.4fr_1fr_1fr_auto] items-end gap-3">
+                <div className="grid grid-cols-[1.4fr_1fr_1fr_auto] items-end gap-2">
                   <ColorRow
                     id={`design-color-${BORDER_PALETTE_FIELD.key}`}
                     title={BORDER_PALETTE_FIELD.title}
@@ -1151,7 +1151,6 @@ function ColorRow({
             <button
               type="button"
               aria-label={`Подобрать цвет: ${title}`}
-              title="Подобрать цвет"
               // Кольца нет, как и у прочих контролов шторки, но метка фокуса образцу
             // нужна своя: у него нет вендоренной перекраски рамки, поэтому на фокусе
             // рамка становится акцентной здесь же.
@@ -1217,7 +1216,7 @@ function ColorRow({
 // бы сделать предупреждение самым нечитаемым абзацем панели.
 function Warning({ children }: { children: ReactNode }) {
   return (
-    <p className="border-warning/40 bg-warning/10 flex gap-2 rounded-md border p-4 text-sm">
+    <p className="bg-warning/10 flex gap-2 rounded-lg p-4 text-sm">
       <TriangleAlert className="text-warning mt-0.5 size-4 shrink-0" />
       <span>{children}</span>
     </p>

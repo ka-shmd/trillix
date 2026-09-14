@@ -183,7 +183,9 @@ export function ChatDrawer({
         // отсутствующем Description (тот же гард, что у шторки оформления).
         aria-describedby={undefined}
       >
-        <SheetHeader className="border-b p-4">
+        {/* Шапка — та же, что у шторки «Оформление» (они делят одно место у правого
+            края): без линии, ленту от заголовка отделяет отбивка. */}
+        <SheetHeader>
           <SheetTitle>Помощь ИИ</SheetTitle>
         </SheetHeader>
 

@@ -137,7 +137,6 @@ function ChromeButton({
   return (
     <button
       type="button"
-      title={title}
       aria-label={title}
       {...rest}
       className={cn(
