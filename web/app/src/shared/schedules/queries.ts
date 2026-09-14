@@ -1,7 +1,7 @@
 // Транспорт и кэш расписаний живут в shared, а не в фиче: их спрашивают ДВЕ фичи —
 // экран расписаний и попап блока «Запись» на полотне, — а импорт фичи из фичи запрещён
 // (web/CLAUDE.md). Компоненты экрана при этом остались в features/schedules.
-import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
+import { queryOptions, useMutation, useQueryClient, type QueryClient } from '@tanstack/react-query'
 
 import { scheduleKeys } from './keys'
 import {
@@ -18,7 +18,7 @@ import {
   removeBlock,
   updateSchedule,
 } from './api'
-import { type ScheduleInput } from '../../entities/schedule'
+import { type Schedule, type ScheduleInput } from '../../entities/schedule'
 
 export function schedulesQueryOptions(workspaceId: string) {
   return queryOptions({
@@ -32,6 +32,17 @@ export function scheduleQueryOptions(scheduleId: string) {
     queryKey: scheduleKeys.detail(scheduleId),
     queryFn: () => getSchedule(scheduleId),
   })
+}
+
+// listedSchedule — расписание из уже прочитанного списка любого пространства. Строка
+// списка — тот же документ плюс счётчики, поэтому страница расписания, открытая со
+// списка, рисуется им сразу, а свежий документ доезжает запросом поверх.
+export function listedSchedule(qc: QueryClient, scheduleId: string): Schedule | undefined {
+  for (const [, items] of qc.getQueriesData<Schedule[]>({ queryKey: scheduleKeys.lists() })) {
+    const found = items?.find((s) => s.id === scheduleId)
+    if (found) return found
+  }
+  return undefined
 }
 
 export function blocksQueryOptions(scheduleId: string) {

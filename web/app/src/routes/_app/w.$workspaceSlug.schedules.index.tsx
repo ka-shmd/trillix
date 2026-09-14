@@ -1,10 +1,12 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { createFileRoute, Link, useNavigate } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { CalendarClock, Plus } from 'lucide-react'
 
 import { DEFAULT_SCHEDULE, MAX_SCHEDULE_NAME_LEN } from '../../entities/schedule'
 import { schedulesQueryOptions, useCreateSchedule } from '../../shared/schedules/queries'
+import { preloadCalendar } from '../../shared/calendarChunk'
+import { preloadScheduleCanvas } from '../../features/schedules/canvasChunk'
 import { ScheduleRow, ScheduleRowsHeader } from '../../features/schedules/ScheduleRow'
 import { workspacesQueryOptions } from '../../features/workspaces/queries'
 import { humanError } from '../../shared/api/errors'
@@ -48,6 +50,14 @@ function SchedulesPage() {
     enabled: workspace !== undefined,
   })
   const [creating, setCreating] = useState(false)
+
+  // Библиотеки страницы расписания грузятся ЗДЕСЬ, пока человек смотрит на список:
+  // страница расписания появляется одним кадром и без скелетов (решение владельца
+  // 2026-09-14), и к клику по строке ждать ей уже нечего.
+  useEffect(() => {
+    void preloadScheduleCanvas()
+    void preloadCalendar()
+  }, [])
 
   return (
     <>

@@ -4,7 +4,7 @@ import { CalendarClock, MoreHorizontal } from 'lucide-react'
 
 import { type Booking, type Schedule } from '../../entities/schedule'
 import { bookingsQueryOptions } from '../../shared/schedules/queries'
-import { LazyCalendar } from '../../shared/lazyCalendar'
+import { InlineCalendar } from '../../shared/lazyCalendar'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { bookingTime } from './scheduleFormat'
 import { formInk, formTint } from './formColor'
@@ -24,7 +24,8 @@ import {
 // целый календарный движок ради семи колонок, со своей темой, своими размерами и
 // собственным представлением о том, что такое клик по дню. `react-day-picker` в
 // кабинете уже узаконен ровно под это (web/CLAUDE.md) и приезжает тем же ленивым
-// чанком, что и выбор даты закрытия формы.
+// чанком, что и выбор даты закрытия формы. Своей заглушки у него нет: полоса
+// появляется одним кадром с полотном (InlineCalendar, решение владельца 2026-09-14).
 export function SchedulePanel({
   schedule,
   visible,
@@ -52,7 +53,7 @@ export function SchedulePanel({
 
   return (
     <div className="flex flex-col gap-4">
-      <LazyCalendar
+      <InlineCalendar
         mode="single"
         required={false}
         selected={first}
