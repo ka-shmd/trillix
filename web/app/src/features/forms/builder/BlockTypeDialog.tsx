@@ -13,6 +13,7 @@ import { editorKind, textIsBold } from './kinds/index'
 import { applyDefaultMarks, BOLD_MARKS } from './richText'
 import { chords } from './shortcuts'
 import { Button } from '@/components/ui/button'
+import { Command, CommandGroup, CommandItem, CommandList } from '@/components/ui/command'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 
@@ -46,7 +47,7 @@ export function BlockTypeDialog({
   )
 }
 
-function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
+export function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
   const [query, setQuery] = useState('')
   const [activeKey, setActiveKey] = useState<string>(MENU_ITEMS[0]!.key)
 
@@ -62,8 +63,21 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
   const activeMeta = MENU_ITEMS.find((b) => b.key === shown)
 
   return (
-    <>
-      <div className="flex items-center gap-2 border-b p-4 pr-14">
+    // Список — вендоренный Command: стрелки из поля поиска двигают выделенный пункт,
+    // фокус остаётся в поле (клавиатуру cmdk слушает на корне, куда событие всплывает).
+    //  • фильтр наш (shouldFilter={false}) — подстрока названия, как и до Command;
+    //  • наведение выделение НЕ двигает (disablePointerSelection): превью справа
+    //    сменялось бы по пути курсора к кнопке «Добавить», и вставлялся бы не тот тип;
+    //  • клик выбирает пункт для превью, двойной клик и Enter — вставляют. Enter гасится
+    //    в поле (preventDefault): иначе cmdk дёрнул бы onSelect пункта, а тот лишь выбирает.
+    <Command
+      shouldFilter={false}
+      disablePointerSelection
+      value={shown ?? ''}
+      onValueChange={setActiveKey}
+      className="rounded-none bg-transparent"
+    >
+      <div className="flex items-center gap-2 p-4 pr-14">
         <div className="relative flex-1">
           <Search className="pointer-events-none absolute left-2.5 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
           <Input
@@ -71,9 +85,12 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             onKeyDown={(e) => {
-              if (chords.enter(e) && activeMeta) onPick(activeMeta)
+              if (!chords.enter(e)) return
+              e.preventDefault()
+              if (activeMeta) onPick(activeMeta)
             }}
             placeholder="Поиск по названию…"
+            aria-label="Поиск по названию"
             className="pl-8"
           />
         </div>
@@ -83,54 +100,48 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
           disabled={!activeMeta}
           className="shrink-0"
         >
-          Добавить <ArrowRight className="size-4" />
+          Добавить <ArrowRight />
         </Button>
       </div>
 
       <div className="flex h-[34rem]">
-        {/* Левая часть: типы по группам. */}
-        <div className="w-64 shrink-0 overflow-y-auto border-r p-2">
+        {/* Левая часть: типы по группам — на подложке, а не за линией
+            (DESIGN-SYSTEM §7, «плоскость вместо рамки»). Выбранный пункт — белый на
+            подложке: штатный bg-accent совпадает с ней по цвету и пропал бы. */}
+        <CommandList className="max-h-none w-64 shrink-0 bg-muted p-2">
           {BLOCK_GROUP_ORDER.map((g) => {
             const items = filtered.filter((b) => b.group === g)
             if (items.length === 0) return null
             return (
-              // role+aria-label: группа была только визуальной (заголовок текстом),
-              // программно список выглядел россыпью кнопок без деления — скринридер
-              // не отличал «Шкалу с заголовком» от «голой Шкалы». Тот же тип поля
-              // намеренно присутствует в двух группах, поэтому имя группы — часть
-              // смысла пункта, а не оформление.
-              <div key={g} className="mb-2" role="group" aria-label={BLOCK_GROUP_LABELS[g]}>
-                <div className="px-2 py-1.5 text-xs text-muted-foreground">
-                  {BLOCK_GROUP_LABELS[g]}
-                </div>
+              // Группа с заголовком — не оформление: тот же тип поля намеренно стоит в
+              // двух группах, и имя группы — часть смысла пункта. cmdk отдаёт его
+              // скринридеру через role="group" + aria-labelledby на заголовок.
+              <CommandGroup key={g} heading={BLOCK_GROUP_LABELS[g]} className="p-0">
                 {items.map((b) => (
-                  <button
+                  <CommandItem
                     key={b.key}
-                    type="button"
-                    onClick={() => setActiveKey(b.key)}
+                    value={b.key}
+                    onSelect={() => setActiveKey(b.key)}
                     onDoubleClick={() => onPick(b)}
-                    onFocus={() => setActiveKey(b.key)}
-                    className={`flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left text-sm ${
-                      shown === b.key ? 'bg-accent text-accent-foreground' : 'hover:bg-accent/50'
-                    }`}
+                    className="data-[selected=true]:bg-background"
                   >
                     <span className="text-muted-foreground">{b.icon}</span>
                     {b.label}
-                  </button>
+                  </CommandItem>
                 ))}
-              </div>
+              </CommandGroup>
             )
           })}
           {filtered.length === 0 && (
             <p className="px-2 py-4 text-sm text-muted-foreground">Ничего не найдено</p>
           )}
-        </div>
+        </CommandList>
 
-        {/* Правая часть: описание (сверху) и пример (снизу), разделённые бордером. */}
-        <div className="flex flex-1 flex-col overflow-y-auto">
+        {/* Правая часть: описание сверху и пример снизу — отбивкой, без линии. */}
+        <div className="flex flex-1 flex-col gap-6 overflow-y-auto p-4">
           {activeMeta && (
             <>
-              <div className="p-4">
+              <div>
                 <div className="flex items-center gap-2">
                   <span className="text-muted-foreground">{activeMeta.icon}</span>
                   <h3 className="text-base font-semibold">{activeMeta.label}</h3>
@@ -138,17 +149,15 @@ function DialogBody({ onPick }: { onPick: (item: MenuItem) => void }) {
                 <p className="mt-2 text-sm text-muted-foreground">{activeMeta.description}</p>
               </div>
 
-              <div className="border-t p-4">
-                <div className="mb-2 text-xs text-muted-foreground">
-                  Пример
-                </div>
+              <div>
+                <div className="mb-2 text-xs text-muted-foreground">Пример</div>
                 <BlockField block={sampleBlock(activeMeta.type)} captionText="Ваш вопрос" />
               </div>
             </>
           )}
         </div>
       </div>
-    </>
+    </Command>
   )
 }
 
