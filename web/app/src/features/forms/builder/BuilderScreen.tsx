@@ -25,8 +25,55 @@ import { FormFactsProvider, type FormFacts } from './formFacts'
 import { ChatDrawer } from '../chat/ChatDrawer'
 import { useAutosave, type DraftCreation } from './useAutosave'
 import { useGlobalChord } from './useGlobalChord'
-import { chords, labelFor } from './shortcuts'
+import { chords, formatLabel, labelFor } from './shortcuts'
 import { Button } from '@/components/ui/button'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
+
+// Подпись значка с клавишами из карты шорткатов — той же, что читает шпаргалка Mod+/:
+// строка «Ctrl+Z», написанная руками, врала бы на маке.
+function withChord(text: string, match: Parameters<typeof labelFor>[0]): string {
+  const chord = labelFor(match)
+  return chord === undefined ? text : `${text} (${formatLabel(chord)})`
+}
+
+// Значок бара: подсказка обязательна, и текст у неё общий с aria-label — одна строка
+// на оба (DESIGN-SYSTEM §7, образец — RowAction в IntegrationsView).
+function BarIcon({
+  icon: Icon,
+  label,
+  disabled,
+  onClick,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  label: string
+  disabled?: boolean
+  onClick: () => void
+}) {
+  // ⚠ У выключенной кнопки нет pointer-событий, и тултип на ней не открылся бы —
+  // обёртка-span держит наведение (тот же приём, что у PublishButton).
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span className="inline-flex">
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            className="text-muted-foreground"
+            disabled={disabled}
+            onClick={onClick}
+            aria-label={label}
+          >
+            <Icon className="size-4" />
+          </Button>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
+  )
+}
+
+const undoLabel = withChord('Отменить', chords.undo)
+const redoLabel = withChord('Повторить', chords.redo)
 
 // Режимов у редактора больше нет: полотно — единственное, что он показывает.
 // Настройки уехали в раздел формы (`/forms/{slug}/settings`, решение владельца
@@ -155,36 +202,19 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
             редактор, иначе откат гонится с автосейвом за один токен блокировки. */}
         <DiscardChanges form={detail} canDiscard={canPublish} />
         {/* Отмена/повтор — история документа, ближе всего к полотну,
-            которое они правят. */}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="text-muted-foreground"
-          disabled={!canUndo}
-          onClick={undo}
-          aria-label="Отменить (Ctrl+Z)"
-          title="Отменить (Ctrl+Z)"
-        >
-          <Undo2 className="size-4" />
-        </Button>
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="text-muted-foreground"
-          disabled={!canRedo}
-          onClick={redo}
-          aria-label="Повторить (Ctrl+Shift+Z)"
-          title="Повторить (Ctrl+Shift+Z)"
-        >
-          <Redo2 className="size-4" />
-        </Button>
+            которое они правят. Пара значков стоит своей коробкой без gap
+            (DESIGN-SYSTEM §7): поля ghost-кнопок уже дают воздух между ними. */}
+        <div className="flex items-center">
+          <BarIcon icon={Undo2} label={undoLabel} disabled={!canUndo} onClick={undo} />
+          <BarIcon icon={Redo2} label={redoLabel} disabled={!canRedo} onClick={redo} />
+        </div>
         {/* Просмотр — только ВХОД, не тумблер: слой закрывает шапку целиком,
             и кнопки, которой можно было бы нажать второй раз, под ним нет.
             Выход подписан словами на самом слое. */}
         <Button
           variant="ghost"
           size="sm"
-          className="gap-1.5 text-muted-foreground"
+          className="text-muted-foreground"
           onClick={() => setPreviewOpen(true)}
         >
           <Eye className="size-4" /> Просмотр
@@ -200,7 +230,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         <Button
           variant="ghost"
           size="sm"
-          className={drawers.designOpen ? 'gap-1.5' : 'gap-1.5 text-muted-foreground'}
+          className={drawers.designOpen ? undefined : 'text-muted-foreground'}
           aria-pressed={drawers.designOpen}
           onClick={() => drawers.openDesign(!drawers.designOpen)}
         >
@@ -215,20 +245,15 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
             настоящему slug'у, и вести туда `new` некуда. Форма появляется на
             сервере на один клик раньше, чем прежде, — цена того, что у настроек
             есть адрес. */}
-        <Button
-          variant="ghost"
-          size="icon-sm"
-          className="text-muted-foreground"
+        <BarIcon
+          icon={Settings}
+          label="Настройки формы"
           onClick={() => {
             void ensureForm()
               .then(({ slug }) => navigate({ to: '/forms/$slug/settings', params: { slug } }))
               .catch(() => undefined)
           }}
-          aria-label="Настройки формы"
-          title="Настройки формы"
-        >
-          <Settings className="size-4" />
-        </Button>
+        />
         {/* Статус автосейва стоит у самой публикации: именно он решает,
             активна ли кнопка «Опубликовать» (canPublish). */}
         <SaveIndicator status={status} onRetry={saveNow} />

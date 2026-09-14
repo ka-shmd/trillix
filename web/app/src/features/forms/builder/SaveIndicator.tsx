@@ -55,7 +55,7 @@ export function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry
         role="status"
         aria-label={label}
         tabIndex={0}
-        className="flex size-8 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="flex size-7 items-center justify-center rounded-md outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
         <Icon className={`size-4 ${className}`} />
       </span>
@@ -73,20 +73,17 @@ export function SaveIndicator({ status, onRetry }: { status: SaveStatus; onRetry
 // в MVP разрешается перезагрузкой: перечитать серверную версию и продолжить с неё.
 export function ConflictBanner() {
   return (
+    // Подложка, а не рамка — тот же вид отказа, что у ErrorState (DESIGN-SYSTEM §7).
     <div
-      className="flex flex-wrap items-center justify-between gap-2 border-b border-destructive/40 bg-destructive/5 px-4 py-2 text-sm"
+      className="flex flex-wrap items-center justify-between gap-2 bg-destructive/8 px-4 py-2 text-sm text-destructive"
       role="alert"
     >
       <span>
         Форма изменена в другой вкладке. Обновите страницу, чтобы продолжить редактирование.
       </span>
-      <button
-        type="button"
-        className="font-medium text-destructive underline underline-offset-2"
-        onClick={() => window.location.reload()}
-      >
+      <Button variant="outline" size="sm" onClick={() => window.location.reload()}>
         Обновить
-      </button>
+      </Button>
     </div>
   )
 }
