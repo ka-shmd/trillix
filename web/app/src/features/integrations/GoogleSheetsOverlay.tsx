@@ -448,7 +448,7 @@ function SetupBody({
         <Label htmlFor="integration-name">Название подключения</Label>
         <Input
           id="integration-name"
-          className="h-10 md:text-base"
+          className="md:text-base"
           value={setup.name}
           maxLength={80}
           placeholder="Необязательно — чтобы отличать связки друг от друга"
@@ -570,7 +570,7 @@ function SheetField({
         {sheets.isError && <LoadFailed />}
       </div>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger id="integration-sheet" className="w-full text-base data-[size=default]:h-10">
+        <SelectTrigger id="integration-sheet" className="w-full text-base">
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -661,7 +661,7 @@ function SpreadsheetField({
       >
         <SelectTrigger
           id="integration-spreadsheet"
-          className="w-full text-base data-[size=default]:h-10"
+          className="w-full text-base"
         >
           <SelectValue />
         </SelectTrigger>
@@ -989,7 +989,7 @@ function AccountField({
       <Select value={setup.account} onValueChange={setup.setAccount}>
         <SelectTrigger
           id="integration-account"
-          className="w-full text-base data-[size=default]:h-10"
+          className="w-full text-base"
         >
           <SelectValue placeholder="Выберите аккаунт" />
         </SelectTrigger>

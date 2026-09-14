@@ -153,7 +153,7 @@ export function WebhookOverlay({
                 inputMode="url"
                 autoFocus
                 placeholder="https://hooks.zapier.com/hooks/catch/…"
-                className="h-10 md:text-base"
+                className="md:text-base"
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
               />
@@ -164,7 +164,7 @@ export function WebhookOverlay({
               <Input
                 id="webhook-name"
                 placeholder="CRM"
-                className="h-10 md:text-base"
+                className="md:text-base"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
@@ -293,7 +293,7 @@ function SecretField({
         <Input
           id="webhook-secret"
           autoFocus
-          className="h-10 flex-1 font-mono md:text-base"
+          className="flex-1 font-mono md:text-base"
           placeholder={signed ? 'Не менять' : `От ${MIN_SECRET} символов`}
           value={secret}
           onChange={(e) => onSecret(e.target.value)}
@@ -368,14 +368,14 @@ function HeadersField({
           <Input
             aria-label={`Имя заголовка ${i + 1}`}
             placeholder="Имя"
-            className="h-10 w-2/5 font-mono md:text-base"
+            className="w-2/5 font-mono md:text-base"
             value={row.name}
             onChange={(e) => onPatch(row.id, { name: e.target.value })}
           />
           <Input
             aria-label={`Значение заголовка ${i + 1}`}
             placeholder="Значение"
-            className="h-10 flex-1 font-mono md:text-base"
+            className="flex-1 font-mono md:text-base"
             value={row.value}
             onChange={(e) => onPatch(row.id, { value: e.target.value })}
           />

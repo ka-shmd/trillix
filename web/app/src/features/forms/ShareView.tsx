@@ -83,7 +83,7 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
             value={link}
             aria-label="Ссылка на форму"
             onFocus={(e) => e.currentTarget.select()}
-            className="h-10 font-mono text-sm md:text-sm"
+            className="font-mono"
           />
           {/* Копирование ведёт себя одинаково везде — общая точка с баром формы и её
               меню действий (features/forms/copyLink.ts). */}
