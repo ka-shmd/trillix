@@ -1577,7 +1577,7 @@ logic: { when?: LogicCondition, then?: LogicAction[] }
 двух копиях и потому уехала в свой файл — копия правится в одной из двух.
 
 ⚠ Заливка и падинг объявляются ТЕМИ ЖЕ вариантами, что перебиваемое (`dark:bg-muted`
-против `dark:bg-input/30` у `SelectTrigger`, `has-[>svg]:px-2` против `has-[>svg]:px-2.5`
+против `dark:bg-input/30` у `SelectTrigger`, `has-[>svg]:px-2` против одноимённого варианта
 у `Button`) — иначе tailwind-merge их не сольёт и победит порядок в собранном CSS, а не
 строка `className` (`web/CLAUDE.md`).
 
