@@ -134,7 +134,7 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
       {moving && (
         <div className="pointer-events-none absolute inset-0 flex items-center justify-center p-4">
           <span className="rounded-lg bg-black/60 px-4 py-2 text-center text-sm text-white">
-            Перетащите картинку, чтобы изменить положение
+            Перетащите картинку, чтобы изменить её положение
           </span>
         </div>
       )}
