@@ -91,6 +91,7 @@ export function JoinLinkSection({
           }
           action={
             <Button
+              variant="utility"
               disabled={create.isPending}
               onClick={() =>
                 create.mutate(undefined, {

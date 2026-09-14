@@ -28,7 +28,7 @@ import {
 } from '@/components/ui/dropdown-menu'
 
 // Строка участника пространства. Действий над ней два, оба редкие и оба опасные
-// (передать владение, снять доступ), поэтому они живут в меню «⋯», а не значками
+// (передать владение, удалить участника), поэтому они живут в меню «⋯», а не значками
 // в строке (DESIGN-SYSTEM §7: «много или редкие — в DropdownMenu»), а
 // деструктивное отделено разделителем.
 //
@@ -100,7 +100,7 @@ export function MemberRow({
               {canRemoveThis && (
                 <DropdownMenuItem variant="destructive" onSelect={() => setRemoving(true)}>
                   <UserMinus className="size-4" />
-                  Снять доступ
+                  Удалить участника
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>
@@ -149,7 +149,7 @@ function RemoveMemberDialog({
     <AlertDialog open={open} onOpenChange={onOpenChange}>
       <AlertDialogContent>
         <AlertDialogHeader>
-          <AlertDialogTitle>Снять доступ: {name}?</AlertDialogTitle>
+          <AlertDialogTitle>Удалить участника: {name}?</AlertDialogTitle>
           <AlertDialogDescription>
             Формы, ответы и расписания пространства останутся на месте — доступ к ним потеряет
             только этот человек. Вернуть его можно новым приглашением.
@@ -160,7 +160,7 @@ function RemoveMemberDialog({
             этом месте не просто бесполезно, а врёт — повтор не поможет никогда. */}
         {remove.isError && (
           <p role="alert" className="text-sm text-destructive">
-            {humanError(remove.error, 'Не удалось снять доступ. Попробуйте ещё раз.')}
+            {humanError(remove.error, 'Не удалось удалить участника. Попробуйте ещё раз.')}
           </p>
         )}
         <AlertDialogFooter>
@@ -170,12 +170,12 @@ function RemoveMemberDialog({
             disabled={remove.isPending}
             onClick={(e) => {
               // Окно закрывается по УСПЕХУ, а не по клику: отказ сервера иначе
-              // остался бы за закрытым окном, и строка выглядела бы снятой.
+              // остался бы за закрытым окном, и строка выглядела бы удалённой.
               e.preventDefault()
               remove.mutate(member.userId, { onSuccess: () => onOpenChange(false) })
             }}
           >
-            {remove.isPending ? 'Снимаем…' : 'Снять доступ'}
+            {remove.isPending ? 'Удаляем…' : 'Удалить'}
           </AlertDialogAction>
         </AlertDialogFooter>
       </AlertDialogContent>
