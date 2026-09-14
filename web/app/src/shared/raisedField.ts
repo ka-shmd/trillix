@@ -8,16 +8,14 @@
 // `transition-[color,box-shadow]` компонентов.
 //
 // Вертикальный паддинг снят: высоту держит h-10, а текст кегля 16 центрируется сам.
+// Текст — Inter 16/500 (решение владельца 2026-09-14), и моноширинного нет даже у
+// ссылки и секрета: системный моноширинный шрифт разгонял буквы и стоял в строке выше
+// Inter, так что текст приходилось сдвигать руками. Семейство наследуется от body.
 // Высота и кегль перебиваются ТЕМИ ЖЕ вариантами, что у вендора: у списка высота —
 // `data-[size=default]:h-8`, у Input кегль — `md:text-sm`.
 const SHADOW = 'shadow-xs shadow-black/35 hover:shadow-sm hover:shadow-black/35'
-export const RAISED_INPUT = `h-10 py-0 md:text-base ${SHADOW}`
-export const RAISED_SELECT = `data-[size=default]:h-10 py-0 text-base ${SHADOW}`
+export const RAISED_INPUT = `h-10 py-0 font-medium md:text-base ${SHADOW}`
+export const RAISED_SELECT = `data-[size=default]:h-10 py-0 text-base font-medium ${SHADOW}`
 // Кнопки в одном ряду с таким полем — его роста: ряд ровняется по нарисованному.
 export const RAISED_ROW_BUTTON = 'h-10'
 export const RAISED_ROW_ICON = 'size-10'
-// Моноширинный текст в таком поле (ссылка на форму, секрет и заголовки вебхука) —
-// на 3px ниже центра. У системного моноширинного шрифта глифы стоят в строке выше, чем
-// у Inter: при равных полях сверху и снизу набранное читалось прижатым к верху.
-// Ставится ПОСЛЕ RAISED_INPUT: там `py-0`, и верхнее поле должно его перебить.
-export const RAISED_MONO = 'font-mono pt-1.5'
