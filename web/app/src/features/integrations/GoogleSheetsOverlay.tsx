@@ -45,6 +45,7 @@ import {
 } from '@/components/ui/alert-dialog'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { INTEGRATION_INPUT, INTEGRATION_SELECT } from './field'
 import { Label } from '@/components/ui/label'
 import {
   Select,
@@ -448,7 +449,7 @@ function SetupBody({
         <Label htmlFor="integration-name">Название подключения</Label>
         <Input
           id="integration-name"
-          className="md:text-base"
+          className={INTEGRATION_INPUT}
           value={setup.name}
           maxLength={80}
           placeholder="Необязательно — чтобы отличать связки друг от друга"
@@ -570,7 +571,7 @@ function SheetField({
         {sheets.isError && <LoadFailed />}
       </div>
       <Select value={value} onValueChange={onChange}>
-        <SelectTrigger id="integration-sheet" className="w-full text-base">
+        <SelectTrigger id="integration-sheet" className={`w-full ${INTEGRATION_SELECT}`}>
           <SelectValue />
         </SelectTrigger>
         <SelectContent>
@@ -661,7 +662,7 @@ function SpreadsheetField({
       >
         <SelectTrigger
           id="integration-spreadsheet"
-          className="w-full text-base"
+          className={`w-full ${INTEGRATION_SELECT}`}
         >
           <SelectValue />
         </SelectTrigger>
@@ -989,7 +990,7 @@ function AccountField({
       <Select value={setup.account} onValueChange={setup.setAccount}>
         <SelectTrigger
           id="integration-account"
-          className="w-full text-base"
+          className={`w-full ${INTEGRATION_SELECT}`}
         >
           <SelectValue placeholder="Выберите аккаунт" />
         </SelectTrigger>

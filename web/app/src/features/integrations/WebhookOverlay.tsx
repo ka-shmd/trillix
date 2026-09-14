@@ -16,6 +16,7 @@ import { humanError } from '../../shared/api/errors'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
+import { INTEGRATION_INPUT } from './field'
 import { Label } from '@/components/ui/label'
 
 // Окно вебхука — полноэкранный оверлей, как у Google Таблиц: решения о том,
@@ -153,7 +154,7 @@ export function WebhookOverlay({
                 inputMode="url"
                 autoFocus
                 placeholder="https://hooks.zapier.com/hooks/catch/…"
-                className="md:text-base"
+                className={INTEGRATION_INPUT}
                 value={url}
                 onChange={(e) => setUrl(e.target.value)}
               />
@@ -164,7 +165,7 @@ export function WebhookOverlay({
               <Input
                 id="webhook-name"
                 placeholder="CRM"
-                className="md:text-base"
+                className={INTEGRATION_INPUT}
                 value={name}
                 onChange={(e) => setName(e.target.value)}
               />
@@ -293,7 +294,7 @@ function SecretField({
         <Input
           id="webhook-secret"
           autoFocus
-          className="flex-1 font-mono md:text-base"
+          className={`flex-1 font-mono ${INTEGRATION_INPUT}`}
           placeholder={signed ? 'Не менять' : `От ${MIN_SECRET} символов`}
           value={secret}
           onChange={(e) => onSecret(e.target.value)}
@@ -368,14 +369,14 @@ function HeadersField({
           <Input
             aria-label={`Имя заголовка ${i + 1}`}
             placeholder="Имя"
-            className="w-2/5 font-mono md:text-base"
+            className={`w-2/5 font-mono ${INTEGRATION_INPUT}`}
             value={row.name}
             onChange={(e) => onPatch(row.id, { name: e.target.value })}
           />
           <Input
             aria-label={`Значение заголовка ${i + 1}`}
             placeholder="Значение"
-            className="flex-1 font-mono md:text-base"
+            className={`flex-1 font-mono ${INTEGRATION_INPUT}`}
             value={row.value}
             onChange={(e) => onPatch(row.id, { value: e.target.value })}
           />
