@@ -83,7 +83,7 @@ describe('окно обложки', () => {
     const store = setup()
     const file = new File(['png'], 'pic.png', { type: 'image/png' })
 
-    const zone = screen.getByRole('button', { name: /Перетащите картинку/ })
+    const zone = screen.getByRole('button', { name: /перетащите его сюда/ })
     await act(async () => {
       fireEvent.drop(zone, { dataTransfer: { files: [file] } })
     })
