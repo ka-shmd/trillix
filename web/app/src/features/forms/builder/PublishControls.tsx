@@ -24,7 +24,6 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from '@/components/ui/alert-dialog'
-import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -35,10 +34,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 //   • уже публиковавшаяся (published/closed) → публикует и ОСТАВЛЯЕТ в редакторе
 //     (автор правит форму, а не ищет ссылку), а рядом появляется иконка на /share;
 //   • закрытая форма той же кнопкой открывается снова (publish снимает closed).
-//
-// hasUnpublishedChanges приходит с сервера на GET, а после каждого автосейва его
-// проставляет сам автосейв (useAutosave) — иначе подпись «есть изменения» появлялась
-// бы только после перезагрузки страницы.
 //
 // ГЕЙТ ТАРИФА КНОПКУ НЕ ГАСИТ (фаза 22): своё оформление можно настраивать и
 // сохранять на любом тарифе, а отказывает публикация — 402 со списком мешающего,
@@ -162,11 +157,6 @@ export function PublishControls({
           >
             <Link2 className="size-4" />
           </Button>
-        )}
-        {everPublished && form.hasUnpublishedChanges && (
-          <Badge variant="outline" className="border-transparent bg-accent text-accent-foreground">
-            Есть изменения
-          </Badge>
         )}
         <PublishButton reasons={reasons}>
           <Button

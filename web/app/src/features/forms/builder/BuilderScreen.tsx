@@ -10,6 +10,7 @@ import { useFeatureAllowed } from '../../plan/useFeature'
 import { useWorkspaceCrumb } from '../../workspaces/crumb'
 import { PageActions, PageCrumbs } from '../../../shared/page/headerPortals'
 import { ChordChips } from './ChordChips'
+import { DiscardChanges } from './DiscardChanges'
 import { useEditorDrawers } from './editorDrawers'
 import { DesignDrawer } from './DesignDrawer'
 import { PreviewOverlay } from './PreviewOverlay'
@@ -149,6 +150,10 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
       <PageCrumbs items={[workspaceCrumb, displayFormName(detail)]} />
       {/* Кнопки редактора — в правую половину верхнего бара. */}
       <PageActions>
+        {/* Плашка «Есть изменения» — первой в ряду, перед историей (решение владельца
+            2026-09-14). Условие отката — то же, что у публикации: черновик догнал
+            редактор, иначе откат гонится с автосейвом за один токен блокировки. */}
+        <DiscardChanges form={detail} canDiscard={canPublish} />
         {/* Отмена/повтор — история документа, ближе всего к полотну,
             которое они правят. */}
         <Button

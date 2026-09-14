@@ -16,7 +16,6 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
-import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // Панель списка форм: поиск по названию, фильтр по статусу и порядок. Все три
 // значения живут в адресной строке (владеет ими маршрут) — сюда приходят пропсами.
@@ -91,12 +90,9 @@ export function FormsToolbar({
         )}
       </div>
 
-      {/* Фильтр — сегментами, а не вторым селектом: значений четыре, они взаимно
-          исключают друг друга, и главное про них — какое сейчас выбрано. Селект
-          прячет этот ответ под клик. Отбор делает СЕРВЕР (?status=) — список
-          постраничный, и просеивание подгруженного молча теряло бы формы с
-          неподгруженных страниц. */}
-      <Tabs
+      {/* Отбор по статусу делает СЕРВЕР (?status=) — список постраничный, и
+          просеивание подгруженного молча теряло бы формы с неподгруженных страниц. */}
+      <Select
         value={filter}
         onValueChange={(value) => {
           // safeParse, а не parse: значения свои, но бросать исключение из
@@ -105,14 +101,17 @@ export function FormsToolbar({
           if (parsed.success) onFilterChange(parsed.data)
         }}
       >
-        <TabsList aria-label="Фильтр по статусу">
+        <SelectTrigger className="w-44" aria-label="Фильтр по статусу">
+          <SelectValue />
+        </SelectTrigger>
+        <SelectContent>
           {formsFilterSchema.options.map((value) => (
-            <TabsTrigger key={value} value={value}>
+            <SelectItem key={value} value={value}>
               {FORMS_FILTER_LABELS[value]}
-            </TabsTrigger>
+            </SelectItem>
           ))}
-        </TabsList>
-      </Tabs>
+        </SelectContent>
+      </Select>
 
       {/* Подписи «Сортировка» у селектора нет: он и так показывает выбранный
           порядок словами («По дате изменения»), а подпись стоила 90 px в ряду, где
