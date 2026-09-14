@@ -110,7 +110,7 @@ test('ссылка-приглашение: коллега вошёл, прави
   // передавать владение ему нельзя, а меню с одним недоступным пунктом обещало бы
   // права, которых нет.
   await expect(matePage.getByRole('button', { name: `Действия: ${ownerEmail}` })).toHaveCount(0)
-  await expect(matePage.getByRole('button', { name: 'Снять доступ' })).toHaveCount(0)
+  await expect(matePage.getByRole('button', { name: 'Удалить участника' })).toHaveCount(0)
   // Пункт «Тариф» в панели есть и у редактора — он про СВОЙ аккаунт, а не про
   // пространство (ADR §10): у коллеги свой план, и смотреть его он вправе.
   await expect(matePage.getByRole('link', { name: 'Тариф' })).toHaveCount(1)
@@ -128,14 +128,14 @@ test('ссылка-приглашение: коллега вошёл, прави
   // перечитывания состава его у владельца в списке нет. Страница состава её
   // переживает — адрес у раздела свой.
   await page.reload()
-  // Действия над участником — меню «⋯» в строке, снятие доступа спрашивает
+  // Действия над участником — меню «⋯» в строке, удаление участника спрашивает
   // подтверждение: оно необратимо и вернуть человека можно только приглашением
   // (DESIGN-SYSTEM §7).
   await page.getByRole('button', { name: `Действия: ${mateEmail}` }).click()
-  await page.getByRole('menuitem', { name: 'Снять доступ' }).click()
+  await page.getByRole('menuitem', { name: 'Удалить участника' }).click()
   await page
-    .getByRole('alertdialog', { name: `Снять доступ: ${mateEmail}?` })
-    .getByRole('button', { name: 'Снять доступ' })
+    .getByRole('alertdialog', { name: `Удалить участника: ${mateEmail}?` })
+    .getByRole('button', { name: 'Удалить' })
     .click()
   await expect(page.getByText(mateEmail)).toHaveCount(0)
 

@@ -354,10 +354,11 @@ export type FormsFilter = z.infer<typeof formsFilterSchema>
 
 export const DEFAULT_FORMS_FILTER: FormsFilter = 'all'
 
-// Подписи сегментов — рядом со схемой, как у сортировки: новый фильтр нельзя
-// завести, забыв про его название на экране.
+// Подписи фильтра — рядом со схемой, как у сортировки: новый фильтр нельзя
+// завести, забыв про его название на экране. «Все формы», а не «Все»: подпись
+// стоит в свёрнутом селекторе одна, без соседних значений.
 export const FORMS_FILTER_LABELS: Record<FormsFilter, string> = {
-  all: 'Все',
+  all: 'Все формы',
   draft: 'Черновики',
   published: 'Опубликованные',
   closed: 'Закрытые',
