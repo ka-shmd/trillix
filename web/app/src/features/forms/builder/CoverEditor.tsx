@@ -1,5 +1,5 @@
 import { useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
-import { ImageIcon, ImagePlus, MoveVertical, Palette, Pencil, RefreshCw, Trash2 } from 'lucide-react'
+import { ImageIcon, ImagePlus, MoveVertical, Palette, RefreshCw, Trash2 } from 'lucide-react'
 
 import { coverY } from '@entities/formSchema'
 import { CoverBand, LogoMark } from '@fields/pageChrome'
@@ -134,8 +134,12 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
 
       {/* Кнопок две (решение владельца 2026-09-14): «Положение» и «Изменить». Всё, чем
           полосу заливают и убирают — файл, ссылка, цвет, удаление, — живёт в окне
-          CoverDialog, общем с строкой «Обложка» шторки оформления. */}
-      <div className="pointer-events-none absolute inset-0 flex items-center justify-center opacity-0 transition-opacity focus-within:opacity-100 group-hover/cover:opacity-100">
+          CoverDialog, общем с строкой «Обложка» шторки оформления.
+
+          Кнопки — в правом нижнем углу полосы (решение владельца 2026-09-14): центр
+          закрывал саму картинку, а левый нижний угол занят логотипом, наезжающим на
+          обложку (.rf-logo--over). */}
+      <div className="pointer-events-none absolute inset-0 flex items-end justify-end p-4 opacity-0 transition-opacity focus-within:opacity-100 group-hover/cover:opacity-100">
         <div className="pointer-events-auto flex items-center gap-2">
           {moving ? (
             <OverlayButton onClick={() => setMoving(false)}>
@@ -152,7 +156,7 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
               )}
               <CoverDialog formId={formId}>
                 <Button type="button" variant="outline" size="sm">
-                  <Pencil /> Изменить
+                  <ImageIcon /> Изменить
                 </Button>
               </CoverDialog>
             </>
