@@ -158,10 +158,10 @@ export function CoverArea({ formId }: { formId: FormIdSource }) {
         <div className="pointer-events-auto flex items-center gap-2">
           {moving ? (
             <>
-              <OverlayButton onClick={cancelMoving}>Отменить</OverlayButton>
               <OverlayButton onClick={finishMoving}>
                 <MoveVertical /> Готово
               </OverlayButton>
+              <OverlayButton onClick={cancelMoving}>Отменить</OverlayButton>
             </>
           ) : (
             <>
