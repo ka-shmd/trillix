@@ -2124,18 +2124,21 @@ describe('createBuilderStore — ось колонок Mod+Alt+←/→ (этап
     expect(cells(store)).toEqual([[1, 1], [1]])
   })
 
-  it('пояснение внутри вопроса оси колонок не имеет: шаги молчат', () => {
+  it('пояснение из середины вопроса шагом Mod+Alt+→ уходит колонкой рядом', () => {
     const store = createBuilderStore()
     store.getState().addBlock('short_text')
     store.getState().addQuestionAfter(store.getState().blocks[0]!.id, 'email')
-    const caption = store.getState().blocks[1]!
-    const text = store.getState().addBlockAfter(caption.id, 'text')
-    store.getState().markSaved()
+    const [a, caption, field] = store.getState().blocks
+    const text = store.getState().addBlockAfter(caption!.id, 'text')
 
-    expect(rowPosition(store.getState().blocks, text)).toEqual({ kind: 'solo' })
+    expect(rowPosition(store.getState().blocks, text)).toEqual({ kind: 'leave', room: true })
     store.getState().shiftColumn(text, 'right')
-    store.getState().shiftColumn(text, 'left')
-    expect(store.getState().dirty).toBe(false)
+
+    const blocks = store.getState().blocks
+    expect(blocks.map((b) => b.id)).toEqual([a!.id, caption!.id, field!.id, text])
+    expect(blocks.map((b) => b.settings?.column ?? '-')).toEqual(['-', 1, '-', 2])
+    // Подпись и поле сомкнулись обратно в вопрос.
+    expect(blocks[2]!.groupId).toBe(blocks[1]!.groupId)
   })
 })
 
@@ -3192,15 +3195,29 @@ describe('createBuilderStore — поле уходит из вопроса в р
     expect(store.getState().blocks).toEqual(before)
   })
 
-  it('пояснение внутри вопроса отдельно в ряд не встаёт — no-op', () => {
+  it('пояснение из середины вопроса уходит в ряд отдельным элементом, вопрос смыкается', () => {
+    const store = question()
+    const [caption, field] = store.getState().blocks
+    const text = store.getState().addBlockAfter(caption!.id, 'text')
+    store.getState().addBlock('email')
+    const other = store.getState().blocks.at(-1)!
+    expect(groupsOf(store)).toEqual([['title', 'text', 'short_text'], ['email']])
+
+    store.getState().placeInRow(text, other.groupId, 2, true)
+
+    expect(ids(store)).toEqual([caption!.id, field!.id, other.id, text])
+    expect(cols(store)).toEqual(['-', '-', 1, 2])
+    expect(groupsOf(store)).toEqual([['title', 'short_text'], ['email'], ['text']])
+  })
+
+  it('подпись собранного вопроса отдельно в ряд не встаёт — она ручка вопроса', () => {
     const store = question()
     const [caption] = store.getState().blocks
-    const text = store.getState().addBlockAfter(caption!.id, 'text')
     store.getState().addBlock('email')
     const other = store.getState().blocks.at(-1)!
     store.getState().markSaved()
 
-    store.getState().placeInRow(text, other.groupId, 2, true)
+    store.getState().placeInRow(caption!.id, other.groupId, 2, true)
     expect(store.getState().dirty).toBe(false)
   })
 
