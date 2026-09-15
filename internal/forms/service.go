@@ -1414,6 +1414,29 @@ func (s *Service) ShowBadge(ctx context.Context, workspaceID uuid.UUID, intent b
 	return !d.Allowed, nil
 }
 
+// MetrikaFor — номер счётчика Яндекс Метрики, уезжающий на публичную форму:
+// подключённый и включённый номер (приезжает строкой формы) плюс разрешение тарифа
+// (ключ form_counters). nil — счётчика на странице нет.
+//
+// Природа бейджа: решается при заходе на форму, поэтому даунгрейд снимает счётчик
+// сам, а апгрейд возвращает сохранённый. Без номера тариф не спрашивается вовсе —
+// у подавляющего большинства форм счётчика нет, и платить поездкой в БД им нечем.
+func (s *Service) MetrikaFor(ctx context.Context, workspaceID uuid.UUID, counter *string) (*string, error) {
+	if counter == nil {
+		return nil, nil
+	}
+	d, err := s.plans.CheckWorkspace(ctx, workspaceID, entitlements.FormCounters)
+	if err != nil {
+		// «Спросить не удалось» — не «можно» (BILLING.md §9): счётчика нет. Невзятая
+		// статистика дешевле, чем чужой скрипт на странице без права.
+		return nil, err
+	}
+	if !d.Allowed {
+		return nil, nil
+	}
+	return counter, nil
+}
+
 // Versions возвращает все опубликованные версии формы (снапшоты схем) для её автора.
 // Авторизация как у остальных операций по ресурсу (чужая/нет формы → 404). Пустой
 // срез — форму ещё не публиковали. Нужен CSV-экспорту (модуль submissions).

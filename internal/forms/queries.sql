@@ -481,6 +481,10 @@ SELECT f.id AS form_id, f.workspace_id, f.title,
     -- и приём ответа с бронью), и каждый обязан пройти те же четыре отказа, что
     -- отдача формы (design/booking.md §7).
     f.schedule_id,
+    -- metrika_counter: номер счётчика Яндекс Метрики (0067), если автор его подключил
+    -- и тумблер включён; NULL — счётчика нет. Право тарифа поверх номера спрашивает
+    -- сервис (MetrikaFor): счётчик, как и бейдж, свойство выдачи, а не документа.
+    fc.counter AS metrika_counter,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -493,6 +497,8 @@ JOIN form_versions fv ON fv.id = f.published_version_id
 -- осиротевшего пространства (без владельца) — они и так недостижимы (TD-53).
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
+-- LEFT JOIN по UNIQUE (form_id, kind): не больше одной строки, форму не размножает.
+LEFT JOIN form_counters fc ON fc.form_id = f.id AND fc.kind = 'yandex_metrika' AND fc.enabled
 WHERE f.slug = $1;
 
 -- name: GetPublicFormRefBySlug :one
@@ -518,7 +524,7 @@ SELECT f.id AS form_id, f.workspace_id, coalesce(f.name, f.title) AS cabinet_nam
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title,
     f.notify_on_submission, f.notify_respondent, f.collect_partial, f.link_preview,
     f.branding, f.progress, f.auto_jump, f.save_locally, f.allow_back,
-    f.password, f.schedule_id,
+    f.password, f.schedule_id, fc.counter AS metrika_counter,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -526,6 +532,7 @@ FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
+LEFT JOIN form_counters fc ON fc.form_id = f.id AND fc.kind = 'yandex_metrika' AND fc.enabled
 WHERE f.slug = $1;
 
 -- name: ListFormVersions :many
