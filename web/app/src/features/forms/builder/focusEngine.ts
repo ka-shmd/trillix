@@ -12,7 +12,10 @@ import type { CaretEdge } from './caret'
 // 13.1 (§2.1). Строка без зарегистрированной цели фокус не принимает (focusBlock —
 // no-op на ней), что сохраняет сегодняшнее поведение до тех срезов.
 export interface FocusTarget {
-  focus(edge: CaretEdge): void
+  // 'defer' — поверхности, которая примет каретку, сейчас нет, но цель её готовит
+  // (свёрнутый список вариантов разворачивается, collapsedOptions.ts). Запрос остаётся
+  // отложенным и исполнится, когда поверхность зарегистрирует свою цель под тем же id.
+  focus(edge: CaretEdge): void | 'defer'
 }
 
 export interface FocusEngine {
@@ -43,8 +46,7 @@ export function createFocusEngine(): FocusEngine {
     register(id, target) {
       targets.set(id, target)
       if (pending && pending.id === id) {
-        target.focus(pending.edge)
-        pending = null
+        if (target.focus(pending.edge) !== 'defer') pending = null
       } else if (last && last.id === id && focusLost()) {
         target.focus(last.edge)
       }
@@ -57,8 +59,7 @@ export function createFocusEngine(): FocusEngine {
     focusBlock(id, edge = 'end') {
       last = { id, edge }
       const t = targets.get(id)
-      if (t) t.focus(edge)
-      else pending = { id, edge }
+      if (!t || t.focus(edge) === 'defer') pending = { id, edge }
     },
   }
 }
@@ -83,7 +84,7 @@ export function useFocusEngine(): FocusEngine {
 // остановка вокруг него).
 export function useRegisterFocusTarget(
   id: string,
-  focus: (edge: CaretEdge) => void,
+  focus: (edge: CaretEdge) => void | 'defer',
   enabled = true,
 ): void {
   const engine = useFocusEngine()

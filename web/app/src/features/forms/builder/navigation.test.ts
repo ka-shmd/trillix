@@ -32,6 +32,26 @@ describe('isFlowLeaf — что поток перескакивает', () => {
   })
 })
 
+describe('свёрнутый список вариантов', () => {
+  const blocks = [
+    blk('c1', 'g1', 'label'),
+    blk('ch', 'g1', 'single_choice'),
+    blk('t', 'g2', 'text'),
+  ]
+  const folded = (b: Block) => b.id === 'ch'
+
+  it('обход перескакивает свёрнутый список вопроса', () => {
+    expect(stopNeighbor(blocks, 0, 'down')?.id).toBe('ch')
+    expect(stopNeighbor(blocks, 0, 'down', folded)?.id).toBe('t')
+    expect(stopNeighbor(blocks, 2, 'up', folded)?.id).toBe('c1')
+  })
+
+  it('голый список листом не становится', () => {
+    const bareList = [blk('ch', 'g1', 'single_choice')]
+    expect(isFlowLeaf(bareList, bareList[0]!, folded)).toBe(false)
+  })
+})
+
 // Схлопывание строки — не обход, и лист-поле оно НЕ перескакивает (решение владельца
 // 2026-08-23). Разница видна ровно на этой паре тестов: из одной и той же точки
 // stopNeighbor уходит на подпись, а prevRow остаётся в поле.

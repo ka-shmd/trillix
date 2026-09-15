@@ -93,6 +93,7 @@ import {
   useRowFocus,
 } from './activeRow'
 import { prevRow, stopNeighbor } from './navigation'
+import { isFolded } from './collapsedOptions'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -772,8 +773,8 @@ export function SlashEditor({
       const firstIdx = blocks.findIndex((b) => b.id === removed[0]!.id)
       // Исход фокуса перескакивает лист-поля (navigation.ts): от краёв удаляемого
       // диапазона ищем ближайшую остановку — следующую, иначе предыдущую.
-      const next = stopNeighbor(blocks, firstIdx + removed.length - 1, 'down')
-      const prev = stopNeighbor(blocks, firstIdx, 'up')
+      const next = stopNeighbor(blocks, firstIdx + removed.length - 1, 'down', isFolded)
+      const prev = stopNeighbor(blocks, firstIdx, 'up', isFolded)
       if (isGroup) removeGroup(id)
       else removeBlock(id)
       if (next) engine.focusBlock(next.id, 'start')
@@ -790,7 +791,7 @@ export function SlashEditor({
     (id: string) => {
       const blocks = readBlocks()
       const i = blocks.findIndex((b) => b.id === id)
-      const prevStop = stopNeighbor(blocks, i, 'up')
+      const prevStop = stopNeighbor(blocks, i, 'up', isFolded)
       removeBlock(id)
       if (prevStop) engine.focusBlock(prevStop.id, 'end')
       else focusTitle()
@@ -807,7 +808,7 @@ export function SlashEditor({
     (id: string, dir: 'up' | 'down') => {
       const blocks = readBlocks()
       const i = blocks.findIndex((b) => b.id === id)
-      const neighbor = stopNeighbor(blocks, i, dir)
+      const neighbor = stopNeighbor(blocks, i, dir, isFolded)
       if (neighbor) engine.focusBlock(neighbor.id, dir === 'up' ? 'end' : 'start')
       else if (dir === 'up') focusTitle()
     },
@@ -1542,7 +1543,9 @@ const GroupRow = memo(function GroupRow({
       // открывающего колонку, mt нет — там расстояние держит сам ряд, и ступень
       // полноширинного ряда лежит на ряде (rowSpace, там же мина про два разных бокса).
       // ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста, и паддинг увёл бы линию вставки.
-      className={`relative w-full rounded-md ${
+      // group/question — наведение на ВОПРОС целиком: по нему проявляется шеврон
+      // сворачивания вариантов у подписи (FoldToggle в BlockRow).
+      className={`group/question relative w-full rounded-md ${
         headOfCell ? '' : spaceMt(groupSpace(group.blocks))
       } ${isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''}`}
     >

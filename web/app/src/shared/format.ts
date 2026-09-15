@@ -91,6 +91,16 @@ export function pluralQuestions(n: number): string {
   return 'вопросов'
 }
 
+// Склонение слова «вариант» по числу: 1 вариант, 2 варианта, 5 вариантов. Нужно
+// свёрнутому вопросу на полотне: он подписывает, сколько вариантов спрятано.
+export function pluralOptions(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'вариант'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'варианта'
+  return 'вариантов'
+}
+
 // Склонение слова «человек» по числу: 1 человек, 2 человека, 5 человек. Нужно
 // плашке закрытой тарифом воронки: она называет НАСТОЯЩЕЕ число не дошедших.
 export function pluralPeople(n: number): string {
