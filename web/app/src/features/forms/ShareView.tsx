@@ -14,7 +14,7 @@ import { EmptyState } from '../../shared/page/states'
 import { ProTag } from '../../shared/ProTag'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { RAISED_INPUT, RAISED_ROW_BUTTON } from '../../shared/raisedField'
+import { CONTOUR_INPUT } from '../../shared/raisedField'
 
 // ShareView — содержимое таба «Поделиться» (/forms/$slug/share). Открывается после
 // публикации (редирект из шапки редактора) и табом у уже опубликованной формы.
@@ -84,13 +84,13 @@ function LinkSection({ form, inactive }: { form: FormDetail; inactive: boolean }
             value={link}
             aria-label="Ссылка на форму"
             onFocus={(e) => e.currentTarget.select()}
-            className={RAISED_INPUT}
+            className={CONTOUR_INPUT}
           />
           {/* Копирование ведёт себя одинаково везде — общая точка с баром формы и её
               меню действий (features/forms/copyLink.ts). */}
           <Button
             variant="utility"
-            className={`gap-2 ${RAISED_ROW_BUTTON}`}
+            className="gap-2"
             onClick={() => copyFormLink(form.slug)}
           >
             <Copy className="size-4" />
