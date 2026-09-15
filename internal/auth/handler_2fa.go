@@ -34,23 +34,10 @@ const knownDeviceCookie = "known_device"
 // списка устройств; IP не берём сознательно (см. спеку §7).
 func (h *Handler) device(r *http.Request) Device {
 	dev := Device{UserAgent: r.UserAgent()}
-	if c, err := r.Cookie(knownDeviceCookie); err == nil {
+	if c, err := h.readCookie(r, knownDeviceCookie); err == nil {
 		dev.Token = c.Value
 	}
 	return dev
-}
-
-// setDeviceCookie ставит (или продлевает) знакомство браузера с аккаунтом.
-func (h *Handler) setDeviceCookie(w http.ResponseWriter, token string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     knownDeviceCookie,
-		Value:    token,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(knownDeviceTTL / time.Second),
-	})
 }
 
 // startTwoFactorChallenge ставит пропуск на второй шаг. Отдельный метод, потому
@@ -60,7 +47,7 @@ func (h *Handler) startTwoFactorChallenge(w http.ResponseWriter, userID uuid.UUI
 }
 
 func (h *Handler) readTwoFactorChallenge(r *http.Request) (uuid.UUID, bool) {
-	c, err := r.Cookie(twoFactorCookie)
+	c, err := h.readCookie(r, twoFactorCookie)
 	if err != nil {
 		return uuid.Nil, false
 	}
@@ -278,7 +265,7 @@ func (h *Handler) forgetAllDevices(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return
 	}
-	c, err := r.Cookie(sessionCookieName)
+	c, err := h.readCookie(r, sessionCookieName)
 	if err != nil {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return

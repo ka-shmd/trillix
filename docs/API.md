@@ -11,6 +11,7 @@
 ### Аутентификация и сессия
 
 - После `register`/`login` сервер ставит две cookie: `session` (httpOnly, `SameSite=Lax`, флаг `Secure` — из конфигурации: в dev по http выключен) и `csrf_token` (читаемая JS).
+- **На контуре с `Secure` (`COOKIE_SECURE=true`) у всех cookie кабинета префикс `__Host-`:** `__Host-session`, `__Host-csrf_token`, а также cookie шагов входа, похода к провайдеру и знакомого устройства (ADR §10). Cookie без префикса на таком контуре не читается: иначе её мог бы подложить соседний поддомен. Имена ниже в этом документе даны без префикса.
 - Приватные эндпоинты требуют живой сессии (`session` cookie). Промах — `401 unauthorized` (не 403: существование ресурса не раскрывается).
 - **CSRF (double-submit):** мутирующие запросы (`POST`/`PATCH`/`DELETE`) обязаны прислать заголовок `X-CSRF-Token`, равный значению cookie `csrf_token`. Несовпадение — `403 forbidden`.
 - Браузерный `fetch` должен идти с `credentials: 'include'` (в кабинете это делает `shared/api/client.ts`).

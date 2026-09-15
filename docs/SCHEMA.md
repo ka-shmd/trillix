@@ -113,7 +113,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 |---|---|---|
 | `id` | `UUID` | PK — UUIDv7 (`domain.NewID`) |
 | `user_id` | `UUID` | `NOT NULL`, FK -> `users(id)` `ON DELETE CASCADE` |
-| `token_hash` | `BYTEA` | `NOT NULL` — SHA-256 случайного токена из cookie `known_device`, а не сам токен: тот же приём и тот же довод, что у `sessions` |
+| `token_hash` | `BYTEA` | `NOT NULL` — SHA-256 случайного токена из cookie `known_device` (на контуре с `Secure` — `__Host-known_device`), а не сам токен: тот же приём и тот же довод, что у `sessions` |
 | `label` | `TEXT` | `NOT NULL` — «Chrome на Windows», разбор `User-Agent`. IP не хранится сознательно: персональные данные, а узнать свой компьютер в списке не помогает |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
 | `last_seen_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()`; обновляется на каждом входе с этого браузера — это и есть содержимое списка в настройках |
