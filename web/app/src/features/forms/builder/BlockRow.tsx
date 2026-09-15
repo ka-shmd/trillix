@@ -113,10 +113,8 @@ export interface BlockRowProps {
   // группы, а строка — только себя.
   requiredFor?: Block
   // Позиция строки на полотне — для плейсхолдеров пустой строки (§7, слой 1: «тип
-  // блока × позиция»). insideQuestion — строка внутри вопроса, но не его подпись
-  // (там пустой текст = описание вопроса); firstOfForm — самая первая строка полотна
-  // (там пустой текст = начало формы, и подсказка зовёт добавить вопрос).
-  insideQuestion?: boolean
+  // блока × позиция»): firstOfForm — самая первая строка полотна (там пустой текст =
+  // начало формы, и подсказка зовёт добавить вопрос).
   firstOfForm?: boolean
   // needsCaption — строка ответа стоит без заголовка. С фазы 15 это ЗАКОННОЕ
   // состояние (правило requiresCaption понижено до правила вставки, §4.4 спеки), и
@@ -298,7 +296,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       // множатся на --rf-density (плотность автора, фаза 22), вычет 6px — нет: он
       // компенсирует padding, а padding за плотностью не едет.
       // Первая строка вопроса интервала не несёт (его несёт сам вопрос), и её -mt-1.5
-      // оставляет li обнимать чистый контент — на это опирается рейл группы.
+      // оставляет li обнимать чистый контент — его рект мерят оверлеи жеста.
       // Mod+Alt+T слушает СТРОКА, а не каждая её поверхность: жест относится ко всей
       // строке (дать ей заголовок), а поверхностей у неё несколько — инпут
       // плейсхолдера, объектная остановка, инпуты вариантов. Событие всплывает от
@@ -345,10 +343,6 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
       {!ownedByQuestion && (
         <div
           // mr-1 (решение владельца 2026-08-16): кластер стоит вплотную к своему блоку.
-          // Прежние 10px держали дистанцию от рейла группы (-left-2, GroupRow) — теперь
-          // жёлоб уже рейла, и у группы из трёх и более блоков наведённая строка
-          // накрывает линию своей подложкой (CLUSTER_BACKDROP). Разойтись им негде:
-          // рейл лежит МЕЖДУ кластером и текстом, и любое сближение его закрывает.
           // СЛЕВА ВСЕГДА (2026-08-11): прежде у правой колонки ряда кластер зеркалился
           // вправо, потому что слева от неё жёлоб и сосед. При четырёх колонках
           // зеркалить некуда — у средней колонки обе стороны чужие, — и вместо выбора
@@ -506,7 +500,6 @@ const BlockRowBody = memo(function BlockRowBody({
   groupHandle,
   groupHasAnswer = false,
   requiredFor,
-  insideQuestion = false,
   firstOfForm = false,
   needsCaption = false,
   openMenuOnMount,
@@ -970,7 +963,6 @@ const BlockRowBody = memo(function BlockRowBody({
         <div className="min-w-0">
           <AnswerField
             block={block}
-            insideQuestion={insideQuestion}
             onAddBelow={onAddBelow}
             onArrow={onArrow}
             onBackspaceDelete={onBackspaceDelete}
@@ -990,7 +982,6 @@ const BlockRowBody = memo(function BlockRowBody({
         // «тип → контрол» здесь больше нет.
         <ObjectStop
           block={block}
-          insideQuestion={insideQuestion}
           onAddBelow={onAddBelow}
           onBackspaceDelete={onBackspaceDelete}
           onArrow={onArrow}
@@ -1076,7 +1067,6 @@ function RequiredToggle({ block }: { block: Block }) {
 // стрелками и focusBlock, но не Tab (полотно — один Tab-stop, §3.1 / срез roving).
 function ObjectStop({
   block,
-  insideQuestion = false,
   children,
   onAddBelow,
   onBackspaceDelete,
@@ -1089,9 +1079,6 @@ function ObjectStop({
   onRowShift,
 }: {
   block: Block
-  // Строка не первая в группе: Mod+Alt+→ собирает ряд со своим заголовком, а не с
-  // предыдущим вопросом (§6.6) — карта обязана называть то, что клавиша делает.
-  insideQuestion?: boolean
   children: ReactNode
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   onBackspaceDelete: (id: string) => void
@@ -1111,8 +1098,6 @@ function ObjectStop({
   // Объектная остановка групповой ручки не несёт никогда (первая строка мульти-группы
   // — всегда подпись, regroup ищет её от поля вверх через контент), поэтому Alt+↑↓
   // здесь двигает саму строку: movesRow дефолтный.
-  // insideQuestion меняет ПОДПИСЬ пункта Mod+Alt+→ в карте: на не первой строке
-  // группы аккорд собирает ряд со своим заголовком, а не с предыдущим вопросом (§6.6).
   // Контекст подсказок объявляет сам тип (row.hint): у картинки Mod+Enter открывает
   // файловый диалог, у даты и шкалы открывать нечего — это разные контексты карты, а не
   // один «объект» (§7).
@@ -1122,7 +1107,6 @@ function ObjectStop({
     objectRow?.surface === 'object' ? objectRow.hint : 'object',
     false,
     true,
-    insideQuestion,
   )
 
   // Поверхность ОБЪЕКТА (§3.3 спеки фазы 16): своего текста у неё нет, поэтому стрелка
@@ -1193,7 +1177,6 @@ function ObjectStop({
 // объектные остановки (картинка, дата, шкала) рисуют контрол своего типа (kinds/*).
 function AnswerField({
   block,
-  insideQuestion = false,
   onAddBelow,
   onArrow,
   onBackspaceDelete,
@@ -1205,8 +1188,6 @@ function AnswerField({
   marks,
 }: {
   block: Block
-  // Как у ObjectStop: не первая строка группы меняет подпись пункта Mod+Alt+→.
-  insideQuestion?: boolean
   // Enter — новая строка ниже, как с любой другой строки полотна (решение владельца
   // 2026-08-22). Внутри объектной остановки (date) поля рисуются без обработчиков.
   onAddBelow?: (id: string) => void
@@ -1237,7 +1218,7 @@ function AnswerField({
   const [focused, setFocused] = useState(false)
   // Контекст подсказок инпута плейсхолдера (§7). Клавиш у него почти нет — это
   // необязательный лист обхода, и чипы там показывают ровно одну строку.
-  const rowFocus = useRowFocus(block.id, 'field', false, true, insideQuestion)
+  const rowFocus = useRowFocus(block.id, 'field')
   const inputRef = useRef<HTMLInputElement | HTMLTextAreaElement | null>(null)
   // Фокус-цель текстового поля — инпут плейсхолдера (§2.1). Только у placeholder-
   // типов; date рисуется превью и фокусируется как объект (цель — у ObjectStop).
@@ -1300,8 +1281,8 @@ function AnswerField({
 
   // Обёртка — якорь глифа типа и кластера отметок; ширину берёт из .rf-field-wrap
   // (index.css), где стоит тот же потолок --rf-input-max, что у поля. Просвет
-  // подпись→поле (12px) даёт групповой контейнер (зазор внутреннего ряда в GroupRow) — свой mt тут не
-  // нужен (был бы двойным отступом и ломал ритм 13.3).
+  // подпись→поле (12px) даёт строка вопроса в GroupRow — свой mt тут не нужен (был бы
+  // двойным отступом и ломал ритм 13.3).
   const wrap = (control: ReactNode, wide = false) => (
     <FieldWrap block={block} wide={wide} glyphTop={multiline} marks={marks}>
       {control}

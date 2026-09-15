@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { type Block, textFromString } from '@entities/formSchema'
-import { groupBlocks, packGroupRows, packRows, type Row } from '@fields/groups'
+import { groupBlocks, packRows, type Row } from '@fields/groups'
 
 import { type Box, pickDropTarget, pickHoverGroup } from './dropTarget'
 import { createBuilderStore } from './store'
@@ -26,10 +26,10 @@ const blk = (type: Block['type'], extra: Partial<Block> = {}): Block => ({
 
 const layout = (blocks: Block[]) => packRows(groupBlocks(blocks))
 
-// Внутренние ряды вопроса — знание ПОЛОТНА, а не прицела: с обобщением на слой вариантов
-// раскладчик приезжает в pickDropTarget колбэком (см. PickOpts.inner). Здесь тот же
-// колбэк, что в SlashEditor, — иначе тест проверял бы другую конфигурацию.
-const INNER = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat())
+// Строки вопроса — знание ПОЛОТНА, а не прицела: с обобщением на слой вариантов они
+// приезжают в pickDropTarget колбэком (см. PickOpts.inner). Здесь тот же колбэк, что в
+// SlashEditor, — иначе тест проверял бы другую конфигурацию.
+const INNER = (blocks: Block[]) => blocks.map((b) => [b])
 
 const H = 40 // высота строки
 // Числа — геометрия ФИКСТУРЫ, а не ритм полотна (он с 2026-08-22 везде 12px): прицел
@@ -42,8 +42,7 @@ const W = 700 // ширина холста
 type Group = { id: string; blocks: Block[] }
 
 // Раскладка в пиксели по той же вложенности, что рисует полотно: ряды сверху вниз,
-// колонки слева направо, внутри колонки стопка групп, внутри группы — её внутренние
-// ряды.
+// колонки слева направо, внутри колонки стопка групп, внутри группы — её строки.
 function boxesOf(rows: Row<Group>[]): Map<string, Box> {
   const out = new Map<string, Box>()
   let y = 0
@@ -55,20 +54,11 @@ function boxesOf(rows: Row<Group>[]): Map<string, Box> {
       let cy = y
       cell.forEach((group, gi) => {
         if (gi > 0) cy += GAP_ROW
-        for (const inner of packGroupRows(group.blocks)) {
-          const iw = (colW - GUTTER * (inner.length - 1)) / inner.length
-          let tallest = 0
-          inner.forEach((stack, ii) => {
-            const il = left + ii * (iw + GUTTER)
-            stack.forEach((b, bi) => {
-              const top = cy + bi * (H + GAP_IN)
-              out.set(b.id, { top, bottom: top + H, left: il, right: il + iw })
-            })
-            tallest = Math.max(tallest, stack.length * H + (stack.length - 1) * GAP_IN)
-          })
-          cy += tallest + GAP_IN
+        for (const b of group.blocks) {
+          out.set(b.id, { top: cy, bottom: cy + H, left, right: left + colW })
+          cy += H + GAP_IN
         }
-        cy -= GAP_IN // последний внутренний ряд просвета после себя не занимает
+        cy -= GAP_IN // последняя строка просвета после себя не занимает
       })
       rowBottom = Math.max(rowBottom, cy)
     })
@@ -587,15 +577,4 @@ describe('pickDropTarget — ряд атомарен для вертикальн
     })
   })
 
-  it('внутренний ряд «подпись | поле»: щель между ними — не позиция', () => {
-    const gid = 'q'
-    const caption = blk('title', { groupId: gid })
-    const field = blk('short_text', { groupId: gid, settings: { column: 2 } })
-    const outsider = blk('text')
-    const rows = layout([caption, field, outsider])
-    expect(packGroupRows(rows[0]![0]![0]!.blocks)[0]).toHaveLength(2)
-
-    const t = pick([caption, field, outsider], caption.id, outsider.id)
-    expect(t).toEqual({ afterId: field.id, lineIds: [caption.id, field.id], before: false })
-  })
 })

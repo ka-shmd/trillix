@@ -43,9 +43,7 @@ import {
   groupBlocks,
   groupCanPair,
   groupMeta,
-  blockRowWidths,
   groupRowWidths,
-  packGroupRows,
   packRows,
   splitFormTitle,
 } from '@fields/groups'
@@ -69,7 +67,6 @@ import {
   noLayoutAnimation,
 } from './dnd'
 import {
-  CellDropZone,
   DropLine,
   FootDropZone,
   GapDropZone,
@@ -156,8 +153,6 @@ export function SlashEditor({
   const reorderBlocks = useBuilderStore((s) => s.reorderBlocks)
   const reorderGroups = useBuilderStore((s) => s.reorderGroups)
   const placeInRow = useBuilderStore((s) => s.placeInRow)
-  const placeBlockInRow = useBuilderStore((s) => s.placeBlockInRow)
-  const takeOwnRow = useBuilderStore((s) => s.takeOwnRow)
   const shiftColumn = useBuilderStore((s) => s.shiftColumn)
   // Сам стор, без подписки: обработчики строк читают документ В МОМЕНТ ВЫЗОВА, а не
   // берут значение с рендера. Это и есть то, что делает их ссылки стабильными
@@ -170,13 +165,13 @@ export function SlashEditor({
   // ходят по нему индексами (stopNeighbor, findIndex), и заголовок в списке сдвинул бы
   // все соседства на единицу.
   const readBlocks = useCallback(() => splitFormTitle(storeApi.getState().blocks).rest, [storeApi])
-  // Координатный якорь оверлеев драга (рейл будущей группы, предупреждающая рамка):
+  // Координатный якорь оверлеев драга (линия вставки, гост, предупреждающая рамка):
   // они absolute-прямоугольники в системе полотна и меряют DOM относительно него.
   const canvasRef = useRef<HTMLDivElement>(null)
   // ИЗМЕРЕННОГО РЕЙЛА БУДУЩЕЙ ГРУППЫ ЗДЕСЬ НЕТ (решение владельца 2026-08-11), и вернуть
   // его нельзя, не вернув расступание: он лечил враньё layout-бокса, пока sortable
   // раздвигал строки трансформами, а при неподвижной раскладке (§5.2) лечить нечего.
-  // Рейл у групп только свой, статичный (GroupRow, проп rail).
+  // Рейла у вопроса нет вовсе (решение владельца 2026-09-15).
   //
   // Предупреждающая рамка (§4.3): строки, которые от ЭТОГО дропа останутся без
   // заголовка. Состав даёт прогноз planBlockDrop, а рисуется он предупреждающим
@@ -207,15 +202,7 @@ export function SlashEditor({
   // сенсор), но полотну он больше ничего не сообщает. Один источник вместо прежних
   // двух (сырая цель + подменённая) — расходиться нечему.
   const targetRef = useRef<DropTarget | null>(null)
-  // Во время драга рейлом групп управляет не hover (курсор с таскаемым элементом
-  // мельтешит по hover-зонам — рейл мигал), а состояние: групповой драг зажигает
-  // рейл у группы-цели постоянно, блочный — гасит рейлы совсем: рейлы мульти-групп
-  // по всему полотну спорят с оверлеями жеста за внимание.
-  const [drag, setDrag] = useState<{
-    kind: 'group' | 'block'
-    activeId: string
-    overGroup: string | null
-  } | null>(null)
+  const [drag, setDrag] = useState<{ kind: 'group' | 'block'; activeId: string } | null>(null)
   // Ближайшее к перетаскиваемому элементу место — ЕДИНСТВЕННОЕ, где горит приглашение
   // «встань в ряд» (решение владельца 2026-08-02; правило и его причина — `rowZones.ts`).
   // Место берётся у ТОЙ ЖЕ цели, что рисует линию (pickDropTarget пишет её в ref), а в
@@ -245,7 +232,6 @@ export function SlashEditor({
     () => (zoneId === null ? null : rowZoneTarget(zoneId)),
     [zoneId],
   )
-  const hoverCell = useMemo(() => (zoneId === null ? null : cellZoneBlock(zoneId)), [zoneId])
   // Замер оверлеев гонит rAF-цикл, а не события драга: активная строка доигрывает свой
   // CSS-переход (200мс) и после остановки курсора, onDragMove в это время молчит —
   // оверлеи отставали от неё. Цикл меряет каждый кадр; аргументы (активный элемент и
@@ -303,11 +289,9 @@ export function SlashEditor({
             // Тем же предикатом, что решает судьбу чипа у строки (needsCaptionFor):
             // обещание шпаргалки и предложение на полотне обязаны совпадать.
             needsCaption: needsCaptionFor(blocksNow, row.id),
-            insideQuestion: row.insideQuestion,
             // Позиция на оси колонок (§11.6) — тем же предикатом, которым ось ведёт стор:
-            // подпись пункта обязана называть то, что случится на ЭТОЙ строке. У строки
-            // внутри вопроса ось своя (insideQuestion выше), позицию ей не считаем.
-            row: row.insideQuestion ? undefined : rowPosition(blocksNow, row.id),
+            // подпись пункта обязана называть то, что случится на ЭТОЙ строке.
+            row: rowPosition(blocksNow, row.id),
           }
         : {},
     }
@@ -391,21 +375,16 @@ export function SlashEditor({
     }
     return { byRow, tail: plan.tail }
   }, [blocks, rows])
-  // Группы, стоящие в СЕКЦИИ. Стороны здесь не считают: при четырёх колонках зеркалить
-  // некуда — у средних колонок «своей» стороны нет вовсе, — поэтому кластер значков у
-  // всех слева, а от наезда на соседа его держит подложка в цвет холста (BlockRow).
-  // Карта нужна ради одного вопроса: стоит ли вопрос в секции (тогда он не показывает
-  // зону второго уровня).
-  const inSection = useMemo(
-    () => new Set(rows.filter((r) => r.length > 1).flatMap((r) => r.flat().map((g) => g.id))),
-    [rows],
-  )
-
-  // Жест ряда (спека §5): пока тащат подходящий элемент, у БЛИЖАЙШЕГО ряда горят обе
-  // полосы — левая и правая. Кандидат — группа активного элемента:
-  // мульти-вопрос едет за ручку подписи (групповой драг), одиночка (голое поле ИЛИ
-  // лэйаут-блок) — блочным слоем. Строку из середины чужого вопроса жест не касается:
-  // она переносит блок, а не вопрос, и её уровень — ряд ВНУТРИ вопроса (ниже).
+  // Жест ряда (спека §5): пока тащат подходящий элемент, у БЛИЖАЙШЕГО ряда горят зоны.
+  // Кандидат — то, что встанет в колонку, в том виде, в каком его адресует placeInRow:
+  // мульти-вопрос едет за ручку подписи (групповой драг) — его группа; одиночка (голое
+  // поле ИЛИ лэйаут-блок) — её группа; любая другая строка собранного вопроса (поле,
+  // пояснение или картинка из его середины) — САМА СТРОКА: встав в ряд, она уходит из
+  // вопроса отдельным элементом (ADR §10, 2026-09-14).
+  //
+  // Кандидат-строка не совпадает ни с одним id группы, поэтому свой вопрос приглашение из
+  // адресов не выкидывает (inviteRowId): строка встаёт колонкой рядом со своим вопросом
+  // так же, как рядом с любым другим.
   //
   // Требований к типу здесь нет: whitelist отменён (ADR §10), и «можно ли этой группе
   // в ряд» спрашивается у раскладчика одним предикатом — тем же, что рисует ряды.
@@ -417,33 +396,10 @@ export function SlashEditor({
     }
     const b = blocks.find((x) => x.id === drag.activeId)
     const g = b && groups.find((x) => x.id === b.groupId)
-    return g && g.blocks.length === 1 && groupCanPair(g.blocks) ? g.id : null
+    if (!b || !g) return null
+    if (g.blocks.length === 1) return groupCanPair(g.blocks) ? g.id : null
+    return b.id !== g.blocks[0]!.id ? b.id : null
   }, [drag, groups, blocks])
-
-  // Жест ряда ВНУТРИ вопроса (§6.6): тащат поле из своей мульти-группы → цель ровно
-  // одна, первая подпись этой же группы, и зона горит на её строке. Между вопросами
-  // такое поле не ходит (rowCandidate выше требует одиночную группу) — уровни не
-  // пересекаются, и двух приглашений сразу автор не видит.
-  const cellCandidate = useMemo(() => {
-    if (drag?.kind !== 'block') return null
-    const b = blocks.find((x) => x.id === drag.activeId)
-    if (!b || !isAnswerableType(b.type)) return null
-    const g = groups.find((x) => x.id === b.groupId)
-    if (!g || g.blocks.length < 2) return null
-    // Вопрос, стоящий в СЕКЦИИ, приглашения не показывает: ряд внутри вопроса делает
-    // группу полноширинной (groupCanShareRow = «внутреннего ряда нет»), то есть дроп
-    // молча развалил бы секцию, в которой вопрос стоит, — обещание зоны и её
-    // последствие разошлись бы. Заодно снаружи такого вопроса нет поля полотна: зона
-    // легла бы в 12px-жёлоб и наехала на соседнюю колонку.
-    if (inSection.has(g.id)) return null
-    const caption = g.blocks.find((x) => isCaptionType(x.type))
-    if (!caption || caption.id === b.id) return null
-    // Ячейка подписи занята (ряд уже собран) — приглашать некуда.
-    const row = packGroupRows(g.blocks).find((r) =>
-      r.some((c) => c.some((x) => x.id === caption.id)),
-    )
-    return row?.length === 1 ? caption.id : null
-  }, [drag, groups, blocks, inSection])
 
   // Чем занять `over`, когда цели дропа нет (см. вызов): вопросом под указателем, а на
   // блочном слое — его последней живой строкой. Полотно от этого ничего не получает,
@@ -633,7 +589,6 @@ export function SlashEditor({
     const zone = zoneRef.current
     stopFrameLoop()
     const candidate = rowCandidate
-    const cellCand = cellCandidate
     setDrag(null)
     const { active } = e
     // Зона исполняет ту же зону, которую полотно всё это время подсвечивало, — `over` у
@@ -646,15 +601,6 @@ export function SlashEditor({
             placeInRow(candidate, zoneTarget.groupId, zoneTarget.col, zoneTarget.insert),
           )
         }
-        return
-      }
-      // Зона второго уровня: ряд внутри вопроса. Заголовка здесь не теряет никто (обе
-      // строки остаются в своей группе), но идём через тот же captionGuard — цену
-      // структурных команд называет одно место, и исключений у него нет.
-      const cellTarget = cellZoneBlock(zone)
-      if (cellTarget !== null) {
-        const dragged = String(active.id)
-        if (cellCand === cellTarget) captionGuard(() => placeBlockInRow(dragged, cellTarget))
         return
       }
     }
@@ -867,38 +813,16 @@ export function SlashEditor({
     [readBlocks, engine, focusTitle],
   )
 
-  // Mod+Alt+→/← — клавиатурное зеркало жеста ряда (§5, §6.6). Каретка не трогается: id
-  // блока стабилен, строка не перемонтируется — «каретка едет с блоком» (§2.4).
+  // Mod+Alt+→/← — клавиатурное зеркало жеста ряда (§5). Каретка не трогается: id блока
+  // стабилен, строка не перемонтируется — «каретка едет с блоком» (§2.4).
   //
-  // Это ШАГ ПО ОСИ (§11.6), а не тумблер «в ряд / из ряда»: где элемент окажется,
-  // зависит от того, где он стоит сейчас, и ось у него ровно одна — полная ширина ↔
-  // левая колонка ↔ правая. Саму ось ведёт стор (shiftColumn): цель шага выводится из
-  // раскладки, а полотно её не знает.
-  //
-  // Уровень задаёт МЕСТО строки в группе — тем же правилом, что и смысл бита (§6.3):
-  // первая строка (подпись или голое поле) ведёт по оси ВЕСЬ вопрос, любая другая —
-  // саму себя по короткой оси ряда внутри вопроса.
+  // Это ШАГ ПО ОСИ (§11.6), а не тумблер «в ряд / из ряда»: где элемент окажется, зависит
+  // от того, где он стоит сейчас. Саму ось ведёт стор (shiftColumn): цель шага выводится
+  // из раскладки, а полотно её не знает. Строка ответа собранного вопроса шагом уходит из
+  // него колонкой рядом — это тоже решает стор (rowPosition, 'leave').
   const handleRowShift = useCallback(
-    (id: string, dir: 'left' | 'right') => {
-      const blocks = readBlocks()
-      const gid = blocks.find((b) => b.id === id)?.groupId
-      if (gid === undefined) return
-      // Группы считаются здесь, а не берутся с рендера: обработчик обязан быть
-      // стабильной ссылкой (иначе memo строк не срабатывает), а разбиение — чистая
-      // функция, и один её прогон на жест ничего не стоит.
-      const group = groupBlocks(blocks).find((g) => g.id === gid)
-      if (!group) return
-      if (group.blocks[0]!.id !== id) {
-        // Ряд ВНУТРИ вопроса: пара направленная («подпись | поле»), левой колонки полю не
-        // достаётся — остаются вход и выход.
-        if (dir === 'left') return takeOwnRow(id)
-        const caption = group.blocks.find((b) => isCaptionType(b.type))
-        if (caption) placeBlockInRow(id, caption.id)
-        return
-      }
-      shiftColumn(id, dir)
-    },
-    [readBlocks, takeOwnRow, placeBlockInRow, shiftColumn],
+    (id: string, dir: 'left' | 'right') => shiftColumn(id, dir),
+    [shiftColumn],
   )
 
   // Что рисует ГОСТ ИСТОЧНИКА: тащат вопрос — его копия целиком, тащат строку — она
@@ -945,15 +869,13 @@ export function SlashEditor({
     hoverZone.insert === insert
 
   // Одна группа полотна. Вынесена из JSX функцией, потому что зовут её из двух мест:
-  // прямо из ряда-одиночки и из ячейки ряда (стопка групп, §5). railOff — у ряда горят
-  // зоны: рейл группы стоит на том же вылете, что и рейл зоны, и две линии в одном
-  // жёлобе читались бы как одна размазанная.
+  // прямо из ряда-одиночки и из ячейки ряда (стопка групп, §5).
   //
   // headOfCell — вопрос открывает стопку колонки и потому интервала перед собой не
   // несёт (его несёт ряд). Позиция приезжает ПРОПОМ, а не вариантом `first:`: в боксе
   // колонки первыми стоят зоны жеста, они появляются с началом драга, и CSS-правило
   // «первый ребёнок» роняло бы вопросу интервал прямо посреди жеста.
-  const renderGroup = (g: (typeof groups)[number], railOff = false, headOfCell = false) => (
+  const renderGroup = (g: (typeof groups)[number], headOfCell = false) => (
     <GroupRow
       key={g.id}
       group={g}
@@ -961,19 +883,6 @@ export function SlashEditor({
       headOfCell={headOfCell}
       formId={formId}
       blockIds={blockIds}
-      // Зона второго уровня: id подписи, у которой горит приглашение собрать ряд
-      // внутри вопроса (null — не в этой группе). Ближним рядом не ограничивается:
-      // цель здесь ровно одна на всё полотно — подпись СВОЕЙ же группы.
-      cellZone={cellCandidate}
-      // Горит ли полоса второго уровня: та же схема, что у зон ряда.
-      cellHot={cellCandidate !== null && hoverCell === cellCandidate}
-      rail={
-        drag
-          ? drag.kind === 'group' && g.id === drag.overGroup && !railOff
-            ? 'on'
-            : 'off'
-          : 'auto'
-      }
       menuForId={menuForId}
       onAddBelow={handleAddBelow}
       onInsertBelow={handleInsertBelow}
@@ -1080,7 +989,7 @@ export function SlashEditor({
                   onDragStart={(e) => {
                     const id = String(e.active.id)
                     const isGroup = groupIds.has(id)
-                    setDrag({ kind: isGroup ? 'group' : 'block', activeId: id, overGroup: null })
+                    setDrag({ kind: isGroup ? 'group' : 'block', activeId: id })
                     // rAF-цикл ведёт рамки (только блочный драг) И ближайшее место с гостом
                     // источника (оба слоя: вопрос за ручку подписи встаёт в ряд ровно так
                     // же, как одиночка), поэтому запускается всегда. Рамки внутри него сами
@@ -1092,16 +1001,6 @@ export function SlashEditor({
                     startFrameLoop(
                       id,
                       isGroup ? blocks.filter((b) => b.groupId === id).map((b) => b.id) : [id],
-                    )
-                  }}
-                  onDragOver={(e) => {
-                    const overId = e.over ? String(e.over.id) : null
-                    // Бэйл на тот же overGroup: лишний setState = лишний ре-рендер посреди
-                    // драга (см. коммент у groupIdList, чем это опасно).
-                    setDrag((d) =>
-                      d && d.kind === 'group' && d.overGroup !== overId
-                        ? { ...d, overGroup: overId }
-                        : d,
                     )
                   }}
                   onDragEnd={onDragEnd}
@@ -1220,7 +1119,7 @@ export function SlashEditor({
                                 gutter={ROW_GUTTER}
                               />
                             )}
-                            {c.map((g, gi) => renderGroup(g, zones, gi === 0))}
+                            {c.map((g, gi) => renderGroup(g, gi === 0))}
                           </div>
                         ))
                         return (
@@ -1366,18 +1265,16 @@ const MEASURING = { droppable: { strategy: MeasuringStrategy.WhileDragging } }
 // линию с середины на чужой контент. Меняешь ритм или py-1.5 — пересчитывай:
 // ROW_GAP = (ритм − 2×ROW_PAD) / 2.
 const BLOCK_ANCHOR = 'data-block-id'
-// Внутренние ряды вопроса для прицела (PickOpts.inner): «подпись | поле», тот же
-// раскладчик, что рисует их у превью. МОДУЛЬНАЯ константа, а не литерал в кадре: прицел
-// зовётся на каждое движение указателя, а свежая замыкающая функция каждый кадр — мусор
-// на длинной форме (§5.3).
-const INNER_ROWS = (blocks: Block[]) => packGroupRows(blocks).map((r) => r.flat())
+// Строки вопроса для прицела (PickOpts.inner): у каждой своя позиция, рядов внутри
+// вопроса нет. МОДУЛЬНАЯ константа, а не литерал в кадре: прицел зовётся на каждое
+// движение указателя, а свежая замыкающая функция каждый кадр — мусор на длинной форме
+// (§5.3).
+const INNER_ROWS = (blocks: Block[]) => blocks.map((b) => [b])
 const ROW_PAD = 6
 const ROW_GAP = 0
 // Жёлоб между колонками ряда вопросов — 12px (.rf-row в fields.css), он же ритм по
-// вертикали и он же жёлоб ряда ВНУТРИ вопроса (.rf-group > .rf-row). Числа разошлись
-// бы снова, если ритм поменяют на одной поверхности, — поэтому две константы, а не одна.
+// вертикали.
 const ROW_GUTTER = 12
-const INNER_GUTTER = 12
 
 // hasGroup — состоит ли ряд из этой группы. Ряд узнаётся по СОСТАВУ, а не по адресу
 // (§5.1): адресом ряда служит любой его участник, кроме перетаскиваемого, и адрес
@@ -1411,17 +1308,7 @@ const rowZoneTarget = (id: string | number): RowZone | null => {
   return { insert: rest[0] === 'b', col: Number(rest.slice(1, at)), groupId: rest.slice(at + 1) }
 }
 
-// Зона второго уровня (§6.6): правая треть строки ПОДПИСИ, пока тащат поле её же
-// группы. Своё пространство id по той же причине, что у зоны ряда, — и отдельное от
-// неё: цель здесь блок, а не группа, и путать их фильтру коллизий нельзя.
-const CELL_ZONE = 'cellzone:'
-const cellZoneId = (blockId: string) => `${CELL_ZONE}${blockId}`
-const cellZoneBlock = (id: string | number): string | null => {
-  const s = String(id)
-  return s.startsWith(CELL_ZONE) ? s.slice(CELL_ZONE.length) : null
-}
-const isRowZone = (id: string | number): boolean =>
-  rowZoneTarget(id) !== null || cellZoneBlock(id) !== null
+const isRowZone = (id: string | number): boolean => rowZoneTarget(id) !== null
 
 // ГОСТ РИСУЕТСЯ ТЕМ ЖЕ, ЧЕМ И СТРОКА НА ПОЛОТНЕ. Для большинства типов это общий
 // BlockField: полотно WYSIWYG, и выключенный контрол респондента выглядит там же, что
@@ -1523,17 +1410,7 @@ type GroupRowProps = {
   formId: FormIdSource
   blockIds: string[]
   // Зона жеста «встань в колонку ряда» здесь НЕ живёт: её якорь — контейнер ряда
-  // (SlashEditor), чья геометрия не зависит от содержимого. Здесь остаётся только
-  // второй уровень.
-  // Второй уровень (§6.6): id ПОДПИСИ, у которой горит приглашение собрать ряд ВНУТРИ
-  // вопроса. Не из этой группы или null — зоны нет.
-  cellZone: string | null
-  // Горит ли полоса второго уровня (курсор в ней). Приезжает пропом, а не спрашивается
-  // у dnd-kit: зона не его `over` (см. состояние зоны в полотне).
-  cellHot: boolean
-  // Режим рейла: auto — по hover/focus-within (покой), on — горит постоянно
-  // (групповой драг над этой группой), off — скрыт (любой другой драг).
-  rail: 'auto' | 'on' | 'off'
+  // (SlashEditor), чья геометрия не зависит от содержимого.
   menuForId: string | null
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   onInsertBelow: (id: string) => void
@@ -1582,9 +1459,6 @@ const BY_REFERENCE = Object.keys({
   firstGroup: true,
   headOfCell: true,
   formId: true,
-  cellZone: true,
-  cellHot: true,
-  rail: true,
   menuForId: true,
   onAddBelow: true,
   onInsertBelow: true,
@@ -1605,9 +1479,6 @@ const GroupRow = memo(function GroupRow({
   headOfCell,
   formId,
   blockIds,
-  cellZone,
-  cellHot,
-  rail,
   menuForId,
   onAddBelow,
   onInsertBelow,
@@ -1635,8 +1506,6 @@ const GroupRow = memo(function GroupRow({
   // `{ attributes, listeners }` пересоздавался на каждый рендер группы и в одиночку
   // отменял memo у подписи: одна такая строка на вопрос — это половина строк формы.
   const groupHandle = useMemo(() => ({ attributes, listeners }), [attributes, listeners])
-  // Жест ширины внутреннего ряда: команда стора стабильна, memo группы она не ломает.
-  const setRowWidths = useBuilderStore((s) => s.setRowWidths)
   // Есть ли в группе контрол ответа: от этого зависит, работает ли Mod+Enter из
   // подписи (handleAnswerAction без отвечаемого блока молчит) — и показывается ли
   // подсказка о нём (§7). Считаем здесь: состав группы знает только GroupRow.
@@ -1653,8 +1522,6 @@ const GroupRow = memo(function GroupRow({
     <li
       ref={setNodeRef}
       style={style}
-      // group/grp — именованная Tailwind-группа: `group` без имени занят строками
-      // (BlockRow) для своих hover-значков, hover группы должен слушаться отдельно.
       // Ширину группа себе НЕ считает: полколонки задаёт ячейка ряда (см. ol в
       // SlashEditor), как .rf-cell у превью. Своя ширина на самой li ломает стопку в
       // колонке — третья полуширинная уезжает на новую строку вместо стопки.
@@ -1668,145 +1535,59 @@ const GroupRow = memo(function GroupRow({
       // а у вопроса с заголовком или подписью — его ступень (space.ts). У вопроса,
       // открывающего колонку, mt нет — там расстояние держит сам ряд, и ступень
       // полноширинного ряда лежит на ряде (rowSpace, там же мина про два разных бокса).
-      // ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста, и паддинг увёл бы рейл группы
-      // вместе с линией вставки.
-      className={`group/grp relative w-full rounded-md ${
+      // ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста, и паддинг увёл бы линию вставки.
+      className={`relative w-full rounded-md ${
         headOfCell ? '' : spaceMt(groupSpace(group.blocks))
       } ${isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''}`}
     >
-      {/* Рейл — постоянная идентичность группы (§4.3): тонкая линия в левом
-          жёлобе, в покое проявляется по hover/focus-within всей группы; во время
-          драга режимом управляет полотно (проп rail — см. SlashEditor). Absolute и
-          вне потока (урок TD-22). Кластер значков строки стоит вплотную к
-          тексту (mr-1 в BlockRow) и рейл собой закрывает — разойтись им негде, рейл
-          лежит между кластером и текстом; видно это только под наведением. top/bottom-0 = ровно высота текста группы:
-          -my-1.5 строк компенсирует их py-1.5, li обнимает чистый контент.
-          СЛЕВА ВСЕГДА, в любой колонке (2026-08-11): зеркалить рейл вправо было
-          осмысленно, пока колонок было две, — при четырёх у средних колонок «своей»
-          стороны нет, и одинаковое место читается лучше, чем угадываемое. */}
-      {/* БОЛЬШЕ ДВУХ БЛОКОВ, а не больше одного (решение владельца 2026-08-16): у пары
-          «подпись + поле» границы вопроса и так очевидны — две строки, и обе на виду.
-          Линия там объясняла то, что не требует объяснения. */}
-      {group.blocks.length > 2 && rail !== 'off' && (
-        <span
-          aria-hidden="true"
-          className={`pointer-events-none absolute top-0 bottom-0 -left-2 w-0.5 rounded-full bg-primary/40 ${
-            rail === 'on'
-              ? ''
-              : 'opacity-0 transition-opacity group-hover/grp:opacity-100 group-focus-within/grp:opacity-100'
-          }`}
-        />
-      )}
-      {/* Зона второго уровня — «встань в ряд со своей подписью». Якорь ей даёт li, а не
-          строка подписи: ширина подписи зависит от того, собран ли ряд, и зона,
-          привязанная к её краю, уехала бы из-под курсора. Сторона всегда правая — пара внутри вопроса
-          направленная (слева подпись, справа поле), и вопрос, стоящий в секции, зону не
-          показывает вовсе (cellCandidate): снаружи него нет поля полотна. */}
-      {cellZone !== null && group.blocks.some((b) => b.id === cellZone) && (
-        <CellDropZone id={cellZoneId(cellZone)} hot={cellHot} />
-      )}
       {/* Стратегия своя (dnd.ts): родная verticalListSortingStrategy считает полотно
           одной вертикалью и на секции сажает строку на строку. */}
       <SortableContext items={blockIds} strategy={canvasSorting}>
         {/* Внутри вопроса блоки стоят с тем же шагом 12px, что между вопросами (=
             .rf-group у превью, решение владельца 2026-08-22). Интервал
             несёт САМА СТРОКА (mt у BlockRow), поэтому зазора у колонки нет: у первой
-            строки вопроса интервала нет, и li обнимает чистый контент — от этого
-            зависит рейл группы (top-0 bottom-0). */}
+            строки вопроса интервала нет, и li обнимает чистый контент — его рект
+            мерят оверлеи жеста. */}
         <div className="flex flex-col">
-          {/* Второй уровень рядов (фаза 15, §6.4/§6.7): пара «подпись | поле» встаёт
-              бок о бок. Раскладчик тот же, что у превью и рендерера (packGroupRows),
-              и вид тот же: зазор 12px × --rf-density (= .rf-group) и выравнивание по центру
-              (items-center = align-items у .rf-group > .rf-row). Ряд из одного
-              остаётся прямой строкой колонки — лишняя обёртка сместила бы кластеры. */}
-          {packGroupRows(group.blocks).map((innerRow, ri) => {
-            // Кто в вопросе ПЕРВЫЙ — знает только раскладчик группы, и знание это
-            // позиционное: интервал перед собой несёт строка, а первой его нести
-            // незачем — расстояние до предыдущего вопроса держит сам вопрос (mt у li).
-            // Внутри вопроса стопки не бывает (пара — «подпись + поле», а отвечаемый
-            // блок в группе один), поэтому ячейка здесь всегда об одном блоке.
-            const render = (b: Block) => {
-              const i = group.blocks.indexOf(b)
-              return (
-                <BlockRow
-                  key={b.id}
-                  block={b}
-                  formId={formId}
-                  firstInGroup={ri === 0}
-                  groupHandle={group.blocks.length > 1 && i === 0 ? groupHandle : null}
-                  groupHasAnswer={hasAnswer}
-                  // Чью обязательность представляет строка: ПЕРВАЯ подпись группы — поля
-                  // своего вопроса, поле БЕЗ подписи — своё. Прочие строки (контент,
-                  // вторая подпись) — ничью, и поле озаглавленного вопроса тоже: звёздочка
-                  // одна на вопрос и стоит там же, где у превью и рендерера (§6). Кластер
-                  // значков у такого поля с фазы 15 есть, а звёздочка — по-прежнему нет:
-                  // это не управление строкой, а свойство вопроса.
-                  requiredFor={
-                    isCaptionType(b.type) && i === 0
-                      ? answerable
-                      : isAnswerableType(b.type) && !hasCaption
-                        ? b
-                        : undefined
-                  }
-                  // Голой строке ответа предлагается дать заголовок (§4.4 спеки фазы 15):
-                  // тем же предикатом, которым шпаргалка решает, обещать ли Mod+Alt+T.
-                  // Хватает блоков ГРУППЫ: подпись, если она есть, лежит здесь же.
-                  needsCaption={needsCaptionFor(group.blocks, b.id)}
-                  // Позиция строки — для контекстного плейсхолдера пустой строки (§7).
-                  insideQuestion={group.blocks.length > 1 && i > 0}
-                  firstOfForm={firstGroup && i === 0}
-                  openMenuOnMount={menuForId === b.id}
-                  onAddBelow={onAddBelow}
-                  onInsertBelow={onInsertBelow}
-                  onBackspaceAtStart={onBackspaceAtStart}
-                  onBackspaceDelete={onBackspaceDelete}
-                  onDeleteBlock={onDeleteBlock}
-                  onAnswerAction={onAnswerAction}
-                  onArrow={onArrow}
-                  onRowShift={onRowShift}
-                />
-              )
-            }
-            const pair = innerRow.length > 1
-            const innerWidths = blockRowWidths(innerRow)
-            // Обёртки стоят ВСЕГДА и в одиночном ряду схлопнуты в display:contents —
-            // строка остаётся прямым flex-ребёнком колонки, как и была (лишний бокс
-            // сместил бы кластеры значков). Урок, оплаченный снятым дублёром второго
-            // уровня: менять здесь можно className, но не ТИП узла — тернарник
-            // «строка ↔ div» ремаунтил подпись прямо посреди драга, а с ней и её эффекты
-            // монтирования (у вопроса, рождённого через «/», заново раскрывалось
-            // слеш-меню, openMenuOnMount).
-            return (
-              <div
-                key={innerRow[0]![0]!.id}
-                className={
-                  pair ? 'flex items-center gap-[calc(0.75rem*var(--rf-density))]' : 'contents'
-                }
-              >
-                {innerRow.map((cell, i) => (
-                  // min-w-0 обязателен, как у .rf-cell: без него длинная подпись не
-                  // даёт колонке ужаться и ломает 50/50.
-                  <div
-                    key={cell[0]!.id}
-                    className={pair ? 'relative min-w-0 flex-1' : 'contents'}
-                    style={pair ? { flexGrow: innerWidths?.[i] } : undefined}
-                    {...(pair ? { 'data-rf-cell': '' } : {})}
-                  >
-                    {/* Тот же жест на втором уровне рядов: жёлоб здесь тот же 12px —
-                        ритм полотна на всех уровнях одно число. */}
-                    {pair && i > 0 && (
-                      <ColumnResizer
-                        index={i}
-                        gutter={INNER_GUTTER}
-                        onCommit={(next) => setRowWidths(innerRow[0]![0]!.id, next)}
-                      />
-                    )}
-                    {cell.map(render)}
-                  </div>
-                ))}
-              </div>
-            )
-          })}
+          {group.blocks.map((b, i) => (
+            <BlockRow
+              key={b.id}
+              block={b}
+              formId={formId}
+              // Интервал перед собой несёт строка, а первой его нести незачем — расстояние
+              // до предыдущего вопроса держит сам вопрос (mt у li).
+              firstInGroup={i === 0}
+              groupHandle={group.blocks.length > 1 && i === 0 ? groupHandle : null}
+              groupHasAnswer={hasAnswer}
+              // Чью обязательность представляет строка: ПЕРВАЯ подпись группы — поля
+              // своего вопроса, поле БЕЗ подписи — своё. Прочие строки (контент, вторая
+              // подпись) — ничью, и поле озаглавленного вопроса тоже: звёздочка одна на
+              // вопрос и стоит там же, где у превью и рендерера (§6). Кластер значков у
+              // такого поля с фазы 15 есть, а звёздочка — по-прежнему нет: это не
+              // управление строкой, а свойство вопроса.
+              requiredFor={
+                isCaptionType(b.type) && i === 0
+                  ? answerable
+                  : isAnswerableType(b.type) && !hasCaption
+                    ? b
+                    : undefined
+              }
+              // Голой строке ответа предлагается дать заголовок (§4.4 спеки фазы 15): тем
+              // же предикатом, которым шпаргалка решает, обещать ли Mod+Alt+T. Хватает
+              // блоков ГРУППЫ: подпись, если она есть, лежит здесь же.
+              needsCaption={needsCaptionFor(group.blocks, b.id)}
+              firstOfForm={firstGroup && i === 0}
+              openMenuOnMount={menuForId === b.id}
+              onAddBelow={onAddBelow}
+              onInsertBelow={onInsertBelow}
+              onBackspaceAtStart={onBackspaceAtStart}
+              onBackspaceDelete={onBackspaceDelete}
+              onDeleteBlock={onDeleteBlock}
+              onAnswerAction={onAnswerAction}
+              onArrow={onArrow}
+              onRowShift={onRowShift}
+            />
+          ))}
         </div>
       </SortableContext>
     </li>

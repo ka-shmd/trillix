@@ -94,17 +94,17 @@ func TestValidateSchema_Valid(t *testing.T) {
 		// иначе undo и промежуточные состояния драга ловили бы отказ автосейва.
 		"column right у первого блока — инертен, но валиден": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"email","settings":{"column":2}},{"id":"b2","groupId":"g2","type":"long_text","settings":{}}]}`,
 		"column right у первого варианта — инертен":          `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"multi_choice","settings":{"options":[{"id":"o1","label":"Go","column":2}]}}]}`,
-		// Фаза 15 (спека §6.3): подпись — законный носитель бита на обоих уровнях.
-		// На первом блоке группы он значит «моя группа справа от предыдущей» (носитель
-		// переехал сюда апгрейдом v3→v4), внутри группы — «справа от подписи».
-		// Документы даны уже в v4: в v3 такой бит апгрейд бы двигал.
+		// Подпись — законный носитель бита: на первом блоке группы он ставит в колонку
+		// вопрос целиком.
 		"column right у подписи — кросс-групповой носитель": `{"schemaVersion":1,"blocks":[
 			{"id":"t1","groupId":"g1","type":"title","text":[{"t":"Город"}]},
 			{"id":"f1","groupId":"g1","type":"short_text","settings":{}},
 			{"id":"t2","groupId":"g2","type":"title","text":[{"t":"Индекс"}],"settings":{"column":2}},
 			{"id":"f2","groupId":"g2","type":"short_text","settings":{}}
 		]}`,
-		"column right у label внутри группы — ряд «подпись | поле»": `{"schemaVersion":1,"blocks":[
+		// Бит на поле ВНУТРИ группы валиден поблочно (кросс-блочное условие не проверяется):
+		// так лежат документы, собранные до ADR §10 2026-09-14, — редактор читает их секцией.
+		"column у поля внутри группы — валиден поблочно": `{"schemaVersion":1,"blocks":[
 			{"id":"t","groupId":"g1","type":"label","text":[{"t":"Индекс"}]},
 			{"id":"f","groupId":"g1","type":"short_text","settings":{"column":2}}
 		]}`,

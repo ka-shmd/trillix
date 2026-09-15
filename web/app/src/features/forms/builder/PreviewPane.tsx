@@ -6,10 +6,8 @@ import { BlockField } from '@fields/BlockField'
 import {
   groupBlocks,
   groupMeta,
-  blockRowWidths,
   cellVars,
   groupRowWidths,
-  packGroupRows,
   packRows,
   splitFormTitle,
   splitThankYou,
@@ -168,41 +166,20 @@ export function PreviewPane({
                     // Ступень воздуха перед вопросом — по типу его первого блока
                     // (@fields/space), тем же кодом, что у рендерера и полотна.
                     <div key={group.id} className={groupClass(group.blocks)}>
-                      {/* Второй уровень рядов (фаза 15, §6.4): подпись и поле встают бок о
-                    бок той же обёрткой .rf-row. Ряд из одного остаётся прямым
-                    ребёнком .rf-group — лишний div не меняет вид, но шумит в DOM. */}
-                      {packGroupRows(group.blocks).map((innerRow) => {
-                        const render = (block: (typeof innerRow)[number][number]) => (
-                          <BlockField
-                            key={block.id}
-                            block={withVisibleOptions(block, plan)}
-                            captionText={groups.get(block.groupId)?.caption}
-                            captionRequired={groups.get(block.groupId)?.required}
-                            value={answers[block.id]}
-                            onChange={(value: Answer) => onChange(block.id, value)}
-                            // disabled=true — умолчание BlockField (превью было
-                            // декоративным). С фазы 21 превью заполняется: иначе автор не
-                            // увидит ни одной своей ветки — она показывается ОТ ОТВЕТА.
-                            disabled={false}
-                          />
-                        )
-                        const innerWidths = blockRowWidths(innerRow)
-                        return innerRow.length > 1 ? (
-                          <div key={innerRow[0]![0]!.id} className="rf-row">
-                            {innerRow.map((cell, i) => (
-                              <div
-                                key={cell[0]!.id}
-                                className="rf-cell"
-                                style={cellVars(innerWidths, i)}
-                              >
-                                {cell.map(render)}
-                              </div>
-                            ))}
-                          </div>
-                        ) : (
-                          render(innerRow[0]![0]!)
-                        )
-                      })}
+                      {group.blocks.map((block) => (
+                        <BlockField
+                          key={block.id}
+                          block={withVisibleOptions(block, plan)}
+                          captionText={groups.get(block.groupId)?.caption}
+                          captionRequired={groups.get(block.groupId)?.required}
+                          value={answers[block.id]}
+                          onChange={(value: Answer) => onChange(block.id, value)}
+                          // disabled=true — умолчание BlockField (превью было
+                          // декоративным). С фазы 21 превью заполняется: иначе автор не
+                          // увидит ни одной своей ветки — она показывается ОТ ОТВЕТА.
+                          disabled={false}
+                        />
+                      ))}
                     </div>
                   )
                   // Обёртка rf-row — только у настоящей пары колонок: одиночный ряд остаётся

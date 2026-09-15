@@ -79,20 +79,16 @@ describe('inviteRowId', () => {
     expect(inviteRowId(rows, before.groupId, other.groupId)).toBe(before.groupId)
   })
 
-  it('не приглашает вопрос с внутренним рядом: он занимает всю ширину (§6.5)', () => {
-    // Мульти-группа «подпись | поле», собранная в ряд ВНУТРИ вопроса: подпись несёт
-    // бит, поле стоит справа от неё. groupCanShareRow для такой группы ложен, и
-    // placeInRow дроп отверг бы — приглашать нельзя.
+  // Поле, уходящее из вопроса (ADR §10, 2026-09-14), — кандидат-СТРОКА: её id не совпадает
+  // ни с одной группой, и свой вопрос остаётся адресом — поле встаёт колонкой рядом со
+  // своей подписью.
+  it('поле собранного вопроса приглашается и в ряд своего вопроса', () => {
     const gid = 'q'
     const caption = blk('title', { groupId: gid })
-    const field = blk('short_text', { groupId: gid, settings: { column: 2 } })
-    const other = blk('email')
-    const rows = layout([caption, field, other])
-    const near = rows[0]![0]![0]!.id
+    const field = blk('short_text', { groupId: gid })
+    const rows = layout([caption, field, blk('email')])
 
-    expect(inviteRowId(rows, near, other.groupId)).toBeNull()
-    // А обычный полноширинный сосед приглашение показывает.
-    expect(inviteRowId(rows, other.groupId, caption.groupId)).toBe(other.groupId)
+    expect(inviteRowId(rows, gid, field.id)).toBe(gid)
   })
 
   it('секция приглашает обеими сторонами — в неё кладут ТРЕТИЙ элемент', () => {

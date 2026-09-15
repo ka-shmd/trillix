@@ -188,20 +188,21 @@ describe('ярусы карты — общее вынесено из конте�
     }
   })
 
-  it('Mod+Alt+→ внутри вопроса обещает СВОЙ заголовок, а не предыдущий вопрос', () => {
-    // Клавиша одна, уровень задаёт место строки в группе (фаза 15, §6.6): на голове
-    // группы ряд собирается с предыдущим вопросом, на любой другой строке — со своей
-    // подписью. Подпись пункта обязана следовать за действием, иначе карта врёт
-    // (демо-критерий 13.5).
-    for (const ctx of ['field', 'object'] as const) {
-      const head = shortcutsFor(ctx).find((s) => s.label === 'Mod+Alt+→')
-      const inner = shortcutsFor(ctx, { insideQuestion: true }).find((s) => s.label === 'Mod+Alt+→')
-      expect(head?.hint, ctx).toBe('В ряд с предыдущим вопросом')
-      expect(inner?.hint, ctx).toBe('В ряд со своим заголовком')
-      // Ничего, кроме этой подписи, флаг не трогает: состав списка тот же.
-      expect(shortcutsFor(ctx, { insideQuestion: true }).map((s) => s.label)).toEqual(
-        shortcutsFor(ctx).map((s) => s.label),
+  it('Mod+Alt+←/→ на строке из вопроса обещают уход из вопроса колонкой', () => {
+    // Строка собранного вопроса, кроме подписи, шагом уходит из него колонкой рядом (ADR §10,
+    // 2026-09-14): это зеркало жеста, и подписи в карте называют именно его. На потолке
+    // колонок шага нет — пункты выпадают (демо-критерий 13.5).
+    for (const ctx of ['text', 'field', 'image', 'object'] as const) {
+      const leave = shortcutsFor(ctx, { row: { kind: 'leave', room: true } })
+      expect(leave.find((s) => s.label === 'Mod+Alt+→')?.hint, ctx).toBe(
+        'Из вопроса колонкой справа',
       )
+      expect(leave.find((s) => s.label === 'Mod+Alt+←')?.hint, ctx).toBe(
+        'Из вопроса колонкой слева',
+      )
+      const full = shortcutsFor(ctx, { row: { kind: 'leave', room: false } }).map((s) => s.label)
+      expect(full, ctx).not.toContain('Mod+Alt+→')
+      expect(full, ctx).not.toContain('Mod+Alt+←')
     }
   })
 
@@ -252,8 +253,7 @@ describe('ярусы карты — общее вынесено из конте�
   })
 
   it('позиция вопроса на оси не трогает подсказки СТРОКИ ВАРИАНТА', () => {
-    // Найдено ревью: строка варианта объявляет контекст без insideQuestion, поэтому в
-    // снимок шпаргалки приезжает позиция её БЛОКА — а Mod+Alt+←/→ на варианте работают на
+    // Найдено ревью: в снимок шпаргалки строки варианта приезжает позиция её БЛОКА — а Mod+Alt+←/→ на варианте работают на
     // своей оси (ряды вариантов внутри choice). Позиция вопроса о них не говорит ничего, и
     // пункты, которые на варианте работают, из карты исчезать не должны.
     const rows: RowPosition[] = [{ kind: 'solo' }, { kind: 'in', col: 2, cols: 2, alone: true }]

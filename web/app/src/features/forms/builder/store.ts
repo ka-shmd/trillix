@@ -21,13 +21,11 @@ import {
   sameRichText,
 } from '@entities/formSchema'
 import {
-  blockRowWidths,
   groupBlocks,
   groupCanPair,
   groupMeta,
   groupRowWidths,
   optionRowWidths,
-  packGroupRows,
   packOptionRows,
   packRows,
   thankYouIssue,
@@ -205,8 +203,14 @@ export type BuilderActions = {
   // такого типа, а их не бывает. Остальное — по одному блоку.
   duplicateBlock: (id: string) => string | null
   // placeInRow — команда ПЕРЕНОСА в свободную ячейку ряда (спека §5), единственный
-  // вход и для жеста (дроп в зону ряда), и для Mod+Alt+→: группа activeGroupId встаёт
-  // в ряд, где стоит targetGroupId. Не режим и не тумблер.
+  // вход и для жеста (дроп в зону ряда), и для Mod+Alt+→: элемент activeId встаёт в
+  // ряд, где стоит группа targetGroupId. Не режим и не тумблер.
+  //
+  // activeId — id группы (вопрос целиком) или id строки. Строка одиночной группы едет
+  // своей группой; любая строка СОБРАННОГО вопроса, кроме подписи, — поле или пояснение
+  // из его середины — из него уходит и встаёт в ряд отдельным элементом, а остальные
+  // строки вопроса остаются на месте и смыкаются (ADR §10, 2026-09-14: вопрос живёт в
+  // одной ячейке). Подпись — ручка вопроса, по её id команда не выдаётся — no-op.
   //
   // Адрес — НОМЕР КОЛОНКИ и способ попадания в неё, потому что команд ровно две и
   // геометрически они разные:
@@ -215,14 +219,9 @@ export type BuilderActions = {
   // Ряд цели во всю ширину — insert его и превращает в секцию (col выбирает, слева или
   // справа от цели встанет активный). Потолок колонок исчерпан, пара не сложилась → вся
   // команда откатывается (no-op, историю и dirty не трогает).
-  placeInRow: (activeGroupId: string, targetGroupId: string, col: number, insert: boolean) => void
-  // placeBlockInRow — та же команда переноса на ВТОРОМ уровне (фаза 15, §6.6): поле
-  // встаёт в ряд со своей подписью внутри вопроса. Пара обязана быть «подпись +
-  // короткое поле» из одной группы, ячейка подписи — свободной; иначе no-op.
-  placeBlockInRow: (activeBlockId: string, targetBlockId: string) => void
+  placeInRow: (activeId: string, targetGroupId: string, col: number, insert: boolean) => void
   // takeOwnRow — обратная команда (Mod+Alt+←, обычный вертикальный дроп): элемент
-  // возвращается своим рядом. Какой именно — решает место строки в группе: своя
-  // строка выходит из ряда внутри вопроса, голова уводит из ряда весь вопрос.
+  // возвращается своим рядом. Строка ведёт свою группу: из ряда уходит вопрос целиком.
   //
   // Секция при этом остаётся ЦЕЛОЙ, пока в ней остаётся хотя бы две непустые колонки:
   // вопрос уезжает ПОД неё (полноширинный блок внутри секции разрезал бы её пополам,
@@ -236,9 +235,8 @@ export type BuilderActions = {
   // Крайняя позиция оси в свою сторону — no-op.
   shiftColumn: (id: string, dir: 'left' | 'right') => void
   // setRowWidths — ДОЛИ КОЛОНОК ряда, в котором стоит anchor (2026-08-22): перетащив
-  // границу колонок, автор задаёт ряду пропорции. Ряд ищется сперва ВНУТРИ вопроса,
-  // потом среди рядов вопросов — порядок безопасен, потому что группа с внутренним
-  // рядом занимает всю ширину и в кросс-групповой ряд не встаёт (groupCanShareRow).
+  // границу колонок, автор задаёт ряду пропорции. Ряд — тот, в котором стоит группа
+  // anchor.
   //
   // Доли проставляются ВСЕМ участникам колонки, а не одному носителю: читает их
   // раскладчик у первого элемента колонки, и перестановка внутри стопки иначе
@@ -417,7 +415,9 @@ function regroup(blocks: Block[]): Block[] {
     // От поля вверх через контент — до ближайшей подписи (не заходя в чужую группу).
     let j = i - 1
     while (j >= floor && (blocks[j]!.type === 'text' || blocks[j]!.type === 'image')) j--
-    if (j >= floor && isCaptionType(blocks[j]!.type)) {
+    // Вопрос живёт в ОДНОЙ ячейке раскладки (ADR §10, 2026-09-14): поле в другой колонке,
+    // чем подпись, ближайшим к ней не является и остаётся голым.
+    if (j >= floor && isCaptionType(blocks[j]!.type) && sameCell(blocks, j, i)) {
       // Подпись ровно ОДНА — ближайшая к полю (решение владельца 2026-07-26). Второй
       // заголовок в группу не входит, и жадным захват делать нельзя: осиротевшая подпись
       // мёртвого вопроса, оказавшись вплотную над следующим, молча стала бы ЕГО вторым
@@ -436,6 +436,19 @@ function regroup(blocks: Block[]): Block[] {
     return { ...b, groupId: g }
   })
   return changed ? next : blocks
+}
+
+// sameCell — стоят ли блоки после подписи j по поле i включительно в ТОЙ ЖЕ ячейке, что
+// она: без своего номера колонки (едут с головой группы) или с тем же номером. Равный
+// номер вплотную за подписью читается как та же колонка: канон секции колоночный, и
+// следующий элемент колонки несёт её номер.
+function sameCell(blocks: Block[], j: number, i: number): boolean {
+  const column = blocks[j]!.settings?.column
+  for (let k = j + 1; k <= i; k++) {
+    const own = blocks[k]!.settings?.column
+    if (own !== undefined && own !== column) return false
+  }
+  return true
 }
 
 // carryLayout переносит бит ряда со старого блока на сконвертированный. Проверка
@@ -511,19 +524,9 @@ function optionWithWidth(o: Option, width: number | undefined): Option {
   return { ...o, columnWidth: width }
 }
 
-// rowCellsAt — КОЛОНКИ ряда, в котором стоит блок, списком id участников. Сперва ряды
-// ВНУТРИ вопроса, потом ряды вопросов: порядок безопасен, потому что группа с
-// внутренним рядом занимает всю ширину и в кросс-групповой ряд не встаёт. Ряд из
-// одной колонки — не ряд: делить там нечего.
+// rowCellsAt — КОЛОНКИ ряда, в котором стоит группа блока, списком id участников. Ряд
+// из одной колонки — не ряд: делить там нечего.
 function rowCellsAt(blocks: Block[], anchorId: string): string[][] | null {
-  for (const g of groupBlocks(blocks)) {
-    if (!g.blocks.some((b) => b.id === anchorId)) continue
-    for (const row of packGroupRows(g.blocks)) {
-      if (row.length > 1 && row.some((cell) => cell.some((b) => b.id === anchorId))) {
-        return row.map((cell) => cell.map((b) => b.id))
-      }
-    }
-  }
   const groups = rowGroups(blocks)
   const owner = groups.find((g) => g.blocks.some((b) => b.id === anchorId))
   if (!owner) return null
@@ -551,9 +554,11 @@ function emitRows(blocks: Block[], rows: RowPlan[]): Block[] {
   for (const row of rows) {
     const section = row.length > 1
     row.forEach((cell, ci) => {
+      // Номер — ВСЕМ блокам единицы: остаток вопроса, из которого ушла строка, может
+      // распасться на отдельные элементы (подпись и пояснение без поля), и пояснение без
+      // номера закрыло бы секцию. У строк настоящего вопроса лишний номер снимает уборка.
       for (const g of cell) {
-        out.push(withColumn(g.blocks[0]!, section ? ci + 1 : undefined))
-        out.push(...g.blocks.slice(1))
+        for (const b of g.blocks) out.push(withColumn(b, section ? ci + 1 : undefined))
       }
     })
   }
@@ -564,6 +569,49 @@ function emitRows(blocks: Block[], rows: RowPlan[]): Block[] {
 // массивов, а не те же ссылки, что держит раскладчик.
 function planRows(blocks: Block[]): RowPlan[] {
   return packRows(rowGroups(blocks)).map((row) => row.map((cell) => cell.slice()))
+}
+
+// rowUnit — ЕДИНИЦА, которую команда ряда ставит в колонку, и чем она была в документе.
+// Вопрос целиком (id группы) и строка одиночной группы едут своей группой. Любая строка
+// СОБРАННОГО вопроса, кроме подписи (поле, пояснение, картинка), уходит из него (ADR §10,
+// 2026-09-14): единица — она одна, а на месте вопроса остаётся `rest` — прочие его строки.
+// Id остатка — прежний id группы: адрес ряда, названный этим вопросом, остаётся валиден.
+// Id ушедшей строки — id её блока, с id групп он не совпадает. Подпись — ручка вопроса и
+// отдельно в ряд не встаёт — null.
+type RowGroup = { id: string; blocks: Block[] }
+function rowUnit(
+  groups: RowGroup[],
+  activeId: string,
+): { active: RowGroup; source: string; rest: RowGroup | null } | null {
+  const whole = groups.find((g) => g.id === activeId)
+  if (whole) return { active: whole, source: whole.id, rest: null }
+  const group = groups.find((g) => g.blocks.some((b) => b.id === activeId))
+  if (!group) return null
+  if (group.blocks.length === 1) return { active: group, source: group.id, rest: null }
+  const self = group.blocks.find((b) => b.id === activeId)!
+  if (self === group.blocks[0]) return null
+  return {
+    active: { id: self.id, blocks: [self] },
+    source: group.id,
+    rest: { id: group.id, blocks: group.blocks.filter((b) => b !== self) },
+  }
+}
+
+// sameLayout — та же раскладка: порядок, группы, колонки и доли. Команды ряда меняют только
+// это, поэтому совпадение значит no-op.
+function sameLayout(a: Block[], b: Block[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((x, i) => {
+      const y = b[i]!
+      return (
+        x.id === y.id &&
+        x.groupId === y.groupId &&
+        x.settings?.column === y.settings?.column &&
+        x.settings?.columnWidth === y.settings?.columnWidth
+      )
+    })
+  )
 }
 
 // ТЕ ЖЕ ДВА ПОМОЩНИКА ДЛЯ ВАРИАНТОВ. Разница с блочными ровно одна: у варианта нет
@@ -618,8 +666,8 @@ function rowGroups(blocks: Block[]): { id: string; blocks: Block[] }[] {
 // участников. Ключ — id блока, а не groupId: groupId выводится regroup и может
 // смениться от чужой правки, id блока стабилен (на него же ссылаются answers).
 //
-// Обходит оба уровня (§11.5, §6.2): секции из групп и ряды «подпись | поле» внутри
-// группы. Отсюда следуют ОБА правила уборки, и своего у стора нет ни одного:
+// Обходит секции из групп (§11.5). Отсюда следуют ОБА правила уборки, и своего у стора
+// нет ни одного:
 //
 //   • «бит инертен» = элемента нет в карте вовсе (раскладчик бит не применил);
 //   • «секция сменилась» = от прежней компании не осталось НИКОГО.
@@ -643,12 +691,6 @@ function sectionMates(blocks: Block[]): Map<string, Set<string>> {
     if (row.length < 2) continue // не секция — полная ширина
     add(row.flat().map((g) => g.blocks))
   }
-  for (const g of groups) {
-    for (const row of packGroupRows(g.blocks)) {
-      if (row.length < 2) continue
-      add(row.flat().map((b) => [b]))
-    }
-  }
   return mates
 }
 
@@ -671,58 +713,33 @@ function optionPartners(options: Option[]): Map<string, string> {
   return m
 }
 
-// reanchorRowBits — бит, который БЫЛ кросс-групповым, остаётся кросс-групповым, даже
-// если правка увела его блок с головы группы (v4, §6.3: смысл ключа задаёт место).
+// reanchorRowBits — ключ колонки голого поля ПЕРЕЕЗЖАЕТ на подпись, которую ему только что
+// дали (Mod+Alt+T, addCaptionFor): носитель ключа — голова группы, и после правки ею
+// становится подпись. Зовётся ДО regroup: подпись без номера над полем с номером — разные
+// ячейки (sameCell), и вопрос не собрался бы, а подпись встала бы колонкой слева от
+// собственного поля.
 //
-// Случай, ради которого это существует: голое поле стоит в ряду со своим соседом, и
-// автор даёт ему заголовок (Mod+Alt+T). Подпись становится головой группы, поле —
-// вторым блоком, и тот же ключ на нём начинает значить «встань справа от своей
-// подписи». Без пере-якорения вопрос молча выпрыгнул бы из ряда и перестроился
-// внутрь себя — правка заголовка переставила бы форму.
-//
-// Обратный случай (бит был внутригрупповым, блок стал головой — например, подпись
-// удалили) специально НЕ переносится: партнёр, ради которого бит ставили, исчез, и
-// дальше его судьбу решает обычная проверка инертности/смены соседа.
-//
-// **Переезжает бит только внутри СВОЕГО вопроса.** Условие «блок был головой, а стал не
-// головой» выполняется ещё в одном случае, для которого правило не писалось: блок
-// вертикальным дропом уехал ВНУТРЬ чужого вопроса (§4.1, дроп туда разрешён с фазы 15).
-// Тогда бит доставался голове чужой группы, и та «вставала справа от предыдущей» —
-// вертикальный дроп РОЖДАЛ ряд, которого никто не просил, вместо того чтобы бит снять
-// (§13, «обычный вертикальный дроп бит снимает»). Отличаются случаи головой: у
-// `Mod+Alt+T`/makeQuestion
-// подпись СОЗДАЁТСЯ, её id в прежнем документе нет; у переезда в чужой вопрос голова —
-// давно живущий блок другой группы. Бит там не переезжает и не остаётся: он умирает
-// вместе с рядом, из которого блок унесли.
+// Переезжает только на НОВУЮ подпись — её id в прежнем документе нет. Давно живущая
+// подпись над полем из ряда — чужой блок в другой ячейке, и поле остаётся отдельным
+// элементом (ADR §10, 2026-09-14).
 function reanchorRowBits(blocks: Block[], prev?: Block[]): Block[] {
   if (!prev) return blocks
-  const wasHead = new Set(groupBlocks(prev).map((g) => g.blocks[0]!.id))
-  const wasGroup = new Map(prev.map((b) => [b.id, b.groupId]))
-  // носитель → голова, на которую переезжает ключ, и с каким номером колонки
-  const move = new Map<string, { head: string; column: number }>()
-  const drop = new Set<string>() // носитель, чей ключ умирает: вопрос теперь чужой
-  for (const g of groupBlocks(blocks)) {
-    const head = g.blocks[0]!
-    for (const b of g.blocks.slice(1)) {
-      const column = b.settings?.column
-      if (column === undefined || !wasHead.has(b.id)) continue
-      const headWas = wasGroup.get(head.id)
-      if (headWas === undefined || headWas === wasGroup.get(b.id)) {
-        move.set(b.id, { head: head.id, column })
-      } else drop.add(b.id)
-    }
+  const known = new Set(prev.map((b) => b.id))
+  let next: Block[] | null = null
+  for (let i = 0; i < blocks.length; i++) {
+    const field = blocks[i]!
+    const column = field.settings?.column
+    if (column === undefined || !isAnswerableType(field.type) || !known.has(field.id)) continue
+    let j = i - 1
+    while (j >= 0 && (blocks[j]!.type === 'text' || blocks[j]!.type === 'image')) j--
+    const caption = blocks[j]
+    if (!caption || !isCaptionType(caption.type) || known.has(caption.id)) continue
+    if (caption.settings?.column !== undefined) continue
+    next ??= blocks.slice()
+    next[j] = withColumn(caption, column)
+    next[i] = withoutColumn(field)
   }
-  if (move.size === 0 && drop.size === 0) return blocks
-  const heads = new Map([...move.values()].map((m) => [m.head, m.column]))
-  return blocks.map((b) => {
-    if (move.has(b.id) || drop.has(b.id)) return withoutColumn(b)
-    // У головы ключ уже мог быть свой — тогда переезжающий просто пропадает.
-    const column = heads.get(b.id)
-    if (column !== undefined && b.settings?.column === undefined) {
-      return { ...b, settings: { ...b.settings, column } }
-    }
-    return b
-  })
+  return next ?? blocks
 }
 
 // normalizeSections приводит документ к КАНОНУ секции (спека §11.4). Две правки, обе
@@ -789,7 +806,7 @@ function normalizeSections(blocks: Block[]): Block[] {
 // (спека §11.5) — и у блоков, и у вариантов. Снимаются два вида:
 //
 //  1. ИНЕРТНЫЙ — раскладчик бит не применил: секции нет (одинокий 'left', 'right' без
-//     кого забрать), вторая колонка пуста, пара внутри вопроса не та. Такой флаг
+//     кого забрать), вторая колонка пуста, ключ стоит не на голове группы. Такой флаг
 //     легален в контракте (кросс-блочное условие намеренно не валидируется — иначе
 //     undo и промежуточные состояния драга ловили бы 422), но в сторе его чистят,
 //     чтобы он не воскрес: иначе вставка вопроса выше молча затянула бы блок в чужую
@@ -805,7 +822,7 @@ function normalizeSections(blocks: Block[]): Block[] {
 //     перенос из одной секции в другую был бы no-op'ом.
 //
 // Оба вида спрашиваются у ТОГО ЖЕ раскладчика, что рисует секции (sectionMates поверх
-// packRows/packGroupRows, отдельно packOptionRows): своё правило здесь разъехалось бы
+// packRows, отдельно packOptionRows): своё правило здесь разъехалось бы
 // с рендером — это и был дефект «помечен half — нарисован full».
 //
 // После уборки документ приводится к КАНОНУ (normalizeSections): левая колонка помечена
@@ -846,9 +863,7 @@ function normalizeThankYou(blocks: Block[]): Block[] {
 // доля у её первого элемента, и перестановка внутри стопки (Alt+Shift+↑↓) иначе
 // роняла бы ряд в равные доли.
 //
-// Три слоя обходятся по отдельности и пересечься не могут: голова группы выражает
-// долю внутреннего ряда только у группы с внутренним рядом, а такая группа занимает
-// всю ширину и в кросс-групповой ряд не встаёт (groupCanShareRow).
+// Два слоя обходятся по отдельности: ряды вопросов и ряды вариантов внутри блока.
 function normalizeWidths(blocks: Block[]): Block[] {
   const width = new Map<string, number>() // id блока → доля его колонки
   const groups = rowGroups(blocks)
@@ -858,15 +873,6 @@ function normalizeWidths(blocks: Block[]): Block[] {
     row.forEach((cell, i) => {
       for (const g of cell) width.set(g.blocks[0]!.id, widths[i]!)
     })
-  }
-  for (const g of groupBlocks(blocks)) {
-    for (const row of packGroupRows(g.blocks)) {
-      const widths = blockRowWidths(row)
-      if (widths === null) continue
-      row.forEach((cell, i) => {
-        for (const b of cell) width.set(b.id, widths[i]!)
-      })
-    }
   }
   return blocks.map((b) => {
     const next = withWidth(b, width.get(b.id))
@@ -887,12 +893,18 @@ function normalizeWidths(blocks: Block[]): Block[] {
   })
 }
 
-function normalizeColumns(input: Block[], prev?: Block[], placed?: string): Block[] {
-  const blocks = reanchorRowBits(input, prev)
+function normalizeColumns(blocks: Block[], prev?: Block[], placed?: string): Block[] {
   const clear = new Set<string>() // id блоков, с которых снимаем бит
   const now = sectionMates(blocks)
   for (const b of blocks) {
     if (b.settings?.column !== undefined && !now.has(b.id)) clear.add(b.id) // (1) инертный
+  }
+  // (1) инертный и на НЕ ГОЛОВЕ группы: строка вопроса едет с подписью, и номер у неё
+  // может быть только равным (sameCell) — снимается без потерь.
+  for (const g of groupBlocks(blocks)) {
+    for (const b of g.blocks.slice(1)) {
+      if (b.settings?.column !== undefined) clear.add(b.id)
+    }
   }
   if (prev) {
     const was = sectionMates(prev)
@@ -944,6 +956,21 @@ function normalizeColumns(input: Block[], prev?: Block[], placed?: string): Bloc
   return normalizeWidths(normalizeOptionSections(normalizeSections(cleaned)))
 }
 
+// settleLayout — группы и ключи колонок до неподвижной точки. Они зависят друг от друга
+// (вопрос живёт в одной ячейке, sameCell): уборка снимает ключ у поля, и оно входит в
+// вопрос над собой. Ключ колонки на новую подпись переезжает ДО regroup
+// (reanchorRowBits): иначе подпись оказалась бы в другой ячейке, чем её поле. Потолок
+// проходов — страховка от зацикливания.
+function settleLayout(input: Block[], prev?: Block[], placed?: string): Block[] {
+  let blocks = regroup(reanchorRowBits(input, prev))
+  for (let pass = 0; pass < 3; pass++) {
+    const cleaned = normalizeColumns(blocks, prev, placed)
+    blocks = regroup(cleaned)
+    if (blocks === cleaned) break
+  }
+  return blocks
+}
+
 // Канон КОЛОНОК У ВАРИАНТОВ — то же, что normalizeSections у блоков, и по тому же
 // доводу: номер обязан называть ту колонку, в которую элемент положил раскладчик.
 // Отсюда же берутся оба прежних правила уборки — ряд из одной колонки это полная
@@ -977,29 +1004,6 @@ function normalizeOptionSections(blocks: Block[]): Block[] {
     }
   })
   return touched ? next : blocks
-}
-
-// На втором уровне (§6.4) стопки не бывает по построению: пара внутри вопроса — это
-// «подпись + поле ответа», а отвечаемый блок в группе не больше одного. Поэтому
-// вопрос прежний: свободна ли ячейка ряда, в котором стоит БЛОК id.
-function innerRowHasFreeCell(blocks: Block[], id: string): boolean {
-  const group = groupBlocks(blocks).find((g) => g.blocks.some((b) => b.id === id))
-  const row =
-    group &&
-    packGroupRows(group.blocks).find((r) => r.some((cell) => cell.some((b) => b.id === id)))
-  return row?.length === 1
-}
-
-// rowBitOwner — какой бит двигает строка id: свой (внутригрупповой, если строка не
-// первая в группе) или группы (кросс-групповой, он на первом блоке). Одно правило на
-// клавиатуру, жест и уборку — уровень задаёт МЕСТО блока в группе (§6.3).
-function rowBitOwner(blocks: Block[], id: string): Block | null {
-  const group = groupBlocks(blocks).find((g) => g.blocks.some((b) => b.id === id))
-  if (!group) return null
-  const self = group.blocks.find((b) => b.id === id)!
-  return self.id !== group.blocks[0]!.id && self.settings?.column !== undefined
-    ? self
-    : group.blocks[0]!
 }
 
 // groupAnswerable — отвечаемый блок группы gid (носитель бита ряда) или null.
@@ -1176,18 +1180,16 @@ export function planBlockDrop(
   // и лишним PATCH: ровно то, что запрещено для «двинуть вверх» на первой строке.
   const to = afterId === null ? canvasFloor(next) : next.findIndex((b) => b.id === afterId) + 1
   if (to === 0 && afterId !== null) return null
-  next.splice(to, 0, raw!)
+  // Прогноз — С НАЗВАННЫМ номером: в какой ячейке строка окажется, решает и то, войдёт ли
+  // она в вопрос над собой (regroup, sameCell).
+  next.splice(to, 0, withColumn(raw!, column))
   const predicted = regroup(next)
   const gid = predicted.find((b) => b.id === activeId)!.groupId
   const members = predicted.filter((b) => b.groupId === gid)
-  // НОМЕР КОЛОНКИ ЗНАЧИМ ТОЛЬКО НА ГОЛОВЕ ГРУППЫ (§13: у остальных блоков тот же ключ
-  // значит ряд ВНУТРИ вопроса). Кем блок станет, решает regroup, поэтому спрашиваем его,
-  // а не тип блока: строка, приземлившаяся в чужой вопрос, приезжает в колонку БЕЗ
-  // ключа — колонку держит голова её новой группы, и она уже в ней стоит.
-  //
-  // Иначе один дроп разваливал секцию целиком: ключ на второй строке собирал вопросу
-  // внутренний ряд «подпись | поле», такая группа занимает всю ширину (`groupCanShareRow`),
-  // ряд перестаёт складываться — и ключи всех соседей гаснут как инертные.
+  // НОМЕР КОЛОНКИ ЗНАЧИМ ТОЛЬКО НА ГОЛОВЕ ГРУППЫ (§13): остальные строки едут с ней. Кем
+  // блок станет, решает regroup, поэтому спрашиваем его, а не тип блока: строка,
+  // приземлившаяся в чужой вопрос, приезжает в колонку БЕЗ ключа — колонку держит голова
+  // её новой группы, и она уже в ней стоит.
   const active = withColumn(raw!, members[0]!.id === activeId ? column : undefined)
   // «Туда, где стоял» — no-op, только если и бит не изменился: снятый бит и есть та
   // правка, ради которой автор тянул элемент из колонки вниз.
@@ -1202,20 +1204,26 @@ export function planBlockDrop(
 // исходов, а координата:
 //
 //   kind 'solo'  — полная ширина, встать в ряд не с кем (первый вопрос полотна либо
-//                  предыдущий занимает всю ширину сам, §6.5) → молчат оба шага;
+//                  предыдущий ряд не делит его тип — разрыв страницы) → молчат оба шага;
 //   kind 'enter' — полная ширина, есть подходящий предыдущий → шаг ставит в ряд с ним,
 //                  и клавиша выбирает край (вправо — последней колонкой, влево — первой);
 //   kind 'in'    — элемент в секции: col — номер его колонки (с единицы), cols — сколько
-//                  колонок в ряду, alone — один ли он в своей колонке.
+//                  колонок в ряду, alone — один ли он в своей колонке;
+//   kind 'leave' — строка СОБРАННОГО вопроса, кроме подписи: шаг выводит её из вопроса новой
+//                  колонкой рядом с ним (зеркало жеста, ADR §10, 2026-09-14); room —
+//                  есть ли в ряду вопроса место под ещё одну колонку.
 //
 // alone нужен обоим шагам, и по разным причинам: уходя из колонки-одиночки, элемент её
 // закрывает — влево это законный переезд (колонок станет меньше), а вправо на последней
 // колонке это no-op, потому что новая колонка открывалась бы взамен умирающей.
 //
-// Спрашивается у ПЕРВОЙ строки группы: у остальных ось своя, короче (ряд внутри вопроса
-// — направленная пара «подпись | поле», §6.6), и решает её rowBitOwner.
+// Ось 'solo'/'enter'/'in' — у ПЕРВОЙ строки группы: она ведёт вопрос целиком. Остальные
+// строки вопроса шагом из него уходят ('leave').
 export type RowPosition =
-  { kind: 'solo' } | { kind: 'enter' } | { kind: 'in'; col: number; cols: number; alone: boolean }
+  | { kind: 'solo' }
+  | { kind: 'enter' }
+  | { kind: 'in'; col: number; cols: number; alone: boolean }
+  | { kind: 'leave'; room: boolean }
 
 export function rowPosition(blocks: Block[], id: string): RowPosition {
   const groups = rowGroups(blocks)
@@ -1223,6 +1231,9 @@ export function rowPosition(blocks: Block[], id: string): RowPosition {
   if (gi < 0) return { kind: 'solo' }
   const group = groups[gi]!
   const row = packRows(groups).find((r) => r.some((c) => c.some((g) => g.id === group.id)))
+  if (group.blocks[0]!.id !== id) {
+    return { kind: 'leave', room: (row?.length ?? 1) < MAX_COLUMNS }
+  }
   if (row && row.length > 1) {
     const col = row.findIndex((c) => c.some((g) => g.id === group.id))
     return { kind: 'in', col: col + 1, cols: row.length, alone: row[col]!.length === 1 }
@@ -1448,7 +1459,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
       return {
         ...patch,
         blocks: normalizeThankYou(
-          normalizeColumns(regroup(pinFormTitle(patch.blocks)), get().blocks, placed),
+          settleLayout(pinFormTitle(patch.blocks), get().blocks, placed),
         ),
       }
     }
@@ -1481,10 +1492,10 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       hydrate: (schema) =>
         set({
-          // normalizeColumns и здесь: контракт допускает инертный флаг (и правильно
+          // settleLayout и здесь: контракт допускает инертный флаг (и правильно
           // делает), но редактор обязан начинать с документа, где флаг = реальный ряд
           // (dirty не ставится, на сервер уедет со следующей правкой).
-          blocks: normalizeThankYou(normalizeColumns(regroup(schema.blocks.map(cloneBlock)))),
+          blocks: normalizeThankYou(settleLayout(schema.blocks.map(cloneBlock))),
           submitLabel: schema.submitLabel ?? '',
           thankYouText: schema.thankYouText ?? '',
           redirectUrl: schema.redirectUrl ?? '',
@@ -1878,50 +1889,55 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         return focus
       },
 
-      placeInRow: (activeGroupId, targetGroupId, col, insert) =>
+      placeInRow: (activeId, targetGroupId, col, insert) =>
         commit(null, (s) => {
-          if (activeGroupId === targetGroupId) return null
           const groups = rowGroups(s.blocks)
-          const activeGroup = groups.find((g) => g.id === activeGroupId)
+          const unit = rowUnit(groups, activeId)
           const targetGroup = groups.find((g) => g.id === targetGroupId)
-          if (!activeGroup || !targetGroup) return null
-          // Может ли группа стоять в ячейке ряда — один предикат на раскладчик, команду
-          // и приглашение жеста (groupCanPair): группа с внутренним рядом занимает всю
-          // ширину (§6.5), а заголовок формы и разрыв страницы ряд не делят по типу
-          // (ADR §10). Полотно их в списке групп и не показывает, но команда обязана
-          // быть честной сама по себе: такой бит — документ, который отвергнет валидатор.
-          if (!groupCanPair(activeGroup.blocks)) return null
+          if (!unit || !targetGroup || unit.active.id === targetGroupId) return null
+          // Может ли единица стоять в ячейке ряда — один предикат на раскладчик, команду
+          // и приглашение жеста (groupCanPair): заголовок формы и разрыв страницы ряд не
+          // делят по типу (ADR §10). Полотно их в списке групп и не показывает, но команда
+          // обязана быть честной сама по себе: такой бит — документ, который отвергнет
+          // валидатор.
+          if (!groupCanPair(unit.active.blocks)) return null
           if (!groupCanPair(targetGroup.blocks)) return null
 
           const rows = planRows(s.blocks)
+          // Активного вырезаем ОТОВСЮДУ до вставки: он мог стоять в этом же ряду
+          // (перенос между колонками — обычный жест) или в чужой секции, которая от его
+          // ухода потеряет колонку. Оба случая разрешает одна уборка (tidyRows) плюс
+          // перенумерация в emitRows. Поле, уходящее из вопроса, оставляет на его месте
+          // остаток — подпись и контент.
+          for (const row of rows) {
+            for (const cell of row) {
+              const k = cell.findIndex((g) => g.id === unit.source)
+              if (k < 0) continue
+              if (unit.rest) cell.splice(k, 1, unit.rest)
+              else cell.splice(k, 1)
+            }
+          }
           const ti = rows.findIndex((r) =>
             r.some((cell) => cell.some((g) => g.id === targetGroupId)),
           )
           if (ti < 0) return null
-          // Активного вырезаем ОТОВСЮДУ до вставки: он мог стоять в этом же ряду
-          // (перенос между колонками — обычный жест) или в чужой секции, которая от его
-          // ухода потеряет колонку. Оба случая разрешает одна уборка (tidyRows) плюс
-          // перенумерация в emitRows — отдельного правила «погаси за собой» больше нет.
-          for (const row of rows) {
-            for (const cell of row) {
-              const k = cell.findIndex((g) => g.id === activeGroupId)
-              if (k >= 0) cell.splice(k, 1)
-            }
-          }
           const target = rows[ti]!.filter((cell) => cell.length > 0)
           // Стопка просится в КОЛОНКУ, а у полноширинного ряда колонок нет: такой дроп
           // ничего не значит и командой не выдаётся (зона его и не показывает).
           if (!insert && target.length < 2) return null
           if (insert && target.length + 1 > MAX_COLUMNS) return null
           const at = Math.min(Math.max(col, 1), insert ? target.length + 1 : target.length)
-          if (insert) target.splice(at - 1, 0, [activeGroup])
-          else target[at - 1]!.push(activeGroup)
+          if (insert) target.splice(at - 1, 0, [unit.active])
+          else target[at - 1]!.push(unit.active)
           rows[ti] = target
-          return structural(
+          const moved = structural(
             { blocks: emitRows(s.blocks, tidyRows(rows)) },
             // Смена секции здесь — по прямой просьбе, а не побочный эффект переноса.
-            activeGroup.blocks[0]!.id,
-          )
+            unit.active.blocks[0]!.id,
+          )!
+          // Строка, брошенная в стопку своей колонки прямо за своим вопросом, в него же и
+          // возвращается: раскладка та же, и шаг истории с dirty тратить не на что.
+          return sameLayout(moved.blocks, s.blocks) ? null : moved
         }),
 
       setRowWidths: (anchorBlockId, widths) =>
@@ -1966,18 +1982,14 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
 
       takeOwnRow: (id) =>
         commit(null, (s) => {
-          // Какой бит снимать, решает место строки в группе (rowBitOwner): своя строка
-          // выходит из ряда ВНУТРИ вопроса, голова — из ряда вопросов.
-          const owner = rowBitOwner(s.blocks, id)
-          if (!owner || owner.settings?.column === undefined) return null
+          // Бит ряда носит голова группы: из ряда уходит вопрос целиком, с какой бы его
+          // строки ни пришла команда.
+          const groups = rowGroups(s.blocks)
+          const group = groups.find((g) => g.blocks.some((b) => b.id === id))
+          const owner = group?.blocks[0]
+          if (!group || !owner || owner.settings?.column === undefined) return null
           const strip = (ids: Set<string>) =>
             structural({ blocks: s.blocks.map((b) => (ids.has(b.id) ? withoutColumn(b) : b)) })
-          const groups = rowGroups(s.blocks)
-          const gi = groups.findIndex((g) => g.blocks[0]!.id === owner.id)
-          // Носитель не голова группы → бит внутригрупповой: поле выходит из ряда со
-          // своей подписью, порядок блоков не меняется (§6.6).
-          if (gi < 0) return strip(new Set([owner.id]))
-          const group = groups[gi]!
           const rows = planRows(s.blocks)
           const ri = rows.findIndex((r) => r.some((c) => c.some((g) => g.id === group.id)))
           // Ключ есть, а секции нет — он инертен: просто снять (уборка сделала бы это и
@@ -2004,6 +2016,15 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         if (gi < 0) return
         const gid = groups[gi]!.id
         if (pos.kind === 'solo') return
+        // Строка собранного вопроса, кроме подписи: шаг выводит её из вопроса колонкой рядом
+        // с ним — клавиатурное зеркало жеста (placeInRow со строкой). Вправо — за колонкой
+        // вопроса, влево — перед ней.
+        if (pos.kind === 'leave') {
+          if (!pos.room) return
+          const head = rowPosition(s.blocks, groups[gi]!.blocks[0]!.id)
+          const col = head.kind === 'in' ? head.col : 1
+          return s.placeInRow(id, gid, dir === 'right' ? col + 1 : col, true)
+        }
         // Полная ширина: ВХОД в ряд с предыдущим, и клавиша выбирает край — вправо в
         // крайнюю правую колонку, влево в первую (§11.6). Цель одна и та же, предыдущая
         // группа, но команда разная: она во всю ширину — секция этим шагом СОЗДАЁТСЯ;
@@ -2048,43 +2069,6 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         if (col === 1 || (alone && cols === 2)) return s.takeOwnRow(id)
         step(col - 1)
       },
-
-      placeBlockInRow: (activeId, targetId) =>
-        commit(null, (s) => {
-          if (activeId === targetId) return null
-          const groups = groupBlocks(s.blocks)
-          const group = groups.find((g) => g.blocks.some((b) => b.id === targetId))
-          const active = group?.blocks.find((b) => b.id === activeId)
-          const target = group?.blocks.find((b) => b.id === targetId)
-          // Ряд внутри вопроса — только пара «подпись + поле ответа» (§6.5), и оба
-          // обязаны быть из ОДНОЙ группы: между вопросами работает placeInRow.
-          // Whitelist типов не проверяется — отменён (ADR §10).
-          if (!group || !active || !target) return null
-          if (!isCaptionType(target.type) || !isAnswerableType(active.type)) return null
-          if (!innerRowHasFreeCell(s.blocks, targetId)) return null
-          // Как и у групп: поле переезжает ВПЛОТНУЮ за подпись (контент между ними
-          // разорвал бы пару) и получает бит. Порядок блоков документа при этом
-          // меняется — это перенос, а не пометка.
-          const rest = group.blocks.filter((b) => b.id !== activeId)
-          const at = rest.findIndex((b) => b.id === targetId) + 1
-          const reordered: Block[] = [
-            ...rest.slice(0, at),
-            // Вторая колонка: пара внутри вопроса направленная и всегда из двоих —
-            // слева подпись, справа поле (§6.5), третьей колонке там взяться неоткуда.
-            { ...active, settings: { ...active.settings, column: 2 } },
-            ...rest.slice(at),
-          ]
-          const gi = groups.indexOf(group)
-          const moved = structural(
-            { blocks: groups.flatMap((g, i) => (i === gi ? reordered : g.blocks)) },
-            // Смена соседа здесь — по прямой просьбе, а не побочный эффект переноса.
-            activeId,
-          )!
-          // Ключ не приземлился — normalizeColumns счёл его инертным; «перенос вплотную
-          // за подпись» без ряда не то, о чём просили.
-          const landed = moved.blocks.find((b) => b.id === activeId)
-          return landed?.settings?.column !== undefined ? moved : null
-        }),
 
       placeOptionInRow: (blockId, activeOptionId, targetOptionId, col, insert) =>
         commit(null, (s) =>

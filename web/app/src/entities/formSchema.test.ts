@@ -165,7 +165,9 @@ describe('formSchemaSchema — валидные', () => {
         { id: 'f2', groupId: 'g2', type: 'short_text', settings: {} },
       ],
     },
-    'column right у label внутри группы — ряд «подпись | поле»': {
+    // Бит на поле внутри группы валиден поблочно: так лежат документы, собранные до ADR §10
+    // 2026-09-14, — редактор читает их секцией.
+    'column у поля внутри группы — валиден поблочно': {
       blocks: [
         { id: 't', groupId: 'g1', type: 'label', text: [{ t: 'Индекс' }], settings: {} },
         { id: 'f', groupId: 'g1', type: 'short_text', settings: { column: 2 } },

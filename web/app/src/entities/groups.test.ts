@@ -1,11 +1,9 @@
 import { describe, expect, it } from 'vitest'
 import {
-  blockRowWidths,
   cellVars,
   groupBlocks,
   groupRowWidths,
   optionRowWidths,
-  packGroupRows,
   packOptionRows,
   packRows,
 } from '@fields/groups'
@@ -98,8 +96,8 @@ describe('packRows', () => {
     expect(rows([heading('h'), field('a', true)])).toEqual([['h', 'a']])
   })
 
-  // v4 (§6.3): носитель кросс-группового бита — ПЕРВЫЙ блок группы. У мульти-группы
-  // это подпись; на отвечаемом блоке тот же ключ значит уже другое (тест ниже).
+  // Носитель бита — ПЕРВЫЙ блок группы. У мульти-группы это подпись; ключ на отвечаемом
+  // блоке той же группы инертен (тест ниже).
   it('флаг у мульти-группы «подпись+поле» читается с подписи', () => {
     const blocks = [caption('t1', 'a'), field('a'), caption('t2', 'b', true), field('b')]
     expect(rows(blocks)).toEqual([['a', 'b']])
@@ -110,13 +108,10 @@ describe('packRows', () => {
     expect(rows(blocks)).toEqual([['a'], ['b']])
   })
 
-  // §6.5: группа с внутренним рядом занимает всю ширину и в кросс-групповой ряд не
-  // встаёт — иначе в одной строке оказались бы четыре ячейки.
-  it('группа с внутренним рядом не делит ряд с соседней', () => {
-    const inner = [caption('t2', 'b'), field('b', true)] // «подпись | поле» внутри вопроса
-    expect(rows([field('a'), ...inner.map((b) => ({ ...b }))])).toEqual([['a'], ['b']])
-    // и наоборот: с внутренним рядом слева ряд тоже не собирается
-    expect(rows([...inner, caption('t3', 'c', true), field('c')])).toEqual([['b'], ['c']])
+  // Ряда внутри вопроса нет (ADR §10, 2026-09-14): группа с ключом на поле — обычный
+  // участник ряда, решает ключ её подписи.
+  it('ключ на поле мульти-группы не мешает ей делить ряд с соседней', () => {
+    expect(rows([field('a'), caption('t2', 'b', true), field('b', true)])).toEqual([['a', 'b']])
   })
 
   it('порядок документа не меняется — конкатенация рядов = исходный список групп', () => {
@@ -128,8 +123,6 @@ describe('packRows', () => {
   })
 })
 
-// Первый проход раскладчика (§6.4): блоки ОДНОЙ группы в ряды. Правило v1 узкое
-// (§6.5) — в ряд встаёт только пара «подпись + поле».
 // ДВУХКОЛОНОЧНАЯ СЕКЦИЯ (спека §11, решение владельца 2026-07-29): у ключа три
 // состояния, в каждой колонке сколько угодно элементов, а элемент без ключа секцию
 // ЗАКРЫВАЕТ. Печатаем колонками, стопку внутри колонки — через «+».
@@ -175,36 +168,6 @@ describe('packRows — секция', () => {
         .flat(2)
         .map((g) => g.id),
     ).toEqual(['a', 'b', 'c', 'd', 'e', 'f'])
-  })
-})
-
-describe('packGroupRows', () => {
-  const inner = (blocks: Block[]): string[][] =>
-    packGroupRows(blocks).map((row) => row.map((cell) => cell.map((b) => b.id).join('+')))
-
-  it('подпись и короткое поле встают в один ряд', () => {
-    expect(inner([caption('t', 'g'), field('f', true)])).toEqual([['t', 'f']])
-  })
-
-  it('без флага у поля — каждый своей строкой', () => {
-    expect(inner([caption('t', 'g'), field('f')])).toEqual([['t'], ['f']])
-  })
-
-  it('контент между подписью и полем ряд разрывает: парой он не бывает', () => {
-    const text: Block = { id: 'd', groupId: 'g', type: 'text', text: textFromString('пояснение') }
-    expect(inner([caption('t', 'g'), text, field('f', true)])).toEqual([['t'], ['d'], ['f']])
-  })
-
-  it('whitelist не проверяется и здесь: длинный ответ встаёт рядом с подписью', () => {
-    expect(inner([caption('t', 'g'), field('f', true, 'long_text')])).toEqual([['t', 'f']])
-  })
-
-  it('пара направленная: поле слева, подпись справа рядом не встают', () => {
-    expect(inner([field('f'), caption('t', 'g', true)])).toEqual([['f'], ['t']])
-  })
-
-  it('бит первого блока (кросс-групповой носитель) внутренний ряд не собирает', () => {
-    expect(inner([caption('t', 'g', true), field('f')])).toEqual([['t'], ['f']])
   })
 })
 
@@ -272,14 +235,6 @@ describe('rowWidths — доли колонок', () => {
   it('доля читается у ПЕРВОГО элемента колонки, стопка её не меняет', () => {
     const blocks = [wide('a', 1, 70), wide('b', 2, 30), wide('c', 2, 55)]
     expect(widthsOf(blocks)).toEqual([[70, 30]])
-  })
-
-  it('внутренний ряд вопроса — тот же расчёт', () => {
-    const inner = packGroupRows([
-      { id: 't', groupId: 'g', type: 'title', text: textFromString('Q'), settings: { column: 1, columnWidth: 35 } },
-      { id: 'f', groupId: 'g', type: 'short_text', settings: { column: 2, columnWidth: 65 } },
-    ])
-    expect(inner.map((row) => blockRowWidths(row))).toEqual([[35, 65]])
   })
 
   it('ряд вариантов — тот же расчёт', () => {
