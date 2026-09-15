@@ -7,5 +7,5 @@ export const multiSelect: EditorKind = {
   defaults: { settings: { options: [] } },
   // Рядов у вариантов нет, как у выпадающего списка: у респондента они живут в списке
   // под полем, а не на полотне формы.
-  row: { surface: 'choice', optionRows: false, lineH: 'h-[var(--rf-control-h)]' },
+  row: { surface: 'choice', optionRows: false, optionLook: 'tag', lineH: 'h-[var(--rf-control-h)]' },
 }

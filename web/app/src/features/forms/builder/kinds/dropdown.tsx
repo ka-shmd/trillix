@@ -5,5 +5,5 @@ export const dropdown: EditorKind = {
   label: 'Выпадающий список',
   description: 'Выбор одного варианта из списка. Удобен, когда вариантов много.',
   defaults: { settings: { options: [] } },
-  row: { surface: 'choice', optionRows: false, lineH: 'h-[var(--rf-control-h)]' },
+  row: { surface: 'choice', optionRows: false, optionLook: 'key', lineH: 'h-[var(--rf-control-h)]' },
 }

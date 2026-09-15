@@ -28,7 +28,6 @@ import {
   isAnswerableType,
   MAX_COLUMNS,
   isCaptionType,
-  isSingleChoiceType,
   isContentType,
   plainText,
   supportsPlaceholder,
@@ -36,10 +35,11 @@ import {
 } from '@entities/formSchema'
 import { optionKey } from '@fields/answer'
 import { optionRowWidths, packOptionRows } from '@fields/groups'
+import { tagClass } from '@fields/tags'
 import { filterMenuItems, type MenuItem } from './blockTypes'
 import { ColumnResizer } from './ColumnResizer'
 import { type FormIdSource } from './mediaUpload'
-import { rowFacts, textIsBold } from './kinds/index'
+import { type OptionLook, rowFacts, textIsBold } from './kinds/index'
 import { FieldWrap, PLACEHOLDER_CLS } from './kinds/fieldWrap'
 import {
   canvasSorting,
@@ -1404,6 +1404,7 @@ function OptionsInline({
   // Умеет ли ЭТОТ список ряды вариантов — факт типа (kinds/<type>.tsx, row.optionRows).
   const choiceRow = rowFacts(block.type)
   const optionRows = choiceRow?.surface === 'choice' && choiceRow.optionRows
+  const look: OptionLook = choiceRow?.surface === 'choice' ? choiceRow.optionLook : 'key'
   // Контекст подсказок варианта (§7): Enter рождает вариант, а не блок, Alt+↑↓ двигает
   // вариант — поэтому у списка свои чипы, а не текстовые.
   const rowFocus = useRowFocus(block.id, 'option')
@@ -1767,8 +1768,8 @@ function OptionsInline({
               <GhostFrame>
                 <OptionGhost
                   label={draggedOption.label}
-                  multiple={!isSingleChoiceType(block.type)}
-                  badge={optionKey(index.get(draggedOption.id)!)}
+                  look={look}
+                  index={index.get(draggedOption.id)!}
                 />
               </GhostFrame>
             </SourceSlot>
@@ -1862,6 +1863,7 @@ function OptionsInline({
                         // документа не меняют, и A/B/C обязаны остаться теми же, что до
                         // переноса.
                         index={index.get(o.id)!}
+                        look={look}
                         dragging={optDrag !== null}
                         inputRef={(el) => {
                           optionRefs.current.set(o.id, el)
@@ -1891,10 +1893,10 @@ function OptionsInline({
           {showGhost && (
             <GhostOption
               ref={ghostRef}
-              multiple={!isSingleChoiceType(block.type)}
-              // Буква будущего варианта — следующая за последним (у списка «один из
-              // списка» глиф это бейдж, а не чекбокс). Пустой бейдж читался бы поломкой.
-              nextKey={optionKey(options.length)}
+              look={look}
+              // Позиция будущего варианта — следующая за последним: буква бейджа или цвет
+              // плашки у призрака те, что получит набранный в нём вариант.
+              index={options.length}
               onType={(text) => {
                 pendingFocus.current = addOption(block.id, text)
               }}
@@ -1929,18 +1931,17 @@ function OptionsInline({
 // текст никогда не хранит — иначе он был бы вариантом-невидимкой со своим состоянием.
 function GhostOption({
   ref,
-  multiple,
-  nextKey,
+  look,
+  index,
   onType,
   onAdd,
   onKeyDown,
   rowFocus,
 }: {
   ref: React.RefObject<HTMLInputElement | null>
-  // Тип списка решает, что стоит перед текстом: чекбокс или буквенный бейдж.
-  multiple: boolean
-  // Буква будущего варианта (null — их больше 26, бейджа не будет и у настоящего).
-  nextKey: string | null
+  // Вид вариантов типа и позиция будущего варианта — во что призрак одет (OptionShell).
+  look: OptionLook
+  index: number
   onType: (text: string) => void
   onAdd: () => void
   onKeyDown: (e: KeyboardEvent<HTMLInputElement>) => void
@@ -1972,15 +1973,10 @@ function GhostOption({
       onClick={onAdd}
       className="relative flex cursor-pointer items-center opacity-45 transition-opacity focus-within:opacity-100 not-focus-within:hover:opacity-70"
     >
-      <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
-        {/* Глиф будущего варианта — НАСТОЯЩИЙ, а не невидимый слот под него (решение
-            владельца 2026-08-16): строка «добавить» выглядит следующим вариантом
-            списка, и место под текст держит тем же классом, что у настоящего.
-            Декоративен (span, aria-hidden) — как и глифы настоящих вариантов: жест
-            принимает строка целиком, а имя ей даёт её инпут. */}
-        <span aria-hidden="true" className={multiple ? 'rf-mark rf-mark--check' : 'rf-option-key'}>
-          {multiple ? null : nextKey}
-        </span>
+      {/* Одет как НАСТОЯЩИЙ следующий вариант, а не невидимый слот под него (решение
+          владельца 2026-08-16): строка «добавить» выглядит следующим вариантом списка.
+          Глиф декоративен — жест принимает строка целиком, а имя ей даёт её инпут. */}
+      <OptionShell look={look} index={index}>
         <span className="rf-option-edit" data-value={placeholder}>
           <input
             ref={ref}
@@ -1996,7 +1992,7 @@ function GhostOption({
             className="bg-transparent outline-none placeholder:text-muted-foreground"
           />
         </span>
-      </span>
+      </OptionShell>
     </div>
   )
 }
@@ -2063,27 +2059,47 @@ function OptionActionMenu({
 // внутри инпут и `useSortable`, то есть вторая карточка с тем же id в том же контексте и
 // второй фокусируемый инпут в списке. Копия рисуется теми же классами rf-*, что оригинал,
 // — гост обязан выглядеть картой, а не эскизом.
-function OptionGhost({
-  label,
-  multiple,
-  badge,
-}: {
-  label: string
-  multiple: boolean
-  badge: string | null
-}) {
+function OptionGhost({ label, look, index }: { label: string; look: OptionLook; index: number }) {
   return (
-    <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
-      {multiple ? (
-        <span className="rf-mark rf-mark--check" aria-hidden="true" />
-      ) : (
-        badge && (
-          <span className="rf-option-key" aria-hidden="true">
-            {badge}
-          </span>
-        )
-      )}
+    <OptionShell look={look} index={index}>
       <span>{label || 'Вариант'}</span>
+    </OptionShell>
+  )
+}
+
+// OptionShell — во что одет вариант на полотне, по виду вариантов типа (row.optionLook
+// в kinds/<type>.tsx), ровно как у респондента: карточка с буквенным бейджем, голый
+// чекбокс или цветная плашка тегов. Одна точка на карточку варианта, призрак «Добавить
+// ответ» и гост жеста: разойдясь, они показывали бы три разных списка. Буква и цвет —
+// по позиции в ПОЛНОМ списке (у призрака — позиция будущего варианта). Глифы
+// декоративны: автор правит текст, а не отвечает.
+function OptionShell({
+  look,
+  index,
+  children,
+}: {
+  look: OptionLook
+  index: number
+  children: ReactNode
+}) {
+  if (look === 'tag') return <span className={tagClass(index)}>{children}</span>
+  if (look === 'check') {
+    return (
+      <span className="rf-option rf-option--check">
+        <span className="rf-mark rf-mark--check" aria-hidden="true" />
+        {children}
+      </span>
+    )
+  }
+  const key = optionKey(index)
+  return (
+    <span className="rf-option">
+      {key && (
+        <span className="rf-option-key" aria-hidden="true">
+          {key}
+        </span>
+      )}
+      {children}
     </span>
   )
 }
@@ -2098,6 +2114,7 @@ function OptionCard({
   block,
   option,
   index,
+  look,
   dragging,
   inputRef,
   onKeyDown,
@@ -2108,6 +2125,7 @@ function OptionCard({
   block: Block
   option: NonNullable<NonNullable<Block['settings']>['options']>[number]
   index: number
+  look: OptionLook
   // Идёт ли жест В ЭТОМ списке. Пока он идёт, наведение молчит у всех карточек, кроме
   // перетаскиваемой (§5 EDITOR.md): курсор с карточкой в руке проезжает по всему списку, и
   // кластеры значков зажигались бы у каждой, над которой он прошёл. Своей наведение
@@ -2143,8 +2161,6 @@ function OptionCard({
     animateLayoutChanges: noLayoutAnimation,
   })
   const placeholder = `Вариант ${index + 1}`
-  const key = optionKey(index)
-  const multiple = !isSingleChoiceType(block.type)
   return (
     // group/opt — именованная группа СВОЕЙ карточки (TD-31): безымянный group занят
     // всей строкой блока, и от него крестики расцветали у всех вариантов разом при
@@ -2267,20 +2283,8 @@ function OptionCard({
           }
         />
       </div>
-      <span className={`rf-option${multiple ? ' rf-option--check' : ''}`}>
-        {/* Что стоит перед текстом, решает тип — ровно как у респондента
-            (BlockField): «несколько из списка» — обычный чекбокс без карточки,
-            «один из списка» — карточка с буквенным бейджем. Здесь оба элемента
-            декоративны (span, aria-hidden): автор правит текст, а не отвечает. */}
-        {multiple ? (
-          <span className="rf-mark rf-mark--check" aria-hidden="true" />
-        ) : (
-          key && (
-            <span className="rf-option-key" aria-hidden="true">
-              {key}
-            </span>
-          )
-        )}
+      {/* Во что одет вариант, решает тип — ровно как у респондента (OptionShell). */}
+      <OptionShell look={look} index={index}>
         {/* data-value — копия текста, задающая ширину (см. .rf-option-edit
             в index.css). Пустой вариант меряется по плейсхолдеру, иначе
             карточка схлопнулась бы в точку. */}
@@ -2299,7 +2303,7 @@ function OptionCard({
             className="bg-transparent outline-none placeholder:text-muted-foreground"
           />
         </span>
-      </span>
+      </OptionShell>
     </div>
   )
 }

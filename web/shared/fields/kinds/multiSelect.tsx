@@ -1,13 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
 
 import { toggleMulti } from '../answer'
+import { tagClass } from '../tags'
 import { type Control } from './contract'
-
-// Число цветов плашек — классы rf-tag--c0…c7 в fields.css.
-const TAG_COLORS = 8
-
-// Цвет плашки — по позиции варианта в списке блока: один и тот же в поле и в списке.
-const tagClass = (index: number) => `rf-tag rf-tag--c${index % TAG_COLORS}`
 
 // Теги: несколько вариантов из выпадающего списка. Поле — тот же rf-input с шевроном,
 // выбранные варианты встают в него цветными плашками, ввод текста сужает список. Список

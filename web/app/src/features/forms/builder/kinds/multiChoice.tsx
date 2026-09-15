@@ -5,5 +5,5 @@ export const multiChoice: EditorKind = {
   label: 'Несколько из списка',
   description: 'Выбор нескольких вариантов из списка (флажки).',
   defaults: { settings: { options: [] } },
-  row: { surface: 'choice', optionRows: true, lineH: 'h-[var(--rf-control-h)]' },
+  row: { surface: 'choice', optionRows: true, optionLook: 'check', lineH: 'h-[var(--rf-control-h)]' },
 }

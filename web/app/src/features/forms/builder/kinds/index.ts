@@ -84,4 +84,4 @@ export const textIsBold = (t: BlockType): boolean => {
 // разошёлся бы с первым молча.
 export const orderedTypes: ReadonlyArray<BlockType> = BLOCK_TYPES
 
-export { type EditorKind, type RowFacts, type RowSurface } from './contract'
+export { type EditorKind, type OptionLook, type RowFacts, type RowSurface } from './contract'

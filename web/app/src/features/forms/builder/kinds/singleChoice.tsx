@@ -9,5 +9,5 @@ export const singleChoice: EditorKind = {
   // нет. Пустой вариант не сохраняется и не публикуется, зато каретке всегда есть куда
   // встать.
   defaults: { settings: { options: [] } },
-  row: { surface: 'choice', optionRows: true, lineH: 'h-[var(--rf-control-h)]' },
+  row: { surface: 'choice', optionRows: true, optionLook: 'key', lineH: 'h-[var(--rf-control-h)]' },
 }
