@@ -1,6 +1,6 @@
-import { useRef, useState, type ChangeEvent, type ReactNode } from 'react'
+import { useRef, useState, type ChangeEvent, type ComponentType, type ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ImagePlus, Trash2 } from 'lucide-react'
+import { ImagePlus, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { mediaSrc } from '@fields/media'
@@ -29,7 +29,9 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { humanError } from '../../shared/api/errors'
+import { FIELD_CONTOUR } from '../../shared/raisedField'
 
 // Окно настройки карточки ссылки: пять полей слева, живой предпросмотр справа.
 //
@@ -140,6 +142,7 @@ export function LinkPreviewDialog({
                 id="lp-site-name"
                 value={draft.siteName}
                 maxLength={MAX_LINK_PREVIEW_SITE_NAME_LEN}
+                className={FIELD_CONTOUR}
                 onChange={(e) => set({ siteName: e.target.value })}
               />
             </Field>
@@ -160,6 +163,7 @@ export function LinkPreviewDialog({
                 id="lp-title"
                 value={draft.title}
                 maxLength={MAX_LINK_PREVIEW_TITLE_LEN}
+                className={FIELD_CONTOUR}
                 onChange={(e) => set({ title: e.target.value })}
               />
             </Field>
@@ -169,6 +173,7 @@ export function LinkPreviewDialog({
                 id="lp-description"
                 value={draft.description}
                 maxLength={MAX_LINK_PREVIEW_DESCRIPTION_LEN}
+                className={FIELD_CONTOUR}
                 onChange={(e) => set({ description: e.target.value })}
               />
             </Field>
@@ -279,13 +284,12 @@ function ImageSlot({
         <div className={`group relative overflow-hidden rounded-md border ${className}`}>
           <img src={mediaSrc(imageKey)} alt="" className="size-full object-contain" />
           <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            <Button size="sm" variant="secondary" onClick={() => fileRef.current?.click()}>
-              Заменить
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => onChange('')}>
-              <Trash2 className="size-3.5" />
-              Убрать
-            </Button>
+            <SlotIconAction
+              icon={RefreshCw}
+              label="Заменить"
+              onClick={() => fileRef.current?.click()}
+            />
+            <SlotIconAction icon={Trash2} label="Убрать" onClick={() => onChange('')} />
           </div>
         </div>
       ) : (
@@ -301,5 +305,28 @@ function ImageSlot({
       )}
       {error && <p className="mt-1.5 text-sm text-destructive">{error}</p>}
     </div>
+  )
+}
+
+// SlotIconAction — действие слота значком. Подсказка обязательна, текст общий с
+// aria-label (DESIGN-SYSTEM). TooltipProvider даёт SidebarProvider выше по дереву.
+function SlotIconAction({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: ComponentType<{ className?: string }>
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button size="icon-sm" variant="secondary" aria-label={label} onClick={onClick}>
+          <Icon className="size-3.5" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }

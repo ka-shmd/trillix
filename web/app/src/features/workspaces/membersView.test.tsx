@@ -17,6 +17,7 @@ import { WorkspaceAddressProvider } from '../../shared/workspaceContext'
 import { planKeys } from '../plan/keys'
 import { MembersView } from './MembersView'
 import { workspaceKeys } from './keys'
+import { TooltipProvider } from '@/components/ui/tooltip'
 
 // Сторожа на то, что ломается МОЛЧА: экран продолжает рисоваться, а обещание
 // меняется. Два деструктивных действия строки, правило «плоскость вместо рамки» и
@@ -111,15 +112,19 @@ async function renderMembers(opts: {
 
   const rootRoute = createRootRoute({
     component: () => (
+      // TooltipProvider повторяет окружение приложения: в кабинете его даёт
+      // SidebarProvider выше по дереву. Без него значок отключения ссылки роняет рендер.
       <QueryClientProvider client={qc}>
-        <WorkspaceAddressProvider personalSlug="personal">
-          <MembersView
-            workspace={TEAM}
-            currentUserId={opts.currentUserId ?? OWNER.userId}
-            onLeft={() => {}}
-          />
-          <Outlet />
-        </WorkspaceAddressProvider>
+        <TooltipProvider>
+          <WorkspaceAddressProvider personalSlug="personal">
+            <MembersView
+              workspace={TEAM}
+              currentUserId={opts.currentUserId ?? OWNER.userId}
+              onLeft={() => {}}
+            />
+            <Outlet />
+          </WorkspaceAddressProvider>
+        </TooltipProvider>
       </QueryClientProvider>
     ),
   })
@@ -244,7 +249,7 @@ it('живая ссылка показана целиком и отключае�
   const field = screen.getByLabelText('Ссылка-приглашение') as HTMLInputElement
   expect(field.value).toBe('https://app.example/join/tok')
 
-  fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))
+  fireEvent.click(screen.getByRole('button', { name: 'Отключить ссылку' }))
   await screen.findByRole('heading', { name: 'Отключить ссылку?' })
   // Выход без решения — крестик в углу, а не «Отмена» в подвале.
   expect(screen.getByRole('button', { name: 'Закрыть' })).toBeTruthy()

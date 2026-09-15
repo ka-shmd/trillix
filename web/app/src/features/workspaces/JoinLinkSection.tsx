@@ -1,10 +1,11 @@
 import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
-import { Copy, Link2, RotateCw, X } from 'lucide-react'
+import { Copy, Link2, Link2Off, RotateCw, X } from 'lucide-react'
 
 import { humanError } from '../../shared/api/errors'
 import { formatDateTime } from '../../shared/format'
+import { CONTOUR_INPUT } from '../../shared/raisedField'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState } from '../../shared/page/states'
 import { joinLinkQueryOptions, useCreateJoinLink, useRevokeJoinLink } from './queries'
@@ -21,6 +22,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // Ссылка-приглашение — РАЗДЕЛ страницы, а не диалог по кнопке: это состояние
 // пространства (она либо есть, либо нет, либо истекла), а диалоги в кабинете
@@ -121,7 +123,7 @@ export function JoinLinkSection({
               readOnly
               value={current.url}
               aria-label="Ссылка-приглашение"
-              className="min-w-48 flex-1"
+              className={`min-w-48 flex-1 ${CONTOUR_INPUT}`}
               onFocus={(e) => e.currentTarget.select()}
             />
             <Button variant="utility" onClick={() => void copyLink(current.url)}>
@@ -129,14 +131,22 @@ export function JoinLinkSection({
               Копировать
             </Button>
             {/* Деструктивное — последним местом и приглушением (DESIGN-SYSTEM §7):
-                отделять его в ряду больше нечем, разделителей у кнопок нет. */}
-            <Button
-              variant="ghost"
-              className="text-destructive hover:bg-destructive/8 hover:text-destructive"
-              onClick={() => setRevoking(true)}
-            >
-              Отключить
-            </Button>
+                отделять его в ряду больше нечем, разделителей у кнопок нет. Значок без
+                подписи — подсказка обязательна, текст общий с aria-label. */}
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  aria-label={REVOKE_LABEL}
+                  className="text-muted-foreground hover:bg-destructive/8 hover:text-destructive"
+                  onClick={() => setRevoking(true)}
+                >
+                  <Link2Off className="size-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>{REVOKE_LABEL}</TooltipContent>
+            </Tooltip>
           </div>
           <p className="text-sm text-muted-foreground">
             Действует до {formatDateTime(current.expiresAt)}
@@ -189,6 +199,8 @@ export function JoinLinkSection({
     </Section>
   )
 }
+
+const REVOKE_LABEL = 'Отключить ссылку'
 
 // Копирование через буфер обмена браузера. Отказ возможен и законен (нет прав,
 // небезопасный контекст), поэтому он не молчит: человеку тогда остаётся выделить
