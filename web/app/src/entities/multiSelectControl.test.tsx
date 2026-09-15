@@ -51,21 +51,23 @@ function open() {
   return input
 }
 
+const optionNames = () => screen.queryAllByRole('option').map((o) => o.textContent)
+
 describe('теги', () => {
   it('фокус открывает список, ввод его сужает', () => {
     const input = open()
-    expect(screen.getAllByRole('option')).toHaveLength(3)
+    expect(optionNames()).toEqual(['Москва', 'Казань', 'Калининград'])
     fireEvent.change(input, { target: { value: 'ка' } })
-    expect(screen.getAllByRole('option').map((o) => o.textContent)).toEqual(['Казань', 'Калининград'])
+    expect(optionNames()).toEqual(['Казань', 'Калининград'])
   })
 
-  it('Enter выбирает активный пункт, список остаётся открытым, поиск очищается', () => {
+  it('Enter добавляет активный пункт: он уходит из списка в поле, список открыт, поиск пуст', () => {
     const input = open()
     fireEvent.change(input, { target: { value: 'каз' } })
     fireEvent.keyDown(input, { key: 'Enter' })
     expect(last).toEqual(['kzn'])
     expect((input as HTMLInputElement).value).toBe('')
-    expect(screen.getAllByRole('option')).toHaveLength(3)
+    expect(optionNames()).toEqual(['Москва', 'Калининград'])
     expect(screen.getByText('Казань', { selector: '.rf-tag-text' })).toBeTruthy()
   })
 
@@ -74,28 +76,46 @@ describe('теги', () => {
     fireEvent.keyDown(input, { key: 'Enter' })
     fireEvent.keyDown(input, { key: 'ArrowDown' })
     fireEvent.keyDown(input, { key: 'Enter' })
-    expect(last).toEqual(['msk', 'kzn'])
+    expect(last).toEqual(['msk', 'klg'])
     fireEvent.keyDown(input, { key: 'Backspace' })
     expect(last).toEqual(['msk'])
   })
 
-  it('клик по пункту выбирает, повторный снимает; крестик плашки убирает тег', () => {
+  it('клик по пункту добавляет, крестик плашки убирает и возвращает вариант в список', () => {
     open()
     fireEvent.click(screen.getByRole('option', { name: 'Калининград' }))
     expect(last).toEqual(['klg'])
+    expect(optionNames()).toEqual(['Москва', 'Казань'])
     fireEvent.click(screen.getByRole('button', { name: 'Убрать «Калининград»' }))
     expect(last).toEqual([])
+    expect(optionNames()).toEqual(['Москва', 'Казань', 'Калининград'])
+  })
+
+  it('цвет плашки — по позиции варианта, одинаковый в поле и в списке', () => {
+    open()
+    const inList = screen.getByRole('option', { name: 'Казань' }).querySelector('.rf-tag')!
+    expect(inList.className).toContain('rf-tag--c1')
+    fireEvent.click(screen.getByRole('option', { name: 'Казань' }))
+    const inField = screen.getByText('Казань', { selector: '.rf-tag-text' }).parentElement!
+    expect(inField.className).toContain('rf-tag--c1')
+  })
+
+  it('когда выбрано всё, список так и говорит', () => {
+    const input = open()
+    for (let i = 0; i < 3; i++) fireEvent.keyDown(input, { key: 'Enter' })
+    expect(screen.getByText('Все варианты выбраны')).toBeTruthy()
   })
 
   it('Esc закрывает список', () => {
     const input = open()
     fireEvent.keyDown(input, { key: 'Escape' })
-    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(optionNames()).toHaveLength(0)
   })
 
-  it('в превью (disabled) списка нет', () => {
-    render(<Harness disabled />)
+  it('в превью (disabled) списка нет, шеврон есть', () => {
+    const { container } = render(<Harness disabled />)
     fireEvent.focus(screen.getByRole('combobox'))
-    expect(screen.queryAllByRole('option')).toHaveLength(0)
+    expect(optionNames()).toHaveLength(0)
+    expect(container.querySelector('.rf-tags-chevron')).toBeTruthy()
   })
 })

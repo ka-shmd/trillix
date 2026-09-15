@@ -1596,13 +1596,15 @@ textarea.rf-input {
 }
 
 /* ТЕГИ — несколько вариантов из выпадающего списка (kinds/multiSelect.tsx). Поле — тот
-   же .rf-input, но растёт по высоте: выбранные варианты встают в него плашками и
-   переносятся, строка поиска занимает остаток ряда. Кольцо фокуса — у поля целиком
-   (:focus-within): сама строка поиска контура не имеет.
+   же .rf-input с шевроном справа, как у выпадающего списка, но растёт по высоте:
+   выбранные варианты встают в него цветными плашками и переносятся, строка поиска
+   занимает остаток ряда. Кольцо фокуса — у поля целиком (:focus-within).
 
-   Список висит поверх формы под полем, шириной с поле. Галочка пункта — тот же глиф,
-   что у «нескольких из списка» (.rf-mark--check), только span: состояние держит класс
-   rf-mark--on, а доступность — aria-selected пункта. */
+   Список висит поверх формы под полем, шириной с поле; в нём только невыбранные
+   варианты, теми же плашками. Цвет плашки — по позиции варианта в блоке (rf-tag--c0…c7,
+   решение владельца 2026-09-15: разноцветные бейджи), один и тот же в поле и в списке.
+   Цвет подмешивается к заливке поля и к цвету текста, поэтому на тёмной теме плашка
+   читается без своей палитры. */
 .rf-tags {
   position: relative;
   width: 100%;
@@ -1610,11 +1612,13 @@ textarea.rf-input {
 }
 
 .rf-tags-field {
+  position: relative;
   display: flex;
   flex-wrap: wrap;
   align-items: center;
   gap: 0.25rem;
-  cursor: text;
+  padding-right: calc(var(--rf-input-px) + 1.25rem);
+  cursor: pointer;
 }
 
 .rf-tags-field:focus-within {
@@ -1625,20 +1629,46 @@ textarea.rf-input {
   cursor: default;
 }
 
+.rf-tags-chevron {
+  position: absolute;
+  top: 50%;
+  right: var(--rf-input-px);
+  width: 1rem;
+  height: 1rem;
+  transform: translateY(-50%);
+  fill: none;
+  stroke: var(--rf-muted);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  pointer-events: none;
+}
+
 .rf-tag {
+  --rf-tag-c: #78716c;
   display: inline-flex;
   align-items: center;
   max-width: 100%;
   box-sizing: border-box;
-  padding: 0 0.125rem 0 0.5rem;
+  padding: 0 0.5rem;
   border-radius: 4px;
-  background: color-mix(in oklab, var(--rf-accent) 12%, transparent);
-  color: var(--rf-text);
+  background: color-mix(in oklab, var(--rf-tag-c) 18%, var(--rf-field-bg));
+  color: color-mix(in oklab, var(--rf-tag-c) 60%, var(--rf-text));
   line-height: 1.5rem;
 }
 
-.rf-tags-field--inert .rf-tag {
-  padding-right: 0.5rem;
+.rf-tag--c0 { --rf-tag-c: #3b82f6; }
+.rf-tag--c1 { --rf-tag-c: #16a34a; }
+.rf-tag--c2 { --rf-tag-c: #d97706; }
+.rf-tag--c3 { --rf-tag-c: #dc2626; }
+.rf-tag--c4 { --rf-tag-c: #9333ea; }
+.rf-tag--c5 { --rf-tag-c: #db2777; }
+.rf-tag--c6 { --rf-tag-c: #0d9488; }
+.rf-tag--c7 { --rf-tag-c: #78716c; }
+
+/* Плашка с крестиком (в поле) — поуже справа: воздух там даёт сам крестик. */
+.rf-tags-field:not(.rf-tags-field--inert) .rf-tag {
+  padding-right: 0.125rem;
 }
 
 .rf-tag-text {
@@ -1657,12 +1687,13 @@ textarea.rf-input {
   border-radius: 4px;
   padding: 0;
   background: transparent;
-  color: var(--rf-muted);
+  color: inherit;
+  opacity: 0.6;
   cursor: pointer;
 }
 
 .rf-tag-remove:hover {
-  color: var(--rf-text);
+  opacity: 1;
 }
 
 .rf-tag-remove svg {
@@ -1912,8 +1943,7 @@ textarea.rf-input {
 
 /* Отмеченные состояния — только у рабочих <input> рендерера; глифы редактора
    (span у варианта, button у строки «добавить») не бывают checked. */
-.rf-mark--check:checked,
-.rf-mark--check.rf-mark--on {
+.rf-mark--check:checked {
   background-color: var(--rf-primary);
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 16 16' fill='none' stroke='white' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpolyline points='3.5 8.5 6.5 11.5 12.5 5'/%3E%3C/svg%3E");
   background-repeat: no-repeat;
