@@ -60,9 +60,8 @@ import {
   GOAL_OPEN,
   GOAL_START,
   GOAL_SUBMIT,
+  goalSink,
   type GoalSink,
-  metrikaCounter,
-  startMetrika,
 } from './metrika'
 import { firstErrorPage, firstQuestionIndex } from './pages'
 import { makeSlotSource } from './slots'
@@ -431,17 +430,15 @@ export function FormView({
     if (!started.current) {
       started.current = true
       tracker.start()
-      // Счётчик Метрики стартует там же, где визит: «открыл» у обоих — одно событие.
+      // Цели Метрики заводятся там же, где визит: «открыл» у обоих — одно событие.
       // Трекера нет в предпросмотре, поэтому и сюда он не доходит; preview передан ради
-      // явного правила в metrikaCounter.
-      const counter = metrikaCounter(form.metrika, {
-        preview: token === null,
-        framed: window.parent !== window,
-      })
-      if (counter !== null) {
-        goals.current = startMetrika(counter, browserHost())
-        goals.current.reach(GOAL_OPEN)
-      }
+      // явного правила в goalSink. Во фрейме цели уходят хосту через мост.
+      goals.current = goalSink(
+        form.metrika,
+        { preview: token === null, framed: window.parent !== window, bridge },
+        browserHost(),
+      )
+      goals.current?.reach(GOAL_OPEN)
     }
 
     const leave = () => {
@@ -460,7 +457,7 @@ export function FormView({
       window.removeEventListener('pagehide', leave)
       document.removeEventListener('visibilitychange', onHidden)
     }
-  }, [blocks, form.metrika, token])
+  }, [blocks, bridge, form.metrika, token])
 
   // ЧЕРНОВИК (спека design/analytics-tally.md §10). Сохраняем набранное, пока
   // человек печатает, — но только если СЕРВЕР разрешил: `collectPartial` это тумблер

@@ -643,6 +643,14 @@ const onFrameMessage = (event: MessageEvent) => {
       // выборе владельца сайта (параметр `redirect=frame`) и уходит по ссылке сам.
       if (entry.opts.redirect !== 'frame' && isHttpUrl(msg.url)) window.location.assign(msg.url)
       return
+    case 'goal': {
+      // Цель Метрики автора отмечает счётчик СТРАНИЦЫ (фаза 29, design/yandex-metrika.md
+      // §7): во фрейме свой счётчик не грузится. Нет ym на странице — молчим: сайт без
+      // Метрики целей не получает, и ошибкой в чужой консоли это быть не должно.
+      const ym = (window as unknown as { ym?: unknown }).ym
+      if (typeof ym === 'function') ym(msg.counter, 'reachGoal', msg.name)
+      return
+    }
   }
 }
 

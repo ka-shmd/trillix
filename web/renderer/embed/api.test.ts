@@ -270,6 +270,23 @@ describe('readFrameMessage', () => {
     expect(readFrameMessage(ok('redirect', { url: '/relative' }))).toBeNull()
     expect(readFrameMessage(ok('redirect', { url: 'http://example.org' }))).not.toBeNull()
   })
+
+  // Номер и имя уходят в ym чужой страницы: форма полезной нагрузки проверяется строго.
+  it('цель Метрики — номер до 12 цифр и имя trillix_…', () => {
+    expect(readFrameMessage(ok('goal', { counter: 12345678, name: 'trillix_open' }))).toEqual({
+      type: 'goal',
+      counter: 12345678,
+      name: 'trillix_open',
+    })
+    expect(readFrameMessage(ok('goal', { counter: 999999999999, name: 'trillix_submit' }))).not.toBeNull()
+
+    for (const counter of ['12345678', 0, -1, 1.5, 1e12, NaN, null]) {
+      expect(readFrameMessage(ok('goal', { counter, name: 'trillix_open' }))).toBeNull()
+    }
+    for (const name of [42, '', 'purchase', 'trillix_', 'trillix_open; x', undefined]) {
+      expect(readFrameMessage(ok('goal', { counter: 12345678, name }))).toBeNull()
+    }
+  })
 })
 
 describe('isHttpUrl', () => {
