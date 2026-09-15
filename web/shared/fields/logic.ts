@@ -512,6 +512,7 @@ function valueDomain(type: BlockType): string {
       return 'text'
     case 'number':
     case 'scale':
+    case 'rating':
       return 'number'
     case 'date':
       return 'date'
@@ -597,7 +598,7 @@ export function ruleWarnings(
 // Равенство ответа значению. У шкалы и number сравнение ЧИСЛОВОЕ: «5» и «5.0» — один
 // ответ, а строковое сравнение зависело бы от того, как респондент напечатал число.
 function sameAnswer(src: Block, answer: string, want: string): boolean {
-  if (src.type === 'scale' || src.type === 'number') {
+  if (src.type === 'scale' || src.type === 'rating' || src.type === 'number') {
     const a = Number(answer)
     const b = Number(want)
     if (answer !== '' && want !== '' && Number.isFinite(a) && Number.isFinite(b)) return a === b

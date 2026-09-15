@@ -1475,6 +1475,75 @@ textarea.rf-input {
   opacity: 1;
 }
 
+/* Рейтинг: ряд звёзд. Закрашены звёзды до выставленной оценки (rf-rating-star--on) и,
+   под мышью, до звезды под курсором: весь ряд закрашивается, звёзды правее наведённой
+   гасятся соседним селектором. Только на устройствах с настоящим наведением — на
+   касании :hover залипает на последней тронутой звезде и спорил бы со снятой оценкой.
+   Без :has() подсветки наведения нет, выбор при этом работает. Цвет — акцент формы. */
+.rf-rating {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+}
+
+.rf-rating-star {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: var(--rf-control-h);
+  height: var(--rf-control-h);
+  border: 0;
+  border-radius: var(--rf-radius);
+  padding: 0;
+  background: transparent;
+  color: var(--rf-muted);
+  cursor: pointer;
+}
+
+.rf-rating-star svg {
+  width: 1.75rem;
+  height: 1.75rem;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linejoin: round;
+}
+
+.rf-rating-star:focus-visible {
+  outline: none;
+  box-shadow: var(--rf-focus-shadow);
+}
+
+.rf-rating-star--on {
+  color: var(--rf-accent);
+}
+
+.rf-rating-star--on svg {
+  fill: currentColor;
+}
+
+@media (hover: hover) {
+  .rf-rating:has(.rf-rating-star:enabled:hover) .rf-rating-star {
+    color: var(--rf-accent);
+  }
+  .rf-rating:has(.rf-rating-star:enabled:hover) .rf-rating-star svg {
+    fill: currentColor;
+  }
+  /* Префикс .rf-rating не лишний: без него правило слабее закрашивающего выше
+     (:has() берёт специфичность своего аргумента) и гасить не будет. */
+  .rf-rating .rf-rating-star:enabled:hover ~ .rf-rating-star {
+    color: var(--rf-muted);
+  }
+  .rf-rating .rf-rating-star:enabled:hover ~ .rf-rating-star svg {
+    fill: none;
+  }
+}
+
+/* В превью звёзды disabled, но выглядят активными — WYSIWYG, как деления шкалы. */
+.rf-rating-star:disabled {
+  cursor: default;
+}
+
 /* Выпадающий список — тот же rf-input, но нативная стрелка браузера ставит свой
    правый отступ и высоту; выравниваем под остальные поля. Сам список (options)
    рисует ОС — стилизовать его нельзя, и это осознанно: на телефоне системное

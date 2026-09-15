@@ -446,6 +446,17 @@ func seedAnswerValue(b domain.Block) (any, bool) {
 			v = w
 		}
 		return strconv.Itoa(v), true
+	case domain.BlockRating:
+		n := domain.DefaultRatingStars
+		if b.Settings.RatingStars != 0 {
+			n = b.Settings.RatingStars
+		}
+		// Смещение вверх — как у шкалы.
+		v := 1 + rand.Intn(n)
+		if w := 1 + rand.Intn(n); w > v {
+			v = w
+		}
+		return strconv.Itoa(v), true
 	case domain.BlockNumber:
 		return strconv.Itoa(1 + rand.Intn(60)), true
 	case domain.BlockConsent:

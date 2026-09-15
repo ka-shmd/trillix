@@ -105,6 +105,7 @@ var blockTypeNames = map[BlockType]string{
 	BlockPhone:        "Телефон",
 	BlockNumber:       "Число",
 	BlockScale:        "Шкала",
+	BlockRating:       "Рейтинг",
 	BlockSingleChoice: "Один из списка",
 	BlockDropdown:     "Выпадающий список",
 	BlockMultiChoice:  "Несколько из списка",

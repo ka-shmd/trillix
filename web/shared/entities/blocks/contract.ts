@@ -18,6 +18,8 @@ export const BLOCK_TYPES = [
   'phone',
   'number',
   'scale',
+  // рейтинг звёздами: ответ — строка с числом 1..N, как у шкалы
+  'rating',
   'single_choice',
   'dropdown',
   'multi_choice',

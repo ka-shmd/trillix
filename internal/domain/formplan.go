@@ -41,6 +41,7 @@ var planKinds = map[BlockType]PlanKind{
 	BlockPhone:        {Title: "Телефон", Hint: "номер телефона; проверяется формой"},
 	BlockNumber:       {Title: "Число", Hint: "возраст, количество, сумма"},
 	BlockScale:        {Title: "Шкала", Hint: "оценка рядом кнопок: удовлетворённость, NPS. Границы — scaleMin и scaleMax"},
+	BlockRating:       {Title: "Рейтинг", Hint: "оценка звёздами: как понравилось, как оцениваете мастера. Пять звёзд"},
 	BlockSingleChoice: {Title: "Один из списка", Hint: "до пяти-шести вариантов на виду; варианты обязательны"},
 	BlockDropdown:     {Title: "Выпадающий список", Hint: "то же, что «один из списка», но вариантов много (город, услуга)"},
 	BlockMultiChoice:  {Title: "Несколько из списка", Hint: "можно выбрать больше одного варианта"},
@@ -67,7 +68,7 @@ var planExcluded = map[BlockType]string{}
 // запуска к запуску, ломая кэш подсказки у провайдера и воспроизводимость тестов.
 var planTypeOrder = []BlockType{
 	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber,
-	BlockScale, BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate,
+	BlockScale, BlockRating, BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate,
 	BlockConsent, BlockFile, BlockSlot, BlockText, BlockHeading, BlockPageBreak,
 }
 

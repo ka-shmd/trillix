@@ -151,7 +151,7 @@ func sampleValue(t BlockType, options []string) string {
 		return "primer@example.com"
 	case t == BlockPhone:
 		return "+7 900 000-00-00"
-	case t == BlockNumber, t == BlockScale:
+	case t == BlockNumber, t.isScaleLike():
 		return "5"
 	case t == BlockDate:
 		return "2026-09-12"

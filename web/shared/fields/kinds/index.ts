@@ -10,6 +10,7 @@ import { longTextControl } from './longText'
 import { multiChoiceControl } from './multiChoice'
 import { numberControl } from './number'
 import { phoneControl } from './phone'
+import { ratingControl } from './rating'
 import { scaleControl } from './scale'
 import { shortTextControl } from './shortText'
 import { singleChoiceControl } from './singleChoice'
@@ -30,6 +31,7 @@ export const CONTROLS: Record<BlockType, Control | null> = {
   phone: phoneControl,
   number: numberControl,
   scale: scaleControl,
+  rating: ratingControl,
   single_choice: singleChoiceControl,
   dropdown: dropdownControl,
   multi_choice: multiChoiceControl,

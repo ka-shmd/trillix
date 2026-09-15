@@ -116,6 +116,16 @@ describe('formSchemaSchema — валидные', () => {
     'шкала без диапазона — валидный черновик': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'scale', settings: {} }],
     },
+    'рейтинг без числа звёзд — пять по умолчанию': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'rating', settings: {} }],
+    },
+    'рейтинг из десяти звёзд': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'rating', settings: { ratingStars: 10 } }],
+    },
+    // Ноль — «не задано», как в Go (int с omitempty): у чужого типа он не ошибка.
+    'ноль звёзд у не-rating': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { ratingStars: 0 } }],
+    },
     'choice без опций — валидный черновик': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'single_choice', settings: {} }],
     },
@@ -535,6 +545,15 @@ describe('formSchemaSchema — невалидные', () => {
     },
     'шкала у не-scale': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', settings: { scaleMin: 1, scaleMax: 5 } }],
+    },
+    'рейтинг: две звезды': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'rating', settings: { ratingStars: 2 } }],
+    },
+    'рейтинг: одиннадцать звёзд': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'rating', settings: { ratingStars: 11 } }],
+    },
+    'звёзды у шкалы': {
+      blocks: [{ id: 'b', groupId: 'g1', type: 'scale', settings: { ratingStars: 5 } }],
     },
     // ЗНАЧИМЫЙ НУЛЬ у чужого типа: scaleMin: 0 — заданное значение (NPS считается от
     // нуля), а не «ключа нет». Единственный сторож правила: у самой шкалы ключ

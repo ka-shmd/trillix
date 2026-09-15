@@ -19,6 +19,7 @@ import { multiChoice } from './multiChoice'
 import { numberField } from './number'
 import { pageBreak } from './pageBreak'
 import { phone } from './phone'
+import { rating } from './rating'
 import { scale } from './scale'
 import { shortText } from './shortText'
 import { singleChoice } from './singleChoice'
@@ -36,6 +37,7 @@ export const EDITOR_KINDS: Record<BlockType, EditorKind> = {
   phone,
   number: numberField,
   scale,
+  rating,
   single_choice: singleChoice,
   dropdown,
   multi_choice: multiChoice,

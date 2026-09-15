@@ -25,6 +25,7 @@ const SPACE: Record<BlockType, SpaceStep> = {
   phone: 'base',
   number: 'base',
   scale: 'base',
+  rating: 'base',
   single_choice: 'base',
   dropdown: 'base',
   multi_choice: 'base',
