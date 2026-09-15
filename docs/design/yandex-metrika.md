@@ -130,12 +130,20 @@ VK Pixel и Google Analytics подключаются там же. Про вст
 Метки рекламы (`yclid`, UTM) счётчик читает из адреса страницы сам. Ответы в Метрику не уходят
 ни в каком виде: ни в параметрах цели, ни в параметрах визита.
 
-**CSP `/r/*`** (`deploy/caddy/Caddyfile`, сниппет `secheaders` у `@embeddable`): `script-src` +=
-`https://mc.yandex.ru https://yastatic.net`, `connect-src` и `img-src` += `https://mc.yandex.ru`.
-Это стартовый набор из [справки Метрики про CSP](https://yandex.ru/support/metrica/ru/code/install-counter-csp);
-общий список там — около сорока адресов (региональные зеркала `mc.yandex.*`, адреса вебвизора,
-`wss://`) без раскладки по директивам. **Какие реально нужны без вебвизора — выясняется на
-prod-local**: в dev CSP нет, заблокированный запрос молчит.
+**CSP `/r/*`** (`deploy/caddy/Caddyfile`, сниппет `secheaders` у `@embeddable`): `script-src`,
+`connect-src` и `img-src` += 18 региональных зеркал `https://mc.yandex.*` из
+[справки Метрики про CSP](https://yandex.ru/support/metrica/ru/code/install-counter-csp).
+
+**Замер на prod-local (2026-09-15, настоящий `tag.js`, выдуманный номер).** Стартовый набор
+(`script-src` += `mc.yandex.ru yastatic.net`, `connect-src`/`img-src` += `mc.yandex.ru`) не
+работал: `tag.js` грузится с `mc.yandex.ru`, а хиты шлёт на зеркало посетителя (на замере —
+`mc.yandex.com`) сразу тремя путями — XHR, картинкой и JSONP-скриптом `watch?callback=`. Зеркало
+зависит от региона, одним замером все не перечислить, поэтому в трёх директивах — полный список
+зеркал из справки. `yastatic.net` не запрашивался ни разу и в набор не вошёл: в `script-src` он
+открыл бы CDN чужих библиотек. С полным списком хиты `watch/<номер>` проходят (200); в консоли
+остаются три ожидаемых отказа — вебсокет `wss://mc.yandex.*/solid.ws`, фрейм `mc.yandex.*` и
+`eval`, — хиты идут мимо них, и открывать под них CSP незачем. Попутно: `tag.js` шлёт и
+собственную телеметрию в служебный счётчик Яндекса.
 
 ## 7. Встроенная форма
 
