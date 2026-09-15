@@ -61,14 +61,14 @@ export function GhostFrame({ children }: { children: ReactNode }) {
 // 2026-08-02). Внутри строки её быть не должно: жест кладёт элемент РЯДОМ со строкой, и
 // зона внутри значила бы целиться в текст, который никуда не переезжает.
 //
-// Три числа, и все три зеркалят рейл группы (GroupRow): рейл жеста стоит на том же вылете
-// (RAIL_OUT = 8px, класс -left-2/-right-2), зона начинается за ним (ZONE_GAP) и тянется до
+// Три числа: рейл жеста стоит на вылете RAIL_OUT = 8px (класс -left-2/-right-2), зона
+// начинается за ним (ZONE_GAP) и тянется до
 // края поля (px-20 = 80px; на узком экране поле 20px, но кабинет desktop-first).
 // Ширина зоны = 80 − 8 − 2 = 70px.
 const ZONE_LEFT = 'right-full mr-2.5 w-2 sm:w-[4.375rem]'
 const ZONE_RIGHT = 'left-full ml-2.5 w-2 sm:w-[4.375rem]'
-// Рейл жеста — те же координаты и та же толщина, что у рейла группы: у автора не должно
-// быть двух «почти одинаковых» линий на разном вылете.
+// Рейл жеста — тот же вылет, что у рейла записи на время (kinds/slotControl.tsx): у автора не
+// должно быть двух «почти одинаковых» линий на разном вылете.
 const zoneRail = (side: 'left' | 'right', hot: boolean) =>
   `pointer-events-none absolute top-0 bottom-0 z-20 w-0.5 rounded-full bg-primary transition-opacity ${
     side === 'right' ? '-right-2' : '-left-2'

@@ -165,13 +165,13 @@ export function SlashEditor({
   // ходят по нему индексами (stopNeighbor, findIndex), и заголовок в списке сдвинул бы
   // все соседства на единицу.
   const readBlocks = useCallback(() => splitFormTitle(storeApi.getState().blocks).rest, [storeApi])
-  // Координатный якорь оверлеев драга (рейл будущей группы, предупреждающая рамка):
+  // Координатный якорь оверлеев драга (линия вставки, гост, предупреждающая рамка):
   // они absolute-прямоугольники в системе полотна и меряют DOM относительно него.
   const canvasRef = useRef<HTMLDivElement>(null)
   // ИЗМЕРЕННОГО РЕЙЛА БУДУЩЕЙ ГРУППЫ ЗДЕСЬ НЕТ (решение владельца 2026-08-11), и вернуть
   // его нельзя, не вернув расступание: он лечил враньё layout-бокса, пока sortable
   // раздвигал строки трансформами, а при неподвижной раскладке (§5.2) лечить нечего.
-  // Рейл у групп только свой, статичный (GroupRow, проп rail).
+  // Рейла у вопроса нет вовсе (решение владельца 2026-09-15).
   //
   // Предупреждающая рамка (§4.3): строки, которые от ЭТОГО дропа останутся без
   // заголовка. Состав даёт прогноз planBlockDrop, а рисуется он предупреждающим
@@ -202,15 +202,7 @@ export function SlashEditor({
   // сенсор), но полотну он больше ничего не сообщает. Один источник вместо прежних
   // двух (сырая цель + подменённая) — расходиться нечему.
   const targetRef = useRef<DropTarget | null>(null)
-  // Во время драга рейлом групп управляет не hover (курсор с таскаемым элементом
-  // мельтешит по hover-зонам — рейл мигал), а состояние: групповой драг зажигает
-  // рейл у группы-цели постоянно, блочный — гасит рейлы совсем: рейлы мульти-групп
-  // по всему полотну спорят с оверлеями жеста за внимание.
-  const [drag, setDrag] = useState<{
-    kind: 'group' | 'block'
-    activeId: string
-    overGroup: string | null
-  } | null>(null)
+  const [drag, setDrag] = useState<{ kind: 'group' | 'block'; activeId: string } | null>(null)
   // Ближайшее к перетаскиваемому элементу место — ЕДИНСТВЕННОЕ, где горит приглашение
   // «встань в ряд» (решение владельца 2026-08-02; правило и его причина — `rowZones.ts`).
   // Место берётся у ТОЙ ЖЕ цели, что рисует линию (pickDropTarget пишет её в ref), а в
@@ -877,15 +869,13 @@ export function SlashEditor({
     hoverZone.insert === insert
 
   // Одна группа полотна. Вынесена из JSX функцией, потому что зовут её из двух мест:
-  // прямо из ряда-одиночки и из ячейки ряда (стопка групп, §5). railOff — у ряда горят
-  // зоны: рейл группы стоит на том же вылете, что и рейл зоны, и две линии в одном
-  // жёлобе читались бы как одна размазанная.
+  // прямо из ряда-одиночки и из ячейки ряда (стопка групп, §5).
   //
   // headOfCell — вопрос открывает стопку колонки и потому интервала перед собой не
   // несёт (его несёт ряд). Позиция приезжает ПРОПОМ, а не вариантом `first:`: в боксе
   // колонки первыми стоят зоны жеста, они появляются с началом драга, и CSS-правило
   // «первый ребёнок» роняло бы вопросу интервал прямо посреди жеста.
-  const renderGroup = (g: (typeof groups)[number], railOff = false, headOfCell = false) => (
+  const renderGroup = (g: (typeof groups)[number], headOfCell = false) => (
     <GroupRow
       key={g.id}
       group={g}
@@ -893,13 +883,6 @@ export function SlashEditor({
       headOfCell={headOfCell}
       formId={formId}
       blockIds={blockIds}
-      rail={
-        drag
-          ? drag.kind === 'group' && g.id === drag.overGroup && !railOff
-            ? 'on'
-            : 'off'
-          : 'auto'
-      }
       menuForId={menuForId}
       onAddBelow={handleAddBelow}
       onInsertBelow={handleInsertBelow}
@@ -1006,7 +989,7 @@ export function SlashEditor({
                   onDragStart={(e) => {
                     const id = String(e.active.id)
                     const isGroup = groupIds.has(id)
-                    setDrag({ kind: isGroup ? 'group' : 'block', activeId: id, overGroup: null })
+                    setDrag({ kind: isGroup ? 'group' : 'block', activeId: id })
                     // rAF-цикл ведёт рамки (только блочный драг) И ближайшее место с гостом
                     // источника (оба слоя: вопрос за ручку подписи встаёт в ряд ровно так
                     // же, как одиночка), поэтому запускается всегда. Рамки внутри него сами
@@ -1018,16 +1001,6 @@ export function SlashEditor({
                     startFrameLoop(
                       id,
                       isGroup ? blocks.filter((b) => b.groupId === id).map((b) => b.id) : [id],
-                    )
-                  }}
-                  onDragOver={(e) => {
-                    const overId = e.over ? String(e.over.id) : null
-                    // Бэйл на тот же overGroup: лишний setState = лишний ре-рендер посреди
-                    // драга (см. коммент у groupIdList, чем это опасно).
-                    setDrag((d) =>
-                      d && d.kind === 'group' && d.overGroup !== overId
-                        ? { ...d, overGroup: overId }
-                        : d,
                     )
                   }}
                   onDragEnd={onDragEnd}
@@ -1146,7 +1119,7 @@ export function SlashEditor({
                                 gutter={ROW_GUTTER}
                               />
                             )}
-                            {c.map((g, gi) => renderGroup(g, zones, gi === 0))}
+                            {c.map((g, gi) => renderGroup(g, gi === 0))}
                           </div>
                         ))
                         return (
@@ -1438,9 +1411,6 @@ type GroupRowProps = {
   blockIds: string[]
   // Зона жеста «встань в колонку ряда» здесь НЕ живёт: её якорь — контейнер ряда
   // (SlashEditor), чья геометрия не зависит от содержимого.
-  // Режим рейла: auto — по hover/focus-within (покой), on — горит постоянно
-  // (групповой драг над этой группой), off — скрыт (любой другой драг).
-  rail: 'auto' | 'on' | 'off'
   menuForId: string | null
   onAddBelow: (id: string, opts?: { openMenu?: boolean; seed?: string }) => void
   onInsertBelow: (id: string) => void
@@ -1489,7 +1459,6 @@ const BY_REFERENCE = Object.keys({
   firstGroup: true,
   headOfCell: true,
   formId: true,
-  rail: true,
   menuForId: true,
   onAddBelow: true,
   onInsertBelow: true,
@@ -1510,7 +1479,6 @@ const GroupRow = memo(function GroupRow({
   headOfCell,
   formId,
   blockIds,
-  rail,
   menuForId,
   onAddBelow,
   onInsertBelow,
@@ -1554,8 +1522,6 @@ const GroupRow = memo(function GroupRow({
     <li
       ref={setNodeRef}
       style={style}
-      // group/grp — именованная Tailwind-группа: `group` без имени занят строками
-      // (BlockRow) для своих hover-значков, hover группы должен слушаться отдельно.
       // Ширину группа себе НЕ считает: полколонки задаёт ячейка ряда (см. ol в
       // SlashEditor), как .rf-cell у превью. Своя ширина на самой li ломает стопку в
       // колонке — третья полуширинная уезжает на новую строку вместо стопки.
@@ -1569,43 +1535,19 @@ const GroupRow = memo(function GroupRow({
       // а у вопроса с заголовком или подписью — его ступень (space.ts). У вопроса,
       // открывающего колонку, mt нет — там расстояние держит сам ряд, и ступень
       // полноширинного ряда лежит на ряде (rowSpace, там же мина про два разных бокса).
-      // ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста, и паддинг увёл бы рейл группы
-      // вместе с линией вставки.
-      className={`group/grp relative w-full rounded-md ${
+      // ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста, и паддинг увёл бы линию вставки.
+      className={`relative w-full rounded-md ${
         headOfCell ? '' : spaceMt(groupSpace(group.blocks))
       } ${isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''}`}
     >
-      {/* Рейл — постоянная идентичность группы (§4.3): тонкая линия в левом
-          жёлобе, в покое проявляется по hover/focus-within всей группы; во время
-          драга режимом управляет полотно (проп rail — см. SlashEditor). Absolute и
-          вне потока (урок TD-22). Кластер значков строки стоит вплотную к
-          тексту (mr-1 в BlockRow) и рейл собой закрывает — разойтись им негде, рейл
-          лежит между кластером и текстом; видно это только под наведением. top/bottom-0 = ровно высота текста группы:
-          -my-1.5 строк компенсирует их py-1.5, li обнимает чистый контент.
-          СЛЕВА ВСЕГДА, в любой колонке (2026-08-11): зеркалить рейл вправо было
-          осмысленно, пока колонок было две, — при четырёх у средних колонок «своей»
-          стороны нет, и одинаковое место читается лучше, чем угадываемое. */}
-      {/* БОЛЬШЕ ДВУХ БЛОКОВ, а не больше одного (решение владельца 2026-08-16): у пары
-          «подпись + поле» границы вопроса и так очевидны — две строки, и обе на виду.
-          Линия там объясняла то, что не требует объяснения. */}
-      {group.blocks.length > 2 && rail !== 'off' && (
-        <span
-          aria-hidden="true"
-          className={`pointer-events-none absolute top-0 bottom-0 -left-2 w-0.5 rounded-full bg-primary/40 ${
-            rail === 'on'
-              ? ''
-              : 'opacity-0 transition-opacity group-hover/grp:opacity-100 group-focus-within/grp:opacity-100'
-          }`}
-        />
-      )}
       {/* Стратегия своя (dnd.ts): родная verticalListSortingStrategy считает полотно
           одной вертикалью и на секции сажает строку на строку. */}
       <SortableContext items={blockIds} strategy={canvasSorting}>
         {/* Внутри вопроса блоки стоят с тем же шагом 12px, что между вопросами (=
             .rf-group у превью, решение владельца 2026-08-22). Интервал
             несёт САМА СТРОКА (mt у BlockRow), поэтому зазора у колонки нет: у первой
-            строки вопроса интервала нет, и li обнимает чистый контент — от этого
-            зависит рейл группы (top-0 bottom-0). */}
+            строки вопроса интервала нет, и li обнимает чистый контент — его рект
+            мерят оверлеи жеста. */}
         <div className="flex flex-col">
           {group.blocks.map((b, i) => (
             <BlockRow
