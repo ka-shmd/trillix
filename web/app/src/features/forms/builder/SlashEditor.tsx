@@ -76,6 +76,7 @@ import {
 } from './dragChrome'
 import { measureLine, measureSlot, measureUnion, type Rect, setRect } from './dragMeasure'
 import { BlockRow, CLUSTER_BACKDROP, GAP_BRIDGE, ICON_BTN } from './BlockRow'
+import { clusterShift } from './clusterAim'
 import { AddChrome, CoverArea, LogoArea } from './CoverEditor'
 import { FormTitleRow } from './FormTitleRow'
 import { type FocusEngine, FocusEngineProvider } from './focusEngine'
@@ -1078,7 +1079,12 @@ export function SlashEditor({
                             // Вертикального зазора у колонки нет: интервал стопки несут сами
                             // вопросы (mt у li в GroupRow), как .rf-cell у превью.
                             className="relative flex min-w-0 flex-1 flex-col self-start"
-                            style={{ flexGrow: widths?.[i] }}
+                            style={{
+                              flexGrow: widths?.[i],
+                              // Кластер значков колонки — за жёлобом, у ручки ширины
+                              // (CLUSTER_GAP в BlockRow).
+                              ...clusterShift(i > 0 ? ROW_GUTTER : 0),
+                            }}
                             // Ячейка ряда для жеста ширины: по этой метке ручка находит
                             // колонки своего ряда, не считая соседями зоны драга. Только у
                             // НАСТОЯЩЕЙ секции: метка снимает потолок поля (fields.css), а

@@ -85,7 +85,7 @@ import { chords } from './shortcuts'
 import { handleRowKeys, type ArrowDir } from './rowKeys'
 import { useActiveRow, useRowFocus } from './activeRow'
 import { CaptionChip } from './CaptionChip'
-import { useClusterAim } from './clusterAim'
+import { clusterShift, useClusterAim } from './clusterAim'
 
 export interface BlockRowProps {
   block: Block
@@ -342,7 +342,8 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           свои кластеры (см. OptionCard). */}
       {!ownedByQuestion && (
         <div
-          // mr-1 (решение владельца 2026-08-16): кластер стоит вплотную к своему блоку.
+          // Кластер стоит вплотную к своему блоку (решение владельца 2026-08-16), в колонке
+          // ряда кроме первой — левее линии ручки ширины (CLUSTER_GAP).
           // СЛЕВА ВСЕГДА (2026-08-11): прежде у правой колонки ряда кластер зеркалился
           // вправо, потому что слева от неё жёлоб и сосед. При четырёх колонках
           // зеркалить некуда — у средней колонки обе стороны чужие, — и вместо выбора
@@ -352,14 +353,13 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           // бокса строки (right-full), но остаётся её потомком, поэтому наведение на
           // ЕГО площадь — это group-hover строки: без pointer-events-none кластер
           // зажигает сам себя, стоит курсору попасть в левое поле, где его ещё нет.
-          // Кроме вранья («навёлся на пустое место — появились чужие значки») это
-          // отбирает жёлоб у ручки ширины: 72px кластера шире 12px жёлоба.
+          // Навёлся на пустое место — появились чужие значки.
           // Показанный — снова ловит события: иначе по его кнопкам нельзя нажать, а
           // hover, ушедший со строки на кластер, гасил бы его под курсором.
           // data-aim на строке — курсор ушёл с неё К кластеру (clusterAim.ts): держит
           // кластер так же, как hover.
           ref={aimCluster}
-          className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 right-full mr-1 flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-data-[aim]:pointer-events-auto group-data-[aim]:opacity-100`}
+          className={`${CLUSTER_BACKDROP} pointer-events-none absolute top-1.5 ${CLUSTER_GAP} flex ${rowLineH} items-center gap-0.5 opacity-0 transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100 group-data-[aim]:pointer-events-auto group-data-[aim]:opacity-100`}
         >
           <button
             type="button"
@@ -461,6 +461,18 @@ export const ICON_BTN =
 // тёмной форме под значками светилось бы белое пятно. Tailwind-цвет кабинета здесь не
 // годится по той же причине.
 export const CLUSTER_BACKDROP = 'z-20 rounded-md bg-[var(--rf-canvas)]'
+
+// CLUSTER_GAP — место кластера значков: вплотную к блоку (4px), а в колонке ряда кроме
+// первой — ещё на полжёлоба дальше, левее линии ручки ширины (`ColumnResizer`): кластер,
+// прижатый к блоку, накрывал бы её подложкой. Линия при этом стоит посередине между
+// значком перетаскивания и блоком. Сдвиг задаёт ЯЧЕЙКА ряда
+// переменной `--cluster-shift` (`clusterShift` в `clusterAim.ts`), кластер читает
+// ближайшую: ячейка вариантов ставит её всегда, в том числе 0 у первой колонки, иначе
+// варианты вопроса из правой колонки унаследовали бы сдвиг его ячейки.
+//
+// Курсор от текста к сдвинутым значкам идёт через ручку, то есть мимо строки: кластер
+// держит диагональ к значкам (`clusterAim.ts`), полоса `GAP_BRIDGE` тут не помощник.
+export const CLUSTER_GAP = 'right-full mr-[calc(var(--cluster-shift,0px)_+_0.25rem)]'
 
 // GAP_BRIDGE — прозрачная полоса шириной с `mr-1`, приклеенная к ЛЕВОМУ краю строки
 // (или карточки варианта) и закрывающая просвет между ней и её кластером значков.
@@ -1811,7 +1823,7 @@ function OptionsInline({
                     // Доля — inline flex-grow, а не переменной, как у респондента: то
                     // же свойство правит жест ширины, и два способа записи на одной
                     // ячейке разъехались бы на первом же перетаскивании.
-                    style={{ flexGrow: widths?.[i] }}
+                    style={{ flexGrow: widths?.[i], ...clusterShift(i > 0 ? OPT_GUTTER : 0) }}
                     // Только у настоящей секции: у ряда из одного варианта обёртка стоит
                     // всегда (якорь зон), и метка сняла бы потолок карточки там, где ряда
                     // нет.
@@ -2181,7 +2193,7 @@ function OptionCard({
         // угодно. Просвет (GAP_BRIDGE на карточке) и диагональ к значкам (data-aim)
         // остаются для случая без каретки.
         ref={aimCluster}
-        className={`${CLUSTER_BACKDROP} pointer-events-none absolute right-full mr-1 flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100 group-focus-within/opt:pointer-events-auto group-focus-within/opt:opacity-100 group-data-[aim]/opt:pointer-events-auto group-data-[aim]/opt:opacity-100`}
+        className={`${CLUSTER_BACKDROP} pointer-events-none absolute ${CLUSTER_GAP} flex items-center gap-0.5 opacity-0 transition-opacity group-hover/opt:pointer-events-auto group-hover/opt:opacity-100 group-focus-within/opt:pointer-events-auto group-focus-within/opt:opacity-100 group-data-[aim]/opt:pointer-events-auto group-data-[aim]/opt:opacity-100`}
       >
         <button
           type="button"

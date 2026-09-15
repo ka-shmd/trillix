@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useRef, type PointerEvent as ReactPointerEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  type CSSProperties,
+  type PointerEvent as ReactPointerEvent,
+} from 'react'
 
 // ДИАГОНАЛЬ К ЗНАЧКАМ — кластер значков не гаснет, пока курсор, ушедший с носителя
 // (строки, карточки варианта) влево, находится между его левым краем и кластером
@@ -126,4 +132,12 @@ export function useClusterAim() {
   }
 
   return { clusterRef, onPointerEnter, onPointerLeave }
+}
+
+// clusterShift — стиль ячейки ряда: на сколько её кластеры значков отодвинуты от своих
+// блоков сверх 4px. У колонки кроме первой это половина жёлоба: линия ручки ширины стоит
+// по его центру, и кластер встаёт левее неё. Передаётся ширина жёлоба (0 — без сдвига).
+// Читает переменную `CLUSTER_GAP` в `BlockRow`.
+export function clusterShift(gutter: number): CSSProperties {
+  return { '--cluster-shift': `${gutter / 2}px` } as CSSProperties
 }
