@@ -560,6 +560,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey).
 		WithWebhooks(integrations.Repo{}, userURLEgress).
+		WithCounters(integrations.Repo{}).
 		// Поводы о поломке цели: доставщик ставит, починка и удаление снимают.
 		WithNotifications(notifySvc)
 	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота

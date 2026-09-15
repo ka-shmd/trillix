@@ -110,6 +110,15 @@ const (
 	// ГЕЙТ ПРИРОДЫ БЕЙДЖА: спрашивается и при сохранении бланка, и при отправке
 	// каждого письма — даунгрейд гасит отправку, ничего не стирая.
 	FormRespondentEmail Key = "form_respondent_email"
+	// FormCounters — счётчики аналитики автора на форме: Яндекс Метрика (фаза 29
+	// DEV-PLAN, миграция 0067, docs/design/yandex-metrika.md §5). Назван по функции,
+	// а не по провайдеру: VK Pixel и GA, появившись, встанут под тот же ключ.
+	//
+	// ГЕЙТ ПРИРОДЫ БЕЙДЖА: спрашивается при отдаче публичной формы, а не при
+	// сохранении. Сохранить счётчик бэк даёт на любом тарифе (контрол держит
+	// кабинет); на страницу формы номер уезжает, только пока тариф разрешает, —
+	// даунгрейд снимает счётчик сам, апгрейд возвращает сохранённое.
+	FormCounters Key = "form_counters"
 
 	// AIGenerations — сколько раз за месяц можно обратиться к ассистенту (фаза 26,
 	// миграции 0048 и 0049). Квота, а не тумблер: каждый вызов стоит денег снаружи,
@@ -237,6 +246,7 @@ var CatalogOrder = []Key{
 	FormLinkPreview,
 	FormNotifyEmail,
 	FormRespondentEmail,
+	FormCounters,
 	StoragePerWorkspace,
 	AIGenerations,
 	BookingSchedulesMax,
@@ -257,6 +267,7 @@ var Catalog = map[Key]Feature{
 	FormLinkPreview:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своя карточка ссылки"},
 	FormNotifyEmail:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё письмо о новом ответе"},
 	FormRespondentEmail: {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Письмо респонденту"},
+	FormCounters:        {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Яндекс Метрика"},
 	AIGenerations:       {Kind: Quota, Scope: WorkspaceScope, Meter: AIGenerationsAccountMeter, Title: "Сообщений ассистенту в месяц"},
 	BookingSchedulesMax: {Kind: Quota, Scope: WorkspaceScope, Meter: SchedulesMeter, Title: "Расписаний записи"},
 }

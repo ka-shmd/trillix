@@ -115,6 +115,7 @@ function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
     },
     connections: [],
     webhooks: [],
+    metrika: null,
     ...patch,
   }
 }

@@ -1026,3 +1026,29 @@ func (Repo) WebhookSubmissionDelivered(ctx context.Context, db postgres.DBTX, we
 	}
 	return ok, nil
 }
+
+// UpsertCounter заводит счётчик вида kind у формы либо правит номер и тумблер
+// существующего: у формы один счётчик вида.
+func (Repo) UpsertCounter(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID, kind, number string, enabled bool) error {
+	return postgres.New(db).UpsertFormCounter(ctx, postgres.UpsertFormCounterParams{
+		ID:      id,
+		FormID:  formID,
+		Kind:    kind,
+		Counter: number,
+		Enabled: enabled,
+	})
+}
+
+// GetCounter — счётчик вида kind у формы; pgx.ErrNoRows, если он не подключён.
+func (Repo) GetCounter(ctx context.Context, db postgres.DBTX, formID uuid.UUID, kind string) (Counter, error) {
+	row, err := postgres.New(db).GetFormCounter(ctx, postgres.GetFormCounterParams{FormID: formID, Kind: kind})
+	if err != nil {
+		return Counter{}, err
+	}
+	return Counter{Kind: row.Kind, Number: row.Counter, Enabled: row.Enabled}, nil
+}
+
+// DeleteCounter снимает счётчик вида kind с формы; возвращает число удалённых строк.
+func (Repo) DeleteCounter(ctx context.Context, db postgres.DBTX, formID uuid.UUID, kind string) (int64, error) {
+	return postgres.New(db).DeleteFormCounter(ctx, postgres.DeleteFormCounterParams{FormID: formID, Kind: kind})
+}
