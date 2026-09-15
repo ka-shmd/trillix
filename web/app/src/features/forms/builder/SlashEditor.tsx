@@ -1190,6 +1190,7 @@ export function SlashEditor({
                 open={insertOpen}
                 onOpenChange={setInsertOpen}
                 onPick={handlePickInsertType}
+                design={design}
               />
 
               <ShortcutSheet
