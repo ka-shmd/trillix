@@ -30,6 +30,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { humanError } from '../../shared/api/errors'
+import { FIELD_CONTOUR } from '../../shared/raisedField'
 
 // Окно настройки карточки ссылки: пять полей слева, живой предпросмотр справа.
 //
@@ -140,6 +141,7 @@ export function LinkPreviewDialog({
                 id="lp-site-name"
                 value={draft.siteName}
                 maxLength={MAX_LINK_PREVIEW_SITE_NAME_LEN}
+                className={FIELD_CONTOUR}
                 onChange={(e) => set({ siteName: e.target.value })}
               />
             </Field>
@@ -160,6 +162,7 @@ export function LinkPreviewDialog({
                 id="lp-title"
                 value={draft.title}
                 maxLength={MAX_LINK_PREVIEW_TITLE_LEN}
+                className={FIELD_CONTOUR}
                 onChange={(e) => set({ title: e.target.value })}
               />
             </Field>
@@ -169,6 +172,7 @@ export function LinkPreviewDialog({
                 id="lp-description"
                 value={draft.description}
                 maxLength={MAX_LINK_PREVIEW_DESCRIPTION_LEN}
+                className={FIELD_CONTOUR}
                 onChange={(e) => set({ description: e.target.value })}
               />
             </Field>

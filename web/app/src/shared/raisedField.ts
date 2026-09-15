@@ -16,11 +16,13 @@
 // Inter, так что текст приходилось сдвигать руками. Семейство наследуется от body.
 // Высота и кегль перебиваются ТЕМИ ЖЕ вариантами, что у вендора: у списка высота —
 // `data-[size=default]:h-8`, у Input кегль — `md:text-sm`.
-const CONTOUR =
+// FIELD_CONTOUR отдельно — у полей, которым нужен только контур при штатных размерах и
+// кегле (окно «Карточка ссылки»: оба поля и многострочное описание).
+export const FIELD_CONTOUR =
   'border-0 shadow-(--rf-field-shadow) focus-visible:ring-0 focus-visible:shadow-(--rf-focus-shadow)'
-export const RAISED_INPUT = `h-10 py-0 font-medium md:text-base ${CONTOUR}`
-export const CONTOUR_INPUT = `py-0 font-medium md:text-base ${CONTOUR}`
-export const RAISED_SELECT = `data-[size=default]:h-10 py-0 text-base font-medium ${CONTOUR}`
+export const RAISED_INPUT = `h-10 py-0 font-medium md:text-base ${FIELD_CONTOUR}`
+export const CONTOUR_INPUT = `py-0 font-medium md:text-base ${FIELD_CONTOUR}`
+export const RAISED_SELECT = `data-[size=default]:h-10 py-0 text-base font-medium ${FIELD_CONTOUR}`
 // Кнопки в одном ряду с таким полем — его роста: ряд ровняется по нарисованному.
 export const RAISED_ROW_BUTTON = 'h-10'
 export const RAISED_ROW_ICON = 'size-10'
