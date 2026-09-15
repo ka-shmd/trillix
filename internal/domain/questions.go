@@ -109,6 +109,7 @@ var blockTypeNames = map[BlockType]string{
 	BlockSingleChoice: "Один из списка",
 	BlockDropdown:     "Выпадающий список",
 	BlockMultiChoice:  "Несколько из списка",
+	BlockMultiSelect:  "Теги",
 	BlockDate:         "Дата",
 	BlockConsent:      "Согласие",
 	BlockFile:         "Файл",

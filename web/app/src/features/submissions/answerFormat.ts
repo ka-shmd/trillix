@@ -1,4 +1,4 @@
-import { CONSENT_YES, type Block, isSingleChoiceType } from '@entities/formSchema'
+import { CONSENT_YES, type Block, isMultiChoiceType, isSingleChoiceType } from '@entities/formSchema'
 import { type AnswerFile, type AnswerValue } from '../../entities/submission'
 import { LOCALE } from '../../shared/format'
 
@@ -17,7 +17,7 @@ export function formatAnswer(
   if (block && isSingleChoiceType(block.type)) {
     return optionLabel(block, asString(value))
   }
-  if (block?.type === 'multi_choice') {
+  if (block && isMultiChoiceType(block.type)) {
     const ids = Array.isArray(value) ? value : [value]
     return ids.map((id) => optionLabel(block, id)).join(', ')
   }

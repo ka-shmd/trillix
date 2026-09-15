@@ -13,6 +13,7 @@ import { label } from './label'
 import { logic } from './logic'
 import { longText } from './longText'
 import { multiChoice } from './multiChoice'
+import { multiSelect } from './multiSelect'
 import { numberField } from './number'
 import { pageBreak } from './pageBreak'
 import { phone } from './phone'
@@ -42,6 +43,7 @@ export const BLOCK_KINDS: Record<BlockType, BlockKindContract> = {
   single_choice: singleChoice,
   dropdown,
   multi_choice: multiChoice,
+  multi_select: multiSelect,
   date,
   consent,
   file,

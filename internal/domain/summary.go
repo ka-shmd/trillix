@@ -293,7 +293,7 @@ func (a *summaryAcc) add(typ BlockType, raw json.RawMessage) {
 		}
 		a.answered++
 		a.counts[id]++
-	case typ == BlockMultiChoice:
+	case typ.isMultiChoice():
 		var ids []string
 		if json.Unmarshal(raw, &ids) != nil || len(ids) == 0 {
 			return

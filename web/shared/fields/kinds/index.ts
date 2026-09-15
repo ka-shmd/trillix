@@ -8,6 +8,7 @@ import { emailControl } from './email'
 import { fileControl } from './file'
 import { longTextControl } from './longText'
 import { multiChoiceControl } from './multiChoice'
+import { multiSelectControl } from './multiSelect'
 import { numberControl } from './number'
 import { phoneControl } from './phone'
 import { ratingControl } from './rating'
@@ -35,6 +36,7 @@ export const CONTROLS: Record<BlockType, Control | null> = {
   single_choice: singleChoiceControl,
   dropdown: dropdownControl,
   multi_choice: multiChoiceControl,
+  multi_select: multiSelectControl,
   date: dateControl,
   consent: consentControl,
   file: fileControl,

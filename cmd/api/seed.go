@@ -414,7 +414,7 @@ func seedAnswerValue(b domain.Block) (any, bool) {
 			return nil, false
 		}
 		return b.Settings.Options[rand.Intn(len(b.Settings.Options))].ID, true
-	case domain.BlockMultiChoice:
+	case domain.BlockMultiChoice, domain.BlockMultiSelect:
 		if len(b.Settings.Options) == 0 {
 			return nil, false
 		}

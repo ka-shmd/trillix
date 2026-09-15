@@ -119,6 +119,16 @@ describe('formSchemaSchema — валидные', () => {
     'рейтинг без числа звёзд — пять по умолчанию': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'rating', settings: {} }],
     },
+    'теги с вариантами': {
+      blocks: [
+        {
+          id: 'b',
+          groupId: 'g1',
+          type: 'multi_select',
+          settings: { options: [{ id: 'o1', label: 'Москва' }, { id: 'o2', label: 'Казань' }] },
+        },
+      ],
+    },
     'рейтинг из десяти звёзд': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'rating', settings: { ratingStars: 10 } }],
     },

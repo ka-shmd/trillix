@@ -22,6 +22,7 @@ import {
   ShieldCheck,
   Star,
   Tag,
+  Tags,
   Type,
   type LucideIcon,
 } from 'lucide-react'
@@ -61,6 +62,7 @@ export const BLOCK_ICONS: Record<BlockType, LucideIcon> = {
   single_choice: CircleDot,
   dropdown: ChevronDown,
   multi_choice: CheckSquare,
+  multi_select: Tags,
   date: Calendar,
   consent: ShieldCheck,
   file: Paperclip,

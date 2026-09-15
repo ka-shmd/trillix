@@ -29,6 +29,7 @@ const SPACE: Record<BlockType, SpaceStep> = {
   single_choice: 'base',
   dropdown: 'base',
   multi_choice: 'base',
+  multi_select: 'base',
   date: 'base',
   consent: 'base',
   file: 'base',

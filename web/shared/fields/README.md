@@ -321,6 +321,7 @@ TD-60): `iframe` со своим корнем React, куда зеркалятс
 | `single_choice` | Один из списка | ответ | `choice` | `options` | вопросы, поля | — |
 | `dropdown` | Выпадающий список | ответ | `choice` | `options` | вопросы, поля | — |
 | `multi_choice` | Несколько из списка | ответ | `choice` | `options` | вопросы, поля | — |
+| `multi_select` | Теги | ответ | `choice` | `options` | вопросы, поля | — |
 | `date` | Дата | ответ | `object` | — | вопросы, поля | — |
 | `consent` | Согласие | ответ | `text` | — | вопросы, поля | — |
 | `file` | Файл | ответ | `object` | `maxFiles`, `maxFileSize`, `accept` | вопросы, поля | есть |

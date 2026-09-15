@@ -474,6 +474,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `rating` | строка с целым числом от 1 до числа звёзд блока **той версии**, по которой отправлен ответ |
 | `single_choice`, `dropdown` | строка — id варианта |
 | `multi_choice` | массив строк — id вариантов |
+| `multi_select` | массив строк — id вариантов (как `multi_choice`, другой контрол) |
 | `consent` | строка `"yes"` (отмечено) или пусто (не отмечено) |
 
 Число, дата, шкала и согласие хранятся **строками**, а не числом/булевым, — это осознанная конвенция: тип `Answer` остаётся `string | string[]`, и «пусто» единообразно означает «не отвечено». У согласия это несущая деталь: булев `false` не равен `''`, не попал бы в `isEmpty` рендерера, и обязательность молча перестала бы работать.
@@ -584,7 +585,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 - `idx_submissions_form_id (form_id, id DESC)` (0005) — курсорный листинг ответов формы новыми сверху (фаза 6): `id` (UUIDv7) монотонен по времени, а `created_at` при пакетной вставке нестабилен, поэтому курсор и сортировка идут по `id`. Индекс покрывает фильтр по `form_id` и keyset/сортировку по `id` одной структурой.
 - `idx_submissions_form (form_id, created_at DESC)` (0004) — исходный сортировочный индекс листинга.
 
-**Формат `answers`** (зеркалит клиентский тип `Answer`, `web/shared/fields/answer.ts`): текстовые типы и `single_choice` — строка; `multi_choice` — массив id выбранных опций; `number`/`date` хранятся строкой, формат проверяет `ValidateAnswers`.
+**Формат `answers`** (зеркалит клиентский тип `Answer`, `web/shared/fields/answer.ts`): текстовые типы и `single_choice` — строка; `multi_choice` и `multi_select` — массив id выбранных опций; `number`/`date` хранятся строкой, формат проверяет `ValidateAnswers`.
 
 ---
 

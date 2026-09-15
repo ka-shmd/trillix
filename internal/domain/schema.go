@@ -142,8 +142,11 @@ const (
 	BlockSingleChoice BlockType = "single_choice"
 	BlockDropdown     BlockType = "dropdown"
 	BlockMultiChoice  BlockType = "multi_choice"
-	BlockDate         BlockType = "date"
-	BlockConsent      BlockType = "consent"
+	// BlockMultiSelect — «Теги»: несколько вариантов из выпадающего списка. От
+	// multi_choice отличается ТОЛЬКО контролом: те же опции, тот же ответ-массив id.
+	BlockMultiSelect BlockType = "multi_select"
+	BlockDate        BlockType = "date"
+	BlockConsent     BlockType = "consent"
 	// BlockFile — файл в ответе (фаза 24, design/answer-files.md). Ответ — массив
 	// id загрузок, выданных сервером; ни имени, ни размера, ни MIME в ответе нет:
 	// всё это утверждения клиента, а правда о файле лежит в submission_files и
@@ -204,8 +207,8 @@ const (
 var blockTypes = []BlockType{
 	// отвечаемые
 	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
-	BlockRating, BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent,
-	BlockFile, BlockSlot,
+	BlockRating, BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockMultiSelect, BlockDate,
+	BlockConsent, BlockFile, BlockSlot,
 	// подписи
 	BlockTitle, BlockLabel,
 	// контент, разрыв страницы, условная логика и заголовок формы
@@ -219,7 +222,7 @@ func (t BlockType) valid() bool { return slices.Contains(blockTypes, t) }
 // dropdown отличается от single_choice ТОЛЬКО контролом на фронте: та же модель
 // опций, тот же формат ответа.
 func (t BlockType) isChoice() bool {
-	return t == BlockSingleChoice || t == BlockDropdown || t == BlockMultiChoice
+	return t == BlockSingleChoice || t == BlockDropdown || t == BlockMultiChoice || t == BlockMultiSelect
 }
 
 // isSingleChoice — выбор ровно одного варианта (ответ — строка-id), в отличие от

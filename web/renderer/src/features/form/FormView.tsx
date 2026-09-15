@@ -8,7 +8,12 @@ import {
   type ReactNode,
 } from 'react'
 
-import { DEFAULT_NEXT_LABEL, DEFAULT_SUBMIT_LABEL, isAnswerableType } from '@entities/formSchema'
+import {
+  DEFAULT_NEXT_LABEL,
+  DEFAULT_SUBMIT_LABEL,
+  isAnswerableType,
+  isMultiChoiceType,
+} from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
 import { BlockField } from '@fields/BlockField'
 import {
@@ -159,7 +164,7 @@ export function FormView({
       readPrefill(window.location.search),
       (blockId) => {
         const block = form.schema.blocks.find((b) => b.id === blockId)
-        return block !== undefined && isAnswerableType(block.type) && block.type !== 'multi_choice'
+        return block !== undefined && isAnswerableType(block.type) && !isMultiChoiceType(block.type)
       },
     ),
   )

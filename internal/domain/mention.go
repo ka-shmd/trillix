@@ -153,7 +153,7 @@ func (c MentionContext) answerText(q Question) string {
 			return ""
 		}
 		return optionLabel(blockOptions(q.Block), id)
-	case BlockMultiChoice:
+	case BlockMultiChoice, BlockMultiSelect:
 		var ids []string
 		if json.Unmarshal(raw, &ids) != nil {
 			return ""
