@@ -524,3 +524,22 @@ SELECT EXISTS (
     SELECT 1 FROM integration_deliveries
     WHERE webhook_id = sqlc.arg(webhook_id)::uuid AND submission_id = sqlc.arg(submission_id) AND outcome = 'delivered'
 );
+
+-- СЧЁТЧИКИ АНАЛИТИКИ (фаза 29 DEV-PLAN, миграция 0067, спека docs/design/yandex-metrika.md).
+
+-- name: UpsertFormCounter :exec
+-- Подключение или правка счётчика вида kind: у формы один счётчик вида, поэтому
+-- повторное подключение правит номер и тумблер существующего, а не заводит второй.
+INSERT INTO form_counters (id, form_id, kind, counter, enabled)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (form_id, kind) DO UPDATE
+SET counter = EXCLUDED.counter, enabled = EXCLUDED.enabled, updated_at = now();
+
+-- name: GetFormCounter :one
+-- Счётчик вида kind у формы. form_id в условии — право доступа уже проверено
+-- сервисом по форме, id счётчика из адреса не приезжает вовсе.
+SELECT kind, counter, enabled FROM form_counters WHERE form_id = $1 AND kind = $2;
+
+-- name: DeleteFormCounter :execrows
+-- Снятие счётчика вида kind с формы.
+DELETE FROM form_counters WHERE form_id = $1 AND kind = $2;

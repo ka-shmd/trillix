@@ -87,7 +87,8 @@ func newStackWithEgress(t *testing.T, provider integrations.Provider, egress int
 
 	svc := integrations.NewService(testPool, postgres.TxRunner{Pool: testPool}, integrations.Repo{},
 		wsSvc, formsSvc, provider, testKey).
-		WithWebhooks(integrations.Repo{}, egress)
+		WithWebhooks(integrations.Repo{}, egress).
+		WithCounters(integrations.Repo{})
 	// Лимитер инжектируется пермиссивной реализацией, а не выключается (инвариант 6).
 	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey,
 		ratelimit.AllowAll{})

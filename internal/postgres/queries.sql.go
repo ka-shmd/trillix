@@ -1342,6 +1342,24 @@ func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const deleteFormCounter = `-- name: DeleteFormCounter :execrows
+DELETE FROM form_counters WHERE form_id = $1 AND kind = $2
+`
+
+type DeleteFormCounterParams struct {
+	FormID uuid.UUID
+	Kind   string
+}
+
+// Снятие счётчика вида kind с формы.
+func (q *Queries) DeleteFormCounter(ctx context.Context, arg DeleteFormCounterParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFormCounter, arg.FormID, arg.Kind)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteFormIntegration = `-- name: DeleteFormIntegration :execrows
 DELETE FROM form_integrations WHERE id = $1 AND form_id = $2
 `
@@ -2957,6 +2975,30 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 		&i.CreatedAt,
 		&i.UpdatedAt,
 	)
+	return i, err
+}
+
+const getFormCounter = `-- name: GetFormCounter :one
+SELECT kind, counter, enabled FROM form_counters WHERE form_id = $1 AND kind = $2
+`
+
+type GetFormCounterParams struct {
+	FormID uuid.UUID
+	Kind   string
+}
+
+type GetFormCounterRow struct {
+	Kind    string
+	Counter string
+	Enabled bool
+}
+
+// Счётчик вида kind у формы. form_id в условии — право доступа уже проверено
+// сервисом по форме, id счётчика из адреса не приезжает вовсе.
+func (q *Queries) GetFormCounter(ctx context.Context, arg GetFormCounterParams) (GetFormCounterRow, error) {
+	row := q.db.QueryRow(ctx, getFormCounter, arg.FormID, arg.Kind)
+	var i GetFormCounterRow
+	err := row.Scan(&i.Kind, &i.Counter, &i.Enabled)
 	return i, err
 }
 
@@ -8454,6 +8496,36 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.IsAdmin,
 	)
 	return i, err
+}
+
+const upsertFormCounter = `-- name: UpsertFormCounter :exec
+
+INSERT INTO form_counters (id, form_id, kind, counter, enabled)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (form_id, kind) DO UPDATE
+SET counter = EXCLUDED.counter, enabled = EXCLUDED.enabled, updated_at = now()
+`
+
+type UpsertFormCounterParams struct {
+	ID      uuid.UUID
+	FormID  uuid.UUID
+	Kind    string
+	Counter string
+	Enabled bool
+}
+
+// СЧЁТЧИКИ АНАЛИТИКИ (фаза 29 DEV-PLAN, миграция 0067, спека docs/design/yandex-metrika.md).
+// Подключение или правка счётчика вида kind: у формы один счётчик вида, поэтому
+// повторное подключение правит номер и тумблер существующего, а не заводит второй.
+func (q *Queries) UpsertFormCounter(ctx context.Context, arg UpsertFormCounterParams) error {
+	_, err := q.db.Exec(ctx, upsertFormCounter,
+		arg.ID,
+		arg.FormID,
+		arg.Kind,
+		arg.Counter,
+		arg.Enabled,
+	)
+	return err
 }
 
 const upsertFormVisit = `-- name: UpsertFormVisit :exec

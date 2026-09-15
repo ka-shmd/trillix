@@ -117,6 +117,9 @@ type Service struct {
 	// nil означает «сборка без вебхуков» (её нет в тестах связок Таблиц).
 	webhooks WebhookStore
 	egress   Egress
+	// counters — счётчики аналитики формы (фаза 29). Подключаются сеттером
+	// WithCounters; nil означает «сборка без счётчиков».
+	counters CounterStore
 	// notes — уведомления кабинета о поломке цели. Тем же сеттером и по той же
 	// причине, что webhooks; nil = уведомлений в сборке нет.
 	notes Notifications
@@ -415,6 +418,8 @@ type FormStatus struct {
 	// Webhooks — вебхуки формы в порядке заведения; без адреса у того, кто не
 	// вправе править форму (listWebhooks).
 	Webhooks []Webhook
+	// Metrika — счётчик Яндекс Метрики формы; nil — не подключён.
+	Metrika *Counter
 }
 
 // FormStatus читает состояние интеграций формы. Право — ActionFormRead внутри
@@ -441,12 +446,17 @@ func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (For
 	if err != nil {
 		return FormStatus{}, fmt.Errorf("form webhooks: %w", err)
 	}
+	metrika, err := s.formCounter(ctx, formID, CounterYandexMetrika)
+	if err != nil {
+		return FormStatus{}, fmt.Errorf("form counters: %w", err)
+	}
 	// Пустые списки — штатное состояние экрана: у формы просто нет интеграций.
 	return FormStatus{
 		WorkspaceID: form.WorkspaceID,
 		Account:     account,
 		Connections: links,
 		Webhooks:    webhooks,
+		Metrika:     metrika,
 	}, nil
 }
 

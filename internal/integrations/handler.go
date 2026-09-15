@@ -73,6 +73,8 @@ type integrationsService interface {
 	SetWebhookSecret(ctx context.Context, userID, formID, webhookID uuid.UUID, secret string) error
 	DisableWebhookSignature(ctx context.Context, userID, formID, webhookID uuid.UUID) error
 	DeleteWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) error
+	SetCounter(ctx context.Context, userID, formID uuid.UUID, kind string, in CounterInput) (Counter, error)
+	DeleteCounter(ctx context.Context, userID, formID uuid.UUID, kind string) error
 }
 
 // RateLimiter — лимитер проверки вебхука. Реализация — ratelimit.TokenBucket; в
@@ -177,6 +179,15 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/forms/{id}/webhooks/{webhookId}/test",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.testWebhook))))
 
+	// Счётчики аналитики — своё семейство под формой, как вебхуки: литеральный
+	// путь под …/integrations/{connectionId} маршрутизатор выбирал бы раньше
+	// шаблона связки, и одно место адресов молча значило бы две вещи. Читаются
+	// тем же состоянием таба (GET …/integrations).
+	mux.Handle("PUT /api/v1/forms/{id}/counters/yandex-metrika",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.setMetrika))))
+	mux.Handle("DELETE /api/v1/forms/{id}/counters/yandex-metrika",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.deleteMetrika))))
+
 	// Один адрес на «подключить ещё один» и «переподключить»: возврат у них
 	// общий, а различает их необязательный accountId — почта названного аккаунта
 	// уезжает провайдеру подсказкой, и человек попадает сразу в нужный аккаунт.
@@ -263,6 +274,8 @@ type formStatusResponse struct {
 	Connections []sheetResponse `json:"connections"`
 	// Webhooks — вебхуки формы; пустой список — тоже состояние экрана.
 	Webhooks []webhookResponse `json:"webhooks"`
+	// Metrika — счётчик Яндекс Метрики формы; `null` — не подключён.
+	Metrika *counterResponse `json:"metrika"`
 }
 
 // webhookResponse — вебхук глазами экрана.
@@ -361,6 +374,7 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 	for _, wh := range st.Webhooks {
 		resp.Webhooks = append(resp.Webhooks, toWebhookResponse(wh))
 	}
+	resp.Metrika = toCounterResponse(st.Metrika)
 	httpserver.WriteJSON(w, r, http.StatusOK, resp)
 }
 

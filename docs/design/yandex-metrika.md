@@ -59,7 +59,7 @@
 
 ## 3. Образец и чем отличаемся
 
-WebAsk ([страница интеграции](https://webask.io/integrations/yandex-metrika), справка
+WebAsk ([страница интеграции](https://webask.io/counters/yandex-metrika), справка
 `webask.io/help/yandex-metrika`): настройки опроса → «Интеграции» → номер счётчика и тумблер
 вебвизора; цели `survey_start` (открыл) и `survey_complete` (отправил); только платные тарифы;
 VK Pixel и Google Analytics подключаются там же. Про встроенный опрос в справке не сказано
@@ -83,9 +83,9 @@ VK Pixel и Google Analytics подключаются там же. Про вст
 
 **Ручки** (кабинет, за `RequireAuth`):
 
-- `PUT /forms/{id}/integrations/yandex-metrika` — `{ "counter": "12345678", "enabled": true }`,
+- `PUT /forms/{id}/counters/yandex-metrika` — `{ "counter": "12345678", "enabled": true }`,
   заводит или правит; тумблер строки — тот же `PUT`. Право `form.write`.
-- `DELETE /forms/{id}/integrations/yandex-metrika` — снять. Право `form.write`.
+- `DELETE /forms/{id}/counters/yandex-metrika` — снять. Право `form.write`.
 - `GET /forms/{id}/integrations` получает поле `metrika: { counter, enabled } | null`. Номер не
   секрет (он виден в коде любой страницы со счётчиком), поэтому приходит всем с `form.read`.
 
