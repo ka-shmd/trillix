@@ -4,7 +4,7 @@ import { toApiError } from './errors'
 
 const BASE = '/api/v1'
 
-type Method = 'GET' | 'POST' | 'PATCH' | 'DELETE'
+type Method = 'GET' | 'POST' | 'PUT' | 'PATCH' | 'DELETE'
 
 interface RequestOptions<T> {
   method?: Method

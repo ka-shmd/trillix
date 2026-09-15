@@ -2,18 +2,24 @@ import { useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { History, Pencil, Trash2 } from 'lucide-react'
 
-import type { FormSheet, Webhook } from '../../entities/integration'
+import type { FormSheet, MetrikaCounter, Webhook } from '../../entities/integration'
 import { DeliveriesDialog } from './DeliveriesDialog'
 import { GoogleSheetsOverlay } from './GoogleSheetsOverlay'
+import { MetrikaOverlay } from './MetrikaOverlay'
 import { WebhookOverlay } from './WebhookOverlay'
-import { GoogleSheetsIcon, WebhookIcon } from './ServiceIcon'
+import { GoogleSheetsIcon, MetrikaIcon, WebhookIcon } from './ServiceIcon'
 import {
   formIntegrationsQueryOptions,
+  useDeleteMetrika,
   useDeleteWebhook,
+  useSetMetrika,
   useUnlinkSheet,
   useUpdateConnection,
   useUpdateWebhook,
 } from './queries'
+import { PlanUpsell } from '../plan/PlanUpsell'
+import { useFeatureAllowed } from '../plan/useFeature'
+import { ProTag } from '../../shared/ProTag'
 import { Section } from '../../shared/page/Section'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
 import {
@@ -51,11 +57,17 @@ const SERVICE_ICON = 'size-10'
 // Overlay — какое окно настройки открыто. Вид цели входит в состояние: окон
 // два (таблица и вебхук), и по одному id их больше не различить. id пуст —
 // подключаем новую цель этого вида.
-type Overlay = { kind: 'sheet' | 'webhook'; id: string | null }
+// Счётчик Метрики у формы один, поэтому id у его окна всегда null.
+type Overlay = { kind: 'sheet' | 'webhook' | 'metrika'; id: string | null }
 
 export function IntegrationsView({ formId }: { formId: string }) {
   const state = useQuery(formIntegrationsQueryOptions(formId))
   const [overlay, setOverlay] = useState<Overlay | null>(null)
+  // Тариф спрашивается ДО ранних возвратов: условный вызов хука ломает их порядок.
+  // Гейт счётчика стоит на отдаче формы (BILLING §10), здесь — только разговор о
+  // тарифе вместо подключения и правда в строке уже подключённого.
+  const metrikaAllowed = useFeatureAllowed('form_counters')
+  const [upsell, setUpsell] = useState(false)
 
   if (state.isPending) {
     return <LoadingRows rows={2} />
@@ -64,11 +76,11 @@ export function IntegrationsView({ formId }: { formId: string }) {
     return <ErrorState title="Не удалось загрузить интеграции." onRetry={() => state.refetch()} />
   }
 
-  const { connections, account, webhooks } = state.data
+  const { connections, account, webhooks, metrika } = state.data
   const editingSheet = connections.find((c) => c.id === overlay?.id) ?? null
   const editingWebhook = webhooks.find((w) => w.id === overlay?.id) ?? null
   // Список непустой, когда есть хоть одна цель любого вида.
-  const anyConnected = connections.length > 0 || webhooks.length > 0
+  const anyConnected = connections.length > 0 || webhooks.length > 0 || metrika !== null
   // Аккаунт, потерявший токен, — ЭТОТ, а не «аккаунт пространства»: связки одной
   // формы могут ехать разными подключениями (и даже чужими). Чужого в списке
   // спрашивающего нет, и про него мы правды не знаем — считаем, что всё цело:
@@ -107,6 +119,16 @@ export function IntegrationsView({ formId }: { formId: string }) {
                 />
               </li>
             ))}
+            {metrika && (
+              <li>
+                <MetrikaRow
+                  formId={formId}
+                  metrika={metrika}
+                  allowed={metrikaAllowed}
+                  onEdit={() => setOverlay({ kind: 'metrika', id: null })}
+                />
+              </li>
+            )}
           </ul>
         </Section>
       )}
@@ -151,8 +173,34 @@ export function IntegrationsView({ formId }: { formId: string }) {
               Подключить
             </Button>
           </li>
+          <li className="flex flex-col items-start">
+            <MetrikaIcon className={SERVICE_ICON} />
+            {/* Метка стоит всегда, а не только на бесплатном тарифе: она называет
+                условие, при котором счётчик сработает, — тот же довод, что у тумблера
+                бейджа на экране «Встроить». */}
+            <p className="mt-2 flex items-center gap-2 text-base font-semibold">
+              Яндекс Метрика
+              <ProTag />
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Отмечайте цели формы в своём счётчике
+            </p>
+            {/* Счётчик у формы один: у подключённого плитка открывает его же
+                настройку. На тарифе без ключа — разговор о тарифе вместо окна. */}
+            <Button
+              variant="link"
+              className="mt-4 h-auto p-0 text-sm text-primary"
+              aria-label="Подключить Яндекс Метрику"
+              onClick={() =>
+                metrikaAllowed ? setOverlay({ kind: 'metrika', id: null }) : setUpsell(true)
+              }
+            >
+              Подключить
+            </Button>
+          </li>
         </ul>
       </Section>
+      <PlanUpsell open={upsell} onOpenChange={setUpsell} />
 
       {overlay?.kind === 'sheet' && (
         <GoogleSheetsOverlay
@@ -168,6 +216,9 @@ export function IntegrationsView({ formId }: { formId: string }) {
           webhook={editingWebhook}
           onClose={() => setOverlay(null)}
         />
+      )}
+      {overlay?.kind === 'metrika' && (
+        <MetrikaOverlay formId={formId} metrika={metrika} onClose={() => setOverlay(null)} />
       )}
     </div>
   )
@@ -580,6 +631,103 @@ function webhookStatus(webhook: Webhook): DotState {
     color: 'bg-success',
     label: 'Работает',
     text: 'Ответы уходят на ваш адрес сразу после отправки формы.',
+    pulsing: false,
+  }
+}
+
+// MetrikaRow — строка счётчика Метрики: то же устройство, что у соседних строк, но
+// без журнала — доставки у счётчика нет, цели отмечает браузер респондента.
+function MetrikaRow({
+  formId,
+  metrika,
+  allowed,
+  onEdit,
+}: {
+  formId: string
+  metrika: MetrikaCounter
+  // allowed — тариф пространства даёт счётчик. Нет — настройка сохранена, но на
+  // странице формы счётчика нет, и строка обязана это сказать.
+  allowed: boolean
+  onEdit: () => void
+}) {
+  const update = useSetMetrika(formId)
+  const remove = useDeleteMetrika(formId)
+  const [confirming, setConfirming] = useState(false)
+
+  return (
+    <div className="flex items-center gap-3 py-3">
+      <MetrikaIcon className={`${SERVICE_ICON} shrink-0`} />
+      <div className="min-w-0 flex-1">
+        <p className="flex items-center gap-2 text-base font-semibold">
+          <span className="truncate">Яндекс Метрика</span>
+          <StatusDot {...metrikaStatus(metrika, allowed)} />
+        </p>
+        <p className="mt-1 truncate text-sm text-muted-foreground">
+          Цели отмечаются в счётчике {metrika.counter}
+        </p>
+      </div>
+
+      <Switch
+        className="data-[state=checked]:bg-success"
+        checked={metrika.enabled}
+        disabled={update.isPending}
+        aria-label={metrika.enabled ? 'Выключить счётчик' : 'Включить счётчик'}
+        onCheckedChange={(enabled) => update.mutate({ counter: metrika.counter, enabled })}
+      />
+      <div className="flex items-center">
+        <RowAction icon={Pencil} label="Настроить счётчик" onClick={onEdit} />
+        <RowAction
+          icon={Trash2}
+          label="Удалить счётчик"
+          className="ml-1 hover:text-destructive"
+          onClick={() => setConfirming(true)}
+        />
+      </div>
+
+      <AlertDialog open={confirming} onOpenChange={setConfirming}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Удалить счётчик?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Цели формы перестанут отмечаться. Сам счётчик и всё, что он уже собрал, останутся в
+              Метрике.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Отмена</AlertDialogCancel>
+            <AlertDialogAction onClick={() => remove.mutate()}>Удалить</AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+    </div>
+  )
+}
+
+// Зелёная точка значит «счётчик стоит на странице формы», а не «цели доходят»: доходят
+// ли они, видно только в самой Метрике (design/yandex-metrika.md §8).
+function metrikaStatus(metrika: MetrikaCounter, allowed: boolean): DotState {
+  if (!metrika.enabled) {
+    return {
+      color: 'bg-muted-foreground/40',
+      label: 'Выключено',
+      text: 'Выключено: счётчика на странице формы нет, цели не отмечаются.',
+      pulsing: false,
+    }
+  }
+  // Тариф — не поломка, чинить здесь нечего: пульс звал бы к действию, которого на
+  // этом экране нет.
+  if (!allowed) {
+    return {
+      color: 'bg-warning',
+      label: 'Не работает на текущем тарифе',
+      text: 'На текущем тарифе счётчик не работает: на странице формы его нет. Настройка сохранена.',
+      pulsing: false,
+    }
+  }
+  return {
+    color: 'bg-success',
+    label: 'Работает',
+    text: 'Счётчик стоит на странице формы. Засчитанные цели видны в самой Метрике.',
     pulsing: false,
   }
 }
