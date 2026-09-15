@@ -14,7 +14,7 @@ import { type Answer } from '@fields/answer'
 //      законченным ответом, и форма улетала бы вперёд посреди слова.
 //
 // Пустой ответ (снятый выбор) не листает: это не ответ, а его отмена.
-const JUMPING_TYPES = new Set(['single_choice', 'dropdown', 'scale'])
+const JUMPING_TYPES = new Set(['single_choice', 'dropdown', 'scale', 'rating'])
 
 // Пауза перед переходом. Страница, исчезающая в тот же миг, читается как сбой:
 // человек не успевает увидеть, что выбор принят. Четверть секунды — ровно столько,

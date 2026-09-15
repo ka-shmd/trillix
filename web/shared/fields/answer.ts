@@ -1,5 +1,5 @@
 // Ответ на один блок формы. Текстовые типы и single_choice хранят строку;
-// multi_choice — массив id выбранных опций. Общий тип для рендерера (useReducer
+// множественный выбор (multi_choice, multi_select) — массив id выбранных опций. Общий тип для рендерера (useReducer
 // хранит карту blockId → Answer) и контролов полей @fields.
 export type Answer = string | string[]
 

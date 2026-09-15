@@ -461,6 +461,10 @@ func rebuildUnit(old []Block, item PlanItem) []Block {
 	} else {
 		updated.Settings.ScaleMin, updated.Settings.ScaleMax = nil, nil
 	}
+	// Число звёзд уходит вместе с типом по той же причине, что диапазон шкалы.
+	if item.Type != BlockRating {
+		updated.Settings.RatingStars = 0
+	}
 
 	// Текст согласия живёт в САМОМ блоке, поэтому отдельная подпись ему не нужна и
 	// снимается: две строки об одном — это не вопрос с заголовком, а дубль.

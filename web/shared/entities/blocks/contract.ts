@@ -18,9 +18,13 @@ export const BLOCK_TYPES = [
   'phone',
   'number',
   'scale',
+  // рейтинг звёздами: ответ — строка с числом 1..N, как у шкалы
+  'rating',
   'single_choice',
   'dropdown',
   'multi_choice',
+  // теги: те же опции и тот же ответ-массив, что у multi_choice, другой контрол
+  'multi_select',
   'date',
   'consent',
   // файл в ответе (фаза 24): значение — массив id загрузок, выданных сервером.

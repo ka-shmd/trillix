@@ -9,7 +9,7 @@ import {
   isAnswerableType,
   isChoiceType,
   plainText,
-  scaleRange,
+  markRange,
 } from '@entities/formSchema'
 import { pageName, pageNumbers, thankYouOpener } from '@fields/groups'
 import { canReferenceAnswer, operatorsFor, ruleWarnings } from '@fields/logic'
@@ -71,8 +71,8 @@ export function valueChoices(source: Block): { value: string; label: string }[] 
       label: o.label.trim() || 'Без названия',
     }))
   }
-  if (source.type === 'scale') {
-    const { min, max } = scaleRange(source)
+  if (source.type === 'scale' || source.type === 'rating') {
+    const { min, max } = markRange(source)
     return Array.from({ length: max - min + 1 }, (_, i) => ({
       value: String(min + i),
       label: String(min + i),

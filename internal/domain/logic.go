@@ -142,7 +142,7 @@ func valueDomain(t BlockType) string {
 	switch t {
 	case BlockShortText, BlockLongText, BlockEmail, BlockPhone:
 		return "text"
-	case BlockNumber, BlockScale:
+	case BlockNumber, BlockScale, BlockRating:
 		return "number"
 	case BlockDate:
 		return "date"
@@ -776,7 +776,7 @@ func orderHolds(sign int, op LogicOp) bool {
 // «5.0» — один ответ, а строковое сравнение сделало бы условие зависящим от того, как
 // респондент напечатал число.
 func sameAnswer(t BlockType, answer, want string) bool {
-	if t == BlockScale || t == BlockNumber {
+	if t.isScaleLike() || t == BlockNumber {
 		a, errA := strconv.ParseFloat(answer, 64)
 		b, errB := strconv.ParseFloat(want, 64)
 		if errA == nil && errB == nil {

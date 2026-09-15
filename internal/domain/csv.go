@@ -204,7 +204,7 @@ func formatCell(view blockView, raw json.RawMessage) string {
 			return ""
 		}
 		return optionLabel(view.options, id)
-	case BlockMultiChoice:
+	case BlockMultiChoice, BlockMultiSelect:
 		var ids []string
 		if json.Unmarshal(raw, &ids) != nil {
 			return ""

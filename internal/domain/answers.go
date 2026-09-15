@@ -128,7 +128,7 @@ func validateAnswer(b Block, raw json.RawMessage, required bool) string {
 	if b.Type.isChoice() {
 		return validateChoiceAnswer(b, raw, required)
 	}
-	if b.Type == BlockScale {
+	if b.Type.isScaleLike() {
 		return validateScaleAnswer(b, raw, required)
 	}
 	if b.Type == BlockConsent {
@@ -303,9 +303,13 @@ func validateScaleAnswer(b Block, raw json.RawMessage, required bool) string {
 	return ""
 }
 
-// scaleRange — диапазон шкалы блока с фолбэком на дефолт, если схема его не несёт
-// (черновик без диапазона; редактор такой не создаёт). Зеркалит scaleRange на фронте.
+// scaleRange — диапазон ответа блока с рядом делений: у рейтинга 1..число звёзд, у
+// шкалы — из настроек с фолбэком на дефолт, если схема его не несёт (черновик без
+// диапазона; редактор такой не создаёт). Зеркалит markRange на фронте.
 func scaleRange(b Block) (int, int) {
+	if b.Type == BlockRating {
+		return 1, ratingStars(b)
+	}
 	min, max := DefaultScaleMin, DefaultScaleMax
 	if b.Settings.ScaleMin != nil && b.Settings.ScaleMax != nil {
 		min, max = *b.Settings.ScaleMin, *b.Settings.ScaleMax

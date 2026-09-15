@@ -317,9 +317,11 @@ TD-60): `iframe` со своим корнем React, куда зеркалятс
 | `phone` | Телефон | ответ | `placeholder` | — | вопросы, поля | — |
 | `number` | Число | ответ | `placeholder` | — | вопросы, поля | — |
 | `scale` | Шкала | ответ | `object` | `scaleMin`, `scaleMax` | вопросы, поля | есть |
+| `rating` | Рейтинг | ответ | `object` | `ratingStars` | вопросы, поля | есть |
 | `single_choice` | Один из списка | ответ | `choice` | `options` | вопросы, поля | — |
 | `dropdown` | Выпадающий список | ответ | `choice` | `options` | вопросы, поля | — |
 | `multi_choice` | Несколько из списка | ответ | `choice` | `options` | вопросы, поля | — |
+| `multi_select` | Теги | ответ | `choice` | `options` | вопросы, поля | — |
 | `date` | Дата | ответ | `object` | — | вопросы, поля | — |
 | `consent` | Согласие | ответ | `text` | — | вопросы, поля | — |
 | `file` | Файл | ответ | `object` | `maxFiles`, `maxFileSize`, `accept` | вопросы, поля | есть |

@@ -112,6 +112,12 @@ export const SCALE_LOWER_BOUND = 0
 export const SCALE_UPPER_BOUND = 10
 export const DEFAULT_SCALE_MIN = 1
 export const DEFAULT_SCALE_MAX = 5
+// Число звёзд рейтинга. Зеркалят RatingStarsMin/RatingStarsMax/DefaultRatingStars. Низ —
+// 3: две звезды читаются как «да/нет». Верх — 10, как у шкалы: ряд кнопок на телефоне.
+// Отсутствие ключа (и ноль — Go хранит int с omitempty) значит DEFAULT_RATING_STARS.
+export const RATING_STARS_MIN = 3
+export const RATING_STARS_MAX = 10
+export const DEFAULT_RATING_STARS = 5
 // Свой CSS формы (фаза 22, слайс 7). Зеркалят MaxCustomCSSLen/MaxBlockClassLen.
 // Потолок объёма — одна из трёх мер против того, чего валидатор проверить не может:
 // разобрать CSS мы не умеем, поэтому ограничиваем объём, тариф и ставим правило-сторож

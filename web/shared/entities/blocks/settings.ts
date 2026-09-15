@@ -75,6 +75,8 @@ export const settingsSchema = z.strictObject({
   // опций.
   scaleMin: z.number().int().optional(),
   scaleMax: z.number().int().optional(),
+  // Число звёзд рейтинга (тип rating). Диапазон проверяет сам тип (blocks/rating.ts).
+  ratingStars: z.number().int().optional(),
   // Настройки блока file (фаза 24). Диапазон проверяет сам тип (blocks/file.ts,
   // issues), как и у шкалы: здесь — форма значения, там — правило типа. Отсутствие
   // ключа читается как дефолт (DEFAULT_MAX_FILES/DEFAULT_MAX_FILE_SIZE_MIB), и
@@ -129,6 +131,7 @@ export type OwnedSettingKey =
   | 'imageKey'
   | 'scaleMin'
   | 'scaleMax'
+  | 'ratingStars'
   | 'maxFiles'
   | 'maxFileSize'
   | 'accept'
@@ -161,6 +164,9 @@ export const OWNED_SETTINGS: ReadonlyArray<{
   { key: 'imageKey', noun: 'картинки', present: (v) => Boolean(v) },
   { key: 'scaleMin', noun: 'шкалы', present: (v) => v !== undefined },
   { key: 'scaleMax', noun: 'шкалы', present: (v) => v !== undefined },
+  // Ноль у рейтинга значит «не задано» (как в Go), поэтому и у чужого типа ноль не
+  // считается заданным.
+  { key: 'ratingStars', noun: 'звёзд', present: (v) => typeof v === 'number' && v !== 0 },
   // Три ключа блока file делят одно существительное — как пара шкалы: на чужом типе
   // они дают ОДНО замечание, а не три про одно и то же.
   { key: 'maxFiles', noun: 'файлов', present: (v) => v !== undefined },

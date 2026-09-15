@@ -16,9 +16,11 @@ import { label } from './label'
 import { logic } from './logic'
 import { longText } from './longText'
 import { multiChoice } from './multiChoice'
+import { multiSelect } from './multiSelect'
 import { numberField } from './number'
 import { pageBreak } from './pageBreak'
 import { phone } from './phone'
+import { rating } from './rating'
 import { scale } from './scale'
 import { shortText } from './shortText'
 import { singleChoice } from './singleChoice'
@@ -36,9 +38,11 @@ export const EDITOR_KINDS: Record<BlockType, EditorKind> = {
   phone,
   number: numberField,
   scale,
+  rating,
   single_choice: singleChoice,
   dropdown,
   multi_choice: multiChoice,
+  multi_select: multiSelect,
   date,
   consent,
   file,
@@ -80,4 +84,4 @@ export const textIsBold = (t: BlockType): boolean => {
 // разошёлся бы с первым молча.
 export const orderedTypes: ReadonlyArray<BlockType> = BLOCK_TYPES
 
-export { type EditorKind, type RowFacts, type RowSurface } from './contract'
+export { type EditorKind, type OptionLook, type RowFacts, type RowSurface } from './contract'

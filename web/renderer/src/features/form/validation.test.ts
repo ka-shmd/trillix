@@ -49,6 +49,17 @@ describe('validateBlock — формат', () => {
   })
 })
 
+describe('validateBlock — рейтинг', () => {
+  it('оценка от 1 до числа звёзд, ноля нет', () => {
+    const five = block({ type: 'rating' })
+    expect(validateBlock(five, '1')).toBeNull()
+    expect(validateBlock(five, '5')).toBeNull()
+    expect(validateBlock(five, '0')).toBe('Выберите значение 1–5')
+    expect(validateBlock(five, '6')).toBe('Выберите значение 1–5')
+    expect(validateBlock(block({ type: 'rating', settings: { ratingStars: 10 } }), '10')).toBeNull()
+  })
+})
+
 describe('validateAll', () => {
   it('собирает только невалидные блоки', () => {
     const blocks = [

@@ -44,7 +44,7 @@ const (
 // бы «заполнили N» вместо распределения.
 func (t BlockType) summaryKind() SummaryKind {
 	switch {
-	case t.isChoice(), t == BlockScale, t == BlockConsent:
+	case t.isChoice(), t.isScaleLike(), t == BlockConsent:
 		return SummaryDistribution
 	case t == BlockNumber:
 		return SummaryNumber
@@ -209,7 +209,7 @@ func NewSummaryBuilder(versions []VersionedSchema) *SummaryBuilder {
 			counts:      make(map[string]int),
 			sampleLimit: SamplesLimit,
 		}
-		if q.Block.Type == BlockScale {
+		if q.Block.Type.isScaleLike() {
 			// Диапазон — из свежайшей версии с этим блоком (q.Block): деления шкалы
 			// показываем те, что видит сегодняшний респондент.
 			a.scaleMin, a.scaleMax = scaleRange(q.Block)
@@ -293,7 +293,7 @@ func (a *summaryAcc) add(typ BlockType, raw json.RawMessage) {
 		}
 		a.answered++
 		a.counts[id]++
-	case typ == BlockMultiChoice:
+	case typ.isMultiChoice():
 		var ids []string
 		if json.Unmarshal(raw, &ids) != nil || len(ids) == 0 {
 			return
@@ -312,7 +312,7 @@ func (a *summaryAcc) add(typ BlockType, raw json.RawMessage) {
 		}
 		a.answered++
 		a.counts[ConsentYes]++
-	case typ == BlockScale:
+	case typ.isScaleLike():
 		v, ok := decodeString(raw)
 		if !ok {
 			return
@@ -458,7 +458,7 @@ func (a *summaryAcc) buckets() []SummaryBucket {
 			{Key: ConsentYes, Label: "Да", Count: a.answered},
 			{Key: "", Label: "Нет", Count: a.asked - a.answered},
 		}
-	case BlockScale:
+	case BlockScale, BlockRating:
 		return a.scaleBuckets()
 	default:
 		// Остальные распределения — choice-типы: варианты из объединения версий.

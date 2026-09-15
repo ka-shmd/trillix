@@ -414,7 +414,7 @@ func seedAnswerValue(b domain.Block) (any, bool) {
 			return nil, false
 		}
 		return b.Settings.Options[rand.Intn(len(b.Settings.Options))].ID, true
-	case domain.BlockMultiChoice:
+	case domain.BlockMultiChoice, domain.BlockMultiSelect:
 		if len(b.Settings.Options) == 0 {
 			return nil, false
 		}
@@ -443,6 +443,17 @@ func seedAnswerValue(b domain.Block) (any, bool) {
 		// случайных чисел, каким она и была бы.
 		v := min + rand.Intn(max-min+1)
 		if w := min + rand.Intn(max-min+1); w > v {
+			v = w
+		}
+		return strconv.Itoa(v), true
+	case domain.BlockRating:
+		n := domain.DefaultRatingStars
+		if b.Settings.RatingStars != 0 {
+			n = b.Settings.RatingStars
+		}
+		// Смещение вверх — как у шкалы.
+		v := 1 + rand.Intn(n)
+		if w := 1 + rand.Intn(n); w > v {
 			v = w
 		}
 		return strconv.Itoa(v), true

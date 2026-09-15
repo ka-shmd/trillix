@@ -73,6 +73,13 @@ const (
 	// Диапазон новой шкалы и фолбэк для схемы без него. Зеркалят DEFAULT_SCALE_*.
 	DefaultScaleMin = 1
 	DefaultScaleMax = 5
+	// Число звёзд рейтинга. Зеркалят RATING_STARS_* и DEFAULT_RATING_STARS. Низ — 3:
+	// две звезды читаются как «да/нет», для этого есть согласие и выбор. Верх — 10, как
+	// у шкалы: ряд кнопок, на телефоне больше в строку не помещается. Ноль в
+	// настройках — «не задано», читается как DefaultRatingStars.
+	RatingStarsMin     = 3
+	RatingStarsMax     = 10
+	DefaultRatingStars = 5
 	// Границы блока file (фаза 24). Зеркалят MAX_FILES_*/MAX_FILE_SIZE_* в limits.ts.
 	//
 	// Верх числа файлов — 10, верх размера — 25 МиБ: и то и другое умножается на
@@ -123,17 +130,23 @@ type BlockType string
 
 const (
 	// Отвечаемые.
-	BlockShortText    BlockType = "short_text"
-	BlockLongText     BlockType = "long_text"
-	BlockEmail        BlockType = "email"
-	BlockPhone        BlockType = "phone"
-	BlockNumber       BlockType = "number"
-	BlockScale        BlockType = "scale"
+	BlockShortText BlockType = "short_text"
+	BlockLongText  BlockType = "long_text"
+	BlockEmail     BlockType = "email"
+	BlockPhone     BlockType = "phone"
+	BlockNumber    BlockType = "number"
+	BlockScale     BlockType = "scale"
+	// BlockRating — оценка звёздами 1..N. Ответ — строка с числом, как у шкалы, и
+	// проверяется, сравнивается и сводится так же (isScaleLike).
+	BlockRating       BlockType = "rating"
 	BlockSingleChoice BlockType = "single_choice"
 	BlockDropdown     BlockType = "dropdown"
 	BlockMultiChoice  BlockType = "multi_choice"
-	BlockDate         BlockType = "date"
-	BlockConsent      BlockType = "consent"
+	// BlockMultiSelect — «Теги»: несколько вариантов из выпадающего списка. От
+	// multi_choice отличается ТОЛЬКО контролом: те же опции, тот же ответ-массив id.
+	BlockMultiSelect BlockType = "multi_select"
+	BlockDate        BlockType = "date"
+	BlockConsent     BlockType = "consent"
 	// BlockFile — файл в ответе (фаза 24, design/answer-files.md). Ответ — массив
 	// id загрузок, выданных сервером; ни имени, ни размера, ни MIME в ответе нет:
 	// всё это утверждения клиента, а правда о файле лежит в submission_files и
@@ -194,8 +207,8 @@ const (
 var blockTypes = []BlockType{
 	// отвечаемые
 	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
-	BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockDate, BlockConsent, BlockFile,
-	BlockSlot,
+	BlockRating, BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockMultiSelect, BlockDate,
+	BlockConsent, BlockFile, BlockSlot,
 	// подписи
 	BlockTitle, BlockLabel,
 	// контент, разрыв страницы, условная логика и заголовок формы
@@ -209,7 +222,7 @@ func (t BlockType) valid() bool { return slices.Contains(blockTypes, t) }
 // dropdown отличается от single_choice ТОЛЬКО контролом на фронте: та же модель
 // опций, тот же формат ответа.
 func (t BlockType) isChoice() bool {
-	return t == BlockSingleChoice || t == BlockDropdown || t == BlockMultiChoice
+	return t == BlockSingleChoice || t == BlockDropdown || t == BlockMultiChoice || t == BlockMultiSelect
 }
 
 // isSingleChoice — выбор ровно одного варианта (ответ — строка-id), в отличие от
@@ -318,6 +331,9 @@ type BlockSettings struct {
 	ImageKey    string   `json:"imageKey,omitempty"`
 	ScaleMin    *int     `json:"scaleMin,omitempty"`
 	ScaleMax    *int     `json:"scaleMax,omitempty"`
+	// RatingStars — число звёзд рейтинга. Ноль — «не задано» (DefaultRatingStars):
+	// звёзд меньше RatingStarsMin не бывает, поэтому указатель, как у шкалы, не нужен.
+	RatingStars int `json:"ratingStars,omitempty"`
 	// Настройки блока file (фаза 24). Нули означают «автор не трогал» и читаются
 	// как дефолты (DefaultMaxFiles/DefaultMaxFileSizeMiB) — указатели здесь не
 	// нужны в отличие от шкалы: ноль файлов и файл нулевого размера не имеют
@@ -802,6 +818,9 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 		}
 	}
 	if err := validateScaleSettings(b); err != nil {
+		return schemaErr("%s: %s", at, err)
+	}
+	if err := validateRatingSettings(b); err != nil {
 		return schemaErr("%s: %s", at, err)
 	}
 	if err := validateFileSettings(b); err != nil {

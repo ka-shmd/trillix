@@ -94,6 +94,7 @@ export {
   type Settings,
 } from './blocks/settings'
 export { scaleRange } from './blocks/scale'
+export { markRange, ratingCount } from './blocks/rating'
 
 // Текст кнопки отправки по умолчанию (когда submitLabel в схеме пуст).
 export const DEFAULT_SUBMIT_LABEL = 'Отправить'
