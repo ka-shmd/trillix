@@ -117,12 +117,22 @@ export const webhookTestSchema = z.object({
   ms: z.number().default(0),
 })
 
+// Счётчик Яндекс Метрики формы (фаза 29). Номер не секрет — он виден в коде любой
+// страницы со счётчиком, поэтому приходит всем, кто видит форму.
+export const metrikaCounterSchema = z.object({
+  counter: z.string(),
+  // enabled — тумблер. Выключенный счётчик на странице формы не запускается.
+  enabled: z.boolean(),
+})
+
 export const formIntegrationsSchema = z.object({
   workspaceId: z.string(),
   account: integrationAccountSchema,
   // Пустой список — состояние экрана, а не ошибка: у формы просто нет связок.
   connections: z.array(formSheetSchema),
   webhooks: z.array(webhookSchema).default([]),
+  // null — счётчик не подключён.
+  metrika: metrikaCounterSchema.nullable().default(null),
 })
 
 // Одна попытка доставки в журнале связки (INTEGRATIONS.md §12). Зеркалит
@@ -186,6 +196,7 @@ export type IntegrationAccount = z.infer<typeof integrationAccountSchema>
 export type FormSheet = z.infer<typeof formSheetSchema>
 export type SheetStatus = z.infer<typeof sheetStatusSchema>
 export type FormIntegrations = z.infer<typeof formIntegrationsSchema>
+export type MetrikaCounter = z.infer<typeof metrikaCounterSchema>
 export type Delivery = z.infer<typeof deliverySchema>
 export type DeliveryOutcome = z.infer<typeof deliveryOutcomeSchema>
 export type DeliveryPage = z.infer<typeof deliveryPageSchema>
