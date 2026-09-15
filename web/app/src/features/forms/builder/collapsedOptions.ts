@@ -1,19 +1,20 @@
 import { create } from 'zustand'
 
-import type { Block } from '@entities/formSchema'
+import { isAnswerableType, isCaptionType, type Block } from '@entities/formSchema'
 import { rowFacts } from './kinds/index'
 
-// Свёрнутые списки вариантов на полотне (решение владельца 2026-09-15): вопрос с
-// вариантами прячет их шевроном у подписи и подписывает, сколько спрятано.
+// Свёрнутые вопросы на полотне (решение владельца 2026-09-15): вопрос с вариантами
+// сворачивается шевроном у подписи — остаётся одна подпись, а прячутся варианты и все
+// прочие строки группы; подпись называет, сколько блоков спрятано (варианты + строки).
 //
-// Это память РЕДАКТОРА, а не документ: превью и респондент видят все варианты, в схеме
-// флага нет. Живёт в localStorage браузера — переживает перезагрузку, у соавтора своя.
-// Не в сторе билдера: там каждая операция — шаг undo, а свернуть список — не правка.
+// Это память РЕДАКТОРА, а не документ: превью и респондент видят всё, в схеме флага нет.
+// Живёт в localStorage браузера — переживает перезагрузку, у соавтора своя. Не в сторе
+// билдера: там каждая операция — шаг undo, а свернуть вопрос — не правка. Ключ — id поля
+// выбора: он стабилен, а групп в документе нет (groupId выводится).
 //
-// Сворачивается только список ВОПРОСА (с подписью, `ownedByQuestion` в BlockRow):
-// свёрнутое голое поле исчезло бы с полотна целиком, и развернуть его было бы не у чего.
-// Пустой список свёрнутым не бывает — прятать нечего, а призрак «добавить» у него
-// единственная строка.
+// Сворачивается только вопрос (подпись первой строкой группы): свёрнутое голое поле
+// исчезло бы с полотна целиком, и развернуть его было бы не у чего. Пустой список не
+// сворачивается — у него, кроме призрака «добавить», нет строк.
 //
 // Отказ хранилища (приватный режим, переполнение) сворачивание не ломает: оно живёт до
 // перезагрузки.
@@ -64,13 +65,34 @@ export const useFoldStore = create<FoldState>()((set, get) => ({
   },
 }))
 
-// canFold — есть ли у блока что сворачивать: список вариантов и хоть один вариант.
-export function canFold(block: Block): boolean {
-  return rowFacts(block.type)?.surface === 'choice' && (block.settings?.options?.length ?? 0) > 0
+export interface FoldPlan {
+  // Поле выбора вопроса — ключ свёртки.
+  fieldId: string
+  // Сколько блоков прячет свёртка: варианты поля + строки группы, кроме подписи и поля.
+  count: number
+  folded: boolean
 }
 
-// isFolded — снимок для обработчиков вне рендера (обход стрелками, исходы удалений).
-// Подпись у группы проверяет вызывающий: navigation.ts спрашивает её сам.
-export function isFolded(block: Block): boolean {
-  return canFold(block) && useFoldStore.getState().ids.has(block.id)
+// foldPlan — сворачивается ли вопрос (блоки ОДНОЙ группы по порядку) и что прячет.
+// null — шеврона нет: группа без подписи первой строкой, без поля выбора или с пустым
+// списком.
+export function foldPlan(group: Block[], ids: ReadonlySet<string>): FoldPlan | null {
+  const head = group[0]
+  const field = group.find((b) => isAnswerableType(b.type))
+  if (!head || !isCaptionType(head.type) || !field) return null
+  if (rowFacts(field.type)?.surface !== 'choice') return null
+  const options = field.settings?.options?.length ?? 0
+  if (options === 0) return null
+  return { fieldId: field.id, count: options + group.length - 2, folded: ids.has(field.id) }
+}
+
+// foldedRows — предикат «строка спрятана свёрткой своего вопроса» над плоским списком
+// блоков, снимок стора на момент вызова. Нужен обработчикам вне рендера: обходу стрелками
+// и исходам удалений (navigation.ts).
+export function foldedRows(blocks: Block[]): (b: Block) => boolean {
+  const ids = useFoldStore.getState().ids
+  return (b) => {
+    const group = blocks.filter((x) => x.groupId === b.groupId)
+    return group[0]?.id !== b.id && foldPlan(group, ids)?.folded === true
+  }
 }

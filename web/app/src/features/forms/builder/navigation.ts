@@ -23,14 +23,14 @@ function groupHasCaption(blocks: Block[], groupId: string): boolean {
 }
 
 // isFlowLeaf — строку поток перескакивает: инпут плейсхолдера в группе с подписью и
-// свёрнутый список вариантов (`folded`, collapsedOptions.ts) — на полотне у него нет ни
-// одного инпута, куда встать. Голое поле листом не считается (см. шапку модуля).
+// строка свёрнутого вопроса (`folded`, collapsedOptions.ts) — на полотне у неё нет
+// поверхности, куда встать. Голое поле листом не считается (см. шапку модуля).
 export function isFlowLeaf(blocks: Block[], b: Block, folded: Folded = noneFolded): boolean {
   return (supportsPlaceholder(b.type) || folded(b)) && groupHasCaption(blocks, b.groupId)
 }
 
-// Folded — свёрнут ли список вариантов блока. Параметром, а не импортом: модуль остаётся
-// чистой логикой над блоками, без хранилища браузера.
+// Folded — спрятана ли строка свёрткой своего вопроса. Параметром, а не импортом: модуль
+// остаётся чистой логикой над блоками, без хранилища браузера.
 export type Folded = (b: Block) => boolean
 const noneFolded: Folded = () => false
 

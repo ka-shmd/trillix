@@ -32,18 +32,19 @@ describe('isFlowLeaf — что поток перескакивает', () => {
   })
 })
 
-describe('свёрнутый список вариантов', () => {
+describe('свёрнутый вопрос', () => {
   const blocks = [
     blk('c1', 'g1', 'label'),
+    blk('note', 'g1', 'text'),
     blk('ch', 'g1', 'single_choice'),
     blk('t', 'g2', 'text'),
   ]
-  const folded = (b: Block) => b.id === 'ch'
+  const folded = (b: Block) => b.groupId === 'g1' && b.id !== 'c1'
 
-  it('обход перескакивает свёрнутый список вопроса', () => {
-    expect(stopNeighbor(blocks, 0, 'down')?.id).toBe('ch')
+  it('обход перескакивает все спрятанные строки вопроса', () => {
+    expect(stopNeighbor(blocks, 0, 'down')?.id).toBe('note')
     expect(stopNeighbor(blocks, 0, 'down', folded)?.id).toBe('t')
-    expect(stopNeighbor(blocks, 2, 'up', folded)?.id).toBe('c1')
+    expect(stopNeighbor(blocks, 3, 'up', folded)?.id).toBe('c1')
   })
 
   it('голый список листом не становится', () => {

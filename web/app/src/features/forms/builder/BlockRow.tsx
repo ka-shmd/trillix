@@ -80,8 +80,8 @@ import { sourceLabel, sourcesFor } from './logic/model'
 import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
-import { canFold, useFoldStore } from './collapsedOptions'
-import { pluralOptions } from '../../../shared/format'
+import { useFoldStore } from './collapsedOptions'
+import { pluralBlocks } from '../../../shared/format'
 import { useCaptionGuard } from './captionGuard'
 import { textCaret } from './caret'
 import { RichLine } from './RichLine'
@@ -161,6 +161,14 @@ export interface BlockRowProps {
   // Mod+Alt+→/← — перенос вопроса в правую ячейку ряда и обратно (§5). Цель выбирает
   // полотно (знает соседей), строка только сообщает о жесте.
   onRowShift: (id: string, dir: 'left' | 'right') => void
+  // Свёртка вопроса (collapsedOptions.ts). Считает GroupRow — состав группы знает он.
+  // foldCount — у подписи сворачиваемого вопроса: сколько блоков прячет свёртка
+  // (undefined — шеврона нет); folded — вопрос свёрнут, подпись показывает счётчик.
+  foldCount?: number
+  folded?: boolean
+  // foldedBy — строка спрятана свёрткой вопроса; значение — id его поля выбора (ключ
+  // свёртки): явный запрос каретки на строку вопрос разворачивает.
+  foldedBy?: string
 }
 
 // BlockRow — одна строка полотна в стиле Tally: слева в поле — ручка перетаскивания
@@ -187,7 +195,14 @@ export interface BlockRowProps {
 // `memo` перестанет срабатывать МОЛЧА и цена вернётся целиком; сторож — замер
 // `e2e/perf` (окно «СТАРТ ЖЕСТА») и `canvasRerender.test.tsx`.
 export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
-  const { block, groupHandle, requiredFor, needsCaption = false, firstInGroup = false } = props
+  const {
+    block,
+    groupHandle,
+    requiredFor,
+    needsCaption = false,
+    firstInGroup = false,
+    foldedBy,
+  } = props
   const engine = useFocusEngine()
   const captionGuard = useCaptionGuard(engine)
   const removeBlock = useBuilderStore((s) => s.removeBlock)
@@ -255,11 +270,9 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
   // requiredFor === undefined (звёздочку показывает подпись), поэтому спрашиваем ровно
   // это, а не заводим второй проп о составе группы.
   const ownedByQuestion = row?.surface === 'choice' && requiredFor?.id !== block.id
-  // Свёрнутый список вариантов (collapsedOptions.ts). Строка остаётся в DOM с пустым
-  // телом: её бокс мерят оверлеи жеста, и у группового драга она якорь линии — последняя
-  // строка вопроса.
-  const foldStored = useFoldStore((s) => s.ids.has(block.id))
-  const folded = ownedByQuestion && foldStored && canFold(block)
+  // Строка свёрнутого вопроса (collapsedOptions.ts) остаётся в DOM с пустым телом: её
+  // бокс мерят оверлеи жеста, и у группового драга последняя строка вопроса — якорь линии.
+  const folded = foldedBy !== undefined
 
   // Дать голой строке ответа заголовок (§4.4 спеки фазы 15) — одно действие на два
   // входа: клавиша строки (здесь, на корне) и клик по чипу (в теле). Ссылка стабильна:
@@ -358,7 +371,7 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
           и полем, утащить поле из своего вопроса — законные действия, а не «действия,
           которых не бывает», как считал снятый замок. У вариантов choice поверх этого
           свои кластеры (см. OptionCard). */}
-      {!ownedByQuestion && (
+      {!ownedByQuestion && !folded && (
         <div
           // Кластер стоит вплотную к своему блоку (решение владельца 2026-08-16), в колонке
           // ряда кроме первой — левее линии ручки ширины (CLUSTER_GAP).
@@ -450,15 +463,18 @@ export const BlockRow = memo(function BlockRow(props: BlockRowProps) {
         </div>
       )}
 
-      <BlockRowBody
-        {...props}
-        folded={folded}
-        actionOpen={actionOpen}
-        setActionOpen={setActionOpen}
-        actionView={actionView}
-        setActionView={setActionView}
-        onAddCaption={addCaption}
-      />
+      {foldedBy !== undefined ? (
+        <FoldedRow blockId={block.id} fieldId={foldedBy} />
+      ) : (
+        <BlockRowBody
+          {...props}
+          actionOpen={actionOpen}
+          setActionOpen={setActionOpen}
+          actionView={actionView}
+          setActionView={setActionView}
+          onAddCaption={addCaption}
+        />
+      )}
     </div>
   )
 })
@@ -546,9 +562,9 @@ const BlockRowBody = memo(function BlockRowBody({
   onAnswerAction,
   onArrow,
   onRowShift,
-  folded,
+  foldCount,
+  folded = false,
 }: BlockRowProps & {
-  folded: boolean
   actionOpen: boolean
   setActionOpen: (open: boolean) => void
   actionView: MenuView
@@ -654,11 +670,9 @@ const BlockRowBody = memo(function BlockRowBody({
   // Поля ввода строки не несут — их подпись живёт отдельным блоком.
   const hasTextLine = isTextRow
   const captionCls = isTextRow ? row.className : ''
-  // Шеврон сворачивания вариантов — у подписи вопроса, чьё поле — непустой список
-  // (requiredFor у первой подписи группы и есть поле её вопроса).
-  const foldable =
-    hasTextLine && requiredFor !== undefined && requiredFor.id !== block.id && canFold(requiredFor)
-  const captionFolded = useFoldStore((s) => requiredFor !== undefined && s.ids.has(requiredFor.id))
+  // Шеврон сворачивания — у подписи вопроса с непустым списком (foldCount от GroupRow;
+  // requiredFor у первой подписи группы и есть поле её вопроса — ключ свёртки).
+  const foldable = hasTextLine && foldCount !== undefined && requiredFor !== undefined
   // Чем набирается ПУСТАЯ строка этого типа. Факт объявлен у типа (kinds/<type>.tsx),
   // ветки по типу здесь нет намеренно — см. шапку BlockRow.
   const captionMarks = textIsBold(block.type) ? BOLD_MARKS : undefined
@@ -983,13 +997,16 @@ const BlockRowBody = memo(function BlockRowBody({
                 />
               )}
               {foldable && (
-                <FoldToggle field={requiredFor!} folded={captionFolded} lineH={rowLineH} />
+                <FoldToggle
+                  fieldId={requiredFor!.id}
+                  folded={folded}
+                  count={foldCount!}
+                  lineH={rowLineH}
+                />
               )}
             </div>
           </div>
         </SlashMenu>
-      ) : row?.surface === 'choice' && folded ? (
-        <FoldedOptions blockId={block.id} />
       ) : row?.surface === 'choice' ? (
         <div className="min-w-0">
           <OptionsInline
@@ -1084,7 +1101,7 @@ function RowMarks({
   )
 }
 
-// FoldToggle — шеврон сворачивания вариантов у подписи вопроса и счётчик спрятанного.
+// FoldToggle — шеврон сворачивания вопроса у его подписи и счётчик спрятанных блоков.
 // Шеврон виден только при наведении на вопрос (group/question у GroupRow), счётчик — пока
 // список свёрнут. Клавиатурного пути нет (решение владельца 2026-09-15): tabIndex -1, а
 // mousedown не забирает каретку у строки.
@@ -1092,40 +1109,49 @@ function RowMarks({
 // Шеврон в ПОТОКЕ, а не в кластере, и мины TD-22 здесь нет: он проявляется прозрачностью и
 // место занимает всегда, поэтому на mousedown ничего не схлопывается. Стоит ДО счётчика —
 // появившийся счётчик не уводит шеврон из-под курсора.
-function FoldToggle({ field, folded, lineH }: { field: Block; folded: boolean; lineH: string }) {
+function FoldToggle({
+  fieldId,
+  folded,
+  count,
+  lineH,
+}: {
+  fieldId: string
+  folded: boolean
+  count: number
+  lineH: string
+}) {
   const toggle = useFoldStore((s) => s.toggle)
-  const n = field.settings?.options?.length ?? 0
   return (
     <div className={`flex shrink-0 ${lineH} items-center gap-1.5`}>
       <button
         type="button"
         tabIndex={-1}
-        aria-label={folded ? 'Развернуть варианты' : 'Свернуть варианты'}
+        aria-label={folded ? 'Развернуть вопрос' : 'Свернуть вопрос'}
         aria-expanded={!folded}
         onMouseDown={(e) => e.preventDefault()}
-        onClick={() => toggle(field.id)}
+        onClick={() => toggle(fieldId)}
         className={`${ICON_BTN} opacity-0 transition-opacity group-hover/question:opacity-100`}
       >
         {folded ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
       </button>
       {folded && (
         <span className="whitespace-nowrap text-sm font-normal text-[var(--rf-muted)]">
-          {n} {pluralOptions(n)}
+          {count} {pluralBlocks(count)}
         </span>
       )}
     </div>
   )
 }
 
-// FoldedOptions — поверхность свёрнутого списка: ничего не рисует, но остаётся фокус-целью
-// блока. Явный запрос каретки (Mod+Enter с подписи, схлопывание Backspace, исход удаления)
-// список разворачивает, и каретка встаёт в него, когда OptionsInline зарегистрирует свою
-// цель ('defer', focusEngine.ts). Стрелки сюда не приходят — обход свёрнутый список
-// перескакивает (navigation.ts).
-function FoldedOptions({ blockId }: { blockId: string }) {
+// FoldedRow — тело строки, спрятанной свёрткой вопроса: ничего не рисует, но остаётся
+// фокус-целью блока. Явный запрос каретки (Mod+Enter с подписи, схлопывание Backspace,
+// исход удаления) вопрос разворачивает, и каретка встаёт в строку, когда её настоящее
+// тело зарегистрирует свою цель ('defer', focusEngine.ts). Стрелки сюда не приходят —
+// обход спрятанные строки перескакивает (navigation.ts).
+function FoldedRow({ blockId, fieldId }: { blockId: string; fieldId: string }) {
   const expand = useFoldStore((s) => s.expand)
   useRegisterFocusTarget(blockId, () => {
-    expand(blockId)
+    expand(fieldId)
     return 'defer'
   })
   return null

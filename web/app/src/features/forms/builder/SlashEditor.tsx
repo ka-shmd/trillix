@@ -93,7 +93,7 @@ import {
   useRowFocus,
 } from './activeRow'
 import { prevRow, stopNeighbor } from './navigation'
-import { isFolded } from './collapsedOptions'
+import { foldPlan, foldedRows, useFoldStore } from './collapsedOptions'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -773,8 +773,8 @@ export function SlashEditor({
       const firstIdx = blocks.findIndex((b) => b.id === removed[0]!.id)
       // Исход фокуса перескакивает лист-поля (navigation.ts): от краёв удаляемого
       // диапазона ищем ближайшую остановку — следующую, иначе предыдущую.
-      const next = stopNeighbor(blocks, firstIdx + removed.length - 1, 'down', isFolded)
-      const prev = stopNeighbor(blocks, firstIdx, 'up', isFolded)
+      const next = stopNeighbor(blocks, firstIdx + removed.length - 1, 'down', foldedRows(blocks))
+      const prev = stopNeighbor(blocks, firstIdx, 'up', foldedRows(blocks))
       if (isGroup) removeGroup(id)
       else removeBlock(id)
       if (next) engine.focusBlock(next.id, 'start')
@@ -791,7 +791,7 @@ export function SlashEditor({
     (id: string) => {
       const blocks = readBlocks()
       const i = blocks.findIndex((b) => b.id === id)
-      const prevStop = stopNeighbor(blocks, i, 'up', isFolded)
+      const prevStop = stopNeighbor(blocks, i, 'up', foldedRows(blocks))
       removeBlock(id)
       if (prevStop) engine.focusBlock(prevStop.id, 'end')
       else focusTitle()
@@ -808,7 +808,7 @@ export function SlashEditor({
     (id: string, dir: 'up' | 'down') => {
       const blocks = readBlocks()
       const i = blocks.findIndex((b) => b.id === id)
-      const neighbor = stopNeighbor(blocks, i, dir, isFolded)
+      const neighbor = stopNeighbor(blocks, i, dir, foldedRows(blocks))
       if (neighbor) engine.focusBlock(neighbor.id, dir === 'up' ? 'end' : 'start')
       else if (dir === 'up') focusTitle()
     },
@@ -1524,6 +1524,10 @@ const GroupRow = memo(function GroupRow({
   // превью и рендерере, §6), а пишет она в это поле; у группы без подписи звёздочка
   // остаётся на самом поле.
   const answerable = group.blocks.find((b) => isAnswerableType(b.type))
+  // Свёртка вопроса (collapsedOptions.ts): у подписи шеврон и счётчик, прочие строки
+  // свёрнутого вопроса — пустые.
+  const foldIds = useFoldStore((s) => s.ids)
+  const fold = foldPlan(group.blocks, foldIds)
 
   return (
     <li
@@ -1544,7 +1548,7 @@ const GroupRow = memo(function GroupRow({
       // полноширинного ряда лежит на ряде (rowSpace, там же мина про два разных бокса).
       // ОТСТУП, А НЕ ПАДДИНГ: рект li мерят оверлеи жеста, и паддинг увёл бы линию вставки.
       // group/question — наведение на ВОПРОС целиком: по нему проявляется шеврон
-      // сворачивания вариантов у подписи (FoldToggle в BlockRow).
+      // сворачивания вопроса у подписи (FoldToggle в BlockRow).
       className={`group/question relative w-full rounded-md ${
         headOfCell ? '' : spaceMt(groupSpace(group.blocks))
       } ${isDragging ? `z-10 ${DRAGGED_LOOK}` : isSorting ? 'pointer-events-none' : ''}`}
@@ -1595,6 +1599,9 @@ const GroupRow = memo(function GroupRow({
               onAnswerAction={onAnswerAction}
               onArrow={onArrow}
               onRowShift={onRowShift}
+              foldCount={i === 0 ? fold?.count : undefined}
+              folded={i === 0 && fold?.folded === true}
+              foldedBy={i > 0 && fold?.folded ? fold.fieldId : undefined}
             />
           ))}
         </div>
