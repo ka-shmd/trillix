@@ -15,6 +15,7 @@ import {
   type WidgetPosition,
 } from '../embedSnippet'
 import { CircleHelp } from 'lucide-react'
+import { RAISED_INPUT, RAISED_SELECT } from '../../../shared/raisedField'
 
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -105,7 +106,7 @@ function BlockSettings({ settings, onChange }: ModeProps) {
               max={2000}
               value={settings.height}
               onChange={(e) => onChange({ height: Number(e.target.value) || DEFAULT_BLOCK_HEIGHT })}
-              className={`pr-9 ${FIELD_TEXT}`}
+              className={`pr-9 ${RAISED_INPUT}`}
             />
           </WithUnit>
         </Field>
@@ -148,18 +149,6 @@ function BlockSettings({ settings, onChange }: ModeProps) {
   )
 }
 
-/**
- * Кегль набранного значения в контролах панели — 16/500 на всех ширинах.
- *
- * Умолчания shadcn мельче и РАЗНЫЕ: у `Input` это `text-base md:text-sm` (на десктопе
- * 14), у `SelectTrigger` — `text-sm` вовсе без брейкпоинта. Поэтому кегль назван в
- * обеих ступенях: `md:text-base` перебивает `md:text-sm` у поля, `text-base` —
- * `text-sm` у списка. Перебивать нужно ТЕМ ЖЕ вариантом, каким значение задано у
- * компонента: плоский класс против `md:` не сработает, и вида не будет при том, что
- * класс на элементе есть (web/CLAUDE.md).
- */
-const FIELD_TEXT = 'text-base font-medium md:text-base'
-
 // Виджет и страница ждут своей очереди редизайна (решение владельца 2026-08-27):
 // набор контролов у них прежний, изменился только каркас вокруг.
 function WidgetSettings({ settings, onChange }: ModeProps) {
@@ -171,7 +160,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
       <Row>
         <Field id="embed-open" label="Когда открывать">
           <Select value={settings.open} onValueChange={(v) => onChange({ open: v as OpenTrigger })}>
-            <SelectTrigger id="embed-open" className={`w-full ${FIELD_TEXT}`}>
+            <SelectTrigger id="embed-open" className={`w-full ${RAISED_SELECT}`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -205,7 +194,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
               max={settings.open === 'delay' ? 120 : 100}
               value={settings.openValue}
               onChange={(e) => onChange({ openValue: Number(e.target.value) || 0 })}
-              className={FIELD_TEXT}
+              className={RAISED_INPUT}
             />
           </Field>
         </Row>
@@ -225,7 +214,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
               })
             }
           >
-            <SelectTrigger id="embed-position" className={`w-full ${FIELD_TEXT}`}>
+            <SelectTrigger id="embed-position" className={`w-full ${RAISED_SELECT}`}>
               <SelectValue />
             </SelectTrigger>
             <SelectContent>
@@ -254,7 +243,7 @@ function WidgetSettings({ settings, onChange }: ModeProps) {
                   width: Number(e.target.value) || widgetDefaults(settings.position).width,
                 })
               }
-              className={`pr-9 ${FIELD_TEXT}`}
+              className={`pr-9 ${RAISED_INPUT}`}
             />
           </WithUnit>
         </Field>
