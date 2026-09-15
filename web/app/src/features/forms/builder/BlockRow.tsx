@@ -22,7 +22,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, Copy, GripVertical, Plus, Tag, Trash2 } from 'lucide-react'
+import { Asterisk, CheckCheck, Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
 import {
   type Block,
   isAnswerableType,
@@ -2085,7 +2085,7 @@ function OptionShell({
   if (look === 'tag') {
     return (
       <span className={`rf-option rf-option--tag ${tagClass(index)}`}>
-        <Tag className="size-4 shrink-0" aria-hidden="true" />
+        <CheckCheck className="size-4 shrink-0" aria-hidden="true" />
         {children}
       </span>
     )
