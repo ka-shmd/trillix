@@ -1,5 +1,5 @@
 import { test, expect, devices, type Locator } from '@playwright/test'
-import { login, seedAccount } from './helpers/session'
+import { csrfToken, login, seedAccount } from './helpers/session'
 
 // «Билдер без мыши» (фаза 13, этап 13.7) — сквозной критерий реворка полотна: форма
 // собирается ОДНОЙ КЛАВИАТУРОЙ, публикуется и доезжает до респондента.
@@ -71,7 +71,7 @@ test('билдер без мыши: форма собирается клавиа
   await login(page, email)
 
   // 2. Форма — запросом к API, сразу с названием. Дальше мышь не участвует.
-  const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')!.value
+  const csrf = await csrfToken(page)
   const created = await page.request.post('/api/v1/forms', {
     headers: { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf },
     data: { title: formTitle },
