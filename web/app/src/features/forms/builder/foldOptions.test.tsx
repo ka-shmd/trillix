@@ -157,7 +157,10 @@ describe('сворачивание вопроса', () => {
     setup(QUESTION)
     const toggle = row('cap').getByRole('button', { name: 'Развернуть вопрос' })
     expect(toggle.className).not.toContain('opacity-0 ')
-    expect(toggle.className).toContain('hover:bg-muted')
+    // Подложка радиусом 8px (rounded-lg = --radius), текст 12px полужирный.
+    for (const cls of ['hover:bg-muted', 'rounded-lg', 'text-xs', 'font-semibold']) {
+      expect(toggle.className.split(' ')).toContain(cls)
+    }
     // Порядок: три точки → число блоков → шеврон; шеврон у свёрнутого не прячется.
     const [dots, chevron] = [...toggle.querySelectorAll('svg')]
     const count = within(toggle).getByText('3 блока')

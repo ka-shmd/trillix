@@ -82,6 +82,7 @@ import { useBuilderStore, useBuilderStoreApi } from './storeContext'
 import type { UpdateKind } from './store'
 import { useFocusEngine, useRegisterFocusTarget } from './focusEngine'
 import { useFoldStore } from './collapsedOptions'
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 import { pluralBlocks } from '../../../shared/format'
 import { useCaptionGuard } from './captionGuard'
 import { textCaret } from './caret'
@@ -1105,8 +1106,11 @@ function RowMarks({
 // FoldToggle — кнопка сворачивания вопроса у его подписи: у свёрнутого «⋯ N блоков ⌄» и
 // видна всегда, у развёрнутого — один шеврон, видный только при наведении на вопрос
 // (group/question у GroupRow). Нажимается вся кнопка и подсвечивается подложкой при
-// наведении. Клавиатурного пути нет (решение владельца 2026-09-15): tabIndex -1, а
-// mousedown не забирает каретку у строки.
+// наведении, по наведению же — тултип с действием. Клавиатурного пути нет (решение
+// владельца 2026-09-15): tabIndex -1, а mousedown не забирает каретку у строки.
+//
+// Свой TooltipProvider: общий даёт SidebarProvider кабинета, а строку рендерят и без него
+// (стенды тестов полотна), и Radix без провайдера бросает.
 //
 // Кнопка в ПОТОКЕ, а не в кластере, и мины TD-22 здесь нет: скрытое проявляется
 // прозрачностью и место занимает всегда, поэтому на mousedown ничего не схлопывается.
@@ -1122,33 +1126,37 @@ function FoldToggle({
   lineH: string
 }) {
   const toggle = useFoldStore((s) => s.toggle)
+  const action = folded ? 'Развернуть вопрос' : 'Свернуть вопрос'
   return (
     <div className={`flex shrink-0 ${lineH} items-center`}>
-      <button
-        type="button"
-        tabIndex={-1}
-        aria-label={folded ? 'Развернуть вопрос' : 'Свернуть вопрос'}
-        aria-expanded={!folded}
-        onMouseDown={(e) => e.preventDefault()}
-        onClick={() => toggle(fieldId)}
-        className={`flex h-6 items-center gap-1 rounded px-1 text-sm font-normal text-[var(--rf-muted)] hover:bg-muted ${
-          folded ? '' : 'opacity-0 transition-opacity group-hover/question:opacity-100'
-        }`}
-      >
-        {folded && (
-          <>
-            <Ellipsis className="size-4" />
-            <span className="whitespace-nowrap">
-              {count} {pluralBlocks(count)}
-            </span>
-          </>
-        )}
-        {folded ? (
-          <ChevronRight className="size-4" />
-        ) : (
-          <ChevronDown className="size-4" />
-        )}
-      </button>
+      <TooltipProvider>
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <button
+              type="button"
+              tabIndex={-1}
+              aria-label={action}
+              aria-expanded={!folded}
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => toggle(fieldId)}
+              className={`flex h-6 items-center gap-1 rounded-lg px-1.5 text-xs font-semibold text-[var(--rf-muted)] hover:bg-muted ${
+                folded ? '' : 'opacity-0 transition-opacity group-hover/question:opacity-100'
+              }`}
+            >
+              {folded && (
+                <>
+                  <Ellipsis className="size-4" />
+                  <span className="whitespace-nowrap">
+                    {count} {pluralBlocks(count)}
+                  </span>
+                </>
+              )}
+              {folded ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
+            </button>
+          </TooltipTrigger>
+          <TooltipContent>{action}</TooltipContent>
+        </Tooltip>
+      </TooltipProvider>
     </div>
   )
 }
