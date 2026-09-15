@@ -28,6 +28,7 @@ import {
   ChevronDown,
   ChevronRight,
   Copy,
+  Ellipsis,
   GripVertical,
   Plus,
   Trash2,
@@ -1101,14 +1102,14 @@ function RowMarks({
   )
 }
 
-// FoldToggle — шеврон сворачивания вопроса у его подписи и счётчик спрятанных блоков.
-// Шеврон виден только при наведении на вопрос (group/question у GroupRow), счётчик — пока
-// список свёрнут. Клавиатурного пути нет (решение владельца 2026-09-15): tabIndex -1, а
-// mousedown не забирает каретку у строки.
+// FoldToggle — кнопка сворачивания вопроса у его подписи: у свёрнутого «⋯ N блоков ⌄»,
+// у развёрнутого — один шеврон. Нажимается вся кнопка и подсвечивается подложкой при
+// наведении. Шеврон виден только при наведении на вопрос (group/question у GroupRow); у
+// развёрнутого вопроса вне наведения не видно всей кнопки. Клавиатурного пути нет (решение
+// владельца 2026-09-15): tabIndex -1, а mousedown не забирает каретку у строки.
 //
-// Шеврон в ПОТОКЕ, а не в кластере, и мины TD-22 здесь нет: он проявляется прозрачностью и
-// место занимает всегда, поэтому на mousedown ничего не схлопывается. Стоит ДО счётчика —
-// появившийся счётчик не уводит шеврон из-под курсора.
+// Кнопка в ПОТОКЕ, а не в кластере, и мины TD-22 здесь нет: скрытое проявляется
+// прозрачностью и место занимает всегда, поэтому на mousedown ничего не схлопывается.
 function FoldToggle({
   fieldId,
   folded,
@@ -1121,8 +1122,9 @@ function FoldToggle({
   lineH: string
 }) {
   const toggle = useFoldStore((s) => s.toggle)
+  const onHover = 'opacity-0 transition-opacity group-hover/question:opacity-100'
   return (
-    <div className={`flex shrink-0 ${lineH} items-center gap-1.5`}>
+    <div className={`flex shrink-0 ${lineH} items-center`}>
       <button
         type="button"
         tabIndex={-1}
@@ -1130,15 +1132,24 @@ function FoldToggle({
         aria-expanded={!folded}
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => toggle(fieldId)}
-        className={`${ICON_BTN} opacity-0 transition-opacity group-hover/question:opacity-100`}
+        className={`flex h-6 items-center gap-1 rounded px-1 text-sm font-normal text-[var(--rf-muted)] hover:bg-muted ${
+          folded ? '' : onHover
+        }`}
       >
-        {folded ? <ChevronRight className="size-4" /> : <ChevronDown className="size-4" />}
+        {folded && (
+          <>
+            <Ellipsis className="size-4" />
+            <span className="whitespace-nowrap">
+              {count} {pluralBlocks(count)}
+            </span>
+          </>
+        )}
+        {folded ? (
+          <ChevronRight className={`size-4 ${onHover}`} />
+        ) : (
+          <ChevronDown className="size-4" />
+        )}
       </button>
-      {folded && (
-        <span className="whitespace-nowrap text-sm font-normal text-[var(--rf-muted)]">
-          {count} {pluralBlocks(count)}
-        </span>
-      )}
     </div>
   )
 }

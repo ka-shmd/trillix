@@ -145,11 +145,28 @@ describe('сворачивание вопроса', () => {
     expect(row('note').queryAllByRole('button')).toEqual([])
   })
 
-  it('шеврон проявляется наведением на вопрос', () => {
+  it('у развёрнутого вопроса кнопка проявляется наведением на вопрос', () => {
     setup(QUESTION)
-    const chevron = row('cap').getByRole('button', { name: 'Свернуть вопрос' })
-    expect(chevron.className).toContain('opacity-0')
-    expect(chevron.className).toContain('group-hover/question:opacity-100')
+    const toggle = row('cap').getByRole('button', { name: 'Свернуть вопрос' })
+    expect(toggle.className).toContain('opacity-0')
+    expect(toggle.className).toContain('group-hover/question:opacity-100')
+  })
+
+  it('у свёрнутого кнопка видна всегда, нажимается целиком — и по числу блоков', () => {
+    useFoldStore.setState({ ids: new Set(['ch']) })
+    setup(QUESTION)
+    const toggle = row('cap').getByRole('button', { name: 'Развернуть вопрос' })
+    expect(toggle.className).not.toContain('opacity-0 ')
+    expect(toggle.className).toContain('hover:bg-muted')
+    // Порядок: три точки → число блоков → шеврон; шеврон — по наведению на вопрос.
+    const [dots, chevron] = [...toggle.querySelectorAll('svg')]
+    expect(dots!.compareDocumentPosition(within(toggle).getByText('3 блока'))).toBe(
+      Node.DOCUMENT_POSITION_FOLLOWING,
+    )
+    expect(chevron!.getAttribute('class')).toContain('group-hover/question:opacity-100')
+
+    fireEvent.click(within(toggle).getByText('3 блока'))
+    expect(screen.getByDisplayValue('Казань')).toBeTruthy()
   })
 
   it('у голого списка шеврона нет, и запомненная свёртка его не прячет', () => {
