@@ -155,7 +155,6 @@ export function LinkPreviewDialog({
                 onChange={(iconKey) => set({ iconKey })}
                 className="size-24"
                 label="Иконка"
-                compact
               />
             </Field>
 
@@ -248,7 +247,6 @@ function ImageSlot({
   onChange,
   className,
   label,
-  compact = false,
 }: {
   formId: string
   purpose: UploadPurpose
@@ -256,8 +254,6 @@ function ImageSlot({
   onChange: (key: string) => void
   className: string
   label: string
-  // compact — действия значками: в слот иконки (96px) две кнопки с подписью не входят.
-  compact?: boolean
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
@@ -288,26 +284,12 @@ function ImageSlot({
         <div className={`group relative overflow-hidden rounded-md border ${className}`}>
           <img src={mediaSrc(imageKey)} alt="" className="size-full object-contain" />
           <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            {compact ? (
-              <>
-                <SlotIconAction
-                  icon={RefreshCw}
-                  label="Заменить"
-                  onClick={() => fileRef.current?.click()}
-                />
-                <SlotIconAction icon={Trash2} label="Убрать" onClick={() => onChange('')} />
-              </>
-            ) : (
-              <>
-                <Button size="sm" variant="secondary" onClick={() => fileRef.current?.click()}>
-                  Заменить
-                </Button>
-                <Button size="sm" variant="secondary" onClick={() => onChange('')}>
-                  <Trash2 className="size-3.5" />
-                  Убрать
-                </Button>
-              </>
-            )}
+            <SlotIconAction
+              icon={RefreshCw}
+              label="Заменить"
+              onClick={() => fileRef.current?.click()}
+            />
+            <SlotIconAction icon={Trash2} label="Убрать" onClick={() => onChange('')} />
           </div>
         </div>
       ) : (
