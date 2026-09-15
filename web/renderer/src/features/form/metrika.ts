@@ -1,6 +1,8 @@
-// Счётчик Яндекс Метрики автора на странице формы (фаза 29 DEV-PLAN, спека
-// design/yandex-metrika.md §6). Номер решает сервер (поле `metrika` публичной отдачи:
-// подключён, включён, тариф разрешает) — здесь только запуск и три цели.
+import { type HostBridge } from './embed'
+
+// Цели Яндекс Метрики автора (фаза 29 DEV-PLAN, спека design/yandex-metrika.md §6–§7).
+// Номер решает сервер (поле `metrika` публичной отдачи: подключён, включён, тариф
+// разрешает) — здесь только куда уходят три цели.
 //
 // Ответы в Метрику не уходят ни в каком виде: цель — одно имя, без параметров цели и
 // параметров визита. Метки рекламы (yclid, UTM) счётчик читает из адреса сам.
@@ -29,19 +31,29 @@ export interface GoalSink {
 }
 
 /**
- * metrikaCounter — запускать ли счётчик и с каким номером.
+ * goalSink — куда уходят цели формы; null — никуда.
  *
- * Предпросмотр автора визитов не считает — значит и целей не отмечает. Во фрейме
- * счётчик не грузится ни при каком раскладе, в том числе в голом `<iframe>` без
- * загрузчика: сторонний контекст режет cookie Метрики, а со счётчиком сайта-хозяина
- * вышел бы двойной счёт (спека §7).
+ * - Предпросмотр автора визитов не считает — и целей не отмечает.
+ * - Обычная страница — собственный счётчик автора (`startMetrika`).
+ * - Фрейм со встроенной формой — сообщение хосту через мост, а счётчик СТРАНИЦЫ отмечает
+ *   цель сам. Свой счётчик во фрейме не грузится ни при каком раскладе: сторонний
+ *   контекст режет cookie Метрики, а со счётчиком сайта вышел бы двойной счёт (§7).
+ * - Фрейм без моста (голый `<iframe>`, ссылка в Notion) — никуда: принимать некому.
  */
-export function metrikaCounter(
+export function goalSink(
   counter: string | null,
-  env: { preview: boolean; framed: boolean },
-): string | null {
-  if (counter === null || env.preview || env.framed) return null
-  return counter
+  env: { preview: boolean; framed: boolean; bridge: HostBridge | null },
+  host: MetrikaHost,
+): GoalSink | null {
+  if (counter === null || env.preview) return null
+  if (env.framed) {
+    const { bridge } = env
+    if (bridge === null) return null
+    // Номер числом: так его ждёт `ym`. Двенадцать цифр (CHECK в form_counters) точны в double.
+    const id = Number(counter)
+    return onceEach((goal) => bridge.goal(id, goal))
+  }
+  return startMetrika(counter, host)
 }
 
 /**
@@ -59,7 +71,6 @@ export function startMetrika(counter: string, host: MetrikaHost): GoalSink {
     win.ym = ym
     host.appendScript(TAG_SRC)
   }
-  // Номер числом: так его ждёт `ym`. Двенадцать цифр (CHECK в form_counters) точны в double.
   const id = Number(counter)
   win.ym!(id, 'init', {
     webvisor: false,
@@ -67,18 +78,21 @@ export function startMetrika(counter: string, host: MetrikaHost): GoalSink {
     trackLinks: true,
     accurateTrackBounce: true,
   })
+  return onceEach((goal) => win.ym!(id, 'reachGoal', goal))
+}
 
+function onceEach(send: (goal: Goal) => void): GoalSink {
   const reached = new Set<Goal>()
   return {
     reach(goal) {
       if (reached.has(goal)) return
       reached.add(goal)
-      win.ym!(id, 'reachGoal', goal)
+      send(goal)
     },
   }
 }
 
-/** browserHost — MetrikaHost поверх настоящей страницы. */
+/** browserHost — MetrikaHost поверх настоящей страницы. Сам ничего не делает до вызова. */
 export function browserHost(): MetrikaHost {
   return {
     win: window as unknown as { ym?: Ym },

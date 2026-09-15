@@ -1,10 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 
+import { createHostBridge, type HostMessage } from './embed'
 import {
   GOAL_OPEN,
   GOAL_START,
   GOAL_SUBMIT,
-  metrikaCounter,
+  goalSink,
   type MetrikaHost,
   startMetrika,
   TAG_SRC,
@@ -20,18 +21,58 @@ function queued(host: MetrikaHost): unknown[][] {
   return host.win.ym?.a ?? []
 }
 
-describe('metrikaCounter', () => {
-  it('запускает счётчик только на обычной странице с номером', () => {
-    expect(metrikaCounter('12345678', { preview: false, framed: false })).toBe('12345678')
-    expect(metrikaCounter(null, { preview: false, framed: false })).toBeNull()
+function fakeBridge() {
+  const sent: HostMessage[] = []
+  return { sent, bridge: createHostBridge('block', (m) => sent.push(m)) }
+}
+
+const page = { preview: false, framed: false, bridge: null }
+
+describe('goalSink', () => {
+  it('на обычной странице запускает счётчик автора', () => {
+    const host = fakeHost()
+    expect(goalSink('12345678', page, host)).not.toBeNull()
+    expect(host.appendScript).toHaveBeenCalledWith(TAG_SRC)
   })
 
-  it('в предпросмотре автора счётчика нет', () => {
-    expect(metrikaCounter('12345678', { preview: true, framed: false })).toBeNull()
+  it('без номера целей нет', () => {
+    const host = fakeHost()
+    expect(goalSink(null, page, host)).toBeNull()
+    expect(host.appendScript).not.toHaveBeenCalled()
   })
 
-  it('во фрейме счётчика нет — цели там отмечает счётчик сайта-хозяина', () => {
-    expect(metrikaCounter('12345678', { preview: false, framed: true })).toBeNull()
+  it('в предпросмотре автора целей нет — ни на странице, ни во фрейме', () => {
+    const host = fakeHost()
+    const { sent, bridge } = fakeBridge()
+    expect(goalSink('12345678', { ...page, preview: true }, host)).toBeNull()
+    expect(goalSink('12345678', { preview: true, framed: true, bridge }, host)).toBeNull()
+    expect(host.appendScript).not.toHaveBeenCalled()
+    expect(sent.map((m) => m.type)).toEqual(['ready'])
+  })
+
+  it('во фрейме цели уходят хосту, а скрипт Метрики не грузится', () => {
+    const host = fakeHost()
+    const { sent, bridge } = fakeBridge()
+    const goals = goalSink('12345678', { preview: false, framed: true, bridge }, host)
+
+    goals?.reach(GOAL_OPEN)
+    goals?.reach(GOAL_START)
+    goals?.reach(GOAL_START)
+    goals?.reach(GOAL_SUBMIT)
+
+    expect(host.appendScript).not.toHaveBeenCalled()
+    expect(host.win.ym).toBeUndefined()
+    expect(sent.filter((m) => m.type === 'goal')).toEqual([
+      { source: 'trillix', v: 1, type: 'goal', counter: 12345678, name: 'trillix_open' },
+      { source: 'trillix', v: 1, type: 'goal', counter: 12345678, name: 'trillix_start' },
+      { source: 'trillix', v: 1, type: 'goal', counter: 12345678, name: 'trillix_submit' },
+    ])
+  })
+
+  it('фрейм без загрузчика (голый iframe) — целей нет: принимать некому', () => {
+    const host = fakeHost()
+    expect(goalSink('12345678', { preview: false, framed: true, bridge: null }, host)).toBeNull()
+    expect(host.appendScript).not.toHaveBeenCalled()
   })
 })
 
