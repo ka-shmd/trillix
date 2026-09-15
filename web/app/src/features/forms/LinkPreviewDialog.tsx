@@ -1,6 +1,6 @@
-import { useRef, useState, type ChangeEvent, type ReactNode } from 'react'
+import { useRef, useState, type ChangeEvent, type ComponentType, type ReactNode } from 'react'
 import { Link } from '@tanstack/react-router'
-import { ImagePlus, Trash2 } from 'lucide-react'
+import { ImagePlus, RefreshCw, Trash2 } from 'lucide-react'
 import { toast } from 'sonner'
 
 import { mediaSrc } from '@fields/media'
@@ -29,6 +29,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
+import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 import { humanError } from '../../shared/api/errors'
 import { FIELD_CONTOUR } from '../../shared/raisedField'
 
@@ -154,6 +155,7 @@ export function LinkPreviewDialog({
                 onChange={(iconKey) => set({ iconKey })}
                 className="size-24"
                 label="Иконка"
+                compact
               />
             </Field>
 
@@ -246,6 +248,7 @@ function ImageSlot({
   onChange,
   className,
   label,
+  compact = false,
 }: {
   formId: string
   purpose: UploadPurpose
@@ -253,6 +256,8 @@ function ImageSlot({
   onChange: (key: string) => void
   className: string
   label: string
+  // compact — действия значками: в слот иконки (96px) две кнопки с подписью не входят.
+  compact?: boolean
 }) {
   const fileRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
@@ -283,13 +288,26 @@ function ImageSlot({
         <div className={`group relative overflow-hidden rounded-md border ${className}`}>
           <img src={mediaSrc(imageKey)} alt="" className="size-full object-contain" />
           <div className="absolute inset-0 flex items-center justify-center gap-2 bg-black/40 opacity-0 transition-opacity group-hover:opacity-100 focus-within:opacity-100">
-            <Button size="sm" variant="secondary" onClick={() => fileRef.current?.click()}>
-              Заменить
-            </Button>
-            <Button size="sm" variant="secondary" onClick={() => onChange('')}>
-              <Trash2 className="size-3.5" />
-              Убрать
-            </Button>
+            {compact ? (
+              <>
+                <SlotIconAction
+                  icon={RefreshCw}
+                  label="Заменить"
+                  onClick={() => fileRef.current?.click()}
+                />
+                <SlotIconAction icon={Trash2} label="Убрать" onClick={() => onChange('')} />
+              </>
+            ) : (
+              <>
+                <Button size="sm" variant="secondary" onClick={() => fileRef.current?.click()}>
+                  Заменить
+                </Button>
+                <Button size="sm" variant="secondary" onClick={() => onChange('')}>
+                  <Trash2 className="size-3.5" />
+                  Убрать
+                </Button>
+              </>
+            )}
           </div>
         </div>
       ) : (
@@ -305,5 +323,28 @@ function ImageSlot({
       )}
       {error && <p className="mt-1.5 text-sm text-destructive">{error}</p>}
     </div>
+  )
+}
+
+// SlotIconAction — действие слота значком. Подсказка обязательна, текст общий с
+// aria-label (DESIGN-SYSTEM). TooltipProvider даёт SidebarProvider выше по дереву.
+function SlotIconAction({
+  icon: Icon,
+  label,
+  onClick,
+}: {
+  icon: ComponentType<{ className?: string }>
+  label: string
+  onClick: () => void
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <Button size="icon-sm" variant="secondary" aria-label={label} onClick={onClick}>
+          <Icon className="size-3.5" />
+        </Button>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   )
 }
