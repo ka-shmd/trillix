@@ -47,6 +47,10 @@ const publicFormSchema = z.object({
   // объект из пустых строк: «записи нет» и «запись есть, но пустая» — разные вещи, и
   // второго не бывает.
   booking: bookingFactsSchema.nullable().default(null),
+  // metrika — номер счётчика Яндекс Метрики (фаза 29). Решение СЕРВЕРА: автор его
+  // подключил, тумблер включён и тариф разрешает. Дефолт null — тело прошлой версии
+  // из кеша счётчик не запускает.
+  metrika: z.string().nullable().default(null),
 })
 export type PublicForm = z.infer<typeof publicFormSchema>
 
