@@ -1477,21 +1477,29 @@ textarea.rf-input {
 
 /* Рейтинг: ряд звёзд. Закрашены звёзды до выставленной оценки (rf-rating-star--on) и,
    под мышью, до звезды под курсором: весь ряд закрашивается, звёзды правее наведённой
-   гасятся соседним селектором. Только на устройствах с настоящим наведением — на
-   касании :hover залипает на последней тронутой звезде и спорил бы со снятой оценкой.
-   Без :has() подсветки наведения нет, выбор при этом работает. Цвет — акцент формы. */
+   гасятся соседним селектором.
+
+   ⚠ Промежутка (gap) между кнопками нет, и это мина: курсор в промежутке не наводит
+   ни одну звезду, подсветка гаснет на каждом переходе и ряд мигает. Воздух между
+   звёздами — внутри кнопки (кнопка 2.75rem, звезда 2.25rem); отрицательный отступ ряда
+   ставит первую звезду по краю колонки. Размер кнопки зеркалит h-11 у строки рейтинга
+   на полотне (builder/kinds/rating.tsx) — по нему центрируются значки строки.
+
+   Наведение — только на устройствах с настоящей мышью: на касании :hover залипает на
+   последней тронутой звезде. Без :has() подсветки наведения нет, выбор работает.
+   Цвет выбранных звёзд жёлтый и мимо акцента формы (решение владельца 2026-09-15). */
 .rf-rating {
   display: flex;
   flex-wrap: wrap;
-  gap: 0.25rem;
+  margin-inline-start: -0.25rem;
 }
 
 .rf-rating-star {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: var(--rf-control-h);
-  height: var(--rf-control-h);
+  width: 2.75rem;
+  height: 2.75rem;
   border: 0;
   border-radius: var(--rf-radius);
   padding: 0;
@@ -1501,12 +1509,13 @@ textarea.rf-input {
 }
 
 .rf-rating-star svg {
-  width: 1.75rem;
-  height: 1.75rem;
+  width: 2.25rem;
+  height: 2.25rem;
   fill: none;
   stroke: currentColor;
-  stroke-width: 1.5;
+  stroke-width: 2;
   stroke-linejoin: round;
+  stroke-linecap: round;
 }
 
 .rf-rating-star:focus-visible {
@@ -1515,7 +1524,7 @@ textarea.rf-input {
 }
 
 .rf-rating-star--on {
-  color: var(--rf-accent);
+  color: #facc15;
 }
 
 .rf-rating-star--on svg {
@@ -1524,7 +1533,7 @@ textarea.rf-input {
 
 @media (hover: hover) {
   .rf-rating:has(.rf-rating-star:enabled:hover) .rf-rating-star {
-    color: var(--rf-accent);
+    color: #facc15;
   }
   .rf-rating:has(.rf-rating-star:enabled:hover) .rf-rating-star svg {
     fill: currentColor;

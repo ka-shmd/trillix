@@ -13,7 +13,7 @@ export const rating: EditorKind = {
     surface: 'object',
     Control: RatingControl,
     hint: 'object',
-    lineH: 'h-[var(--rf-control-h)]',
+    lineH: 'h-11',
   },
   // Число звёзд правится в попапе, как диапазон шкалы: у респондента этого выбора нет.
   Settings: RatingSettings,
