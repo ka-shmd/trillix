@@ -135,8 +135,9 @@ export function useClusterAim() {
 }
 
 // clusterShift — стиль ячейки ряда: на сколько её кластеры значков отодвинуты от своих
-// блоков сверх 4px. У колонки кроме первой это ширина жёлоба — его занимает ручка ширины.
+// блоков сверх 4px. У колонки кроме первой это половина жёлоба: линия ручки ширины стоит
+// по его центру, и кластер встаёт левее неё. Передаётся ширина жёлоба (0 — без сдвига).
 // Читает переменную `CLUSTER_GAP` в `BlockRow`.
 export function clusterShift(gutter: number): CSSProperties {
-  return { '--cluster-shift': `${gutter}px` } as CSSProperties
+  return { '--cluster-shift': `${gutter / 2}px` } as CSSProperties
 }
