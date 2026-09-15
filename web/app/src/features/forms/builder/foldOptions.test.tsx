@@ -158,12 +158,12 @@ describe('сворачивание вопроса', () => {
     const toggle = row('cap').getByRole('button', { name: 'Развернуть вопрос' })
     expect(toggle.className).not.toContain('opacity-0 ')
     expect(toggle.className).toContain('hover:bg-muted')
-    // Порядок: три точки → число блоков → шеврон; шеврон — по наведению на вопрос.
+    // Порядок: три точки → число блоков → шеврон; шеврон у свёрнутого не прячется.
     const [dots, chevron] = [...toggle.querySelectorAll('svg')]
-    expect(dots!.compareDocumentPosition(within(toggle).getByText('3 блока'))).toBe(
-      Node.DOCUMENT_POSITION_FOLLOWING,
-    )
-    expect(chevron!.getAttribute('class')).toContain('group-hover/question:opacity-100')
+    const count = within(toggle).getByText('3 блока')
+    expect(dots!.compareDocumentPosition(count)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(count.compareDocumentPosition(chevron!)).toBe(Node.DOCUMENT_POSITION_FOLLOWING)
+    expect(chevron!.getAttribute('class')).not.toContain('opacity-0')
 
     fireEvent.click(within(toggle).getByText('3 блока'))
     expect(screen.getByDisplayValue('Казань')).toBeTruthy()

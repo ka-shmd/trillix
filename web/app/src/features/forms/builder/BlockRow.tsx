@@ -1102,11 +1102,11 @@ function RowMarks({
   )
 }
 
-// FoldToggle — кнопка сворачивания вопроса у его подписи: у свёрнутого «⋯ N блоков ⌄»,
-// у развёрнутого — один шеврон. Нажимается вся кнопка и подсвечивается подложкой при
-// наведении. Шеврон виден только при наведении на вопрос (group/question у GroupRow); у
-// развёрнутого вопроса вне наведения не видно всей кнопки. Клавиатурного пути нет (решение
-// владельца 2026-09-15): tabIndex -1, а mousedown не забирает каретку у строки.
+// FoldToggle — кнопка сворачивания вопроса у его подписи: у свёрнутого «⋯ N блоков ⌄» и
+// видна всегда, у развёрнутого — один шеврон, видный только при наведении на вопрос
+// (group/question у GroupRow). Нажимается вся кнопка и подсвечивается подложкой при
+// наведении. Клавиатурного пути нет (решение владельца 2026-09-15): tabIndex -1, а
+// mousedown не забирает каретку у строки.
 //
 // Кнопка в ПОТОКЕ, а не в кластере, и мины TD-22 здесь нет: скрытое проявляется
 // прозрачностью и место занимает всегда, поэтому на mousedown ничего не схлопывается.
@@ -1122,7 +1122,6 @@ function FoldToggle({
   lineH: string
 }) {
   const toggle = useFoldStore((s) => s.toggle)
-  const onHover = 'opacity-0 transition-opacity group-hover/question:opacity-100'
   return (
     <div className={`flex shrink-0 ${lineH} items-center`}>
       <button
@@ -1133,7 +1132,7 @@ function FoldToggle({
         onMouseDown={(e) => e.preventDefault()}
         onClick={() => toggle(fieldId)}
         className={`flex h-6 items-center gap-1 rounded px-1 text-sm font-normal text-[var(--rf-muted)] hover:bg-muted ${
-          folded ? '' : onHover
+          folded ? '' : 'opacity-0 transition-opacity group-hover/question:opacity-100'
         }`}
       >
         {folded && (
@@ -1145,7 +1144,7 @@ function FoldToggle({
           </>
         )}
         {folded ? (
-          <ChevronRight className={`size-4 ${onHover}`} />
+          <ChevronRight className="size-4" />
         ) : (
           <ChevronDown className="size-4" />
         )}
