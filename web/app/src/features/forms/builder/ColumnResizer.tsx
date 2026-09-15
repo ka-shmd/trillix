@@ -18,6 +18,9 @@ import { nextWidths, pxToWidths } from './columnResize'
 //
 // Escape отменяет начатое перетаскивание — доли возвращаются к тем, что были в DOM до
 // захвата (у ряда без долей это пустая строка, то есть «поровну из CSS»).
+// Сколько хит-области заходит ВНУТРЬ своей колонки, поверх её содержимого (px).
+const GRAB_INSIDE = 8
+
 export function ColumnResizer({
   index,
   gutter,
@@ -71,8 +74,10 @@ export function ColumnResizer({
     <div
       ref={ref}
       aria-hidden="true"
-      // Хит-область — ровно жёлоб (как у зоны драга), видимая линия внутри тоньше:
-      // попасть в 2px мышью нельзя, а обещать 2px — можно.
+      // Хит-область — весь жёлоб (как у зоны драга) плюс GRAB_INSIDE пикселей своей
+      // колонки, видимая линия внутри тоньше: попасть в 2px мышью нельзя, а обещать 2px —
+      // можно. Цена края — первые GRAB_INSIDE пикселей строки не ставят каретку и не
+      // начинают выделение (жест гасит событие), поэтому число маленькое: край, а не поле.
       //
       // Жёлоб ручка делит только с полосой просвета строки (`GAP_BRIDGE`): кластер
       // значков колонки стоит левее жёлоба (`clusterShift` в `BlockRow`). z-10 держит
@@ -80,7 +85,7 @@ export function ColumnResizer({
       // поверх.
       data-rf-resizer=""
       className="group absolute top-0 bottom-0 z-10 cursor-col-resize touch-none"
-      style={{ left: -gutter, width: gutter }}
+      style={{ left: -gutter, width: gutter + GRAB_INSIDE }}
       onPointerDown={(e) => {
         if (e.button !== 0) return
         const handle = ref.current
