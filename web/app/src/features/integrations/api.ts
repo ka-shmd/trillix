@@ -13,6 +13,7 @@ import {
   type DeliveryPage,
   type FormIntegrations,
   type FormSheet,
+  type MetrikaCounter,
   type SheetRef,
   type SpreadsheetRef,
   type Webhook,
@@ -224,6 +225,19 @@ export function updateWebhook(
 
 export function deleteWebhook(formId: string, webhookId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/webhooks/${webhookId}`, { method: 'DELETE' })
+}
+
+// --- ЯНДЕКС МЕТРИКА (фаза 29) ---
+
+// Подключение, правка номера и тумблер строки — один и тот же PUT: счётчик у формы
+// один, заводить и править его разными ручками незачем. Номер проверяет сервер
+// (422 с человеческим текстом), ответ экрану не нужен — состояние перезапрашивается.
+export function setMetrika(formId: string, input: MetrikaCounter): Promise<void> {
+  return apiRequest(`/forms/${formId}/counters/yandex-metrika`, { method: 'PUT', body: input })
+}
+
+export function deleteMetrika(formId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/counters/yandex-metrika`, { method: 'DELETE' })
 }
 
 // Секрет подписи — отдельной ручкой по нажатию «Показать», а не в состоянии

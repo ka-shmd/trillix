@@ -5,11 +5,12 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 
-import type { WebhookHeader } from '../../entities/integration'
+import type { MetrikaCounter, WebhookHeader } from '../../entities/integration'
 import { integrationKeys } from './keys'
 import {
   createSheet,
   createWebhook,
+  deleteMetrika,
   deleteWebhook,
   disableWebhookSignature,
   getFormIntegrations,
@@ -21,6 +22,7 @@ import {
   refillSheet,
   retryDelivery,
   retryWebhookDelivery,
+  setMetrika,
   setWebhookSecret,
   testWebhook,
   unlinkSheet,
@@ -218,6 +220,25 @@ export function useDeleteWebhook(formId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: (webhookId: string) => deleteWebhook(formId, webhookId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+// --- ЯНДЕКС МЕТРИКА (фаза 29) ---
+
+// Одна мутация на подключение, правку номера и тумблер: ручка у них общая (PUT).
+export function useSetMetrika(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: MetrikaCounter) => setMetrika(formId, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+export function useDeleteMetrika(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => deleteMetrika(formId),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }

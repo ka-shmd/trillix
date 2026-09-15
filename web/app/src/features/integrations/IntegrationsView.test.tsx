@@ -39,6 +39,24 @@ vi.mock('./api', async (importOriginal) => {
   }
 })
 
+// Тариф пространства: разрешает ли он счётчик Метрики. По умолчанию «можно» — так же
+// отвечает настоящий хук, пока снимок тарифа не приехал.
+const plan = vi.hoisted(() => ({ allowed: true }))
+
+vi.mock('../plan/useFeature', () => ({
+  useFeatureAllowed: () => plan.allowed,
+}))
+
+// Метка тарифа и оверлей тарифа ведут ссылкой на страницу тарифа — роутера в тесте
+// нет, поэтому подменены своим текстом: проверяется, КОГДА они появляются.
+vi.mock('../../shared/ProTag', () => ({
+  ProTag: () => <span>ПРО</span>,
+}))
+
+vi.mock('../plan/PlanUpsell', () => ({
+  PlanUpsell: ({ open }: { open: boolean }) => (open ? <p>Это на платном тарифе</p> : null),
+}))
+
 vi.mock('../../shared/oauthPopup', () => ({
   useOAuthPopup: (onOutcome: (outcome: string) => void) => {
     popup.callbacks.push(onOutcome)
@@ -1555,3 +1573,188 @@ function mockWebhookCalls(
   vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
   return calls
 }
+
+// --- Яндекс Метрика (фаза 29) ---
+
+const COUNTER: NonNullable<FormIntegrations['metrika']> = { counter: '12345678', enabled: true }
+
+// mockCounterCalls — записывает правки счётчика; GET состояния после мутации отвечает
+// тем же состоянием, иначе перезапрос уронил бы экран в отказ.
+function mockCounterCalls(data: FormIntegrations, reply?: Response) {
+  const calls: { method: string; url: string; body: unknown }[] = []
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    if (method === 'GET') {
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    return reply ?? new Response(null, { status: 204 })
+  })
+  vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+  return calls
+}
+
+describe('Яндекс Метрика на экране интеграций', () => {
+  afterEach(() => {
+    plan.allowed = true
+    vi.unstubAllGlobals()
+  })
+
+  it('каталог предлагает Метрику плиткой с меткой тарифа', () => {
+    renderView(state())
+
+    expect(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' })).toBeTruthy()
+    expect(screen.getByText('Отмечайте цели формы в своём счётчике')).toBeTruthy()
+    expect(screen.getByText('ПРО')).toBeTruthy()
+  })
+
+  it('на тарифе без счётчика «Подключить» открывает предложение тарифа, а не окно', () => {
+    plan.allowed = false
+    renderView(state())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    expect(screen.getByText('Это на платном тарифе')).toBeTruthy()
+    expect(screen.queryByLabelText('Номер счётчика')).toBeNull()
+  })
+
+  it('окно — номер, три цели с копированием и условия работы', () => {
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    expect(screen.getByLabelText('Номер счётчика')).toBeTruthy()
+    for (const goal of ['trillix_open', 'trillix_start', 'trillix_submit']) {
+      expect(screen.getByText(goal)).toBeTruthy()
+      expect(screen.getByRole('button', { name: `Скопировать ${goal}` })).toBeTruthy()
+    }
+    expect(screen.getByText('Где отмечаются цели')).toBeTruthy()
+    expect(screen.getByText(/цели не отмечаются/)).toBeTruthy()
+    expect(screen.getByText(/Вебвизор на форме не работает/)).toBeTruthy()
+  })
+
+  it('«Подключить» без номера не нажимается', () => {
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    const connect = screen.getByRole('button', { name: 'Подключить' }) as HTMLButtonElement
+    expect(connect.disabled).toBe(true)
+  })
+
+  it('подключение шлёт номер включённым и закрывает окно', async () => {
+    const calls = mockCounterCalls(state())
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: ' 12345678 ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls).toEqual([
+      {
+        method: 'PUT',
+        url: expect.stringContaining('/forms/form-1/counters/yandex-metrika'),
+        body: { counter: '12345678', enabled: true },
+      },
+    ])
+  })
+
+  it('отказ сервера показан его текстом, окно остаётся открытым', async () => {
+    mockCounterCalls(
+      state(),
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'validation_failed',
+            message: 'номер счётчика — от 1 до 12 цифр, как в настройках Метрики',
+          },
+        }),
+        { status: 422, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: 'abc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('от 1 до 12 цифр')
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
+  it('подключённый счётчик — строка в «Моих подключениях» с номером и без журнала', () => {
+    renderView(state({ metrika: COUNTER }))
+
+    expect(screen.getByText('Мои подключения')).toBeTruthy()
+    expect(screen.getByText('Цели отмечаются в счётчике 12345678')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Работает' })).toBeTruthy()
+    // Доставки у счётчика нет — и журнала тоже.
+    expect(screen.queryByRole('button', { name: 'Журнал доставок' })).toBeNull()
+  })
+
+  it('«Настроить» открывает окно с номером и кнопкой «Сохранить»', () => {
+    renderView(state({ metrika: COUNTER }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить счётчик' }))
+
+    expect((screen.getByLabelText('Номер счётчика') as HTMLInputElement).value).toBe('12345678')
+    expect(screen.getByRole('button', { name: 'Сохранить' })).toBeTruthy()
+  })
+
+  it('правка номера у выключенного счётчика его не включает', async () => {
+    const calls = mockCounterCalls(state({ metrika: { ...COUNTER, enabled: false } }))
+    renderView(state({ metrika: { ...COUNTER, enabled: false } }))
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить счётчик' }))
+
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: '87654321' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    expect(calls[0]!.body).toEqual({ counter: '87654321', enabled: false })
+  })
+
+  it('тумблер строки выключает счётчик, сохраняя номер', async () => {
+    const calls = mockCounterCalls(state({ metrika: COUNTER }))
+    renderView(state({ metrika: COUNTER }))
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Выключить счётчик' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    expect(calls[0]).toEqual({
+      method: 'PUT',
+      url: expect.stringContaining('/forms/form-1/counters/yandex-metrika'),
+      body: { counter: '12345678', enabled: false },
+    })
+  })
+
+  it('удаление спрашивает и обещает сохранить данные в Метрике', async () => {
+    const calls = mockCounterCalls(state({ metrika: COUNTER }))
+    renderView(state({ metrika: COUNTER }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить счётчик' }))
+    expect(screen.getByText('Удалить счётчик?')).toBeTruthy()
+    expect(screen.getByText(/останутся в\s+Метрике/)).toBeTruthy()
+    expect(calls).toEqual([])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить' }))
+    await waitFor(() => expect(calls.map((c) => c.method)).toEqual(['DELETE']))
+  })
+
+  it('на тарифе без счётчика строка говорит, что он не работает', () => {
+    plan.allowed = false
+    renderView(state({ metrika: COUNTER }))
+
+    expect(screen.getByRole('button', { name: 'Не работает на текущем тарифе' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Работает' })).toBeNull()
+  })
+
+  it('выключенный счётчик помечен выключенным и на бесплатном тарифе', () => {
+    plan.allowed = false
+    renderView(state({ metrika: { ...COUNTER, enabled: false } }))
+
+    expect(screen.getByRole('button', { name: 'Выключено' })).toBeTruthy()
+  })
+})
