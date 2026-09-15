@@ -1,5 +1,5 @@
 import { test, expect, devices } from '@playwright/test'
-import { login, seedAccount } from './helpers/session'
+import { csrfToken, login, seedAccount } from './helpers/session'
 
 // Многостраничная форма (фаза 19) против prod-local: шаги, пошаговая валидация,
 // отсутствие хода назад и уточнённая воронка.
@@ -42,7 +42,7 @@ test('форма из трёх страниц: шаги, пошаговая ва
   const email = seedAccount('multipage')
   await login(page, email)
 
-  const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')!.value
+  const csrf = await csrfToken(page)
   const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }
 
   const created = await page.request.post('/api/v1/forms', { headers, data: { title: formTitle } })

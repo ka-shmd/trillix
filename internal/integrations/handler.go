@@ -1125,42 +1125,6 @@ func (h *Handler) finish(w http.ResponseWriter, r *http.Request, o outcome) {
 	http.Redirect(w, r, h.appOrigin+"/oauth/done?r="+string(o), http.StatusFound)
 }
 
-func (h *Handler) setFlowCookie(w http.ResponseWriter, name, value string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    value,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(flowTTL.Seconds()),
-	})
-}
-
-func (h *Handler) expireCookie(w http.ResponseWriter, name string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
-}
-
-func (h *Handler) readFlowCookie(r *http.Request, name string) (first, second string, ok bool) {
-	c, err := r.Cookie(name)
-	if err != nil {
-		return "", "", false
-	}
-	a, b, found := strings.Cut(c.Value, ":")
-	if !found || a == "" || b == "" {
-		return "", "", false
-	}
-	return a, b, true
-}
-
 // signIntent подписывает «кто начал поход» со сроком. Пространства в намерении
 // больше нет: подключение принадлежит человеку, и записывать его некуда, кроме
 // как на него самого (ADR §10).
@@ -1172,7 +1136,7 @@ func (h *Handler) signIntent(userID uuid.UUID) string {
 // readIntent достаёт намерение из запроса. Битая подпись, истёкший срок и
 // отсутствие cookie неразличимы снаружи — все они означают «похода не было».
 func (h *Handler) readIntent(r *http.Request) (userID uuid.UUID, ok bool) {
-	c, err := r.Cookie(intentCookie)
+	c, err := h.readCookie(r, intentCookie)
 	if err != nil {
 		return uuid.Nil, false
 	}

@@ -1,5 +1,5 @@
 import { test, expect, devices } from '@playwright/test'
-import { login, seedAccount } from './helpers/session'
+import { csrfToken, login, seedAccount } from './helpers/session'
 
 // Визиты и воронка (фаза 8.5, шаги 6 и 6б) против prod-local.
 //
@@ -34,7 +34,7 @@ test('визит считается под прод-CSP, конверсия и �
 
   // 2. Форма с ДВУМЯ вопросами через API. Второй нужен, чтобы воронка была
   // содержательной: респондент коснётся только первого, и шаги обязаны разойтись.
-  const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')!.value
+  const csrf = await csrfToken(page)
   const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }
 
   const created = await page.request.post('/api/v1/forms', {

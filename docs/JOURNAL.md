@@ -6727,3 +6727,48 @@ Ctrl+кликом и нет плашек. Вид — по итерациям в�
 `SidebarProvider`, без него подсказка роняет рендер.
 
 Проверено: `make lint`, vitest кабинета (2019/124). В браузере агент не смотрел.
+
+## Фаза 29 `DEV-PLAN`, слайс A: cookie кабинета под `__Host-`
+
+Первый слайс фазы, строка ADR §10 «Cookie кабинета — с префиксом `__Host-`» (2026-09-15).
+Кабинет `app.trillix.ru` и формы `f.trillix.ru` делят домен `trillix.ru`, и host-only cookie
+защищала только от чтения. Скрипт на домене форм мог выставить `session` с
+`Domain=.trillix.ru` и более точным путём, кабинет получил бы обе, а `r.Cookie` взял бы первую.
+
+**Имя.** `httpserver.HostCookie(name, secure)` даёт `__Host-` + имя при `cfg.CookieSecure` и
+прежнее имя без него (браузер отверг бы префикс без `Secure`). Чтение и запись cookie в `auth`
+и `integrations` переехали в `cookies.go` своих пакетов — `readCookie` и помощники записи;
+хендлеры зовут только их. Правило 11 `check-docs` запрещает `.Cookie(` и `http.SetCookie(` в
+`cmd/` и `internal/` вне `cookies.go`: чтение мимо помощника в dev и тестах работает, а на
+прод-контуре не находит cookie.
+
+**Кабинет и e2e.** `csrf.ts` читает `__Host-csrf_token` первой и `csrf_token` второй:
+подложенная без префикса может стоять в `document.cookie` раньше. Разбор — чистая
+`readCsrfToken`. Восемь e2e-файлов искали `csrf_token` по имени и на prod-local упали бы все;
+теперь токен берёт `helpers/session.csrfToken`, у `perf/form.ts` своя строка с обоими именами.
+
+**Проверено.**
+
+- `make lint`; `make test` — Go с интеграционными, vitest 2023 в кабинете и 174 в рендерере.
+- Мутации: `readCookie` без префикса — красные три теста контура с `Secure` в `auth` и тест
+  `integrations`; обратный порядок имён в `csrf.ts` — красный тест подложенной cookie; пробный
+  `r.Cookie("session")` вне `cookies.go` — красный `check-docs`.
+- prod-local, curl: вход ставит `__Host-session` и `__Host-csrf_token` (`Secure`, `Path=/`, без
+  `Domain`); `/me` с подложенной `session` без префикса — 401, с обеими — 200; выход с подложенным
+  `csrf_token` — 403, сессия жива; включение фактора, выход, вход с фактором (`__Host-two_factor`)
+  и второй шаг с кодом из Mailpit — `__Host-known_device` и новая сессия. Cookie без префикса в
+  ответах нет ни одной.
+- Полный e2e на prod-local: 2 из 10 зелёные. Все 8 `POST /api/v1/forms` ответили 201 тем же
+  CSRF-токеном, 401 и 403 нет ни одного. Красные — прежние, ночной e2e красный с 2026-08-11
+  (`STATUS.md`): 422 на `PATCH` черновика в пяти сценариях (у `design`, `embed`, `multipage` —
+  `schemaVersion: 4` при `domain.SchemaVersion = 1`, у `form-settings` и `visits-funnel` причина
+  другая и не разобрана), текст на полотне в `builder-keyboard`, кнопка «Картинка» в
+  `full-loop`, две ссылки с именем пространства в `workspace-team`.
+
+**Вживую не проверено:** вход через провайдера и подключение Google — на prod-local нет ключей.
+Покрыты юнит-тестами `TestSecureContour_OAuthFlowUsesPrefixedCookies` и
+`TestFlowCookie_SecureContourUsesHostPrefix`.
+
+**Попутно.** `make prod-local` падает, пока поднят dev-стек: MinIO обоих контуров публикует
+`127.0.0.1:9000`. Для проверки `api` prod-local поднят отдельно (`up --no-deps api`), MinIO
+prod-local остался не запущен.

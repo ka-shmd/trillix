@@ -1,5 +1,5 @@
 import { test, expect, devices } from '@playwright/test'
-import { login, seedAccount } from './helpers/session'
+import { csrfToken, login, seedAccount } from './helpers/session'
 
 // Настройки формы на стороне респондента (фаза 8.5, шаги 1 и 4) против prod-local:
 // свой текст благодарности и лимит мест, закрывающий приём.
@@ -40,7 +40,7 @@ test('свой текст благодарности и лимит мест: в�
   const email = seedAccount('settings')
   await login(page, email)
 
-  const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')!.value
+  const csrf = await csrfToken(page)
   const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }
 
   const created = await page.request.post('/api/v1/forms', { headers, data: { title: formTitle } })
