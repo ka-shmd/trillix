@@ -37,6 +37,20 @@ describe("цель, ответившая 'defer'", () => {
   })
 })
 
+describe('заглушка (standIn)', () => {
+  it('страховка ремаунта заглушку не зовёт, явный запрос — зовёт', () => {
+    const engine = createFocusEngine()
+    const calls: string[] = []
+    engine.focusBlock('b', 'end')
+    // Фокус в body (afterEach чистит документ), последний запрос — 'b'.
+    engine.register('b', { focus: () => void calls.push('поверхность') })()
+    engine.register('b', { focus: () => void calls.push('заглушка'), standIn: true })
+    expect(calls).toEqual(['поверхность'])
+    engine.focusBlock('b', 'end')
+    expect(calls).toEqual(['поверхность', 'заглушка'])
+  })
+})
+
 describe('textCaret', () => {
   it('focus("start") ставит каретку в начало и фокус на элемент', () => {
     const el = makeTextarea('привет')

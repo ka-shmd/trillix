@@ -1165,13 +1165,19 @@ function FoldToggle({
 // фокус-целью блока. Явный запрос каретки (Mod+Enter с подписи, схлопывание Backspace,
 // исход удаления) вопрос разворачивает, и каретка встаёт в строку, когда её настоящее
 // тело зарегистрирует свою цель ('defer', focusEngine.ts). Стрелки сюда не приходят —
-// обход спрятанные строки перескакивает (navigation.ts).
+// обход спрятанные строки перескакивает (navigation.ts). Цель — заглушка (standIn):
+// страховка ремаунта в движке её не зовёт, иначе свёртка разворачивалась бы сама.
 function FoldedRow({ blockId, fieldId }: { blockId: string; fieldId: string }) {
   const expand = useFoldStore((s) => s.expand)
-  useRegisterFocusTarget(blockId, () => {
-    expand(fieldId)
-    return 'defer'
-  })
+  useRegisterFocusTarget(
+    blockId,
+    () => {
+      expand(fieldId)
+      return 'defer'
+    },
+    true,
+    true,
+  )
   return null
 }
 

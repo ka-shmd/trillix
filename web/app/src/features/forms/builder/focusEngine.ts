@@ -16,6 +16,11 @@ export interface FocusTarget {
   // (свёрнутый список вариантов разворачивается, collapsedOptions.ts). Запрос остаётся
   // отложенным и исполнится, когда поверхность зарегистрирует свою цель под тем же id.
   focus(edge: CaretEdge): void | 'defer'
+  // standIn — заглушка на месте поверхности (свёрнутая строка): отвечает только на явный
+  // focusBlock, страховка ремаунта её не зовёт. Иначе клик по шеврону сворачивал вопрос,
+  // а регистрация заглушки под id последнего фокуса при фокусе в body тут же его
+  // разворачивала (так бывает после удаления строки из вопроса).
+  standIn?: boolean
 }
 
 export interface FocusEngine {
@@ -47,7 +52,7 @@ export function createFocusEngine(): FocusEngine {
       targets.set(id, target)
       if (pending && pending.id === id) {
         if (target.focus(pending.edge) !== 'defer') pending = null
-      } else if (last && last.id === id && focusLost()) {
+      } else if (!target.standIn && last && last.id === id && focusLost()) {
         target.focus(last.edge)
       }
       return () => {
@@ -86,6 +91,7 @@ export function useRegisterFocusTarget(
   id: string,
   focus: (edge: CaretEdge) => void | 'defer',
   enabled = true,
+  standIn = false,
 ): void {
   const engine = useFocusEngine()
   // Latest-ref: держим актуальный focus, не пере-подписывая регистрацию на каждый
@@ -97,6 +103,6 @@ export function useRegisterFocusTarget(
   })
   useEffect(() => {
     if (!enabled) return
-    return engine.register(id, { focus: (edge) => focusRef.current(edge) })
-  }, [engine, id, enabled])
+    return engine.register(id, { focus: (edge) => focusRef.current(edge), standIn })
+  }, [engine, id, enabled, standIn])
 }

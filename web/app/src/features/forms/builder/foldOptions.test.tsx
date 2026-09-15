@@ -192,6 +192,21 @@ describe('сворачивание вопроса', () => {
     expect(useFoldStore.getState().ids.has('ch')).toBe(false)
   })
 
+  // Дефект, найденный владельцем 2026-09-15: после удаления строки из вопроса шеврон не
+  // сворачивал его, пока не кликнешь по подписи. Удаление ставит каретку focusBlock'ом,
+  // удалённая строка роняет фокус в body, и страховка ремаунта в движке (last + фокус
+  // потерян) звала цель свёрнутой строки — та разворачивала вопрос в том же такте.
+  it('свёртка держится, когда последний фокус был в вопросе, а фокус потерян', () => {
+    const { engine } = setup(QUESTION)
+    act(() => engine.focusBlock('ch', 'end'))
+    act(() => (document.activeElement as HTMLElement).blur())
+    expect(document.activeElement).toBe(document.body)
+
+    fireEvent.click(row('cap').getByRole('button', { name: 'Свернуть вопрос' }))
+    expect(useFoldStore.getState().ids.has('ch')).toBe(true)
+    expect(screen.queryByDisplayValue('Казань')).toBeNull()
+  })
+
   it('явный запрос каретки на спрятанную строку разворачивает вопрос', () => {
     useFoldStore.setState({ ids: new Set(['ch']) })
     const { engine } = setup(WITH_NOTE)
