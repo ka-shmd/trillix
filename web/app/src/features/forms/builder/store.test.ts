@@ -3160,6 +3160,9 @@ describe('createBuilderStore — поле уходит из вопроса в р
     groupBlocks(store.getState().blocks).map((g) => g.blocks.map((b) => b.type))
   const rowCols = (store: ReturnType<typeof createBuilderStore>) =>
     packRows(groupBlocks(store.getState().blocks)).map((row) => row.length)
+  // Ряды колонками: [[2, 1]] — в первой колонке двое, во второй один.
+  const cells = (store: ReturnType<typeof createBuilderStore>) =>
+    packRows(groupBlocks(store.getState().blocks)).map((row) => row.map((cell) => cell.length))
 
   it('поле, поставленное колонкой к своей подписи, — отдельный элемент', () => {
     const store = question()
@@ -3351,5 +3354,50 @@ describe('createBuilderStore — поле уходит из вопроса в р
     expect(rowPosition(store.getState().blocks, field!.id)).toEqual({ kind: 'leave', room: false })
     store.getState().shiftColumn(field!.id, 'right')
     expect(store.getState().dirty).toBe(false)
+  })
+
+  // Остаток вопроса без поля распадается на отдельные элементы — и каждый обязан остаться в
+  // колонке вопроса: пояснение без номера закрыло бы секцию.
+  it('поле уходит из вопроса с пояснением: подпись и пояснение остаются стопкой в колонке', () => {
+    const store = question()
+    const [caption, field] = store.getState().blocks
+    const text = store.getState().addBlockAfter(caption!.id, 'text')
+    store.getState().placeInRow(field!.id, caption!.groupId, 2, true)
+
+    expect(ids(store)).toEqual([caption!.id, text, field!.id])
+    expect(cols(store)).toEqual([1, 1, 2])
+    expect(groupsOf(store)).toEqual([['title'], ['text'], ['short_text']])
+    expect(cells(store)).toEqual([[2, 1]])
+  })
+
+  it('вопрос с пояснением в секции: поле уходит колонкой справа, секция цела', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email')
+    store.getState().addQuestionAfter(null, 'short_text')
+    const [x, caption, field] = store.getState().blocks
+    const text = store.getState().addBlockAfter(caption!.id, 'text')
+    store.getState().placeInRow(caption!.groupId, x!.groupId, 2, true)
+    expect(cells(store)).toEqual([[1, 1]])
+
+    store.getState().shiftColumn(field!.id, 'right')
+
+    expect(ids(store)).toEqual([x!.id, caption!.id, text, field!.id])
+    expect(cols(store)).toEqual([1, 2, 2, 3])
+    expect(cells(store)).toEqual([[1, 2, 1]])
+  })
+
+  it('строка, брошенная в стопку своей колонки прямо за вопросом, — no-op без шага истории', () => {
+    const store = createBuilderStore()
+    store.getState().addBlock('email')
+    store.getState().addQuestionAfter(null, 'short_text')
+    const [x, caption, field] = store.getState().blocks
+    store.getState().placeInRow(caption!.groupId, x!.groupId, 2, true)
+    const past = store.getState().past.length
+    store.getState().markSaved()
+
+    store.getState().placeInRow(field!.id, x!.groupId, 2, false)
+
+    expect(store.getState().dirty).toBe(false)
+    expect(store.getState().past.length).toBe(past)
   })
 })

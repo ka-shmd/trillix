@@ -554,9 +554,11 @@ function emitRows(blocks: Block[], rows: RowPlan[]): Block[] {
   for (const row of rows) {
     const section = row.length > 1
     row.forEach((cell, ci) => {
+      // Номер — ВСЕМ блокам единицы: остаток вопроса, из которого ушла строка, может
+      // распасться на отдельные элементы (подпись и пояснение без поля), и пояснение без
+      // номера закрыло бы секцию. У строк настоящего вопроса лишний номер снимает уборка.
       for (const g of cell) {
-        out.push(withColumn(g.blocks[0]!, section ? ci + 1 : undefined))
-        out.push(...g.blocks.slice(1))
+        for (const b of g.blocks) out.push(withColumn(b, section ? ci + 1 : undefined))
       }
     })
   }
@@ -593,6 +595,23 @@ function rowUnit(
     source: group.id,
     rest: { id: group.id, blocks: group.blocks.filter((b) => b !== self) },
   }
+}
+
+// sameLayout — та же раскладка: порядок, группы, колонки и доли. Команды ряда меняют только
+// это, поэтому совпадение значит no-op.
+function sameLayout(a: Block[], b: Block[]): boolean {
+  return (
+    a.length === b.length &&
+    a.every((x, i) => {
+      const y = b[i]!
+      return (
+        x.id === y.id &&
+        x.groupId === y.groupId &&
+        x.settings?.column === y.settings?.column &&
+        x.settings?.columnWidth === y.settings?.columnWidth
+      )
+    })
+  )
 }
 
 // ТЕ ЖЕ ДВА ПОМОЩНИКА ДЛЯ ВАРИАНТОВ. Разница с блочными ровно одна: у варианта нет
@@ -1911,11 +1930,14 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
           if (insert) target.splice(at - 1, 0, [unit.active])
           else target[at - 1]!.push(unit.active)
           rows[ti] = target
-          return structural(
+          const moved = structural(
             { blocks: emitRows(s.blocks, tidyRows(rows)) },
             // Смена секции здесь — по прямой просьбе, а не побочный эффект переноса.
             unit.active.blocks[0]!.id,
-          )
+          )!
+          // Строка, брошенная в стопку своей колонки прямо за своим вопросом, в него же и
+          // возвращается: раскладка та же, и шаг истории с dirty тратить не на что.
+          return sameLayout(moved.blocks, s.blocks) ? null : moved
         }),
 
       setRowWidths: (anchorBlockId, widths) =>
