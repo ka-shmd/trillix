@@ -1621,15 +1621,15 @@ describe('Яндекс Метрика на экране интеграций', (
     expect(screen.queryByLabelText('Номер счётчика')).toBeNull()
   })
 
-  it('окно — номер, три цели с копированием и условия работы', () => {
+  it('окно — номер, цели одной строкой текстом и условия работы', () => {
     renderView(state())
     fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
 
     expect(screen.getByLabelText('Номер счётчика')).toBeTruthy()
-    for (const goal of ['trillix_open', 'trillix_start', 'trillix_submit']) {
-      expect(screen.getByText(goal)).toBeTruthy()
-      expect(screen.getByRole('button', { name: `Скопировать ${goal}` })).toBeTruthy()
-    }
+    // Цели — одна строка: все три идентификатора в одном абзаце, без списка и кнопок.
+    const line = screen.getByText(/«JavaScript-событие»/)
+    expect(line.textContent).toContain('trillix_open, trillix_start и trillix_submit.')
+    expect(screen.queryByRole('button', { name: /Скопировать/ })).toBeNull()
     expect(screen.getByText('Где отмечаются цели')).toBeTruthy()
     expect(screen.getByText(/цели не отмечаются/)).toBeTruthy()
     expect(screen.getByText(/Вебвизор на форме не работает/)).toBeTruthy()
