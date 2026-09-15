@@ -1850,15 +1850,19 @@ textarea.rf-input {
 
 /* Вариант тегов на полотне редактора — карточка варианта (.rf-option: высота поля,
    ширина по тексту, место под иконку), окрашенная как плашка тега (.rf-tag задаёт
-   --rf-tag-c): фон и текст — цвет варианта. Поля и тень — как у .rf-input (решения
-   владельца 2026-09-15). Двойной класс нужен против .rf-option выше: у одиночных
-   селекторов побеждала бы просто более поздняя строка файла. */
+   --rf-tag-c): фон и текст — цвет варианта. Поля — как у .rf-input; тень той же
+   геометрии, что --rf-field-shadow (близкая, кольцо, дальняя), но окрашена цветом
+   варианта, а не серым (решения владельца 2026-09-15). Двойной класс нужен против
+   .rf-option выше: у одиночных селекторов побеждала бы просто более поздняя строка. */
 .rf-option.rf-option--tag {
   padding: 0.375rem var(--rf-input-px);
   line-height: 1.5rem;
   background: color-mix(in oklab, var(--rf-tag-c) 18%, var(--rf-field-bg));
   color: color-mix(in oklab, var(--rf-tag-c) 60%, var(--rf-text));
-  box-shadow: var(--rf-field-shadow);
+  box-shadow:
+    0 1px 1px 0 color-mix(in oklab, var(--rf-tag-c) 28%, transparent),
+    0 0 0 var(--rf-ring-w) color-mix(in oklab, var(--rf-tag-c) 38%, transparent),
+    0 2px 5px 0 color-mix(in oklab, var(--rf-tag-c) 20%, transparent);
 }
 
 .rf-option.rf-option--tag:focus-within {
