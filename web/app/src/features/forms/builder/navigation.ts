@@ -22,11 +22,17 @@ function groupHasCaption(blocks: Block[], groupId: string): boolean {
   return blocks.some((b) => b.groupId === groupId && isCaptionType(b.type))
 }
 
-// isFlowLeaf — строку поток перескакивает: инпут плейсхолдера в группе с подписью.
-// Голое поле листом не считается (см. шапку модуля).
-export function isFlowLeaf(blocks: Block[], b: Block): boolean {
-  return supportsPlaceholder(b.type) && groupHasCaption(blocks, b.groupId)
+// isFlowLeaf — строку поток перескакивает: инпут плейсхолдера в группе с подписью и
+// строка свёрнутого вопроса (`folded`, collapsedOptions.ts) — на полотне у неё нет
+// поверхности, куда встать. Голое поле листом не считается (см. шапку модуля).
+export function isFlowLeaf(blocks: Block[], b: Block, folded: Folded = noneFolded): boolean {
+  return (supportsPlaceholder(b.type) || folded(b)) && groupHasCaption(blocks, b.groupId)
 }
+
+// Folded — спрятана ли строка свёрткой своего вопроса. Параметром, а не импортом: модуль
+// остаётся чистой логикой над блоками, без хранилища браузера.
+export type Folded = (b: Block) => boolean
+const noneFolded: Folded = () => false
 
 // prevRow — предыдущая строка, КАКАЯ БЫ ОНА НИ БЫЛА, включая лист-поле. Ею
 // заканчивается схлопывание (Backspace в начале строки, решение владельца 2026-08-23):
@@ -44,9 +50,14 @@ export function prevRow(blocks: Block[], i: number): Block | undefined {
 
 // stopNeighbor — ближайшая строка-остановка от индекса i в сторону dir, перескакивая
 // лист-поля. undefined — остановок в эту сторону нет (край полотна).
-export function stopNeighbor(blocks: Block[], i: number, dir: 'up' | 'down'): Block | undefined {
+export function stopNeighbor(
+  blocks: Block[],
+  i: number,
+  dir: 'up' | 'down',
+  folded: Folded = noneFolded,
+): Block | undefined {
   const step = dir === 'up' ? -1 : 1
   let j = i + step
-  while (blocks[j] && isFlowLeaf(blocks, blocks[j]!)) j += step
+  while (blocks[j] && isFlowLeaf(blocks, blocks[j]!, folded)) j += step
   return blocks[j]
 }

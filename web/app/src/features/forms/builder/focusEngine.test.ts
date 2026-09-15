@@ -20,6 +20,37 @@ function makeTextarea(value = ''): HTMLTextAreaElement {
   return el
 }
 
+describe("цель, ответившая 'defer'", () => {
+  it('запрос дожидается поверхности, зарегистрированной под тем же id', () => {
+    const engine = createFocusEngine()
+    const calls: string[] = []
+    const off = engine.register('b', {
+      focus: () => {
+        calls.push('свёрнутый')
+        return 'defer'
+      },
+    })
+    engine.focusBlock('b', 'start')
+    off()
+    engine.register('b', { focus: (edge) => void calls.push(`список:${edge}`) })
+    expect(calls).toEqual(['свёрнутый', 'список:start'])
+  })
+})
+
+describe('заглушка (standIn)', () => {
+  it('страховка ремаунта заглушку не зовёт, явный запрос — зовёт', () => {
+    const engine = createFocusEngine()
+    const calls: string[] = []
+    engine.focusBlock('b', 'end')
+    // Фокус в body (afterEach чистит документ), последний запрос — 'b'.
+    engine.register('b', { focus: () => void calls.push('поверхность') })()
+    engine.register('b', { focus: () => void calls.push('заглушка'), standIn: true })
+    expect(calls).toEqual(['поверхность'])
+    engine.focusBlock('b', 'end')
+    expect(calls).toEqual(['поверхность', 'заглушка'])
+  })
+})
+
 describe('textCaret', () => {
   it('focus("start") ставит каретку в начало и фокус на элемент', () => {
     const el = makeTextarea('привет')
@@ -56,7 +87,7 @@ describe('createFocusEngine', () => {
   // probe — цель, запоминающая, с каким краем её сфокусировали.
   function probe(): FocusTarget & { edges: string[] } {
     const edges: string[] = []
-    return { edges, focus: (edge) => edges.push(edge) }
+    return { edges, focus: (edge) => void edges.push(edge) }
   }
 
   it('focusBlock фокусирует зарегистрированную строку сразу', () => {

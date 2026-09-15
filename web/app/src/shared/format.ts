@@ -91,6 +91,16 @@ export function pluralQuestions(n: number): string {
   return 'вопросов'
 }
 
+// Склонение слова «блок» по числу: 1 блок, 2 блока, 5 блоков. Нужно свёрнутому вопросу
+// на полотне: он подписывает, сколько блоков спрятано.
+export function pluralBlocks(n: number): string {
+  const mod10 = n % 10
+  const mod100 = n % 100
+  if (mod10 === 1 && mod100 !== 11) return 'блок'
+  if (mod10 >= 2 && mod10 <= 4 && (mod100 < 10 || mod100 >= 20)) return 'блока'
+  return 'блоков'
+}
+
 // Склонение слова «человек» по числу: 1 человек, 2 человека, 5 человек. Нужно
 // плашке закрытой тарифом воронки: она называет НАСТОЯЩЕЕ число не дошедших.
 export function pluralPeople(n: number): string {

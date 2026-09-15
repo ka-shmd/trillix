@@ -574,7 +574,7 @@ export function DesignDrawer({
                       value={design?.controls?.radius}
                       // Зеркалит --rf-radius в fields.css: незаданное скругление панель
                       // показывает тем же числом, которое рисует полотно.
-                      fallback={6}
+                      fallback={8}
                       min={MIN_RADIUS}
                       max={MAX_RADIUS}
                       onChange={(n) => set('controls', 'radius', n)}
@@ -802,8 +802,8 @@ export function DesignDrawer({
                       id="design-btn-radius"
                       value={design?.button?.radius}
                       // Зеркалит --rf-submit-radius: пока не задан, кнопка берёт радиус
-                      // контролов (--rf-radius, 6px).
-                      fallback={6}
+                      // контролов (--rf-radius, 8px).
+                      fallback={8}
                       min={MIN_BUTTON_RADIUS}
                       max={MAX_BUTTON_RADIUS}
                       onChange={(n) => set('button', 'radius', n)}
