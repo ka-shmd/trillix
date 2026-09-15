@@ -1842,6 +1842,23 @@ textarea.rf-input {
   box-shadow: var(--rf-focus-shadow);
 }
 
+/* Вариант тегов на полотне редактора — карточка варианта (.rf-option: высота поля,
+   ширина по тексту, место под иконку), окрашенная как плашка тега (.rf-tag задаёт
+   --rf-tag-c): без кольца-тени, фон и текст — цвет варианта. Поля — как у .rf-input
+   (решение владельца 2026-09-15). Двойной класс нужен против .rf-option выше: у
+   одиночных селекторов побеждала бы просто более поздняя строка файла. */
+.rf-option.rf-option--tag {
+  padding: 0.375rem var(--rf-input-px);
+  line-height: 1.5rem;
+  background: color-mix(in oklab, var(--rf-tag-c) 18%, var(--rf-field-bg));
+  color: color-mix(in oklab, var(--rf-tag-c) 60%, var(--rf-text));
+  box-shadow: none;
+}
+
+.rf-option.rf-option--tag:focus-within {
+  box-shadow: var(--rf-focus-shadow);
+}
+
 /* «Несколько из списка» — обычные чекбоксы, а не карточки с буквой (решение
    владельца 2026-07-26): список галочек сразу читается как множественный выбор,
    тогда как карточка с буквой выглядит ровно так же, как у одиночного, и разницу

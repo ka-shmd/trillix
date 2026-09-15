@@ -22,7 +22,7 @@ import {
 } from '@dnd-kit/core'
 import { SortableContext, useSortable } from '@dnd-kit/sortable'
 import { CSS } from '@dnd-kit/utilities'
-import { Asterisk, Copy, GripVertical, Plus, Trash2 } from 'lucide-react'
+import { Asterisk, Copy, GripVertical, Plus, Tag, Trash2 } from 'lucide-react'
 import {
   type Block,
   isAnswerableType,
@@ -2082,7 +2082,14 @@ function OptionShell({
   index: number
   children: ReactNode
 }) {
-  if (look === 'tag') return <span className={tagClass(index)}>{children}</span>
+  if (look === 'tag') {
+    return (
+      <span className={`rf-option rf-option--tag ${tagClass(index)}`}>
+        <Tag className="size-4 shrink-0" aria-hidden="true" />
+        {children}
+      </span>
+    )
+  }
   if (look === 'check') {
     return (
       <span className="rf-option rf-option--check">
