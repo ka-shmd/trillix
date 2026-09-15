@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { AlertCircle, Check, Copy } from 'lucide-react'
+import { AlertCircle } from 'lucide-react'
 
 import type { MetrikaCounter } from '../../entities/integration'
 import { useSetMetrika } from './queries'
@@ -10,24 +10,19 @@ import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip'
 
 // Окно Яндекс Метрики — тот же полноэкранный оверлей, что у вебхука и Таблиц
-// (фаза 29, design/yandex-metrika.md §8): номер счётчика, цели для заведения в
-// Метрике и условия, при которых они отмечаются.
+// (фаза 29, design/yandex-metrika.md §8): номер счётчика, одна строка о том, какие
+// цели завести в Метрике, и условия, при которых они отмечаются.
 //
 // Условия работы стоят на экране, а не в справке, — решение владельца 2026-09-15:
 // до вики автору негде узнать, что встроенная форма без счётчика на сайте целей не
 // отмечает. С появлением вики текст уезжает туда.
 
-// Имена целей — контракт со счётчиком автора и зеркало GOAL_* в
+// Идентификаторы целей — контракт со счётчиком автора и зеркало GOAL_* в
 // web/renderer/src/features/form/metrika.ts: разойдутся — цели, заведённые по этому
-// экрану, не засчитаются никогда, и молча.
-const GOALS = [
-  { id: 'trillix_open', text: 'Форму открыли' },
-  { id: 'trillix_start', text: 'Начали заполнять' },
-  { id: 'trillix_submit', text: 'Отправили ответ' },
-] as const
+// экрану, не засчитаются никогда, и молча. Порядок — тот же, что в подзаголовке окна.
+const GOAL_IDS = ['trillix_open', 'trillix_start', 'trillix_submit'] as const
 
 export function MetrikaOverlay({
   formId,
@@ -80,24 +75,16 @@ export function MetrikaOverlay({
                 value={counter}
                 onChange={(e) => setCounter(e.target.value)}
               />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <p className="text-sm font-semibold">Цели</p>
-              <ul className="flex flex-col">
-                {GOALS.map((goal) => (
-                  <li key={goal.id} className="flex items-center gap-3 py-1.5">
-                    <div className="min-w-0 flex-1">
-                      <p className="text-base font-medium">{goal.id}</p>
-                      <p className="text-sm text-muted-foreground">{goal.text}</p>
-                    </div>
-                    <CopyGoal id={goal.id} />
-                  </li>
-                ))}
-              </ul>
+              {/* Одна строка текстом, без списка и кнопок (решение владельца
+                  2026-09-15): идентификатор выделяется и копируется как обычный текст. */}
               <p className="text-sm text-muted-foreground">
-                В Метрике: «Цели» → «Добавить цель» → «JavaScript-событие», идентификатор — из
-                списка выше.
+                Заведите в Метрике цели типа «JavaScript-событие» с идентификаторами{' '}
+                {GOAL_IDS.map((id, i) => (
+                  <span key={id}>
+                    <span className="font-medium text-foreground">{id}</span>
+                    {i < GOAL_IDS.length - 2 ? ', ' : i === GOAL_IDS.length - 2 ? ' и ' : '.'}
+                  </span>
+                ))}
               </p>
             </div>
 
@@ -131,39 +118,5 @@ export function MetrikaOverlay({
         </div>
       </DialogContent>
     </Dialog>
-  )
-}
-
-// CopyGoal — скопировать идентификатор цели. Чёрная служебная кнопка — облик
-// «копировать» у поля (DESIGN-SYSTEM); подпись одна на доступное имя и подсказку,
-// как у значков строки. Ответ на нажатие — галочка на полторы секунды, тот же, что у
-// «Копировать» на экране «Встроить».
-function CopyGoal({ id }: { id: string }) {
-  const [copied, setCopied] = useState(false)
-  const label = `Скопировать ${id}`
-  return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <Button
-          variant="utility"
-          size="icon-sm"
-          aria-label={label}
-          onClick={() => {
-            navigator.clipboard
-              .writeText(id)
-              .then(() => {
-                setCopied(true)
-                setTimeout(() => setCopied(false), 1500)
-              })
-              .catch(() => {
-                // Буфер недоступен — идентификатор виден рядом, его можно выделить.
-              })
-          }}
-        >
-          {copied ? <Check className="size-4" /> : <Copy className="size-4" />}
-        </Button>
-      </TooltipTrigger>
-      <TooltipContent>{label}</TooltipContent>
-    </Tooltip>
   )
 }
