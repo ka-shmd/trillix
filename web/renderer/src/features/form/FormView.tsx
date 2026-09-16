@@ -45,6 +45,7 @@ import {
   submitAnswers,
 } from './api'
 import { ConsentCheck } from '@fields/ConsentCheck'
+import { missingRequired } from '@fields/required'
 import { documentHref } from './consent'
 import { Badge } from '@fields/Badge'
 import { applyPrefill, type EmbedOptions, type HostBridge, readPrefill } from './embed'
@@ -244,7 +245,6 @@ export function FormView({
   // Галочка согласия (0069). Не в черновике: после перезагрузки согласие даётся заново,
   // отметкой человека, а не восстановленным состоянием.
   const [consentChecked, setConsentChecked] = useState(false)
-  const [consentError, setConsentError] = useState(false)
 
   // Защита от setState после размонтирования во время долгого ретрая. Флаг ставится
   // в true при монтировании и в false при размонтировании — под StrictMode (dev
@@ -394,6 +394,12 @@ export function FormView({
   // обход кладёт его в план рядом со страницами, здесь остаётся дефолт на пустое.
   const nextLabel = plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL
   const locked = phase !== 'editing'
+  // Кнопка отправки неактивна, пока у видимых вопросов есть пустое обязательное или не
+  // отмечено согласие (решение владельца 2026-09-17; согласие обязательно всегда, когда
+  // включено). Формат ответа (email, число) кнопку не держит — его покажет нажатие.
+  const canSubmit =
+    !missingRequired(pages.flat(), answers, plan.required) &&
+    (form.consentRevision === null || consentChecked)
 
   // Визит: «открыли» на монтировании, «дошёл до вопроса» на уходе со страницы.
   // Трекер создаётся лениво в ref, а не в эффекте: под StrictMode (dev делает
@@ -590,9 +596,6 @@ export function FormView({
     // поля. Видимые блоки — это плоский план (страниц, на которые он не попадёт, там нет).
     const found = validateAll(pages.flat(), answers, plan.required)
     setErrors(found)
-    // Без галочки ответа нет — ни в предпросмотре, ни на сети: сервер отказал бы тем же.
-    const consentMissing = form.consentRevision !== null && !consentChecked
-    setConsentError(consentMissing)
     if (Object.keys(found).length > 0) {
       // Ошибка на другой странице (сюда попадают из-за прыжка «назад» и правки, из-за
       // восстановленного черновика и из-за формы, переопубликованной под открытой
@@ -601,7 +604,9 @@ export function FormView({
       if (target !== null) goToPage(target)
       return // сеть не трогаем, пока форма невалидна
     }
-    if (consentMissing) return
+    // Кнопка без согласия неактивна (canSubmit), но нажатие приходит и мимо неё — Enter
+    // в поле, скрипт. Сервер отказал бы тем же.
+    if (!canSubmit) return
 
     // ПРЕДПРОСМОТР ОСТАНАВЛИВАЕТСЯ РОВНО ЗДЕСЬ — после валидации, до сети. Всё, что
     // делает форма, автор увидит (обязательные поля, переход к странице с ошибкой,
@@ -834,7 +839,7 @@ export function FormView({
                   className="rf-submit"
                   type="button"
                   onClick={() => void onSubmit()}
-                  disabled={phase === 'submitting'}
+                  disabled={phase === 'submitting' || !canSubmit}
                 >
                   {phase === 'submitting' ? 'Отправка…' : submitLabel}
                 </button>
@@ -854,11 +859,7 @@ export function FormView({
                 policy: documentHref(slug, 'policy', form.consentRevision, form.version),
               }}
               checked={consentChecked}
-              onChange={(checked) => {
-                setConsentChecked(checked)
-                if (checked) setConsentError(false)
-              }}
-              error={consentError}
+              onChange={setConsentChecked}
               disabled={locked}
             />
           )}
