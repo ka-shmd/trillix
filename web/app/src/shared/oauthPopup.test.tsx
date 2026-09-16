@@ -71,6 +71,20 @@ describe('useOAuthPopup — окно похода', () => {
 
     expect(fake.focus).toHaveBeenCalledTimes(2)
   })
+
+  // Вторая попытка начинается с ЧИСТОГО окна, а не с того, в котором лежит отказ
+  // провайдера: имя окна одно, и живое окно повторный window.open не открывает
+  // заново — он грузит в него адрес, показывая прежнюю страницу, пока новая не
+  // приедет. Снаружи это ровно «второй попытки нет».
+  it('закрывает прошлое окно, не дожидаясь, пока в нём сменится страница', () => {
+    const { view } = start()
+
+    act(() => {
+      view.result.current.open('/api/v1/integrations/yandex/start')
+    })
+
+    expect(fake.close).toHaveBeenCalled()
+  })
 })
 
 describe('useOAuthPopup — что вкладка принимает от окна', () => {
