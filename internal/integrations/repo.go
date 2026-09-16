@@ -116,10 +116,11 @@ func (Repo) UpdateToken(ctx context.Context, db postgres.DBTX, id uuid.UUID, sea
 // Delete удаляет ОДИН аккаунт человека и отдаёт шифротекст токена — на отзыв у
 // провайдера. userID в условии обязателен: id приезжает из адреса и правом
 // доступа не является (инвариант 1).
-func (Repo) Delete(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID) ([]byte, error) {
+func (Repo) Delete(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID, provider string) ([]byte, error) {
 	sealed, err := postgres.New(db).DeleteIntegrationAccount(ctx, postgres.DeleteIntegrationAccountParams{
-		ID:     id,
-		UserID: userID,
+		ID:       id,
+		UserID:   userID,
+		Provider: provider,
 	})
 	if err != nil {
 		return nil, err

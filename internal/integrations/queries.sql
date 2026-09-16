@@ -51,7 +51,7 @@ UPDATE integration_accounts SET refresh_token = $2 WHERE id = $1;
 -- user_id в условии не украшение: id аккаунта приезжает из адреса и правом
 -- доступа не является (инвариант 1). Чужой аккаунт отсюда не отключить.
 DELETE FROM integration_accounts
-WHERE id = $1 AND user_id = $2
+WHERE id = $1 AND user_id = $2 AND provider = $3
 RETURNING refresh_token;
 
 -- name: MarkIntegrationAccountAccessLost :exec

@@ -134,6 +134,7 @@ function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
     connections: [],
     webhooks: [],
     metrika: null,
+    yandex: { enabled: false, accounts: [] },
     ...patch,
   }
 }

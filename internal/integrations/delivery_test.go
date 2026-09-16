@@ -792,7 +792,7 @@ func TestStatus_AccessLostAsksToReconnect(t *testing.T) {
 	conn.AccessLostAt = time.Now().Add(-time.Hour)
 	svc := deliveryService(&fakeStore{conn: conn}, &fakeProvider{}, &fakeSubmissions{})
 
-	st, err := svc.Status(context.Background(), testUser)
+	st, err := svc.Status(context.Background(), integrations.ProviderGoogle, testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}

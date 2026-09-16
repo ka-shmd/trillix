@@ -399,3 +399,55 @@ func TestLoad(t *testing.T) {
 		}
 	})
 }
+
+// Приложение Яндекс ID для интеграций (фаза 29) — парное, как и приложение входа:
+// половина ключей — опечатка, а не намерение, и молча выключенная интеграция
+// заставила бы искать причину в консоли Яндекса, где всё в порядке.
+func TestLoad_YandexIntegrationApp(t *testing.T) {
+	t.Run("не задано — выключено", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("YANDEX_INTEGRATION_CLIENT_ID", "")
+		t.Setenv("YANDEX_INTEGRATION_CLIENT_SECRET", "")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() вернул ошибку: %v", err)
+		}
+		if cfg.YandexIntegrationEnabled() {
+			t.Error("YandexIntegrationEnabled() = true без ключей")
+		}
+	})
+
+	t.Run("задано целиком — включено и не путается со входом", func(t *testing.T) {
+		setValidEnv(t)
+		t.Setenv("YANDEX_INTEGRATION_CLIENT_ID", "integration-id")
+		t.Setenv("YANDEX_INTEGRATION_CLIENT_SECRET", "integration-secret")
+		t.Setenv("YANDEX_OAUTH_CLIENT_ID", "")
+		t.Setenv("YANDEX_OAUTH_CLIENT_SECRET", "")
+
+		cfg, err := Load()
+		if err != nil {
+			t.Fatalf("Load() вернул ошибку: %v", err)
+		}
+		if !cfg.YandexIntegrationEnabled() {
+			t.Error("YandexIntegrationEnabled() = false при обоих ключах")
+		}
+		if cfg.YandexOAuthEnabled() {
+			t.Error("ключи интеграции включили вход через Яндекс")
+		}
+	})
+
+	for _, half := range []string{"YANDEX_INTEGRATION_CLIENT_ID", "YANDEX_INTEGRATION_CLIENT_SECRET"} {
+		t.Run("задана только "+half+" — ошибка", func(t *testing.T) {
+			setValidEnv(t)
+			t.Setenv("YANDEX_INTEGRATION_CLIENT_ID", "")
+			t.Setenv("YANDEX_INTEGRATION_CLIENT_SECRET", "")
+			t.Setenv(half, "value")
+
+			_, err := Load()
+			if err == nil || !strings.Contains(err.Error(), "YANDEX_INTEGRATION_CLIENT_ID") {
+				t.Fatalf("ожидалась ошибка про пару YANDEX_INTEGRATION_*, получено: %v", err)
+			}
+		})
+	}
+}

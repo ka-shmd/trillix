@@ -563,6 +563,15 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		WithCounters(integrations.Repo{}).
 		// Поводы о поломке цели: доставщик ставит, починка и удаление снимают.
 		WithNotifications(notifySvc)
+	// Аккаунт Яндекса для счётчика Метрики (фаза 29) — только при заданных ключах:
+	// типизированный nil в интерфейсе сервис счёл бы настроенным (см. выше).
+	if cfg.YandexIntegrationEnabled() {
+		integrationsSvc = integrationsSvc.WithYandex(integrations.NewYandex(
+			cfg.YandexIntegrationClientID,
+			cfg.YandexIntegrationClientSecret,
+			cfg.AppOrigin+"/api/v1/integrations/yandex/callback",
+		))
+	}
 	// Расписания записи на время (фаза 27). Права спрашиваются у workspaces, квота
 	// числа расписаний — у entitlements. Транзакция нужна одному действию — переносу
 	// записи: лок слота, счёт мест и правка обязаны быть одной.
@@ -594,7 +603,9 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	webhookTestLimiter := ratelimit.NewTokenBucket(webhookTestRatePerSec, webhookTestBurst)
 	integrationsHandler := integrations.NewHandler(integrationsSvc, authHandler.RequireAuth, authHandler.RequireCSRF,
 		cfg.AppOrigin, cfg.CookieSecure, cfg.FormTokenSecret, webhookTestLimiter)
-	log.Info("integrations configured", slog.Bool("google", cfg.GoogleOAuthEnabled()))
+	log.Info("integrations configured",
+		slog.Bool("google", cfg.GoogleOAuthEnabled()),
+		slog.Bool("yandex", cfg.YandexIntegrationEnabled()))
 
 	formTokenLimiter := ratelimit.NewTokenBucket(formTokenRatePerSec, formTokenBurst)
 	formsPublic, err := forms.NewPublicHandler(formsSvc, cfg.FormTokenSecret, cfg.PublicRendererBaseURL, cfg.OGImageURL, cfg.PublicRendererIndexPath,

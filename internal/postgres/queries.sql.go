@@ -1421,13 +1421,14 @@ func (q *Queries) DeleteIdentity(ctx context.Context, arg DeleteIdentityParams) 
 
 const deleteIntegrationAccount = `-- name: DeleteIntegrationAccount :one
 DELETE FROM integration_accounts
-WHERE id = $1 AND user_id = $2
+WHERE id = $1 AND user_id = $2 AND provider = $3
 RETURNING refresh_token
 `
 
 type DeleteIntegrationAccountParams struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	Provider string
 }
 
 // Отключение ОДНОГО аккаунта. RETURNING отдаёт токен на отзыв у провайдера:
@@ -1437,7 +1438,7 @@ type DeleteIntegrationAccountParams struct {
 // user_id в условии не украшение: id аккаунта приезжает из адреса и правом
 // доступа не является (инвариант 1). Чужой аккаунт отсюда не отключить.
 func (q *Queries) DeleteIntegrationAccount(ctx context.Context, arg DeleteIntegrationAccountParams) ([]byte, error) {
-	row := q.db.QueryRow(ctx, deleteIntegrationAccount, arg.ID, arg.UserID)
+	row := q.db.QueryRow(ctx, deleteIntegrationAccount, arg.ID, arg.UserID, arg.Provider)
 	var refresh_token []byte
 	err := row.Scan(&refresh_token)
 	return refresh_token, err
