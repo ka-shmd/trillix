@@ -144,7 +144,12 @@ export function MetrikaOverlay({
     onClose()
   }
 
-  const busy = counters.isFetching || popup.waiting
+  // Окно занято ТОЛЬКО походом за согласием: человек в другом окне, и трогать
+  // здесь нечего. Загрузка счётчиков окно не запирает — от неё зависит одно поле
+  // из трёх, а запереть окно значит отнять и ручной ввод, то есть единственный
+  // путь, которым в этот момент можно закончить настройку.
+  // история — JOURNAL, «Слайс I. Бесконечная загрузка счётчиков»
+  const busy = popup.waiting
   const pending = save.isPending || goals.isPending
 
   return (
@@ -208,7 +213,9 @@ export function MetrikaOverlay({
                   counter={counter}
                   setCounter={setCounter}
                   list={counters.data ?? []}
+                  listLoading={counters.isLoading}
                   listFailed={counters.isError}
+                  onRetryList={() => void counters.refetch()}
                   editing={metrika !== null}
                   onConsent={setConsent}
                   onManual={() => setManual(true)}
@@ -251,10 +258,11 @@ export function MetrikaOverlay({
           )}
         </div>
 
-        {/* Слой поверх окна, пока оно занято: едет список счётчиков либо идёт поход
-            за согласием. Трогать настройки в это время нечего — выбирать не из
-            чего, а на время похода человек в другом окне. «Отменить» лежит ЗДЕСЬ,
-            а не в колонке под слоем: колонка на это время inert. */}
+        {/* Слой поверх окна на время похода за согласием: человек в другом окне,
+            и настройки под слоем трогать нечего. «Отменить» лежит ЗДЕСЬ, а не в
+            колонке под слоем: колонка на это время inert. Отказ провайдера
+            приходит на ЕГО стороне и к нам не возвращается — «Отменить» и есть
+            выход из такого похода. */}
         {busy && (
           <div
             className="fixed inset-0 z-10 flex items-center justify-center gap-3 bg-background/85"
@@ -263,13 +271,11 @@ export function MetrikaOverlay({
           >
             <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
             <span className="text-base text-muted-foreground">
-              {popup.waiting ? 'Ждём подтверждения в окне Яндекса…' : 'Загружаем счётчики…'}
+              Ждём подтверждения в окне Яндекса…
             </span>
-            {popup.waiting && (
-              <Button variant="ghost" size="sm" onClick={popup.cancel}>
-                Отменить
-              </Button>
-            )}
+            <Button variant="ghost" size="sm" onClick={popup.cancel}>
+              Отменить
+            </Button>
           </div>
         )}
       </DialogContent>
@@ -359,7 +365,9 @@ function AccountFields({
   counter,
   setCounter,
   list,
+  listLoading,
   listFailed,
+  onRetryList,
   editing,
   onConsent,
   onManual,
@@ -372,7 +380,9 @@ function AccountFields({
   counter: string
   setCounter: (value: string) => void
   list: { id: number; name: string; site: string }[]
+  listLoading: boolean
   listFailed: boolean
+  onRetryList: () => void
   editing: boolean
   onConsent: (target: ConsentTarget) => void
   onManual: () => void
@@ -434,8 +444,14 @@ function AccountFields({
       <div className="flex flex-col gap-2">
         <Label htmlFor="metrika-counter-select">Счётчик</Label>
         <Select value={counter} onValueChange={setCounter}>
-          <SelectTrigger id="metrika-counter-select" className={`w-full ${RAISED_SELECT}`}>
-            <SelectValue placeholder={listFailed ? 'Счётчики не загрузились' : 'Выберите счётчик'} />
+          <SelectTrigger
+            id="metrika-counter-select"
+            className={`w-full ${RAISED_SELECT}`}
+            // Выключено, пока выбирать не из чего: открытый пустой список
+            // выглядит как «счётчиков нет», а это неправда.
+            disabled={listLoading}
+          >
+            <SelectValue placeholder={counterPlaceholder(listLoading, listFailed)} />
           </SelectTrigger>
           <SelectContent>
             {outside && <SelectItem value={counter}>Текущий счётчик {counter}</SelectItem>}
@@ -447,6 +463,9 @@ function AccountFields({
           </SelectContent>
         </Select>
         <div className="flex justify-end">
+          {/* Список не приехал — человеку нужны оба выхода: попробовать ещё раз
+              и вписать номер руками. Второй рядом и так. */}
+          {listFailed && <CompactAction icon={RefreshCw} label="Повторить" onClick={onRetryList} />}
           {/* Повтор заведения целей: цели живут в Метрике, и автор волен удалить
               их там. Дублей повтор не создаёт — заведённой считается цель с тем же
               идентификатором, как бы она ни называлась. */}
@@ -462,6 +481,14 @@ function AccountFields({
       </div>
     </>
   )
+}
+
+// counterPlaceholder — что стоит в поле, пока счётчик не выбран. Три разных
+// сообщения: «ещё едет», «не приехало» и «выберите» — лечение у них разное.
+function counterPlaceholder(loading: boolean, failed: boolean): string {
+  if (loading) return 'Загружаем счётчики…'
+  if (failed) return 'Счётчики не загрузились'
+  return 'Выберите счётчик'
 }
 
 // ManualField — сегодняшний путь: номер руками и одна строка о том, какие цели

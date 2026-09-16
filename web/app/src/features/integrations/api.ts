@@ -247,9 +247,13 @@ export function deleteMetrika(formId: string): Promise<void> {
 // Счётчики аккаунта Яндекса — из чего выбирают номер (фаза 29, §13.3). Адрес по
 // АККАУНТУ, а не по форме: счётчики лежат в чужой Метрике, и право на их список
 // даёт владение аккаунтом, а не роль в пространстве (ADR §10).
-export async function listMetrikaCounters(accountId: string): Promise<MetrikaCounterRef[]> {
+export async function listMetrikaCounters(
+  accountId: string,
+  signal?: AbortSignal,
+): Promise<MetrikaCounterRef[]> {
   const res = await apiRequest(`/integrations/yandex/accounts/${accountId}/counters`, {
     schema: metrikaCounterListSchema,
+    signal,
   })
   return res.counters
 }
