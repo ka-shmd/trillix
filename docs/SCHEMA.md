@@ -916,7 +916,7 @@ SHA-256: утечка дампа не даёт рабочих ссылок. Зд
 |---|---|---|
 | `id` | `UUID` | PK (UUIDv7) |
 | `user_id` | `UUID` | `NOT NULL`, FK → `users(id)` `ON DELETE CASCADE` — чьё подключение |
-| `provider` | `TEXT` | `NOT NULL` — `google` |
+| `provider` | `TEXT` | `NOT NULL` — `google` (Таблицы) или `yandex` (счётчик Метрики, фаза 29); миграции не потребовалось — колонка задумана под нескольких провайдеров с `0029` |
 | `external_account_id` | `TEXT` | `NOT NULL` — `sub` провайдера: стабилен при смене почты |
 | `external_email` | `TEXT` | `NOT NULL` — «подключено как …» на экране; не идентификатор |
 | `refresh_token` | `BYTEA` | `NOT NULL` — **шифротекст** AES-256-GCM (ключ — HKDF от `FORM_TOKEN_SECRET`). В логи, ответы API и отчёты не попадает |
