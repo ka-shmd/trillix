@@ -67,6 +67,8 @@ type Forms interface {
 	// формы). Форма уже резолвнута по slug, членство не проверяется (это адресат, а
 	// не доступ пользователя). Слайс D.
 	SubmissionOwner(ctx context.Context, formID uuid.UUID) (forms.Owner, error)
+	// ConsentRevisionEnabled — ревизия согласия принадлежит форме и включена (0069).
+	ConsentRevisionEnabled(ctx context.Context, formID, revisionID uuid.UUID) (bool, error)
 }
 
 // Mailer — коллаборатор из модуля mail: ставит письмо-уведомление в outbox.
@@ -247,6 +249,9 @@ type Meta struct {
 	// полей в базу не пишется и писаться не должен: это доказательство права
 	// отправить ответ, а не свойство самого ответа.
 	Unlock string
+	// ConsentRevision — ревизия согласия, под которой человек поставил галочку
+	// (0069); uuid.Nil — галочки не было. Недоверенный ввод: сверяется с формой.
+	ConsentRevision uuid.UUID
 }
 
 // Service — приём ответов. Валидация идёт против ОПУБЛИКОВАННОЙ версии формы, а
@@ -436,6 +441,11 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		return fmt.Errorf("%w: форма не принимает запись на время", domain.ErrValidation)
 	}
 
+	consentRevision, err := s.acceptedConsent(ctx, pf.PublicFormRef, meta.ConsentRevision)
+	if err != nil {
+		return err
+	}
+
 	answersJSON, err := json.Marshal(clean)
 	if err != nil {
 		return fmt.Errorf("marshal answers: %w", err)
@@ -460,6 +470,9 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		Answers:     answersJSON,
 		Meta:        metaJSON,
 		WorkspaceID: pf.WorkspaceID,
+		// Ревизия согласия пишется в ту же строку, что ответ: ответа без следа согласия
+		// на форме с включённым согласием не бывает (design/privacy-consent.md §3.4).
+		ConsentRevisionID: consentRevision,
 	}
 	if d, e := s.plans.CheckWorkspace(ctx, pf.WorkspaceID, entitlements.SubmissionsPerMonth); e != nil {
 		httpserver.LoggerFrom(ctx).Error("quota not checked, submission accepted as within quota",
@@ -1838,4 +1851,43 @@ func (s *Service) scheduleZone(ctx context.Context, formID uuid.UUID) *time.Loca
 		return nil
 	}
 	return loc
+}
+
+// errConsentRequired — отказ приёму без галочки согласия. Текст видит респондент, если
+// рендерер его пропустил (curl, страница из кэша до включения согласия).
+var errConsentRequired = fmt.Errorf("%w: нужно согласие на обработку персональных данных — обновите форму и отметьте его", domain.ErrValidation)
+
+// acceptedConsent решает, с какой ревизией согласия принять ответ (спека §3.4).
+//
+// Согласие у формы включено → нужна присланная ВКЛЮЧЁННАЯ ревизия ЭТОЙ формы, и
+// записывается она, а не текущая: автор мог сохранить новую, пока человек заполнял
+// форму, а соглашался человек с тем текстом, который видел.
+//
+// Выключено → ответ принимается как без согласия. Присланная включённая ревизия формы
+// всё равно записывается: человек согласился, и это правда. Чужая или выключенная —
+// молча не пишется: отказывать ответу из-за устаревшей страницы незачем.
+func (s *Service) acceptedConsent(ctx context.Context, pf forms.PublicFormRef, sent uuid.UUID) (*uuid.UUID, error) {
+	required := pf.ConsentRevisionID != nil
+	if sent == uuid.Nil {
+		if required {
+			return nil, errConsentRequired
+		}
+		return nil, nil
+	}
+	// Текущая включённая ревизия — самый частый случай, и базе здесь нечего добавить.
+	if required && *pf.ConsentRevisionID == sent {
+		return &sent, nil
+	}
+	ok, err := s.forms.ConsentRevisionEnabled(ctx, pf.FormID, sent)
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case ok:
+		return &sent, nil
+	case required:
+		return nil, errConsentRequired
+	default:
+		return nil, nil
+	}
 }

@@ -229,6 +229,9 @@ type PublicFormRef struct {
 	// включённого (0067); nil — счётчика нет. Право тарифа поверх номера спрашивает
 	// service.MetrikaFor при отдаче формы — счётчик, как бейдж, свойство выдачи.
 	MetrikaCounter *string
+	// ConsentRevisionID — текущая ревизия согласия, если согласие ВКЛЮЧЕНО (0069); nil —
+	// выключено или не настраивалось. Тарифа нет: согласие — требование закона.
+	ConsentRevisionID *uuid.UUID
 }
 
 // PublicForm — та же форма ВМЕСТЕ с документом: сырая схема опубликованной версии,
@@ -884,6 +887,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 			ScheduleID:         ptrUUID(row.ScheduleID),
 			LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 			MetrikaCounter:     ptrStr(row.MetrikaCounter),
+			ConsentRevisionID:  enabledConsent(row.ConsentRevisionID, row.ConsentEnabled),
 		},
 		Title:  row.Title,
 		Schema: json.RawMessage(row.Schema),
@@ -923,6 +927,7 @@ func (Repo) GetPublicFormRefBySlug(ctx context.Context, db postgres.DBTX, slug s
 		ScheduleID:         ptrUUID(row.ScheduleID),
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
 		MetrikaCounter:     ptrStr(row.MetrikaCounter),
+		ConsentRevisionID:  enabledConsent(row.ConsentRevisionID, row.ConsentEnabled),
 	}, nil
 }
 
@@ -1334,4 +1339,107 @@ func (Repo) UpdateCollectPartial(ctx context.Context, db postgres.DBTX, id, work
 		CreatedAt:          row.CreatedAt.Time,
 		UpdatedAt:          row.UpdatedAt.Time,
 	}, nil
+}
+
+// ConsentRevision — ревизия раздела «Персональные данные» (0069).
+type ConsentRevision struct {
+	ID       uuid.UUID
+	Enabled  bool
+	Settings domain.ConsentSettings
+	// Template — версия шаблона типового текста, которой собираются документы ревизии.
+	Template  int
+	CreatedAt time.Time
+}
+
+// NewConsentRevision — строка для вставки.
+type NewConsentRevision struct {
+	ID        uuid.UUID
+	FormID    uuid.UUID
+	Enabled   bool
+	Settings  domain.ConsentSettings
+	Template  int
+	CreatedBy uuid.UUID
+}
+
+// enabledConsent — id ревизии, только если согласие по ней включено. Выключенная
+// ревизия для публичного пути то же, что её отсутствие.
+func enabledConsent(id pgtype.UUID, enabled pgtype.Bool) *uuid.UUID {
+	if !id.Valid || !enabled.Valid || !enabled.Bool {
+		return nil
+	}
+	v := uuid.UUID(id.Bytes)
+	return &v
+}
+
+func consentRevisionFromRow(id uuid.UUID, enabled bool, settings []byte, template int16, createdAt pgtype.Timestamptz) (ConsentRevision, error) {
+	var s domain.ConsentSettings
+	if err := json.Unmarshal(settings, &s); err != nil {
+		return ConsentRevision{}, fmt.Errorf("decode consent settings %s: %w", id, err)
+	}
+	return ConsentRevision{ID: id, Enabled: enabled, Settings: s, Template: int(template), CreatedAt: createdAt.Time}, nil
+}
+
+// GetFormConsent — текущая ревизия согласия формы. pgx.ErrNoRows — раздел не
+// сохраняли ни разу.
+func (Repo) GetFormConsent(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (ConsentRevision, error) {
+	row, err := postgres.New(db).GetFormConsent(ctx, formID)
+	if err != nil {
+		return ConsentRevision{}, fmt.Errorf("get form consent: %w", err)
+	}
+	return consentRevisionFromRow(row.ID, row.Enabled, row.Settings, row.Template, row.CreatedAt)
+}
+
+// GetConsentRevision — ревизия именно этой формы. pgx.ErrNoRows — у формы такой нет.
+func (Repo) GetConsentRevision(ctx context.Context, db postgres.DBTX, formID, revisionID uuid.UUID) (ConsentRevision, error) {
+	row, err := postgres.New(db).GetConsentRevision(ctx, postgres.GetConsentRevisionParams{ID: revisionID, FormID: formID})
+	if err != nil {
+		return ConsentRevision{}, fmt.Errorf("get consent revision: %w", err)
+	}
+	return consentRevisionFromRow(row.ID, row.Enabled, row.Settings, row.Template, row.CreatedAt)
+}
+
+// InsertConsentRevision пишет ревизию и возвращает её целиком.
+func (Repo) InsertConsentRevision(ctx context.Context, db postgres.DBTX, in NewConsentRevision) (ConsentRevision, error) {
+	settings, err := json.Marshal(in.Settings)
+	if err != nil {
+		return ConsentRevision{}, fmt.Errorf("encode consent settings: %w", err)
+	}
+	createdBy := pgtype.UUID{}
+	if in.CreatedBy != uuid.Nil {
+		createdBy = pgtype.UUID{Bytes: in.CreatedBy, Valid: true}
+	}
+	createdAt, err := postgres.New(db).InsertConsentRevision(ctx, postgres.InsertConsentRevisionParams{
+		ID:        in.ID,
+		FormID:    in.FormID,
+		Enabled:   in.Enabled,
+		Settings:  settings,
+		Template:  int16(in.Template),
+		CreatedBy: createdBy,
+	})
+	if err != nil {
+		return ConsentRevision{}, fmt.Errorf("insert consent revision: %w", err)
+	}
+	return ConsentRevision{ID: in.ID, Enabled: in.Enabled, Settings: in.Settings, Template: in.Template, CreatedAt: createdAt.Time}, nil
+}
+
+// SetFormConsentRevision ставит текущую ревизию. 0 строк — форма чужого пространства.
+func (Repo) SetFormConsentRevision(ctx context.Context, db postgres.DBTX, formID, workspaceID, revisionID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).SetFormConsentRevision(ctx, postgres.SetFormConsentRevisionParams{
+		ID:                formID,
+		WorkspaceID:       workspaceID,
+		ConsentRevisionID: pgtype.UUID{Bytes: revisionID, Valid: true},
+	})
+	if err != nil {
+		return 0, fmt.Errorf("set form consent revision: %w", err)
+	}
+	return n, nil
+}
+
+// GetFormVersionSchema — снапшот версии формы по номеру. pgx.ErrNoRows — такой нет.
+func (Repo) GetFormVersionSchema(ctx context.Context, db postgres.DBTX, formID uuid.UUID, version int32) (json.RawMessage, error) {
+	schema, err := postgres.New(db).GetFormVersionSchema(ctx, postgres.GetFormVersionSchemaParams{FormID: formID, Version: version})
+	if err != nil {
+		return nil, fmt.Errorf("get form version schema: %w", err)
+	}
+	return json.RawMessage(schema), nil
 }

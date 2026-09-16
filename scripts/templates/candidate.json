@@ -116,17 +116,6 @@
         "type": "long_text",
         "required": true,
         "settings": {}
-      },
-      {
-        "id": "blk_candidate_14",
-        "groupId": "g_blk_candidate_14",
-        "type": "consent",
-        "text": [
-          {
-            "t": "Согласен на обработку персональных данных"
-          }
-        ],
-        "required": true
       }
     ]
   }

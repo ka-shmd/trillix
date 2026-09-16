@@ -49,6 +49,17 @@ type NewSubmission struct {
 	// OverQuota — ответ пришёл сверх квоты плана. Не отказ: строка сохраняется,
 	// скрыт ответ только в кабинете владельца.
 	OverQuota bool
+	// ConsentRevisionID — ревизия согласия, под которой поставлена галочка; nil —
+	// согласия при ответе не было (0069).
+	ConsentRevisionID *uuid.UUID
+}
+
+// optUUID — необязательный uuid в параметр запроса: nil уходит NULL.
+func optUUID(id *uuid.UUID) pgtype.UUID {
+	if id == nil {
+		return pgtype.UUID{}
+	}
+	return pgtype.UUID{Bytes: *id, Valid: true}
 }
 
 // InsertSubmission пишет ответ и инкрементит расход тарифа одним утверждением.
@@ -57,14 +68,15 @@ type NewSubmission struct {
 // а не ошибку; расход при таком ретрае тоже не растёт.
 func (Repo) InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmission) (int64, error) {
 	n, err := postgres.New(db).InsertSubmission(ctx, postgres.InsertSubmissionParams{
-		ID:            in.ID,
-		FormID:        in.FormID,
-		FormVersionID: in.VersionID,
-		Answers:       in.Answers,
-		Meta:          in.Meta,
-		OverQuota:     in.OverQuota,
-		WorkspaceID:   in.WorkspaceID,
-		Period:        pgtype.Date{Time: in.Period, Valid: true},
+		ID:                in.ID,
+		FormID:            in.FormID,
+		FormVersionID:     in.VersionID,
+		Answers:           in.Answers,
+		Meta:              in.Meta,
+		OverQuota:         in.OverQuota,
+		WorkspaceID:       in.WorkspaceID,
+		ConsentRevisionID: optUUID(in.ConsentRevisionID),
+		Period:            pgtype.Date{Time: in.Period, Valid: true},
 	})
 	if err != nil {
 		return 0, fmt.Errorf("insert submission: %w", err)

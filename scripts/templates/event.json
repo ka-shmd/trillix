@@ -138,17 +138,6 @@
         "groupId": "g_blk_event_12",
         "type": "long_text",
         "settings": {}
-      },
-      {
-        "id": "blk_event_13",
-        "groupId": "g_blk_event_13",
-        "type": "consent",
-        "text": [
-          {
-            "t": "Согласен на обработку персональных данных"
-          }
-        ],
-        "required": true
       }
     ]
   }

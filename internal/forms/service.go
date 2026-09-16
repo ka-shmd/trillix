@@ -108,6 +108,12 @@ type Store interface {
 	GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
 	GetPublicFormRefBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicFormRef, error)
 	ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Version, error)
+	GetFormVersionSchema(ctx context.Context, db postgres.DBTX, formID uuid.UUID, version int32) (json.RawMessage, error)
+	// Согласие на обработку персональных данных (0069): ревизии раздела настроек.
+	GetFormConsent(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (ConsentRevision, error)
+	GetConsentRevision(ctx context.Context, db postgres.DBTX, formID, revisionID uuid.UUID) (ConsentRevision, error)
+	InsertConsentRevision(ctx context.Context, db postgres.DBTX, in NewConsentRevision) (ConsentRevision, error)
+	SetFormConsentRevision(ctx context.Context, db postgres.DBTX, formID, workspaceID, revisionID uuid.UUID) (int64, error)
 }
 
 var _ Store = Repo{}
@@ -346,9 +352,37 @@ func (s *Service) Duplicate(ctx context.Context, userID, formID uuid.UUID) (Form
 		return Form{}, err
 	}
 	name := nextCopyName(displayName(src.Name, src.Title), siblings)
-	form, err := s.repo.CreateFormWithSchema(
-		ctx, s.db, domain.NewID(), src.WorkspaceID, src.Title, domain.NewSlug(), &name, src.DraftSchema,
-	)
+	consent, hasConsent, err := s.currentConsent(ctx, src.ID)
+	if err != nil {
+		return Form{}, err
+	}
+	// Согласие копируется вместе с документом, а прочие живые настройки — нет:
+	// опубликованная копия без согласия молча собирала бы данные без него
+	// (design/privacy-consent.md §3.6). Ревизия копии — своя строка: ревизии
+	// принадлежат форме, и ответы копии не должны ссылаться на чужую.
+	var form Form
+	err = s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		var err error
+		form, err = s.repo.CreateFormWithSchema(
+			ctx, tx, domain.NewID(), src.WorkspaceID, src.Title, domain.NewSlug(), &name, src.DraftSchema,
+		)
+		if err != nil || !hasConsent {
+			return err
+		}
+		rev, err := s.repo.InsertConsentRevision(ctx, tx, NewConsentRevision{
+			ID:        domain.NewID(),
+			FormID:    form.ID,
+			Enabled:   consent.Enabled,
+			Settings:  consent.Settings,
+			Template:  consent.Template,
+			CreatedBy: userID,
+		})
+		if err != nil {
+			return err
+		}
+		_, err = s.repo.SetFormConsentRevision(ctx, tx, form.ID, form.WorkspaceID, rev.ID)
+		return err
+	})
 	if err != nil {
 		return Form{}, err
 	}
