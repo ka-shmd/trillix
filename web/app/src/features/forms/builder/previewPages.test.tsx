@@ -19,7 +19,10 @@ const question = (id: string, caption: string): Block[] => [
   { id, groupId: '', type: 'short_text' },
 ]
 
-function renderPreview(blocks: Block[], { allowBack = false, title = 'Анкета' } = {}) {
+function renderPreview(
+  blocks: Block[],
+  { allowBack = false, title = 'Анкета', consent = false } = {},
+) {
   const store = createBuilderStore()
   store.getState().hydrate({ schemaVersion: SCHEMA_VERSION, blocks })
   return render(
@@ -30,7 +33,7 @@ function renderPreview(blocks: Block[], { allowBack = false, title = 'Анкет
 
           allowBack приходит вторым тумблером (0055) и по умолчанию ВЫКЛЮЧЕН — как
           колонка: без него превью обязано листаться только вперёд. */}
-      <PreviewPane title={title} badge={false} progress allowBack={allowBack} />
+      <PreviewPane title={title} badge={false} progress allowBack={allowBack} consent={consent} />
     </BuilderStoreContext.Provider>,
   )
 }
@@ -228,5 +231,51 @@ describe('превью и страница «Спасибо»', () => {
       ...question('c', 'Телефон'),
     ])
     expect(screen.getByLabelText('Шаг 1 из 3')).toBeTruthy()
+  })
+})
+
+// Согласие на обработку персональных данных (0069): превью показывает галочку там же, где
+// респондент, и так же не «отправляет» форму без неё.
+describe('превью и согласие', () => {
+  it('согласие выключено — галочки нет, отправка проходит', () => {
+    renderPreview(question('a', 'Имя'))
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect(screen.getByRole('button', { name: /Вернуться к форме/ })).toBeTruthy()
+  })
+
+  it('галочка только на последней странице, под кнопкой отправки', () => {
+    const { container } = renderPreview(twoPages(), { consent: true })
+    expect(screen.queryByRole('checkbox')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Далее' }))
+    const box = container.querySelector('.rf-consent-box')
+    expect(box).toBeTruthy()
+    // Под кнопкой: блок согласия идёт в разметке после ряда с кнопкой.
+    const nav = container.querySelector('.rf-nav')!
+    expect(nav.compareDocumentPosition(box!) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(
+      screen.getByRole('link', { name: 'Политика обработки персональных данных' }),
+    ).toBeTruthy()
+  })
+
+  it('без отметки отправка не проходит и показывает ошибку, с отметкой — проходит', () => {
+    renderPreview(question('a', 'Имя'), { consent: true })
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect(screen.getByRole('alert').textContent).toContain('Отметьте согласие')
+    expect(screen.queryByRole('button', { name: /Вернуться к форме/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('checkbox'))
+    expect(screen.queryByRole('alert')).toBeNull()
+    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect(screen.getByRole('button', { name: /Вернуться к форме/ })).toBeTruthy()
+  })
+
+  it('ссылка на документ в превью никуда не ведёт', () => {
+    renderPreview(question('a', 'Имя'), { consent: true })
+    const link = screen.getByRole('link', { name: 'согласие на обработку персональных данных' })
+    // Дефолт клика погашен: переход увёл бы автора с превью. Что клик по ссылке внутри
+    // метки не переключает галочку, здесь не проверить: happy-dom переключает её вопреки
+    // спецификации, браузеры — нет.
+    expect(fireEvent.click(link)).toBe(false)
   })
 })

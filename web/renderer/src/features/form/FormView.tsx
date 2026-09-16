@@ -44,7 +44,8 @@ import {
   savePartialOnLeave,
   submitAnswers,
 } from './api'
-import { ConsentCheck } from './ConsentCheck'
+import { ConsentCheck } from '@fields/ConsentCheck'
+import { documentHref } from './consent'
 import { Badge } from '@fields/Badge'
 import { applyPrefill, type EmbedOptions, type HostBridge, readPrefill } from './embed'
 import {
@@ -848,9 +849,10 @@ export function FormView({
             шагах отправлять нечего, а на тупике (кнопку скрыла логика) — нельзя. */}
           {form.consentRevision !== null && page === lastPage && !plan.blocked && (
             <ConsentCheck
-              slug={slug}
-              revision={form.consentRevision}
-              version={form.version}
+              hrefs={{
+                consent: documentHref(slug, 'consent', form.consentRevision, form.version),
+                policy: documentHref(slug, 'policy', form.consentRevision, form.version),
+              }}
               checked={consentChecked}
               onChange={(checked) => {
                 setConsentChecked(checked)
