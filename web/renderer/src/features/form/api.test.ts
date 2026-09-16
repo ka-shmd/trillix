@@ -22,6 +22,14 @@ const validBody = JSON.stringify({
 })
 
 describe('fetchPublicForm', () => {
+  it('ревизия согласия: есть в теле — едет в форму, нет (кеш прошлой версии) — null', async () => {
+    stubFetch(new Response(validBody.replace('"token"', '"consentRevision":"018f-rev","token"'), { status: 200 }))
+    const withConsent = await fetchPublicForm('abc')
+    expect(withConsent.status === 'ok' && withConsent.form.consentRevision).toBe('018f-rev')
+    stubFetch(new Response(validBody, { status: 200 }))
+    const without = await fetchPublicForm('abc')
+    expect(without.status === 'ok' && without.form.consentRevision).toBeNull()
+  })
   it('валидный ответ → ok + распарсенная форма', async () => {
     stubFetch(new Response(validBody, { status: 200 }))
     const r = await fetchPublicForm('abc')
@@ -63,7 +71,13 @@ describe('fetchPublicForm', () => {
   })
 })
 
-const body = { submissionId: '018f-id', token: 'tok', answers: { b1: 'Анна' }, visitId: '018f-visit' }
+const body = {
+  submissionId: '018f-id',
+  token: 'tok',
+  answers: { b1: 'Анна' },
+  visitId: '018f-visit',
+  consentRevision: '018f-consent',
+}
 
 describe('submitAnswers', () => {
   it('201 → ok, а тело шлёт honeypot пустым и snake_case-поля', async () => {
@@ -79,6 +93,8 @@ describe('submitAnswers', () => {
     expect(sent.answers).toEqual({ b1: 'Анна' })
     // Визит уезжает вместе с ответом — отсюда точная конверсия (фаза 8.5 шаг 6).
     expect(sent.visit_id).toBe('018f-visit')
+    // Ревизия согласия — та, которую человек видел, отметив галочку (0069).
+    expect(sent.consent_revision).toBe('018f-consent')
   })
 
   it('422 с fields → invalid + карта полей', async () => {

@@ -64,6 +64,12 @@ const SLOTS_PREFIX = 'slots/'
 const CANCEL_BUDGET_BYTES = 8 * 1024
 const CANCEL_PREFIX = 'cancel/'
 
+// Страница документа согласия (dist/document/, 0069) — ШЕСТОЙ порог, отдельный по тому
+// же доводу, что у отмены: её открывает только тот, кто решил прочитать документ.
+// Порог 8 КиБ: сама страница — заголовок и абзацы, остальное — экран пароля формы.
+const DOCUMENT_BUDGET_BYTES = 8 * 1024
+const DOCUMENT_PREFIX = 'document/'
+
 // Шрифты формы (фаза 22) — ТРЕТИЙ порог, снова отдельный, и снова потому, что
 // складывать разное значит не мерить ничего. Шрифт не в бандле: он не парсится и не
 // исполняется, приезжает параллельно и только тем респондентам, чьей форме он
@@ -116,12 +122,14 @@ const jsFiles =
       !f.label.startsWith(EMBED_PREFIX) &&
       !f.label.startsWith(PRINT_PREFIX) &&
       !f.label.startsWith(SLOTS_PREFIX) &&
-      !f.label.startsWith(CANCEL_PREFIX),
+      !f.label.startsWith(CANCEL_PREFIX) &&
+      !f.label.startsWith(DOCUMENT_PREFIX),
   ) ?? null
 const embedFiles = allFiles?.filter((f) => f.label.startsWith(EMBED_PREFIX)) ?? []
 const printFiles = allFiles?.filter((f) => f.label.startsWith(PRINT_PREFIX)) ?? []
 const slotFiles = allFiles?.filter((f) => f.label.startsWith(SLOTS_PREFIX)) ?? []
 const cancelFiles = allFiles?.filter((f) => f.label.startsWith(CANCEL_PREFIX)) ?? []
+const documentFiles = allFiles?.filter((f) => f.label.startsWith(DOCUMENT_PREFIX)) ?? []
 if (jsFiles === null) {
   console.error(`✗ нет собранной сборки в ${distDir} — сначала 'npm run build'`)
   process.exit(1)
@@ -231,6 +239,25 @@ if (cancelFiles.length > 0) {
     process.exit(1)
   }
   console.log('✓ отмена записи в пределах бюджета')
+}
+
+if (documentFiles.length > 0) {
+  let documentTotal = 0
+  console.log('')
+  for (const f of documentFiles) {
+    const size = gzipSync(readFileSync(f.path)).length
+    documentTotal += size
+    console.log(`  ${f.label}  ${kib(size)} gzip`)
+  }
+  console.log(`Документ согласия: ${kib(documentTotal)} gzip · бюджет ${kib(DOCUMENT_BUDGET_BYTES)}`)
+  if (documentTotal > DOCUMENT_BUDGET_BYTES) {
+    console.error(
+      `✗ бюджет страницы документа превышен на ${kib(documentTotal - DOCUMENT_BUDGET_BYTES)}. ` +
+        `Это заголовок и абзацы текста — режь код, а не порог.`,
+    )
+    process.exit(1)
+  }
+  console.log('✓ документ согласия в пределах бюджета')
 }
 
 // Загрузчик собирается вторым проходом (vite.embed.config.ts), печатная страница —

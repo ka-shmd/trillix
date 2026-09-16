@@ -62,9 +62,9 @@ prod-local (зелёный на слайсах D–E, после них не г�
 - **PostgreSQL 16** — 69 миграций (`0001`…`0069_form_consent`). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui; графики аналитики —
   recharts за ленивой загрузкой, в общий чанк не входят.
-- **web/renderer** — preact/compat + zod, **бюджет 60 КиБ gzip** (сейчас **47.54**, числа
-  `check:bundle` на CI #207, гейт CI). Свои пороги рядом: `embed/v1.js` 5 (4.00), `dist/print/` 60
-  (41.19), `dist/slots/` 12 (2.89), `dist/cancel/` 8 (1.16), шрифты формы 400 (326).
+- **web/renderer** — preact/compat + zod, **бюджет 60 КиБ gzip** (сейчас **47.94**, числа
+  `check:bundle` на ветке согласия, гейт CI). Свои пороги рядом: `embed/v1.js` 5 (4.00), `dist/print/` 60
+  (41.19), `dist/slots/` 12 (2.89), `dist/cancel/` 8 (1.16), `dist/document/` 8 (0.82), шрифты формы 400 (326).
 - **e2e** — десять Playwright-сценариев против prod-local: `full-loop`, `builder-keyboard`,
   `form-settings`, `visits-funnel`, `workspace-team`, `multipage`, `embed`, `logic`, `design`,
   `metrika`.

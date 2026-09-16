@@ -38,11 +38,13 @@ import { StepBar } from '@fields/stepBar'
 
 import {
   type PublicForm,
+  type SubmitBody,
   type SubmitOutcome,
   savePartial,
   savePartialOnLeave,
   submitAnswers,
 } from './api'
+import { ConsentCheck } from './ConsentCheck'
 import { Badge } from '@fields/Badge'
 import { applyPrefill, type EmbedOptions, type HostBridge, readPrefill } from './embed'
 import {
@@ -107,7 +109,7 @@ const retryBackoffMs = [400, 1200, 3000]
 // Ответ сервера (в т.ч. 4xx/5xx) — это не обрыв: возвращается сразу, ретраить нечего.
 async function submitWithRetry(
   slug: string,
-  body: { submissionId: string; token: string; answers: Record<string, Answer>; visitId: string },
+  body: SubmitBody,
 ): Promise<SubmitOutcome> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -238,6 +240,10 @@ export function FormView({
   const [phase, setPhase] = useState<'editing' | 'submitting' | 'done'>('editing')
   // notice — отказ отправки, не привязанный к полю (антиспам, закрытая форма, сеть).
   const [notice, setNotice] = useState<string | null>(null)
+  // Галочка согласия (0069). Не в черновике: после перезагрузки согласие даётся заново,
+  // отметкой человека, а не восстановленным состоянием.
+  const [consentChecked, setConsentChecked] = useState(false)
+  const [consentError, setConsentError] = useState(false)
 
   // Защита от setState после размонтирования во время долгого ретрая. Флаг ставится
   // в true при монтировании и в false при размонтировании — под StrictMode (dev
@@ -583,6 +589,9 @@ export function FormView({
     // поля. Видимые блоки — это плоский план (страниц, на которые он не попадёт, там нет).
     const found = validateAll(pages.flat(), answers, plan.required)
     setErrors(found)
+    // Без галочки ответа нет — ни в предпросмотре, ни на сети: сервер отказал бы тем же.
+    const consentMissing = form.consentRevision !== null && !consentChecked
+    setConsentError(consentMissing)
     if (Object.keys(found).length > 0) {
       // Ошибка на другой странице (сюда попадают из-за прыжка «назад» и правки, из-за
       // восстановленного черновика и из-за формы, переопубликованной под открытой
@@ -591,6 +600,7 @@ export function FormView({
       if (target !== null) goToPage(target)
       return // сеть не трогаем, пока форма невалидна
     }
+    if (consentMissing) return
 
     // ПРЕДПРОСМОТР ОСТАНАВЛИВАЕТСЯ РОВНО ЗДЕСЬ — после валидации, до сети. Всё, что
     // делает форма, автор увидит (обязательные поля, переход к странице с ошибкой,
@@ -621,6 +631,7 @@ export function FormView({
         // Сервер повторит вычистку сам — здесь она ради честного тела запроса.
         answers: stripHiddenAnswers(blocks, answers),
         visitId: visit.current?.id ?? '',
+        consentRevision: form.consentRevision !== null && consentChecked ? form.consentRevision : '',
       })
     } catch {
       if (!active.current) return
@@ -833,6 +844,22 @@ export function FormView({
               бейдж переносится под неё — переносом ряда, а не своей веткой. */}
             {form.showBadge && <Badge />}
           </div>
+          {/* Согласие — под кнопкой отправки и только там, где она есть: на промежуточных
+            шагах отправлять нечего, а на тупике (кнопку скрыла логика) — нельзя. */}
+          {form.consentRevision !== null && page === lastPage && !plan.blocked && (
+            <ConsentCheck
+              slug={slug}
+              revision={form.consentRevision}
+              version={form.version}
+              checked={consentChecked}
+              onChange={(checked) => {
+                setConsentChecked(checked)
+                if (checked) setConsentError(false)
+              }}
+              error={consentError}
+              disabled={locked}
+            />
+          )}
           {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
             2026-08-05). Разметка общая с превью (@fields).
 
