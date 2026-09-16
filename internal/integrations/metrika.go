@@ -112,16 +112,23 @@ func (y *Yandex) EnsureGoals(ctx context.Context, accessToken string, counterID 
 	// Метрика на повторное создание цели с тем же условием не заводит вторую, а
 	// заменяет существующую.
 	// история — JOURNAL, «Слайс K. Затёртые цели и создание счётчика»
+	//
+	// Указатель, а не срез: ответ без поля goals (или с null) — незнакомый конверт,
+	// и пустой список из него значил бы «целей нет» и три создания поверх
+	// существующих. Пустой массив — законный ответ нового счётчика.
 	var list struct {
-		Goals []json.RawMessage `json:"goals"`
+		Goals *[]json.RawMessage `json:"goals"`
 	}
 	if err := y.metrikaRequest(ctx, http.MethodGet, path, accessToken, nil, &list); err != nil {
 		return GoalsResult{}, fmt.Errorf("integrations metrika: list goals: %w", err)
 	}
+	if list.Goals == nil {
+		return GoalsResult{}, fmt.Errorf("integrations metrika: list goals: в ответе нет поля goals")
+	}
 
 	var res GoalsResult
 	for _, g := range goals {
-		if goalPresent(list.Goals, g.ID) {
+		if goalPresent(*list.Goals, g.ID) {
 			res.Existing++
 			continue
 		}

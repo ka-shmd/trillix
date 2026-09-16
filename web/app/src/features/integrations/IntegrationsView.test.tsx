@@ -46,12 +46,13 @@ vi.mock('./api', async (importOriginal) => {
   }
 })
 
-// Тариф пространства: разрешает ли он счётчик Метрики. По умолчанию «можно» — так же
-// отвечает настоящий хук, пока снимок тарифа не приехал.
-const plan = vi.hoisted(() => ({ allowed: true }))
+// Тариф пространства: разрешает ли он счётчик Метрики. undefined — «не знаем»
+// (снимок едет или закрыт правом, как у редактора).
+const plan = vi.hoisted(() => ({ allowed: true as boolean | undefined }))
 
 vi.mock('../plan/useFeature', () => ({
-  useFeatureAllowed: () => plan.allowed,
+  useFeatureAllowed: () => plan.allowed ?? true,
+  useFeatureDecision: () => plan.allowed,
 }))
 
 // Метка тарифа и оверлей тарифа ведут ссылкой на страницу тарифа — роутера в тесте
@@ -1769,6 +1770,16 @@ describe('Яндекс Метрика на экране интеграций', (
     expect(screen.queryByRole('button', { name: 'Работает' })).toBeNull()
   })
 
+  // Редактору снимок тарифа не отдаётся (billing.view): «Работает» по умолчанию
+  // было бы ложью, если пространство на бесплатном тарифе.
+  it('тариф неизвестен — строка не утверждает, что счётчик работает', () => {
+    plan.allowed = undefined
+    renderView(state({ metrika: COUNTER }))
+
+    expect(screen.getByRole('button', { name: 'Включено' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Работает' })).toBeNull()
+  })
+
   it('выключенный счётчик помечен выключенным и на бесплатном тарифе', () => {
     plan.allowed = false
     renderView(state({ metrika: { ...COUNTER, enabled: false } }))
@@ -1817,6 +1828,13 @@ function mockYandexCalls(
   const calls: { method: string; url: string; body: unknown }[] = []
   const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method ?? 'GET'
+    // Список счётчиков лежит под ключом формы и перезапрашивается её инвалидацией.
+    if (method === 'GET' && url.includes('/counters')) {
+      return new Response(JSON.stringify({ counters: COUNTERS }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
     if (method === 'GET') {
       return new Response(JSON.stringify(data), {
         status: 200,
@@ -1914,9 +1932,10 @@ describe('Метрика через аккаунт Яндекса', () => {
   // Отказ по целям НЕ отменяет подключения: счётчик уже сохранён, и закрытое окно
   // выглядело бы как «ничего не произошло». Повтор шлёт только цели — второй PUT
   // ничего не менял бы.
-  it('цели не завелись — счётчик подключён, окно осталось, повтор шлёт только цели', async () => {
+  // failingGoalsOnce — первое заведение целей отказывает, следующие проходят.
+  function failingGoalsOnce() {
     let first = true
-    const calls = mockYandexCalls(state({ yandex: YANDEX_ON }), () => {
+    return () => {
       if (first) {
         first = false
         return new Response(
@@ -1933,7 +1952,14 @@ describe('Метрика через аккаунт Яндекса', () => {
         status: 200,
         headers: { 'content-type': 'application/json' },
       })
-    })
+    }
+  }
+
+  // Отдельного «Завести цели» нет: повтор — то же «Подключить», и номер
+  // сохраняется заново. Иначе смена счётчика между попытками молча завела бы цели
+  // в прежнем.
+  it('цели не завелись — окно осталось, повтор с другим счётчиком сохраняет его номер', async () => {
+    const calls = mockYandexCalls(state({ yandex: YANDEX_ON }), failingGoalsOnce())
     renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
     openMetrika()
 
@@ -1945,10 +1971,32 @@ describe('Метрика через аккаунт Яндекса', () => {
     expect(alert.textContent).toContain('Счётчик подключён, но цели завести не удалось')
     expect(alert.textContent).toContain('аккаунт вправе его править')
     expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Завести цели' })).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Завести цели' }))
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: /Лендинг/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
     await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
-    expect(calls.map((c) => c.method)).toEqual(['PUT', 'POST', 'POST'])
+    expect(calls.map((c) => c.method)).toEqual(['PUT', 'POST', 'PUT', 'POST'])
+    expect(calls[2]!.body).toEqual({ counter: '999', enabled: true })
+  })
+
+  it('цели не завелись — номер, вписанный после этого руками, сохраняется', async () => {
+    const calls = mockYandexCalls(state({ yandex: YANDEX_ON }), failingGoalsOnce())
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: /Сайт агентства/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+    await screen.findByRole('alert')
+
+    fireEvent.click(screen.getByRole('button', { name: /Ввести номер вручную/ }))
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: '55555' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls.map((c) => c.method)).toEqual(['PUT', 'POST', 'PUT'])
+    expect(calls[2]!.body).toEqual({ counter: '55555', enabled: true })
   })
 
   it('ручной номер остаётся запасным путём при подключённом аккаунте', async () => {

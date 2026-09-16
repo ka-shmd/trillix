@@ -7,6 +7,7 @@
 package integrations_test
 
 import (
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
@@ -57,6 +58,7 @@ func TestMetrikaGoals_CreatedOnceThenExisting(t *testing.T) {
 	google := &fakeProvider{refreshErr: errors.New("токен Яндекса ушёл на обмен в Google")}
 	srv := newStackWith(t, google, yandex, testEgress())
 	owner := registerUser(t, srv, "owner@example.com")
+	onPaidPlan(t, "owner@example.com")
 	wsID := personalWorkspace(t)
 	accountID := connectYandex(t, owner, srv)
 
@@ -115,6 +117,7 @@ func TestMetrikaGoals_WithoutCounter(t *testing.T) {
 	yandex := newFakeYandexProvider()
 	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
 	owner := registerUser(t, srv, "owner@example.com")
+	onPaidPlan(t, "owner@example.com")
 	formID := newForm(t, personalWorkspace(t), "f-no-counter")
 	accountID := connectYandex(t, owner, srv)
 	before := yandex.calls
@@ -139,6 +142,7 @@ func TestMetrikaGoals_ForeignAccountRefused(t *testing.T) {
 	yandex := newFakeYandexProvider()
 	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
 	owner := registerUser(t, srv, "owner@example.com")
+	onPaidPlan(t, "owner@example.com")
 	wsID := personalWorkspace(t)
 	stranger := registerUser(t, srv, "stranger@example.com")
 	strangerAccount := connectYandex(t, stranger, srv)
@@ -165,6 +169,7 @@ func TestMetrikaGoals_YandexRefusedInRussian(t *testing.T) {
 	yandex.refuse = integrations.ErrPermanent
 	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
 	owner := registerUser(t, srv, "owner@example.com")
+	onPaidPlan(t, "owner@example.com")
 	accountID := connectYandex(t, owner, srv)
 
 	formID := newForm(t, personalWorkspace(t), "f-refused")
@@ -236,6 +241,44 @@ func TestMetrikaGoals_NotConfigured(t *testing.T) {
 	}
 }
 
+// onPaidPlan переводит пользователя на платный тариф: счётчик и цели в Яндексе
+// заводятся только там, где счётчик разрешён.
+func onPaidPlan(t *testing.T, email string) {
+	t.Helper()
+	_, err := testPool.Exec(context.Background(),
+		`UPDATE subscriptions SET plan_code = 'pro' WHERE user_id = (SELECT id FROM users WHERE email = $1)`, email)
+	if err != nil {
+		t.Fatalf("перевод на платный тариф: %v", err)
+	}
+}
+
+// На бесплатном тарифе ни счётчик, ни цели в Яндексе не заводятся — 402 до похода
+// в Яндекс. Сохранение номера тарифом не закрыто.
+func TestMetrika_FreePlanRefusedBeforeYandex(t *testing.T) {
+	resetDB(t)
+	yandex := newFakeYandexProvider()
+	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
+	owner := registerUser(t, srv, "owner@example.com")
+	accountID := connectYandex(t, owner, srv)
+	formID := newForm(t, personalWorkspace(t), "f-free-metrika")
+	closeBody(t, putMetrika(t, owner, srv, formID, `{"counter":"12345678"}`))
+	before := yandex.calls
+
+	r := createCounter(t, owner, srv, formID, accountID)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("создание счётчика на free: статус %d, ожидалось 402", r.StatusCode)
+	}
+	r = ensureGoals(t, owner, srv, formID, accountID)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusPaymentRequired {
+		t.Fatalf("цели на free: статус %d, ожидалось 402", r.StatusCode)
+	}
+	if yandex.calls != before {
+		t.Fatalf("отказ по тарифу дошёл до Яндекса")
+	}
+}
+
 func createCounter(t *testing.T, c *http.Client, srv *httptest.Server, formID, accountID string) *http.Response {
 	t.Helper()
 	return postBodyWithCSRF(t, c, srv, "/api/v1/forms/"+formID+"/counters/yandex-metrika/counter",
@@ -249,6 +292,7 @@ func TestMetrikaCounter_CreatedWithNumberAndGoals(t *testing.T) {
 	yandex := newFakeYandexProvider()
 	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
 	owner := registerUser(t, srv, "owner@example.com")
+	onPaidPlan(t, "owner@example.com")
 	wsID := personalWorkspace(t)
 	accountID := connectYandex(t, owner, srv)
 	formID := newForm(t, wsID, "f-new-counter")
@@ -288,6 +332,7 @@ func TestMetrikaCounter_NameFromAuthor(t *testing.T) {
 	yandex := newFakeYandexProvider()
 	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
 	owner := registerUser(t, srv, "owner@example.com")
+	onPaidPlan(t, "owner@example.com")
 	accountID := connectYandex(t, owner, srv)
 	formID := newForm(t, personalWorkspace(t), "f-named-counter")
 	url := "/api/v1/forms/" + formID + "/counters/yandex-metrika/counter"

@@ -18,7 +18,7 @@ import {
   useUpdateWebhook,
 } from './queries'
 import { PlanUpsell } from '../plan/PlanUpsell'
-import { useFeatureAllowed } from '../plan/useFeature'
+import { useFeatureDecision } from '../plan/useFeature'
 import { ProTag } from '../../shared/ProTag'
 import { Section } from '../../shared/page/Section'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
@@ -66,7 +66,9 @@ export function IntegrationsView({ formId }: { formId: string }) {
   // Тариф спрашивается ДО ранних возвратов: условный вызов хука ломает их порядок.
   // Гейт счётчика стоит на отдаче формы (BILLING §10), здесь — только разговор о
   // тарифе вместо подключения и правда в строке уже подключённого.
-  const metrikaAllowed = useFeatureAllowed('form_counters')
+  // undefined — тариф неизвестен (едет или закрыт правом billing.view у редактора).
+  const metrikaDecision = useFeatureDecision('form_counters')
+  const metrikaAllowed = metrikaDecision ?? true
   const [upsell, setUpsell] = useState(false)
 
   if (state.isPending) {
@@ -124,7 +126,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
                 <MetrikaRow
                   formId={formId}
                   metrika={metrika}
-                  allowed={metrikaAllowed}
+                  allowed={metrikaDecision}
                   onEdit={() => setOverlay({ kind: 'metrika', id: null })}
                 />
               </li>
@@ -651,8 +653,9 @@ function MetrikaRow({
   formId: string
   metrika: MetrikaCounter
   // allowed — тариф пространства даёт счётчик. Нет — настройка сохранена, но на
-  // странице формы счётчика нет, и строка обязана это сказать.
-  allowed: boolean
+  // странице формы счётчика нет, и строка обязана это сказать. undefined — тариф
+  // неизвестен, и «Работает» утверждать нельзя.
+  allowed: boolean | undefined
   onEdit: () => void
 }) {
   const update = useSetMetrika(formId)
@@ -710,7 +713,7 @@ function MetrikaRow({
 
 // Зелёная точка значит «счётчик стоит на странице формы», а не «цели доходят»: доходят
 // ли они, видно только в самой Метрике (design/yandex-metrika.md §8).
-function metrikaStatus(metrika: MetrikaCounter, allowed: boolean): DotState {
+function metrikaStatus(metrika: MetrikaCounter, allowed: boolean | undefined): DotState {
   if (!metrika.enabled) {
     return {
       color: 'bg-muted-foreground/40',
@@ -721,6 +724,14 @@ function metrikaStatus(metrika: MetrikaCounter, allowed: boolean): DotState {
   }
   // Тариф — не поломка, чинить здесь нечего: пульс звал бы к действию, которого на
   // этом экране нет.
+  if (allowed === undefined) {
+    return {
+      color: 'bg-muted-foreground/40',
+      label: 'Включено',
+      text: 'Счётчик включён. Работает ли он на странице формы, зависит от тарифа пространства.',
+      pulsing: false,
+    }
+  }
   if (!allowed) {
     return {
       color: 'bg-warning',

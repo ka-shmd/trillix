@@ -15,6 +15,7 @@ import (
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -58,16 +59,47 @@ type CounterStore interface {
 
 var _ CounterStore = Repo{}
 
+// Plans — тариф пространства, объявленный потребителем. Реализация —
+// *entitlements.Service.
+type Plans interface {
+	CheckWorkspace(ctx context.Context, workspaceID uuid.UUID, key entitlements.Key) (entitlements.Decision, error)
+}
+
 // WithCounters подключает счётчики аналитики. nil — сборка без счётчиков: ручки
 // отвечают 404, в состоянии таба счётчика нет.
 //
 // formBaseURL — адрес публичного рендерера: из его хоста берётся «сайт» счётчика,
 // который продукт заводит в Метрике. Пусто — создание счётчика недоступно, всё
 // остальное работает.
-func (s *Service) WithCounters(store CounterStore, formBaseURL string) *Service {
+//
+// plans — гейт ручек, которые действуют в Яндексе (создание счётчика и целей).
+// Сохранение номера им не закрыто: номер — намерение автора, право на счётчик
+// спрашивается при отдаче формы (спека §5).
+func (s *Service) WithCounters(store CounterStore, formBaseURL string, plans Plans) *Service {
 	s.counters = store
 	s.formBase = formBaseURL
+	s.plans = plans
 	return s
+}
+
+// canActInMetrika — право действовать в Метрике от имени формы: правка формы, затем
+// тариф. Порядок обязателен: 402 раньше 404 рассказал бы постороннему о чужой форме.
+func (s *Service) canActInMetrika(ctx context.Context, userID, formID uuid.UUID) (forms.Form, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return forms.Form{}, err
+	}
+	if err := s.access.Can(ctx, form.WorkspaceID, userID, domain.ActionFormWrite); err != nil {
+		return forms.Form{}, err
+	}
+	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.FormCounters)
+	if err != nil {
+		return forms.Form{}, fmt.Errorf("check plan: %w", err)
+	}
+	if !d.Allowed {
+		return forms.Form{}, fmt.Errorf("%w: Яндекс Метрика доступна на платном тарифе", domain.ErrPlanRequired)
+	}
+	return form, nil
 }
 
 // metrikaCounterName — имя счётчика, который заводит продукт. Название формы в
@@ -95,16 +127,13 @@ func (s *Service) CreateMetrikaCounter(ctx context.Context, userID, formID, acco
 	if s.counters == nil || s.yandex == nil || s.formBase == "" {
 		return Counter{}, GoalsResult{}, domain.ErrNotFound
 	}
-	if err := s.canEditForm(ctx, userID, formID); err != nil {
+	form, err := s.canActInMetrika(ctx, userID, formID)
+	if err != nil {
 		return Counter{}, GoalsResult{}, err
 	}
 	name = strings.TrimSpace(name)
 	if utf8.RuneCountInString(name) > MaxConnectionNameLen {
 		return Counter{}, GoalsResult{}, fmt.Errorf("%w: название счётчика длиннее %d символов", domain.ErrValidation, MaxConnectionNameLen)
-	}
-	form, err := s.forms.Get(ctx, userID, formID)
-	if err != nil {
-		return Counter{}, GoalsResult{}, err
 	}
 	if name == "" {
 		name = metrikaCounterName(form)
@@ -245,7 +274,7 @@ func (s *Service) EnsureMetrikaGoals(ctx context.Context, userID, formID, accoun
 	if s.counters == nil || s.yandex == nil {
 		return GoalsResult{}, domain.ErrNotFound
 	}
-	if err := s.canEditForm(ctx, userID, formID); err != nil {
+	if _, err := s.canActInMetrika(ctx, userID, formID); err != nil {
 		return GoalsResult{}, err
 	}
 	c, err := s.formCounter(ctx, formID, CounterYandexMetrika)

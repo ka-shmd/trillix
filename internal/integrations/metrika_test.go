@@ -230,6 +230,23 @@ func TestMetrika_EnsureGoals_UnknownShapeStillRecognised(t *testing.T) {
 	}
 }
 
+// Ответ без поля goals — незнакомый конверт, а не «целей нет»: иначе продукт завёл
+// бы все три цели поверх существующих и затёр их статистику.
+func TestMetrika_EnsureGoals_UnknownEnvelopeRefused(t *testing.T) {
+	for _, body := range []string{`{}`, `{"goals":null}`, `{"items":[{"conditions":[{"url":"trillix_open"}]}]}`} {
+		f := &fakeMetrika{goalsBody: body}
+		y := newFakeMetrika(t, f)
+
+		res, err := y.EnsureGoals(context.Background(), "ya-at", 42, metrikaGoals)
+		if err == nil {
+			t.Fatalf("тело %s: ошибки нет, итог = %+v", body, res)
+		}
+		if len(f.created) != 0 {
+			t.Fatalf("тело %s: заведено %d целей поверх незнакомого ответа", body, len(f.created))
+		}
+	}
+}
+
 // Отказ Метрики — окончательный: ждать и повторять нечего, нужен человек. Причина
 // из тела доезжает до ЛОГА (на экран ей нельзя — она английская).
 func TestMetrika_ListCounters_AccessDenied(t *testing.T) {
