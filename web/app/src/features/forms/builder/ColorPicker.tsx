@@ -163,6 +163,7 @@ export interface ColorPickerProps {
   // Снятие цвета — кнопкой рядом с полем hex. Без onRemove кнопки нет: у окна обложки
   // удаление своё, в углу окна, и второе рядом с полем повторяло бы его.
   onRemove?: () => void
+  // Пустой список — без сетки: у окна обложки готовые цвета стоят плитками рядом.
   swatches: readonly string[]
   // Подпись кнопки снятия цвета: у текста и фона она разная.
   removeLabel?: string
@@ -270,21 +271,23 @@ export function ColorPicker({
         <Thumb x={density} y={0.5} color={current} />
       </div>
 
-      <div className="grid grid-cols-8 gap-1">
-        {swatches.map((c) => (
-          <button
-            key={c}
-            type="button"
-            aria-label={c}
-            title={c}
-            style={{ backgroundColor: c }}
-            className="size-5 rounded border border-black/10 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
-            // Тот же гард, что у панели: образец фокус не забирает, выделение цело.
-            onMouseDown={(e) => e.preventDefault()}
-            onClick={() => applyHex(c)}
-          />
-        ))}
-      </div>
+      {swatches.length > 0 && (
+        <div className="grid grid-cols-8 gap-1">
+          {swatches.map((c) => (
+            <button
+              key={c}
+              type="button"
+              aria-label={c}
+              title={c}
+              style={{ backgroundColor: c }}
+              className="size-5 rounded border border-black/10 outline-none focus-visible:ring-[3px] focus-visible:ring-ring/50"
+              // Тот же гард, что у панели: образец фокус не забирает, выделение цело.
+              onMouseDown={(e) => e.preventDefault()}
+              onClick={() => applyHex(c)}
+            />
+          ))}
+        </div>
+      )}
 
       <div className="flex items-center gap-1">
         <span

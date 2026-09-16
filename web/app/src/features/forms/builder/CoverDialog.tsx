@@ -24,7 +24,13 @@ import { cn } from '@/lib/utils'
 // удаление. Одно на оба входа — кнопку «Изменить» на полотне и строку «Обложка» в
 // шторке оформления (решение владельца 2026-09-14): обложка меняется одинаково,
 // откуда бы её ни открыли.
-export function CoverDialog({ formId, children }: { formId: FormIdSource; children: ReactElement }) {
+export function CoverDialog({
+  formId,
+  children,
+}: {
+  formId: FormIdSource
+  children: ReactElement
+}) {
   const cover = useBuilderStore((s) => s.cover)
   const setCover = useBuilderStore((s) => s.setCover)
 
@@ -44,17 +50,58 @@ export function CoverDialog({ formId, children }: { formId: FormIdSource; childr
       color={
         // Цвет применяется на каждое движение и окна не закрывает: подбирают по
         // результату на полосе. История не дробится — стор коалесит подбор одним тегом.
-        <div className="w-64">
-          <ColorPicker
-            initial={cover?.color ?? DEFAULT_COVER_COLOR}
-            swatches={COVER_COLORS}
-            onChange={(hex) => setCover(coverFill(cover, { color: hex }))}
-          />
-        </div>
+        <CoverColor
+          value={cover?.color}
+          onChange={(hex) => setCover(coverFill(cover, { color: hex }))}
+        />
       }
     >
       {children}
     </ImageDialog>
+  )
+}
+
+// Вкладка «Цвет»: слева плитки готовых цветов, справа выборщик.
+function CoverColor({
+  value,
+  onChange,
+}: {
+  value: string | undefined
+  onChange: (hex: string) => void
+}) {
+  // Выборщик держит цвет у себя и читает `initial` только при монтировании, поэтому
+  // клик по плитке пересоздаёт его — иначе квадрат и hex остались бы на прежнем цвете.
+  const [pickerKey, setPickerKey] = useState(0)
+
+  return (
+    <div className="flex gap-8">
+      <div className="grid flex-1 grid-cols-4 content-start gap-2">
+        {COVER_COLORS.map((c) => (
+          <button
+            key={c}
+            type="button"
+            aria-label={c}
+            aria-pressed={value === c}
+            title={c}
+            style={{ backgroundColor: c }}
+            className={cn(
+              'h-14 rounded-md border border-black/10 outline-none transition-shadow hover:ring-2 hover:ring-ring/40 focus-visible:ring-[3px] focus-visible:ring-ring/50',
+              value === c && 'ring-2 ring-primary ring-offset-2 hover:ring-primary',
+            )}
+            onClick={() => {
+              onChange(c)
+              setPickerKey((k) => k + 1)
+            }}
+          />
+        ))}
+      </div>
+      <ColorPicker
+        key={pickerKey}
+        initial={value ?? DEFAULT_COVER_COLOR}
+        swatches={[]}
+        onChange={onChange}
+      />
+    </div>
   )
 }
 
@@ -127,8 +174,7 @@ interface ImageBodyProps {
 // Вкладка шапки: текст с чертой под активной. Черта — `after` вендоренного варианта
 // line, опущенная на линию шапки (-bottom-px), а не на штатные 5px ниже триггера.
 // Сдвиг задан ТЕМ ЖЕ вариантом, что у вендора, иначе tailwind-merge его не сольёт.
-const TAB =
-  'flex-none px-0 font-semibold group-data-[orientation=horizontal]/tabs:after:-bottom-px'
+const TAB = 'flex-none px-0 font-semibold group-data-[orientation=horizontal]/tabs:after:-bottom-px'
 
 // Тело окна — отдельный компонент внутри Content: Radix размонтирует его при закрытии,
 // поэтому вкладка, адрес и ошибка сбрасываются к умолчанию сами.

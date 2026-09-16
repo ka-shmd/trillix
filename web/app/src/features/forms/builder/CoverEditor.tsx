@@ -1,4 +1,4 @@
-import { useRef, useState, type ChangeEvent, type PointerEvent as ReactPointerEvent } from 'react'
+import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import { ImageIcon, ImagePlus, MoveVertical, Palette, Save } from 'lucide-react'
 
 import { coverY } from '@entities/formSchema'
@@ -7,7 +7,7 @@ import { CoverBand, LogoMark } from '@fields/pageChrome'
 import { CoverDialog, LogoDialog } from './CoverDialog'
 import { coverOverflowPx, nextCoverY } from './coverDrag'
 import { DEFAULT_COVER_COLOR } from './designEdit'
-import { uploadImage, type FormIdSource } from './mediaUpload'
+import { uploadLogoPlaceholder, type FormIdSource } from './mediaUpload'
 import { useBuilderStore } from './storeContext'
 import { Button } from '@/components/ui/button'
 import { humanError } from '../../../shared/api/errors'
@@ -225,30 +225,25 @@ export function AddChrome({
   const logo = useBuilderStore((s) => s.logo)
   const setCover = useBuilderStore((s) => s.setCover)
   const setLogo = useBuilderStore((s) => s.setLogo)
-  const fileRef = useRef<HTMLInputElement>(null)
+  const [addingLogo, setAddingLogo] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  function onFile(e: ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
-    if (!file) return
+  // Логотип заводится заглушкой, а не диалогом выбора файла — как обложка цветом:
+  // один клик, и знак уже на месте; свою картинку ставят нажатием на него (LogoDialog).
+  function addLogo() {
+    if (addingLogo) return
     setError(null)
-    uploadImage(formId, file, {}, 'logo')
+    setAddingLogo(true)
+    uploadLogoPlaceholder(formId)
       .then((imageKey) => setLogo({ imageKey }))
-      .catch((err: unknown) => setError(humanError(err, 'Ошибка загрузки')))
+      .catch((err: unknown) => setError(humanError(err, 'Не удалось добавить логотип')))
+      .finally(() => setAddingLogo(false))
   }
 
   // Кластер живёт, даже когда заводить нечего: «Оформление» — не «завести», оно
   // уместно всегда, и раньше кнопки исчезали целиком при обложке с логотипом.
   return (
     <div className="relative h-0">
-      <input
-        ref={fileRef}
-        type="file"
-        accept="image/png,image/jpeg"
-        className="hidden"
-        onChange={onFile}
-      />
       {/* bottom-0 + pb вместо bottom-N: зазор до заголовка становится ПАДДИНГОМ
         коробки, а не пустым местом снаружи неё — иначе курсор, идущий от заголовка к
         кнопкам, на середине пути покидал бы group/title (там ничего нет) и наведение
@@ -287,7 +282,8 @@ export function AddChrome({
             variant="ghost"
             size="sm"
             className="text-muted-foreground"
-            onClick={() => fileRef.current?.click()}
+            disabled={addingLogo}
+            onClick={addLogo}
           >
             <ImagePlus /> Добавить логотип
           </Button>
