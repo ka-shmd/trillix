@@ -27,7 +27,10 @@ import { Label } from '@/components/ui/label'
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
+  SelectLabel,
+  SelectSeparator,
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
@@ -84,6 +87,8 @@ export function MetrikaOverlay({
 
   const [accountId, setAccountId] = useState(accounts[0]?.id ?? '')
   const [counter, setCounter] = useState(metrika?.counter ?? '')
+  // counterName — имя нового счётчика; спрашивается, только когда выбран NEW_COUNTER.
+  const [counterName, setCounterName] = useState('')
 
   const save = useSetMetrika(formId)
   const goals = useEnsureMetrikaGoals(formId)
@@ -145,7 +150,7 @@ export function MetrikaOverlay({
     // Новый счётчик — одно действие сервера: счётчик, номер у формы, цели.
     if (counter === NEW_COUNTER) {
       try {
-        await create.mutateAsync(accountId)
+        await create.mutateAsync({ accountId, name: counterName.trim() })
       } catch {
         // Счётчик мог создаться, а цели — нет; тогда номер уже у формы, и выбор
         // переедет на него эффектом ниже. Повтор пойдёт целями, а не вторым
@@ -177,12 +182,11 @@ export function MetrikaOverlay({
     onClose()
   }
 
-  // Окно занято ТОЛЬКО походом за согласием: человек в другом окне, и трогать
-  // здесь нечего. Загрузка счётчиков окно не запирает — от неё зависит одно поле
-  // из трёх, а запереть окно значит отнять и ручной ввод, то есть единственный
-  // путь, которым в этот момент можно закончить настройку.
-  // история — JOURNAL, «Слайс I. Бесконечная загрузка счётчиков»
-  const busy = popup.waiting
+  // Окно занято: либо едут счётчики, либо человек в окне Яндекса. Состояние одно
+  // и слой один, как у окна Таблиц; различаются подпись и «Отменить» у похода.
+  // Повтор списка — тоже загрузка: isFetching держится и на паузе перед ним.
+  // история — JOURNAL, «Загрузка счётчиков снова под общим слоем»
+  const busy = counters.isFetching || popup.waiting
   const pending = save.isPending || goals.isPending || create.isPending
 
   return (
@@ -245,8 +249,9 @@ export function MetrikaOverlay({
                   setAccountId={setAccountId}
                   counter={counter}
                   setCounter={setCounter}
+                  counterName={counterName}
+                  setCounterName={setCounterName}
                   list={counters.data ?? []}
-                  listLoading={counters.isLoading}
                   listFailed={counters.isError}
                   onRetryList={() => void counters.refetch()}
                   onConsent={setConsent}
@@ -294,11 +299,10 @@ export function MetrikaOverlay({
           )}
         </div>
 
-        {/* Слой поверх окна на время похода за согласием: человек в другом окне,
-            и настройки под слоем трогать нечего. «Отменить» лежит ЗДЕСЬ, а не в
-            колонке под слоем: колонка на это время inert. Отказ провайдера
-            приходит на ЕГО стороне и к нам не возвращается — «Отменить» и есть
-            выход из такого похода. */}
+        {/* Слой поверх окна, пока оно занято: едут счётчики либо идёт поход за
+            согласием. «Отменить» лежит ЗДЕСЬ, а не в колонке под слоем: колонка на
+            это время inert. Отказ провайдера приходит на ЕГО стороне и к нам не
+            возвращается — «Отменить» и есть выход из такого похода. */}
         {busy && (
           <div
             className="fixed inset-0 z-10 flex items-center justify-center gap-3 bg-background/85"
@@ -307,11 +311,13 @@ export function MetrikaOverlay({
           >
             <Loader2 className="size-6 animate-spin text-muted-foreground" aria-hidden />
             <span className="text-base text-muted-foreground">
-              Ждём подтверждения в окне Яндекса…
+              {popup.waiting ? 'Ждём подтверждения в окне Яндекса…' : 'Загружаем данные Яндекса…'}
             </span>
-            <Button variant="ghost" size="sm" onClick={popup.cancel}>
-              Отменить
-            </Button>
+            {popup.waiting && (
+              <Button variant="ghost" size="sm" onClick={popup.cancel}>
+                Отменить
+              </Button>
+            )}
           </div>
         )}
       </DialogContent>
@@ -400,8 +406,9 @@ function AccountFields({
   setAccountId,
   counter,
   setCounter,
+  counterName,
+  setCounterName,
   list,
-  listLoading,
   listFailed,
   onRetryList,
   onConsent,
@@ -412,8 +419,9 @@ function AccountFields({
   setAccountId: (value: string) => void
   counter: string
   setCounter: (value: string) => void
+  counterName: string
+  setCounterName: (value: string) => void
   list: { id: number; name: string; site: string }[]
-  listLoading: boolean
   listFailed: boolean
   onRetryList: () => void
   onConsent: (target: ConsentTarget) => void
@@ -422,8 +430,10 @@ function AccountFields({
   const chosen = accounts.find((a) => a.id === accountId) ?? null
   // Счётчика формы нет среди счётчиков аккаунта — его вписали руками или он
   // принадлежит другому аккаунту. Показываем отдельным пунктом: пустое поле у
-  // подключённого счётчика выглядело бы как «номер потерялся».
-  const outside = counter !== '' && !list.some((c) => String(c.id) === counter)
+  // подключённого счётчика выглядело бы как «номер потерялся». NEW_COUNTER
+  // номером не является — иначе пункт «Текущий счётчик new» встаёт в список.
+  const outside =
+    counter !== '' && counter !== NEW_COUNTER && !list.some((c) => String(c.id) === counter)
 
   return (
     <>
@@ -474,26 +484,30 @@ function AccountFields({
       <div className="flex flex-col gap-2">
         <Label htmlFor="metrika-counter-select">Счётчик</Label>
         <Select value={counter} onValueChange={setCounter}>
-          <SelectTrigger
-            id="metrika-counter-select"
-            className={`w-full ${RAISED_SELECT}`}
-            // Выключено, пока выбирать не из чего: открытый пустой список
-            // выглядит как «счётчиков нет», а это неправда.
-            disabled={listLoading}
-          >
-            <SelectValue placeholder={counterPlaceholder(listLoading, listFailed)} />
+          <SelectTrigger id="metrika-counter-select" className={`w-full ${RAISED_SELECT}`}>
+            <SelectValue
+              placeholder={listFailed ? 'Счётчики не загрузились' : 'Выберите счётчик'}
+            />
           </SelectTrigger>
           <SelectContent>
-            {/* Первым пунктом, как «Создать новую таблицу» в окне Таблиц: у
-                человека без Метрики это единственный путь, и прятать его под
-                список чужих счётчиков незачем. */}
+            {/* Первым пунктом и отдельно от списка чертой, как «Создать новую
+                таблицу» в окне Таблиц: у человека без Метрики это единственный
+                путь, и прятать его под список счётчиков незачем. */}
             <SelectItem value={NEW_COUNTER}>Создать новый счётчик</SelectItem>
-            {outside && <SelectItem value={counter}>Текущий счётчик {counter}</SelectItem>}
-            {list.map((c) => (
-              <SelectItem key={c.id} value={String(c.id)}>
-                {[c.name, c.site, c.id].filter((part) => part !== '').join(' · ')}
-              </SelectItem>
-            ))}
+            {(outside || list.length > 0) && (
+              <>
+                <SelectSeparator />
+                <SelectGroup>
+                  <SelectLabel>Мои счётчики</SelectLabel>
+                  {outside && <SelectItem value={counter}>Текущий счётчик {counter}</SelectItem>}
+                  {list.map((c) => (
+                    <SelectItem key={c.id} value={String(c.id)}>
+                      {[c.name, c.site, c.id].filter((part) => part !== '').join(' · ')}
+                    </SelectItem>
+                  ))}
+                </SelectGroup>
+              </>
+            )}
           </SelectContent>
         </Select>
         {/* Что произойдёт с выбранным счётчиком — сказано ДО нажатия: продукт
@@ -508,6 +522,20 @@ function AccountFields({
               : 'В этом счётчике будут созданы три цели формы. Уже заведённые с теми же идентификаторами мы не трогаем.'}
           </p>
         )}
+        {counter === NEW_COUNTER && (
+          <div className="flex flex-col gap-2 pt-2">
+            <Label htmlFor="metrika-counter-name">Название счётчика</Label>
+            <Input
+              id="metrika-counter-name"
+              className={RAISED_INPUT}
+              value={counterName}
+              // Зеркало MaxConnectionNameLen в internal/integrations.
+              maxLength={80}
+              placeholder="Необязательно — по умолчанию «Trillix: название формы»"
+              onChange={(e) => setCounterName(e.target.value)}
+            />
+          </div>
+        )}
         <div className="flex justify-end">
           {/* Список не приехал — человеку нужны оба выхода: попробовать ещё раз
               и вписать номер руками. Второй рядом и так. */}
@@ -517,14 +545,6 @@ function AccountFields({
       </div>
     </>
   )
-}
-
-// counterPlaceholder — что стоит в поле, пока счётчик не выбран. Три разных
-// сообщения: «ещё едет», «не приехало» и «выберите» — лечение у них разное.
-function counterPlaceholder(loading: boolean, failed: boolean): string {
-  if (loading) return 'Загружаем счётчики…'
-  if (failed) return 'Счётчики не загрузились'
-  return 'Выберите счётчик'
 }
 
 // ManualField — сегодняшний путь: номер руками и одна строка о том, какие цели

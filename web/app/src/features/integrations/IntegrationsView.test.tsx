@@ -2009,28 +2009,29 @@ describe('Метрика через аккаунт Яндекса', () => {
     expect(link.getAttribute('href')).toContain('accountId=' + YA_ACCOUNT_ID)
   })
 
-  // Список счётчиков ОКНО НЕ ЗАПИРАЕТ: от него зависит одно поле из трёх, а слой
-  // поверх окна отнял бы и ручной ввод — единственный путь, которым в этот момент
-  // можно закончить настройку. Поймано владельцем: изредка список не приезжал
-  // вовсе, и окно оставалось мёртвым до перезагрузки страницы.
-  it('счётчики ещё едут — поле ждёт, а окно остаётся живым', async () => {
+  // Загрузка счётчиков закрывает окно тем же слоем, что поход за согласием, — как
+  // списки в окне Таблиц: пока что-то едет, трогать в окне нечего.
+  it('счётчики ещё едут — окно закрыто общим слоем, поля выключены', async () => {
     hangingList.enabled = true
     try {
       renderView(state({ yandex: YANDEX_ON }))
       openMetrika()
 
-      await waitFor(() =>
-        expect(screen.getByLabelText('Счётчик').textContent).toContain('Загружаем счётчики…'),
-      )
-      // Ни слоя занятости, ни inert на колонке: ручной ввод доступен.
-      expect(screen.queryByText(/Ждём подтверждения в окне Яндекса/)).toBeNull()
-      expect(screen.getByLabelText('Аккаунт Яндекса').closest('[inert]')).toBeNull()
-
-      fireEvent.click(screen.getByRole('button', { name: /Ввести номер вручную/ }))
-      expect(screen.getByLabelText('Номер счётчика')).toBeTruthy()
+      await waitFor(() => expect(screen.getByText('Загружаем данные Яндекса…')).toBeTruthy())
+      expect(screen.getByLabelText('Аккаунт Яндекса').closest('[inert]')).not.toBeNull()
+      // «Отменить» — только у похода за согласием: загрузку отменяет закрытие окна.
+      expect(screen.queryByRole('button', { name: 'Отменить' })).toBeNull()
     } finally {
       hangingList.enabled = false
     }
+  })
+
+  it('счётчики приехали — слоя нет и поля живые', async () => {
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    await waitFor(() => expect(screen.queryByText('Загружаем данные Яндекса…')).toBeNull())
+    expect(screen.getByLabelText('Аккаунт Яндекса').closest('[inert]')).toBeNull()
   })
 
   // Закрытое окно обрывает поход за списком: за ним стоит запрос к Метрике на
@@ -2097,6 +2098,11 @@ describe('Метрика через аккаунт Яндекса', () => {
     fireEvent.click(screen.getByLabelText('Счётчик'))
     fireEvent.click(screen.getByRole('option', { name: 'Создать новый счётчик' }))
     expect(screen.getByText(/Заведём новый счётчик/)).toBeTruthy()
+    // Служебное значение пункта номером не притворяется.
+    expect(screen.getByLabelText('Счётчик').textContent).not.toContain('Текущий счётчик')
+    fireEvent.change(screen.getByLabelText('Название счётчика'), {
+      target: { value: '  Сайт компании ' },
+    })
 
     fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
 
@@ -2107,7 +2113,7 @@ describe('Метрика через аккаунт Яндекса', () => {
       {
         method: 'POST',
         url: expect.stringContaining('/forms/form-1/counters/yandex-metrika/counter'),
-        body: { accountId: YA_ACCOUNT_ID },
+        body: { accountId: YA_ACCOUNT_ID, name: 'Сайт компании' },
       },
     ])
   })

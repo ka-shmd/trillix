@@ -10,6 +10,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"unicode"
 
@@ -277,6 +278,38 @@ func TestMetrikaCounter_CreatedWithNumberAndGoals(t *testing.T) {
 	}
 	if yandex.createdSite != "f.example" {
 		t.Errorf("сайт счётчика = %q, ожидался хост страниц форм без схемы и порта", yandex.createdSite)
+	}
+}
+
+// Имя из окна уезжает в Метрику как есть; длиннее потолка — отказ до похода в
+// Яндекс, и счётчик не заводится.
+func TestMetrikaCounter_NameFromAuthor(t *testing.T) {
+	resetDB(t)
+	yandex := newFakeYandexProvider()
+	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
+	owner := registerUser(t, srv, "owner@example.com")
+	accountID := connectYandex(t, owner, srv)
+	formID := newForm(t, personalWorkspace(t), "f-named-counter")
+	url := "/api/v1/forms/" + formID + "/counters/yandex-metrika/counter"
+
+	before := yandex.calls
+	r := postBodyWithCSRF(t, owner, srv, url,
+		`{"accountId":"`+accountID+`","name":"`+strings.Repeat("я", integrations.MaxConnectionNameLen+1)+`"}`)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("длинное имя: статус %d, ожидалось 422", r.StatusCode)
+	}
+	if yandex.calls != before {
+		t.Fatalf("длинное имя дошло до Яндекса")
+	}
+
+	r = postBodyWithCSRF(t, owner, srv, url, `{"accountId":"`+accountID+`","name":"  Сайт компании  "}`)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusCreated {
+		t.Fatalf("создание с именем: статус %d, ожидалось 201", r.StatusCode)
+	}
+	if yandex.createdName != "Сайт компании" {
+		t.Errorf("имя счётчика = %q", yandex.createdName)
 	}
 }
 

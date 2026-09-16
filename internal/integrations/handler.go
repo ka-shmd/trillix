@@ -77,7 +77,7 @@ type integrationsService interface {
 	DeleteCounter(ctx context.Context, userID, formID uuid.UUID, kind string) error
 	MetrikaCounters(ctx context.Context, userID, accountID uuid.UUID) ([]MetrikaCounter, error)
 	EnsureMetrikaGoals(ctx context.Context, userID, formID, accountID uuid.UUID) (GoalsResult, error)
-	CreateMetrikaCounter(ctx context.Context, userID, formID, accountID uuid.UUID) (Counter, GoalsResult, error)
+	CreateMetrikaCounter(ctx context.Context, userID, formID, accountID uuid.UUID, name string) (Counter, GoalsResult, error)
 }
 
 // RateLimiter — лимитер проверки вебхука. Реализация — ratelimit.TokenBucket; в

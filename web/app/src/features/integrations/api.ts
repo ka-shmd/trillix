@@ -272,10 +272,15 @@ export function ensureMetrikaGoals(formId: string, accountId: string): Promise<M
 
 // Завести НОВЫЙ счётчик в аккаунте: одним действием счётчик, номер у формы и три
 // цели. Имя и сайт задаёт сервер — счётчик ставится ровно на страницу формы.
-export function createMetrikaCounter(formId: string, accountId: string): Promise<MetrikaCreated> {
+// name — имя счётчика; пустое — имя по умолчанию от сервера.
+export function createMetrikaCounter(
+  formId: string,
+  accountId: string,
+  name: string,
+): Promise<MetrikaCreated> {
   return apiRequest(`/forms/${formId}/counters/yandex-metrika/counter`, {
     method: 'POST',
-    body: { accountId },
+    body: { accountId, name },
     schema: metrikaCreatedSchema,
   })
 }

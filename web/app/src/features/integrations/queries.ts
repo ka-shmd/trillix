@@ -321,7 +321,8 @@ export function useRetryWebhookDelivery(formId: string, webhookId: string) {
 export function useCreateMetrikaCounter(formId: string) {
   const qc = useQueryClient()
   return useMutation({
-    mutationFn: (accountId: string) => createMetrikaCounter(formId, accountId),
+    mutationFn: ({ accountId, name }: { accountId: string; name: string }) =>
+      createMetrikaCounter(formId, accountId, name),
     // onSettled, а не onSuccess: счётчик мог создаться, а цели — нет, и тогда
     // номер у формы уже стоит. Экран обязан увидеть его и в этом случае, иначе
     // повтор завёл бы ВТОРОЙ счётчик.

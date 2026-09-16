@@ -25,15 +25,15 @@ export function GoogleSheetsIcon({ className }: { className?: string }) {
   )
 }
 
-// Яндекс Метрика: три столбца графика в цветах Яндекса на жёлтом круге. Рисунок по
-// мотивам фирменного знака, а не его копия; точный знак заменяется в этом месте.
+// Яндекс Метрика: фирменный знак — три столбца по возрастанию. Контуры и цвета —
+// из каталога сервисов Яндекса (yastatic.net/s3/home/services/block/metrika.svg);
+// viewBox обрезан по знаку, чтобы он был одного размера с соседними.
 export function MetrikaIcon({ className }: { className?: string }) {
   return (
-    <svg viewBox="0 0 24 24" className={className} role="img" aria-label="Яндекс Метрика">
-      <circle cx="12" cy="12" r="11" fill="#FFCC00" />
-      <rect x="6" y="11" width="3" height="7" rx="1" fill="#FC3F1D" />
-      <rect x="10.5" y="7.5" width="3" height="10.5" rx="1" fill="#2E6BE6" />
-      <rect x="15" y="9.5" width="3" height="8.5" rx="1" fill="#1F1F1F" />
+    <svg viewBox="5 5 34 34" className={className} role="img" aria-label="Яндекс Метрика">
+      <path d="M15.85 26.48H6V38h9.85V26.48z" fill="#F33" />
+      <path d="M26.92 17.52h-9.84V38h9.84V17.52z" fill="#07F" />
+      <path d="M38 6h-9.85v32H38V6z" fill="#FC0" />
     </svg>
   )
 }

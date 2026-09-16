@@ -109,6 +109,13 @@ type goalsResponse struct {
 	Existing int `json:"existing"`
 }
 
+// createCounterRequest — чьим аккаунтом заводить счётчик и под каким именем.
+// Пустое имя — имя по умолчанию.
+type createCounterRequest struct {
+	AccountID string `json:"accountId"`
+	Name      string `json:"name"`
+}
+
 // counterCreatedResponse — что вернулось из одного действия: номер нового
 // счётчика и итог по целям.
 type counterCreatedResponse struct {
@@ -122,11 +129,15 @@ func (h *Handler) createMetrikaCounter(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	accountID, ok := h.accountFromBody(w, r)
+	var req createCounterRequest
+	if !decodeBody(w, r, &req) {
+		return
+	}
+	accountID, ok := parseAccount(w, r, req.AccountID)
 	if !ok {
 		return
 	}
-	c, goals, err := h.svc.CreateMetrikaCounter(r.Context(), user.ID, formID, accountID)
+	c, goals, err := h.svc.CreateMetrikaCounter(r.Context(), user.ID, formID, accountID, req.Name)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -139,15 +150,27 @@ func (h *Handler) createMetrikaCounter(w http.ResponseWriter, r *http.Request) {
 // accountFromBody — чьим аккаунтом Яндекса действовать. Общее для обеих ручек
 // тело: форма в адресе, счётчик у формы, в теле остаётся только аккаунт.
 func (h *Handler) accountFromBody(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
+	var req goalsRequest
+	if !decodeBody(w, r, &req) {
+		return uuid.Nil, false
+	}
+	return parseAccount(w, r, req.AccountID)
+}
+
+// decodeBody читает тело ручки счётчика: потолок размера и отказ на незнакомые поля.
+func decodeBody(w http.ResponseWriter, r *http.Request, dst any) bool {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
-	var req goalsRequest
-	if err := dec.Decode(&req); err != nil {
+	if err := dec.Decode(dst); err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
-		return uuid.Nil, false
+		return false
 	}
-	accountID, err := uuid.Parse(req.AccountID)
+	return true
+}
+
+func parseAccount(w http.ResponseWriter, r *http.Request, raw string) (uuid.UUID, bool) {
+	accountID, err := uuid.Parse(raw)
 	if err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: не выбран аккаунт Яндекса", domain.ErrValidation))
 		return uuid.Nil, false

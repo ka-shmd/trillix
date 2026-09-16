@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -84,21 +85,29 @@ func metrikaCounterName(form forms.Form) string {
 }
 
 // CreateMetrikaCounter заводит в аккаунте новый счётчик, ставит его форме и
-// создаёт цели — одним действием.
+// создаёт цели — одним действием. name — имя счётчика от автора; пустое —
+// имя по умолчанию (metrikaCounterName).
 //
 // Действие одно, потому что по отдельности его половинки бессмысленны: счётчик
 // без номера у формы не работает, а номер без целей не отмечает ничего. Права и
 // порядок проверок те же, что у заведения целей: форма — раньше похода в Яндекс.
-func (s *Service) CreateMetrikaCounter(ctx context.Context, userID, formID, accountID uuid.UUID) (Counter, GoalsResult, error) {
+func (s *Service) CreateMetrikaCounter(ctx context.Context, userID, formID, accountID uuid.UUID, name string) (Counter, GoalsResult, error) {
 	if s.counters == nil || s.yandex == nil || s.formBase == "" {
 		return Counter{}, GoalsResult{}, domain.ErrNotFound
 	}
 	if err := s.canEditForm(ctx, userID, formID); err != nil {
 		return Counter{}, GoalsResult{}, err
 	}
+	name = strings.TrimSpace(name)
+	if utf8.RuneCountInString(name) > MaxConnectionNameLen {
+		return Counter{}, GoalsResult{}, fmt.Errorf("%w: название счётчика длиннее %d символов", domain.ErrValidation, MaxConnectionNameLen)
+	}
 	form, err := s.forms.Get(ctx, userID, formID)
 	if err != nil {
 		return Counter{}, GoalsResult{}, err
+	}
+	if name == "" {
+		name = metrikaCounterName(form)
 	}
 	conn, err := s.accountOfProvider(ctx, ProviderYandex, userID, accountID)
 	if err != nil {
@@ -108,7 +117,7 @@ func (s *Service) CreateMetrikaCounter(ctx context.Context, userID, formID, acco
 	if err != nil {
 		return Counter{}, GoalsResult{}, metrikaRefusal(ctx, err)
 	}
-	created, err := s.yandex.CreateCounter(ctx, token, metrikaCounterName(form), formSite(s.formBase))
+	created, err := s.yandex.CreateCounter(ctx, token, name, formSite(s.formBase))
 	if err != nil {
 		return Counter{}, GoalsResult{}, metrikaRefusal(ctx, err)
 	}
