@@ -218,7 +218,12 @@ export function IntegrationsView({ formId }: { formId: string }) {
         />
       )}
       {overlay?.kind === 'metrika' && (
-        <MetrikaOverlay formId={formId} metrika={metrika} onClose={() => setOverlay(null)} />
+        <MetrikaOverlay
+          formId={formId}
+          metrika={metrika}
+          yandex={state.data.yandex}
+          onClose={() => setOverlay(null)}
+        />
       )}
     </div>
   )

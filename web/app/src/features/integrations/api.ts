@@ -8,12 +8,16 @@ import {
   sheetListSchema,
   spreadsheetListSchema,
   webhookSchema,
+  metrikaCounterListSchema,
+  metrikaGoalsSchema,
   webhookSecretSchema,
   webhookTestSchema,
   type DeliveryPage,
   type FormIntegrations,
   type FormSheet,
   type MetrikaCounter,
+  type MetrikaCounterRef,
+  type MetrikaGoals,
   type SheetRef,
   type SpreadsheetRef,
   type Webhook,
@@ -238,6 +242,40 @@ export function setMetrika(formId: string, input: MetrikaCounter): Promise<void>
 
 export function deleteMetrika(formId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/counters/yandex-metrika`, { method: 'DELETE' })
+}
+
+// Счётчики аккаунта Яндекса — из чего выбирают номер (фаза 29, §13.3). Адрес по
+// АККАУНТУ, а не по форме: счётчики лежат в чужой Метрике, и право на их список
+// даёт владение аккаунтом, а не роль в пространстве (ADR §10).
+export async function listMetrikaCounters(accountId: string): Promise<MetrikaCounterRef[]> {
+  const res = await apiRequest(`/integrations/yandex/accounts/${accountId}/counters`, {
+    schema: metrikaCounterListSchema,
+  })
+  return res.counters
+}
+
+// Завести в счётчике формы недостающие цели. Номер сюда не едет: счётчик берётся
+// у формы — цели заводятся тому номеру, который стоит на её странице.
+export function ensureMetrikaGoals(formId: string, accountId: string): Promise<MetrikaGoals> {
+  return apiRequest(`/forms/${formId}/counters/yandex-metrika/goals`, {
+    method: 'POST',
+    body: { accountId },
+    schema: metrikaGoalsSchema,
+  })
+}
+
+// Отключить свой аккаунт Яндекса. Счётчик формы при этом остаётся: номер живёт у
+// формы, а аккаунт нужен лишь для выбора счётчика и заведения целей.
+export function disconnectYandex(accountId: string): Promise<void> {
+  return apiRequest(`/integrations/yandex/accounts/${accountId}`, { method: 'DELETE' })
+}
+
+// yandexStartUrl — НАВИГАЦИЯ к экрану согласия Яндекса, а не вызов API: бэк
+// отвечает редиректом и ставит cookie похода. reconnect — id переподключаемого
+// аккаунта, его почта уезжает подсказкой login_hint.
+export function yandexStartUrl(reconnect?: string): string {
+  const base = '/api/v1/integrations/yandex/start'
+  return reconnect ? `${base}?accountId=${encodeURIComponent(reconnect)}` : base
 }
 
 // Секрет подписи — отдельной ручкой по нажатию «Показать», а не в состоянии

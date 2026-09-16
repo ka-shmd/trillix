@@ -18,6 +18,10 @@ export const integrationKeys = {
     ['integrations', formId, 'spreadsheets', accountId] as const,
   sheets: (formId: string, accountId: string, spreadsheetId: string) =>
     ['integrations', formId, 'sheets', accountId, spreadsheetId] as const,
+  // Счётчики аккаунта Яндекса (фаза 29). Под form() по той же причине, что
+  // таблицы: индикатор занятости окна считает ключи глубже ключа формы.
+  metrikaCounters: (formId: string, accountId: string) =>
+    ['integrations', formId, 'metrika-counters', accountId] as const,
   // Журнал доставок одной связки. Тоже под form(): любая мутация экрана
   // инвалидирует ключ формы, и лента переспрашивается вместе с состоянием —
   // повтор доставки виден в ней сам, без второй инвалидации.
