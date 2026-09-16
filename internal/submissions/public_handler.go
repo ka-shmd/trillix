@@ -87,6 +87,9 @@ type submitRequest struct {
 	// пусто → ответ принимается как раньше. Иначе страница, отданная из кэша до
 	// выкатки биконов, перестала бы отправляться.
 	VisitID string `json:"visit_id"`
+	// ConsentRevision — ревизия согласия, при которой отмечена галочка (0069). Пусто —
+	// галочки нет; у формы с включённым согласием такой ответ отклоняется сервисом.
+	ConsentRevision string `json:"consent_revision"`
 }
 
 type submitResponse struct {
@@ -139,6 +142,13 @@ func (h *PublicHandler) submit(w http.ResponseWriter, r *http.Request) {
 	if req.VisitID != "" {
 		if visitID, err := uuid.Parse(req.VisitID); err == nil {
 			meta.VisitID = visitID
+		}
+	}
+	// Неразбираемый id ревизии — то же, что его отсутствие: решает сервис, и у формы с
+	// включённым согласием это отказ, а у прочих — ответ без следа согласия.
+	if req.ConsentRevision != "" {
+		if rev, err := uuid.Parse(req.ConsentRevision); err == nil {
+			meta.ConsentRevision = rev
 		}
 	}
 	if err := h.svc.Submit(r.Context(), r.PathValue("slug"), id, req.Answers, meta); err != nil {

@@ -29,6 +29,12 @@ type fakeForms struct {
 	// чужая или несуществующая: Get и GetForAction отдают 404, и это верный
 	// умолчательный случай для тестов анти-IDOR.
 	owned *forms.Form
+	// consentRevisions — включённые ревизии согласия формы (0069).
+	consentRevisions map[uuid.UUID]bool
+}
+
+func (f fakeForms) ConsentRevisionEnabled(_ context.Context, _, revisionID uuid.UUID) (bool, error) {
+	return f.consentRevisions[revisionID], nil
 }
 
 func (f fakeForms) PublicForm(context.Context, string) (forms.PublicForm, error) {
