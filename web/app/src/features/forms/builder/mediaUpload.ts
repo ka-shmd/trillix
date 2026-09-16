@@ -8,6 +8,8 @@ import { z } from 'zod'
 import { apiRequest } from '../../../shared/api/client'
 import { CSRF_HEADER, csrfToken } from '../../../shared/api/csrf'
 
+import logoPlaceholderUrl from '@/assets/logo-placeholder.png'
+
 export interface UploadHandlers {
   onProgress?: (pct: number) => void
 }
@@ -39,6 +41,20 @@ export function uploadImage(
   purpose: UploadPurpose = 'block',
 ): Promise<string> {
   return resolveFormId(form).then((formId) => sendImage(formId, file, h, purpose))
+}
+
+// uploadLogoPlaceholder заводит логотип-заглушку: картинка из сборки кабинета грузится
+// в хранилище формы тем же путём, что файл автора, — схема знает только imageKey, и
+// общего ключа «логотип по умолчанию» у неё нет.
+export function uploadLogoPlaceholder(form: FormIdSource): Promise<string> {
+  return fetch(logoPlaceholderUrl)
+    .then((res) => {
+      if (!res.ok) throw new Error('Не удалось добавить логотип')
+      return res.blob()
+    })
+    .then((blob) =>
+      uploadImage(form, new File([blob], 'logo.png', { type: 'image/png' }), {}, 'logo'),
+    )
 }
 
 const uploadResponseSchema = z.object({ imageKey: z.string().min(1) })
