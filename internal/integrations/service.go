@@ -116,6 +116,7 @@ type MetrikaProvider interface {
 	AccountProvider
 
 	ListCounters(ctx context.Context, accessToken string) ([]MetrikaCounter, error)
+	CreateCounter(ctx context.Context, accessToken, name, site string) (MetrikaCounter, error)
 	EnsureGoals(ctx context.Context, accessToken string, counterID int64, goals []MetrikaGoal) (GoalsResult, error)
 }
 
@@ -142,6 +143,9 @@ type Service struct {
 	// counters — счётчики аналитики формы (фаза 29). Подключаются сеттером
 	// WithCounters; nil означает «сборка без счётчиков».
 	counters CounterStore
+	// formBase — адрес публичного рендерера (тем же сеттером): из его хоста
+	// берётся «сайт» счётчика, который продукт заводит в Метрике.
+	formBase string
 	// notes — уведомления кабинета о поломке цели. Тем же сеттером и по той же
 	// причине, что webhooks; nil = уведомлений в сборке нет.
 	notes Notifications

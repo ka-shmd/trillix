@@ -109,22 +109,59 @@ type goalsResponse struct {
 	Existing int `json:"existing"`
 }
 
-func (h *Handler) metrikaGoals(w http.ResponseWriter, r *http.Request) {
+// counterCreatedResponse — что вернулось из одного действия: номер нового
+// счётчика и итог по целям.
+type counterCreatedResponse struct {
+	Counter  string `json:"counter"`
+	Created  int    `json:"created"`
+	Existing int    `json:"existing"`
+}
+
+func (h *Handler) createMetrikaCounter(w http.ResponseWriter, r *http.Request) {
 	user, formID, ok := h.userAndForm(w, r)
 	if !ok {
 		return
 	}
+	accountID, ok := h.accountFromBody(w, r)
+	if !ok {
+		return
+	}
+	c, goals, err := h.svc.CreateMetrikaCounter(r.Context(), user.ID, formID, accountID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusCreated, counterCreatedResponse{
+		Counter: c.Number, Created: goals.Created, Existing: goals.Existing,
+	})
+}
+
+// accountFromBody — чьим аккаунтом Яндекса действовать. Общее для обеих ручек
+// тело: форма в адресе, счётчик у формы, в теле остаётся только аккаунт.
+func (h *Handler) accountFromBody(w http.ResponseWriter, r *http.Request) (uuid.UUID, bool) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
 	dec := json.NewDecoder(r.Body)
 	dec.DisallowUnknownFields()
 	var req goalsRequest
 	if err := dec.Decode(&req); err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
-		return
+		return uuid.Nil, false
 	}
 	accountID, err := uuid.Parse(req.AccountID)
 	if err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: не выбран аккаунт Яндекса", domain.ErrValidation))
+		return uuid.Nil, false
+	}
+	return accountID, true
+}
+
+func (h *Handler) metrikaGoals(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+	accountID, ok := h.accountFromBody(w, r)
+	if !ok {
 		return
 	}
 	res, err := h.svc.EnsureMetrikaGoals(r.Context(), user.ID, formID, accountID)

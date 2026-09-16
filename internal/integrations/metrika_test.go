@@ -22,11 +22,15 @@ type fakeMetrika struct {
 	// created — тела заведения целей в порядке отправки.
 	created []metrikaGoalEnvelope
 
-	countersStatus int
-	countersBody   string
-	goalsBody      string
-	createStatus   int
-	createBody     string
+	// createdCounter — тело создания счётчика.
+	createdCounter metrikaCounterEnvelope
+
+	countersStatus    int
+	countersBody      string
+	createCounterBody string
+	goalsBody         string
+	createStatus      int
+	createBody        string
 }
 
 func newFakeMetrika(t *testing.T, f *fakeMetrika) *Yandex {
@@ -37,11 +41,22 @@ func newFakeMetrika(t *testing.T, f *fakeMetrika) *Yandex {
 	if f.goalsBody == "" {
 		f.goalsBody = `{"goals":[]}`
 	}
+	if f.createCounterBody == "" {
+		f.createCounterBody = `{"counter":{"id":112704693,"name":"Trillix","site2":{"site":"f.trillix.ru"}}}`
+	}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("/counters", func(w http.ResponseWriter, r *http.Request) {
-		f.countersQuery = r.URL.Query()
 		f.authHeader = r.Header.Get("Authorization")
+		if r.Method == http.MethodPost {
+			body, _ := io.ReadAll(r.Body)
+			if err := json.Unmarshal(body, &f.createdCounter); err != nil {
+				t.Errorf("тело создания счётчика не разбирается: %v", err)
+			}
+			_, _ = w.Write([]byte(f.createCounterBody))
+			return
+		}
+		f.countersQuery = r.URL.Query()
 		if f.countersStatus != 0 {
 			w.WriteHeader(f.countersStatus)
 		}
@@ -172,10 +187,14 @@ func TestMetrika_EnsureGoals_SkipsExistingUnderAnyName(t *testing.T) {
 	}
 }
 
-// Похожая, но чужая цель заведённой не считается: событие с другим условием
-// (вхождение вместо точного совпадения) или цель другого типа с тем же адресом
-// нашего идентификатора не отмечают.
-func TestMetrika_EnsureGoals_ForeignGoalIsNotOurs(t *testing.T) {
+// Цель, упоминающая наш идентификатор, считается заведённой — каким бы ни был её
+// тип и тип условия.
+//
+// Ошибка в эту сторону — «решили, что цель есть, хотя она чужая» — стоит человеку
+// невыполненного создания, и он это видит. Ошибка в обратную стоит затёртой
+// статистики и не видна никому.
+// история — JOURNAL, «Слайс K. Затёртые цели и создание счётчика»
+func TestMetrika_EnsureGoals_IdentifierAnywhereCountsAsOurs(t *testing.T) {
 	f := &fakeMetrika{goalsBody: `{"goals":[
 		{"id":1,"name":"Похожая","type":"action","conditions":[{"type":"contain","url":"trillix_open"}]},
 		{"id":2,"name":"Страница","type":"url","conditions":[{"type":"exact","url":"trillix_start"}]}
@@ -186,8 +205,28 @@ func TestMetrika_EnsureGoals_ForeignGoalIsNotOurs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EnsureGoals: %v", err)
 	}
-	if res.Created != 3 || res.Existing != 0 {
-		t.Fatalf("итог = %+v, ожидалось «завели все три»", res)
+	if res.Created != 1 || res.Existing != 2 {
+		t.Fatalf("итог = %+v, ожидалось «две узнали, завели одну недостающую»", res)
+	}
+	if len(f.created) != 1 || f.created[0].Goal.Conditions[0].URL != "trillix_submit" {
+		t.Fatalf("заведено = %+v, ожидалась только недостающая цель", f.created)
+	}
+}
+
+// Список целей в НЕЗНАКОМОЙ форме (поля переименованы, условия вложены иначе)
+// создания не вызывает: идентификатор в теле цели есть, и этого довольно.
+func TestMetrika_EnsureGoals_UnknownShapeStillRecognised(t *testing.T) {
+	f := &fakeMetrika{goalsBody: `{"goals":[
+		{"id":1,"goal_name":"Открытие","kind":"js_event","match":{"rule":"eq","value":"trillix_open"}}
+	]}`}
+	y := newFakeMetrika(t, f)
+
+	res, err := y.EnsureGoals(context.Background(), "ya-at", 42, metrikaGoals)
+	if err != nil {
+		t.Fatalf("EnsureGoals: %v", err)
+	}
+	if res.Existing != 1 {
+		t.Fatalf("итог = %+v — цель с нашим идентификатором не узнана, и мы завели её второй раз", res)
 	}
 }
 
@@ -222,5 +261,36 @@ func TestMetrika_EnsureGoals_PartialFailure(t *testing.T) {
 	}
 	if res.Existing != 1 || res.Created != 0 {
 		t.Fatalf("итог = %+v, ожидалось «одна уже была, ни одной не завели»", res)
+	}
+}
+
+// Счётчик заводится телом, которое ждёт Метрика: имя и сайт внутри объекта
+// counter, сайт — доменом.
+func TestMetrika_CreateCounter(t *testing.T) {
+	f := &fakeMetrika{createCounterBody: `{"counter":{"id":112704693,"name":"Trillix: Анкета","site2":{"site":"f.trillix.ru"}}}`}
+	y := newFakeMetrika(t, f)
+
+	c, err := y.CreateCounter(context.Background(), "ya-at", "Trillix: Анкета", "f.trillix.ru")
+	if err != nil {
+		t.Fatalf("CreateCounter: %v", err)
+	}
+	if c.ID != 112704693 || c.Name != "Trillix: Анкета" || c.Site != "f.trillix.ru" {
+		t.Fatalf("счётчик = %+v", c)
+	}
+	if f.createdCounter.Counter.Name != "Trillix: Анкета" || f.createdCounter.Counter.Site2.Site != "f.trillix.ru" {
+		t.Fatalf("тело создания = %+v", f.createdCounter)
+	}
+	if f.authHeader != "OAuth ya-at" {
+		t.Errorf("Authorization = %q", f.authHeader)
+	}
+}
+
+// Ответ без номера — это не «счётчик создан»: пустой номер уехал бы форме и
+// молча ничего не отмечал.
+func TestMetrika_CreateCounter_NoNumber(t *testing.T) {
+	y := newFakeMetrika(t, &fakeMetrika{createCounterBody: `{"counter":{"name":"Trillix"}}`})
+
+	if _, err := y.CreateCounter(context.Background(), "ya-at", "Trillix", "f.trillix.ru"); err == nil {
+		t.Fatal("ожидалась ошибка")
 	}
 }

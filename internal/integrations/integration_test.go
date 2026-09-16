@@ -94,7 +94,7 @@ func newStackWith(t *testing.T, provider integrations.Provider, yandex integrati
 	svc := integrations.NewService(testPool, postgres.TxRunner{Pool: testPool}, integrations.Repo{},
 		wsSvc, formsSvc, provider, testKey).
 		WithWebhooks(integrations.Repo{}, egress).
-		WithCounters(integrations.Repo{})
+		WithCounters(integrations.Repo{}, "https://f.example")
 	if yandex != nil {
 		svc = svc.WithYandex(yandex)
 	}

@@ -9,6 +9,7 @@ import {
   spreadsheetListSchema,
   webhookSchema,
   metrikaCounterListSchema,
+  metrikaCreatedSchema,
   metrikaGoalsSchema,
   webhookSecretSchema,
   webhookTestSchema,
@@ -17,6 +18,7 @@ import {
   type FormSheet,
   type MetrikaCounter,
   type MetrikaCounterRef,
+  type MetrikaCreated,
   type MetrikaGoals,
   type SheetRef,
   type SpreadsheetRef,
@@ -265,6 +267,16 @@ export function ensureMetrikaGoals(formId: string, accountId: string): Promise<M
     method: 'POST',
     body: { accountId },
     schema: metrikaGoalsSchema,
+  })
+}
+
+// Завести НОВЫЙ счётчик в аккаунте: одним действием счётчик, номер у формы и три
+// цели. Имя и сайт задаёт сервер — счётчик ставится ровно на страницу формы.
+export function createMetrikaCounter(formId: string, accountId: string): Promise<MetrikaCreated> {
+  return apiRequest(`/forms/${formId}/counters/yandex-metrika/counter`, {
+    method: 'POST',
+    body: { accountId },
+    schema: metrikaCreatedSchema,
   })
 }
 

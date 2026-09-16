@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Hash, Loader2, Plus, RefreshCw, Target, UserRound } from 'lucide-react'
+import { AlertCircle, Hash, Loader2, Plus, RefreshCw, UserRound } from 'lucide-react'
 
 import type {
   ConnectedAccount,
@@ -11,6 +11,7 @@ import { CompactAction } from './CompactAction'
 import { yandexStartUrl } from './api'
 import {
   metrikaCountersQueryOptions,
+  useCreateMetrikaCounter,
   useEnsureMetrikaGoals,
   useRefreshIntegrations,
   useSetMetrika,
@@ -52,6 +53,10 @@ import {
 // продукт, и читать их идентификаторы человеку незачем.
 const GOAL_IDS = ['trillix_open', 'trillix_start', 'trillix_submit'] as const
 
+// NEW_COUNTER — пункт «завести новый счётчик» в списке. Служебное значение
+// селекта: номером счётчика оно быть не может — номер это цифры.
+const NEW_COUNTER = 'new'
+
 export function MetrikaOverlay({
   formId,
   metrika,
@@ -82,6 +87,7 @@ export function MetrikaOverlay({
 
   const save = useSetMetrika(formId)
   const goals = useEnsureMetrikaGoals(formId)
+  const create = useCreateMetrikaCounter(formId)
   const refresh = useRefreshIntegrations(formId)
 
   const popup = useOAuthPopup((result) => {
@@ -108,6 +114,20 @@ export function MetrikaOverlay({
     if (added) setAccountId(added.id)
   }, [accounts])
 
+  // Счётчик у формы появился, пока в селекте стоял «создать новый», — это наш
+  // только что созданный (в том числе созданный, но с неудавшимися целями).
+  // Выбор переезжает на него: иначе повторное нажатие завело бы ВТОРОЙ счётчик.
+  //
+  // Сверка в РЕНДЕРЕ, а не эффектом: эффект здесь даёт лишний каскадный рендер и
+  // запрещён линтом (react-hooks/set-state-in-effect) — приём взят у настроек
+  // формы (FormSettingsView).
+  const formCounter = metrika?.counter ?? ''
+  const [syncedCounter, setSyncedCounter] = useState(formCounter)
+  if (syncedCounter !== formCounter) {
+    if (counter === NEW_COUNTER && formCounter !== '') setCounter(formCounter)
+    setSyncedCounter(formCounter)
+  }
+
   const counters = useQuery({
     ...metrikaCountersQueryOptions(formId, accountId),
     enabled: !manual && consent === null && accountId !== '',
@@ -122,6 +142,19 @@ export function MetrikaOverlay({
   // счётчика». Отказ по целям окно НЕ закрывает: счётчик уже подключён, и
   // закрытие выглядело бы как «ничего не сохранилось».
   async function connect() {
+    // Новый счётчик — одно действие сервера: счётчик, номер у формы, цели.
+    if (counter === NEW_COUNTER) {
+      try {
+        await create.mutateAsync(accountId)
+      } catch {
+        // Счётчик мог создаться, а цели — нет; тогда номер уже у формы, и выбор
+        // переедет на него эффектом ниже. Повтор пойдёт целями, а не вторым
+        // счётчиком.
+        return
+      }
+      onClose()
+      return
+    }
     if (!saved) {
       try {
         // Тумблер окно не трогает: правка номера у выключенного счётчика его не
@@ -150,7 +183,7 @@ export function MetrikaOverlay({
   // путь, которым в этот момент можно закончить настройку.
   // история — JOURNAL, «Слайс I. Бесконечная загрузка счётчиков»
   const busy = popup.waiting
-  const pending = save.isPending || goals.isPending
+  const pending = save.isPending || goals.isPending || create.isPending
 
   return (
     <Dialog open onOpenChange={(open) => !open && onClose()}>
@@ -216,11 +249,8 @@ export function MetrikaOverlay({
                   listLoading={counters.isLoading}
                   listFailed={counters.isError}
                   onRetryList={() => void counters.refetch()}
-                  editing={metrika !== null}
                   onConsent={setConsent}
                   onManual={() => setManual(true)}
-                  onGoals={() => goals.mutate(accountId)}
-                  goalsPending={goals.isPending}
                 />
               )}
 
@@ -230,6 +260,12 @@ export function MetrikaOverlay({
                 <p role="alert" className="flex gap-2 text-sm text-destructive">
                   <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
                   {humanError(save.error)}
+                </p>
+              )}
+              {create.error != null && (
+                <p role="alert" className="flex gap-2 text-sm text-destructive">
+                  <AlertCircle className="mt-0.5 size-4 shrink-0" aria-hidden />
+                  {humanError(create.error)}
                 </p>
               )}
               {goals.error != null && (
@@ -368,11 +404,8 @@ function AccountFields({
   listLoading,
   listFailed,
   onRetryList,
-  editing,
   onConsent,
   onManual,
-  onGoals,
-  goalsPending,
 }: {
   accounts: ConnectedAccount[]
   accountId: string
@@ -383,11 +416,8 @@ function AccountFields({
   listLoading: boolean
   listFailed: boolean
   onRetryList: () => void
-  editing: boolean
   onConsent: (target: ConsentTarget) => void
   onManual: () => void
-  onGoals: () => void
-  goalsPending: boolean
 }) {
   const chosen = accounts.find((a) => a.id === accountId) ?? null
   // Счётчика формы нет среди счётчиков аккаунта — его вписали руками или он
@@ -454,6 +484,10 @@ function AccountFields({
             <SelectValue placeholder={counterPlaceholder(listLoading, listFailed)} />
           </SelectTrigger>
           <SelectContent>
+            {/* Первым пунктом, как «Создать новую таблицу» в окне Таблиц: у
+                человека без Метрики это единственный путь, и прятать его под
+                список чужих счётчиков незачем. */}
+            <SelectItem value={NEW_COUNTER}>Создать новый счётчик</SelectItem>
             {outside && <SelectItem value={counter}>Текущий счётчик {counter}</SelectItem>}
             {list.map((c) => (
               <SelectItem key={c.id} value={String(c.id)}>
@@ -462,20 +496,22 @@ function AccountFields({
             ))}
           </SelectContent>
         </Select>
+        {/* Что произойдёт с выбранным счётчиком — сказано ДО нажатия: продукт
+            заводит в нём цели, то есть меняет чужую настройку аналитики.
+            Отдельного действия «Завести цели» нет (решение владельца
+            2026-09-16): цели заводятся подключением, а кнопка-повтор на боевом
+            счётчике стоила автору собранной статистики. */}
+        {counter !== '' && (
+          <p className="text-sm text-muted-foreground">
+            {counter === NEW_COUNTER
+              ? 'Заведём новый счётчик в вашей Метрике и сразу создадим в нём три цели формы.'
+              : 'В этом счётчике будут созданы три цели формы. Уже заведённые с теми же идентификаторами мы не трогаем.'}
+          </p>
+        )}
         <div className="flex justify-end">
           {/* Список не приехал — человеку нужны оба выхода: попробовать ещё раз
               и вписать номер руками. Второй рядом и так. */}
           {listFailed && <CompactAction icon={RefreshCw} label="Повторить" onClick={onRetryList} />}
-          {/* Повтор заведения целей: цели живут в Метрике, и автор волен удалить
-              их там. Дублей повтор не создаёт — заведённой считается цель с тем же
-              идентификатором, как бы она ни называлась. */}
-          {editing && counter !== '' && (
-            <CompactAction
-              icon={Target}
-              label={goalsPending ? 'Заводим цели…' : 'Завести цели'}
-              onClick={onGoals}
-            />
-          )}
           <CompactAction icon={Hash} label="Ввести номер вручную" onClick={onManual} />
         </div>
       </div>

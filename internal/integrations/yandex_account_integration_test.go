@@ -31,6 +31,10 @@ type fakeYandex struct {
 	calls int
 	// refuse — чем Яндекс отвечает вместо работы.
 	refuse error
+	// createdName и createdSite — с чем продукт завёл счётчик.
+	createdName string
+	createdSite string
+	nextID      int64
 }
 
 func (f *fakeYandex) Provider() string { return integrations.ProviderYandex }
@@ -41,6 +45,20 @@ func (f *fakeYandex) ListCounters(_ context.Context, _ string) ([]integrations.M
 		return nil, f.refuse
 	}
 	return f.counters, nil
+}
+
+// CreateCounter — счётчик заводится с растущим номером; имя и сайт запоминаются:
+// их задаёт продукт, и проверяется именно это.
+func (f *fakeYandex) CreateCounter(_ context.Context, _ string, name, site string) (integrations.MetrikaCounter, error) {
+	f.calls++
+	if f.refuse != nil {
+		return integrations.MetrikaCounter{}, f.refuse
+	}
+	f.createdName, f.createdSite = name, site
+	f.nextID++
+	c := integrations.MetrikaCounter{ID: 90000000 + f.nextID, Name: name, Site: site}
+	f.counters = append(f.counters, c)
+	return c, nil
 }
 
 func (f *fakeYandex) EnsureGoals(_ context.Context, _ string, counterID int64, goals []integrations.MetrikaGoal) (integrations.GoalsResult, error) {

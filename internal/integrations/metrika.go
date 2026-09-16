@@ -104,33 +104,24 @@ func (y *Yandex) ListCounters(ctx context.Context, accessToken string) ([]Metrik
 func (y *Yandex) EnsureGoals(ctx context.Context, accessToken string, counterID int64, goals []MetrikaGoal) (GoalsResult, error) {
 	path := "/counter/" + strconv.FormatInt(counterID, 10) + "/goals"
 
+	// Цели счётчика читаются СЫРЫМИ: решение «эта цель уже есть» не должно
+	// зависеть от того, совпал ли разбор с сегодняшней формой ответа Метрики.
+	//
+	// Мина: цена ошибки несимметрична. Лишнее «уже есть» человек видит — цели не
+	// завелись, он жалуется. Лишнее создание молча ломает собранную статистику:
+	// Метрика на повторное создание цели с тем же условием не заводит вторую, а
+	// заменяет существующую.
+	// история — JOURNAL, «Слайс K. Затёртые цели и создание счётчика»
 	var list struct {
-		Goals []struct {
-			Type       string `json:"type"`
-			Conditions []struct {
-				Type string `json:"type"`
-				URL  string `json:"url"`
-			} `json:"conditions"`
-		} `json:"goals"`
+		Goals []json.RawMessage `json:"goals"`
 	}
 	if err := y.metrikaRequest(ctx, http.MethodGet, path, accessToken, nil, &list); err != nil {
 		return GoalsResult{}, fmt.Errorf("integrations metrika: list goals: %w", err)
 	}
-	have := map[string]bool{}
-	for _, g := range list.Goals {
-		if g.Type != metrikaGoalType {
-			continue
-		}
-		for _, c := range g.Conditions {
-			if c.Type == "exact" {
-				have[c.URL] = true
-			}
-		}
-	}
 
 	var res GoalsResult
 	for _, g := range goals {
-		if have[g.ID] {
+		if goalPresent(list.Goals, g.ID) {
 			res.Existing++
 			continue
 		}
@@ -147,6 +138,62 @@ func (y *Yandex) EnsureGoals(ctx context.Context, accessToken string, counterID 
 		res.Created++
 	}
 	return res, nil
+}
+
+// goalPresent — упоминается ли идентификатор в теле хоть одной цели счётчика.
+//
+// Поиск строкой по сырому JSON, а не по разобранным полям: идентификатор
+// (`trillix_open`) не встречается в чужих целях случайно, зато любая наша цель
+// несёт его в условии, как бы Метрика ни назвала окружающие поля. Совпадение по
+// ИМЕНИ цели тоже сойдёт за «уже есть» — и это правильная сторона ошибки:
+// невыполненное создание видно человеку, лишнее — нет.
+func goalPresent(raw []json.RawMessage, id string) bool {
+	needle := []byte(strconv.Quote(id))
+	for _, g := range raw {
+		if bytes.Contains(g, needle) {
+			return true
+		}
+	}
+	return false
+}
+
+// CreateCounter заводит в аккаунте новый счётчик и отдаёт его номер.
+//
+// Имя и сайт задаёт продукт (см. вызывающего): счётчик ставится ровно на страницу
+// формы, а встроенная в чужой сайт форма отмечает цели в счётчике ТОГО сайта
+// (спека §7) — указывать там домен автора нам нечем.
+func (y *Yandex) CreateCounter(ctx context.Context, accessToken, name, site string) (MetrikaCounter, error) {
+	payload := metrikaCounterEnvelope{Counter: metrikaCounterBody{Name: name, Site2: metrikaSite{Site: site}}}
+	var body struct {
+		Counter struct {
+			ID   int64  `json:"id"`
+			Name string `json:"name"`
+			Site struct {
+				Site string `json:"site"`
+			} `json:"site2"`
+		} `json:"counter"`
+	}
+	if err := y.metrikaRequest(ctx, http.MethodPost, "/counters", accessToken, payload, &body); err != nil {
+		return MetrikaCounter{}, fmt.Errorf("integrations metrika: create counter: %w", err)
+	}
+	if body.Counter.ID <= 0 {
+		return MetrikaCounter{}, fmt.Errorf("integrations metrika: create counter: пустой номер")
+	}
+	return MetrikaCounter{ID: body.Counter.ID, Name: body.Counter.Name, Site: body.Counter.Site.Site}, nil
+}
+
+// metrikaCounterEnvelope — тело создания счётчика: Метрика ждёт объект в поле counter.
+type metrikaCounterEnvelope struct {
+	Counter metrikaCounterBody `json:"counter"`
+}
+
+type metrikaCounterBody struct {
+	Name  string      `json:"name"`
+	Site2 metrikaSite `json:"site2"`
+}
+
+type metrikaSite struct {
+	Site string `json:"site"`
 }
 
 // metrikaGoalEnvelope — тело создания цели: Метрика ждёт объект в поле goal.

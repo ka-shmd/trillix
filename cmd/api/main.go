@@ -560,7 +560,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	integrationsSvc := integrations.NewService(pool, postgres.TxRunner{Pool: pool}, integrations.Repo{}, workspacesSvc, formsSvc, googleProvider, cfg.FormTokenSecret).
 		WithPicker(cfg.GooglePickerAPIKey).
 		WithWebhooks(integrations.Repo{}, userURLEgress).
-		WithCounters(integrations.Repo{}).
+		WithCounters(integrations.Repo{}, cfg.PublicRendererBaseURL).
 		// Поводы о поломке цели: доставщик ставит, починка и удаление снимают.
 		WithNotifications(notifySvc)
 	// Аккаунт Яндекса для счётчика Метрики (фаза 29) — только при заданных ключах:

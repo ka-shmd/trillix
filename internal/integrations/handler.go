@@ -77,6 +77,7 @@ type integrationsService interface {
 	DeleteCounter(ctx context.Context, userID, formID uuid.UUID, kind string) error
 	MetrikaCounters(ctx context.Context, userID, accountID uuid.UUID) ([]MetrikaCounter, error)
 	EnsureMetrikaGoals(ctx context.Context, userID, formID, accountID uuid.UUID) (GoalsResult, error)
+	CreateMetrikaCounter(ctx context.Context, userID, formID, accountID uuid.UUID) (Counter, GoalsResult, error)
 }
 
 // RateLimiter — лимитер проверки вебхука. Реализация — ratelimit.TokenBucket; в
@@ -193,6 +194,11 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// который стоит на её странице, и право спрашивается на форму.
 	mux.Handle("POST /api/v1/forms/{id}/counters/yandex-metrika/goals",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.metrikaGoals))))
+	// Новый счётчик заводится ОДНИМ действием вместе с номером у формы и целями:
+	// по отдельности половинки бессмысленны — счётчик без номера не работает, а
+	// номер без целей ничего не отмечает.
+	mux.Handle("POST /api/v1/forms/{id}/counters/yandex-metrika/counter",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.createMetrikaCounter))))
 
 	// Один адрес на «подключить ещё один» и «переподключить»: возврат у них
 	// общий, а различает их необязательный accountId — почта названного аккаунта

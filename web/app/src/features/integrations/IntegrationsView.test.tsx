@@ -1968,24 +1968,16 @@ describe('Метрика через аккаунт Яндекса', () => {
     expect(calls[0]!.body).toEqual({ counter: '55555', enabled: true })
   })
 
-  it('правка подключённого счётчика: номер виден и цели заводятся повтором', async () => {
-    const data = state({ metrika: COUNTER, yandex: YANDEX_ON })
-    const calls = mockYandexCalls(data, () =>
-      new Response(JSON.stringify({ created: 0, existing: 3 }), {
-        status: 200,
-        headers: { 'content-type': 'application/json' },
-      }),
-    )
-    renderView(data, { counters: COUNTERS })
+  it('правка подключённого счётчика: номер виден, отдельного «Завести цели» нет', () => {
+    renderView(state({ metrika: COUNTER, yandex: YANDEX_ON }), { counters: COUNTERS })
     fireEvent.click(screen.getByRole('button', { name: 'Настроить счётчик' }))
 
     expect(screen.getByLabelText('Счётчик').textContent).toContain('12345678')
-
-    fireEvent.click(screen.getByRole('button', { name: 'Завести цели' }))
-    // Повтор — это только цели: номер не менялся, и PUT здесь был бы пустым
-    // действием.
-    await waitFor(() => expect(calls.map((c) => c.method)).toEqual(['POST']))
-    expect(await screen.findByText('Все три цели уже заведены в этом счётчике.')).toBeTruthy()
+    // Кнопки-повтора нет (решение владельца 2026-09-16): на боевом счётчике она
+    // стоила автору собранной статистики по целям.
+    expect(screen.queryByRole('button', { name: /Завести цели/ })).toBeNull()
+    // Вместо неё — предупреждение о том, что подключение сделает с его счётчиком.
+    expect(screen.getByText(/будут созданы три цели формы/)).toBeTruthy()
   })
 
   // Счётчик, вписанный руками или принадлежащий другому аккаунту, в списке
@@ -2087,6 +2079,58 @@ describe('Метрика через аккаунт Яндекса', () => {
         fetchMock.mock.calls.filter(([u]) => String(u).includes('/counters')).length,
       ).toBeGreaterThan(before),
     )
+  })
+
+  // Создание счётчика — путь для того, у кого Метрики ещё нет: пункт стоит
+  // ПЕРВЫМ, а не под списком чужих счётчиков.
+  it('счётчик можно завести новый — одним действием', async () => {
+    const created = state({ metrika: COUNTER, yandex: YANDEX_ON })
+    const calls = mockYandexCalls(created, () =>
+      new Response(JSON.stringify({ counter: '112704693', created: 3, existing: 0 }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: 'Создать новый счётчик' }))
+    expect(screen.getByText(/Заведём новый счётчик/)).toBeTruthy()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // Одно действие: ни PUT номера, ни отдельного заведения целей — их делает
+    // сервер, и половинки по отдельности бессмысленны.
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        url: expect.stringContaining('/forms/form-1/counters/yandex-metrika/counter'),
+        body: { accountId: YA_ACCOUNT_ID },
+      },
+    ])
+  })
+
+  // Счётчик создался, а цели — нет: номер уже у формы, и повтор обязан пойти
+  // целями, а не вторым счётчиком.
+  it('создание сорвалось на целях — выбор переезжает на созданный счётчик', async () => {
+    const qc = renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: 'Создать новый счётчик' }))
+
+    act(() => {
+      qc.setQueryData(
+        integrationKeys.form(FORM_ID),
+        state({ metrika: { counter: '112704693', enabled: true }, yandex: YANDEX_ON }),
+      )
+    })
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Счётчик').textContent).toContain('112704693'),
+    )
+    expect(screen.queryByText(/Заведём новый счётчик/)).toBeNull()
   })
 
   // Аккаунт подключается в соседнем окне: вернувшись с согласием, окно обязано

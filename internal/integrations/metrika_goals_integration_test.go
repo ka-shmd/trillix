@@ -234,3 +234,71 @@ func TestMetrikaGoals_NotConfigured(t *testing.T) {
 		t.Fatalf("счётчик = %+v — ручной номер перестал работать", got)
 	}
 }
+
+func createCounter(t *testing.T, c *http.Client, srv *httptest.Server, formID, accountID string) *http.Response {
+	t.Helper()
+	return postBodyWithCSRF(t, c, srv, "/api/v1/forms/"+formID+"/counters/yandex-metrika/counter",
+		`{"accountId":"`+accountID+`"}`)
+}
+
+// Создание счётчика — одно действие: счётчик в аккаунте, номер у формы, три цели.
+// По отдельности половинки бессмысленны, поэтому и проверяются вместе.
+func TestMetrikaCounter_CreatedWithNumberAndGoals(t *testing.T) {
+	resetDB(t)
+	yandex := newFakeYandexProvider()
+	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
+	owner := registerUser(t, srv, "owner@example.com")
+	wsID := personalWorkspace(t)
+	accountID := connectYandex(t, owner, srv)
+	formID := newForm(t, wsID, "f-new-counter")
+
+	r := createCounter(t, owner, srv, formID, accountID)
+	if r.StatusCode != http.StatusCreated {
+		closeBody(t, r)
+		t.Fatalf("создание счётчика: статус %d, ожидалось 201", r.StatusCode)
+	}
+	var got struct {
+		Counter  string `json:"counter"`
+		Created  int    `json:"created"`
+		Existing int    `json:"existing"`
+	}
+	decode(t, r, &got)
+	if got.Counter == "" || got.Created != 3 || got.Existing != 0 {
+		t.Fatalf("ответ = %+v, ожидался номер и три заведённые цели", got)
+	}
+	// Номер стоит у формы: счётчик без него не работает, а связать его с формой
+	// потом человеку нечем.
+	if c := metrikaOf(t, owner, srv, formID); c == nil || c.Counter != got.Counter || !c.Enabled {
+		t.Fatalf("счётчик формы = %+v, ожидался включённый %s", c, got.Counter)
+	}
+	// Имя и сайт задаёт продукт: название формы в имени и домен страниц форм.
+	if yandex.createdName != "Trillix: Опрос" {
+		t.Errorf("имя счётчика = %q", yandex.createdName)
+	}
+	if yandex.createdSite != "f.example" {
+		t.Errorf("сайт счётчика = %q, ожидался хост страниц форм без схемы и порта", yandex.createdSite)
+	}
+}
+
+// Чужая форма — 404 раньше похода в Яндекс: счётчик в чужом аккаунте не заводится
+// и наружу ничего не рассказывает.
+func TestMetrikaCounter_ForeignFormRefusedBeforeYandex(t *testing.T) {
+	resetDB(t)
+	yandex := newFakeYandexProvider()
+	srv := newStackWith(t, &fakeProvider{}, yandex, testEgress())
+	registerUser(t, srv, "owner@example.com")
+	ownerForm := newForm(t, personalWorkspace(t), "f-owner-counter")
+
+	stranger := registerUser(t, srv, "stranger@example.com")
+	strangerAccount := connectYandex(t, stranger, srv)
+	before := yandex.calls
+
+	r := createCounter(t, stranger, srv, ownerForm, strangerAccount)
+	closeBody(t, r)
+	if r.StatusCode != http.StatusNotFound {
+		t.Fatalf("чужая форма: статус %d, ожидалось 404", r.StatusCode)
+	}
+	if yandex.calls != before {
+		t.Fatal("постороннего пустили заводить счётчик в Яндексе")
+	}
+}
