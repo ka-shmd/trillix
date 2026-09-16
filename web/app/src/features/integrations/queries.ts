@@ -12,7 +12,6 @@ import {
   createWebhook,
   deleteMetrika,
   deleteWebhook,
-  disconnectYandex,
   ensureMetrikaGoals,
   disableWebhookSignature,
   getFormIntegrations,
@@ -261,15 +260,6 @@ export function metrikaCountersQueryOptions(formId: string, accountId: string) {
 export function useEnsureMetrikaGoals(formId: string) {
   return useMutation({
     mutationFn: (accountId: string) => ensureMetrikaGoals(formId, accountId),
-  })
-}
-
-// Отключение аккаунта Яндекса меняет список аккаунтов в состоянии вкладки.
-export function useDisconnectYandex(formId: string) {
-  const qc = useQueryClient()
-  return useMutation({
-    mutationFn: (accountId: string) => disconnectYandex(accountId),
-    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
 
