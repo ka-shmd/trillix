@@ -12,10 +12,13 @@ import {
   createWebhook,
   deleteMetrika,
   deleteWebhook,
+  disconnectYandex,
+  ensureMetrikaGoals,
   disableWebhookSignature,
   getFormIntegrations,
   listDeliveries,
   listWebhookDeliveries,
+  listMetrikaCounters,
   listSheets,
   listSpreadsheets,
   recheckSheet,
@@ -239,6 +242,33 @@ export function useDeleteMetrika(formId: string) {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: () => deleteMetrika(formId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+// Счётчики выбранного аккаунта. Поход к Метрике, поэтому спрашиваются только при
+// открытом окне и выбранном аккаунте — как таблицы Google.
+export function metrikaCountersQueryOptions(formId: string, accountId: string) {
+  return queryOptions({
+    queryKey: integrationKeys.metrikaCounters(formId, accountId),
+    queryFn: () => listMetrikaCounters(accountId),
+    staleTime: 30_000,
+  })
+}
+
+// Заведение целей состояния вкладки НЕ меняет: цели живут в Метрике, и у нас о
+// них не записано ничего. Инвалидировать нечего — окно показывает исход само.
+export function useEnsureMetrikaGoals(formId: string) {
+  return useMutation({
+    mutationFn: (accountId: string) => ensureMetrikaGoals(formId, accountId),
+  })
+}
+
+// Отключение аккаунта Яндекса меняет список аккаунтов в состоянии вкладки.
+export function useDisconnectYandex(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (accountId: string) => disconnectYandex(accountId),
     onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
