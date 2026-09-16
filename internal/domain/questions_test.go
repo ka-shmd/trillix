@@ -156,17 +156,6 @@ func TestBlockTypeNames_CoverAnswerableTypes(t *testing.T) {
 	}
 }
 
-// consent несёт собственный текст согласия — он и становится подписью, отдельного
-// title не нужно.
-func TestQuestionOrder_ConsentOwnTextAsCaption(t *testing.T) {
-	got := QuestionOrder([]VersionedSchema{vs(1,
-		Block{ID: "c1", GroupID: "g1", Type: BlockConsent, Text: TextFromString("Соглашаюсь с обработкой данных")},
-	)})
-	if got[0].Label != "Соглашаюсь с обработкой данных" {
-		t.Fatalf("подпись = %q, ждали текст согласия", got[0].Label)
-	}
-}
-
 // Неотвечаемые блоки (подписи и контент) в модель не входят: у них нет ответов, им
 // нечего делать ни в колонке выгрузки, ни в шаге воронки.
 func TestQuestionOrder_SkipsContentBlocks(t *testing.T) {

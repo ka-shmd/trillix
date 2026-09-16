@@ -31,7 +31,7 @@ export const COLUMN_WIDTH_TOTAL = 100
 // ни под поле, ни под подпись). В схеме диапазон шире (1..COLUMN_WIDTH_TOTAL): туда
 // приезжают и документы, собранные не этим жестом, и сужать их незачем.
 export const MIN_COLUMN_WIDTH = 10
-// Суммарная длина текста блока по всем спанам (title/label/heading/text/consent).
+// Суммарная длина текста блока по всем спанам (title/label/heading/text).
 // Зеркалит MaxTextLen. Число то же, что было у строки в v2: текст не стал длиннее от
 // того, что его покрасили.
 export const MAX_TEXT_LEN = 2000

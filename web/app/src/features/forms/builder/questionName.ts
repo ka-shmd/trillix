@@ -1,4 +1,4 @@
-import { isAnswerableType, plainText, type Block } from '@entities/formSchema'
+import { isAnswerableType, type Block } from '@entities/formSchema'
 import { groupMeta } from '@fields/groups'
 
 import { editorKind } from './kinds/index'
@@ -16,7 +16,7 @@ import { editorKind } from './kinds/index'
 // картой имён типов, а здесь берётся подпись типа из реестра редактора. Сегодня
 // строки совпадают слово в слово; переименование подписи типа в редакторе разведёт их,
 // и плейсхолдер станет обещать колонку с другим именем. Цена мала и ограничена
-// вырожденным случаем — у вопроса нет ни заголовка, ни своего текста, ни подсказки, —
+// вырожденным случаем — у вопроса нет ни заголовка, ни подсказки, —
 // а второе объявление имён типов на фронте стоило бы дороже: этап 16.1 их оттуда как
 // раз и убирал.
 export function derivedQuestionName(blocks: Block[], block: Block): string {
@@ -24,9 +24,6 @@ export function derivedQuestionName(blocks: Block[], block: Block): string {
   // рендерер, а не своя копия правила.
   const caption = groupMeta(blocks).get(block.groupId)?.caption ?? ''
   if (caption.trim() !== '') return caption
-  // Собственный текст блока — у согласия это текст рядом с галочкой.
-  const own = plainText(block.text)
-  if (own.trim() !== '') return own
   const placeholder = block.settings?.placeholder ?? ''
   if (placeholder.trim() !== '') return placeholder
   // «Тип N»: N — позиция среди ОТВЕЧАЕМЫХ блоков, как её считает QuestionOrder.

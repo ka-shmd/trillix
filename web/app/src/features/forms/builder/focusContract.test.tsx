@@ -66,25 +66,17 @@ function setup(schema: FormSchema) {
 const el = () => document.activeElement as HTMLElement
 
 describe('контракт фокус-целей строк (§2.1)', () => {
-  it('подпись/контент/consent — фокус на текстовую поверхность своего текста', () => {
+  it('подпись/контент — фокус на текстовую поверхность своего текста', () => {
     const { engine } = setup({
       schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'title', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
         { id: 'head', groupId: 'g2', type: 'heading', text: textFromString('Раздел') },
-        {
-          id: 'cons',
-          groupId: 'g3',
-          type: 'consent',
-          text: textFromString('Согласен'),
-          required: true,
-        },
       ],
     })
     for (const [id, text] of [
       ['title', 'Вопрос'],
       ['head', 'Раздел'],
-      ['cons', 'Согласен'],
     ]) {
       engine.focusBlock(id!, 'end')
       // С этапа 14.3 текстовая поверхность — contenteditable, а не <textarea>. Сам
@@ -104,13 +96,11 @@ describe('контракт фокус-целей строк (§2.1)', () => {
       schemaVersion: SCHEMA_VERSION,
       blocks: [
         { id: 'title', groupId: 'g1', type: 'title', text: textFromString('Вопрос') },
-        { id: 'cons', groupId: 'g2', type: 'consent', text: textFromString('Согласен') },
         { id: 'para', groupId: 'g3', type: 'text', text: [] },
       ],
     })
     const named = (name: string) => document.querySelector(`[data-rich-line][aria-label="${name}"]`)
     expect(named('Заголовок вопроса')).not.toBeNull()
-    expect(named('Текст согласия')).not.toBeNull()
     // Пустая неактивная строка текста подсказки не показывает — а имя у неё уже есть.
     expect(named('Напечатайте «/», чтобы выбрать блок')).not.toBeNull()
     engine.focusBlock('para', 'end')

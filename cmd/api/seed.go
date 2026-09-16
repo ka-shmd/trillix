@@ -459,13 +459,6 @@ func seedAnswerValue(b domain.Block) (any, bool) {
 		return strconv.Itoa(v), true
 	case domain.BlockNumber:
 		return strconv.Itoa(1 + rand.Intn(60)), true
-	case domain.BlockConsent:
-		// Снявший галочку и не тронувший вопрос — для сводки одно и то же «нет»,
-		// поэтому несогласие это просто отсутствие ответа.
-		if rand.Intn(10) < 8 {
-			return domain.ConsentYes, true
-		}
-		return nil, false
 	case domain.BlockEmail:
 		return fmt.Sprintf("%s%d@example.com", seedLogins[rand.Intn(len(seedLogins))], rand.Intn(900)), true
 	case domain.BlockPhone:

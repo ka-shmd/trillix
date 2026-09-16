@@ -1,7 +1,6 @@
 import { BLOCK_TYPES } from '@entities/blocks/contract'
 import { type BlockType } from '@entities/formSchema'
 
-import { consent } from './consent'
 import { type EditorKind, type RowFacts } from './contract'
 import { date } from './date'
 import { dropdown } from './dropdown'
@@ -44,7 +43,6 @@ export const EDITOR_KINDS: Record<BlockType, EditorKind> = {
   multi_choice: multiChoice,
   multi_select: multiSelect,
   date,
-  consent,
   file,
   slot,
   title,

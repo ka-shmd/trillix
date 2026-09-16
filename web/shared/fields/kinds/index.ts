@@ -1,6 +1,5 @@
 import { type BlockType } from '@entities/formSchema'
 
-import { consentControl } from './consent'
 import { type Control } from './contract'
 import { dateControl } from './date'
 import { dropdownControl } from './dropdown'
@@ -38,7 +37,6 @@ export const CONTROLS: Record<BlockType, Control | null> = {
   multi_choice: multiChoiceControl,
   multi_select: multiSelectControl,
   date: dateControl,
-  consent: consentControl,
   file: fileControl,
   slot: slotControl,
   // Неотвечаемые: рисуются как статический контент (ContentBlock в BlockField), контрола

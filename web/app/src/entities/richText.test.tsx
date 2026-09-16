@@ -122,7 +122,7 @@ describe('RichText — разметка не протекает в текст', 
 })
 
 // Сквозь BlockField — то есть ровно так, как блок увидит респондент: подпись, заголовок
-// раздела, абзац и текст согласия.
+// раздела и абзац.
 describe('BlockField рисует богатый текст всех текстовых типов', () => {
   const rich: Span[] = [{ t: 'важно', m: ['b'] }, { t: ' и ссылка', href: 'https://a.ru' }]
 
@@ -138,19 +138,6 @@ describe('BlockField рисует богатый текст всех текст�
     expect(host.querySelector('.rf-b')?.textContent).toBe('важно')
     expect(host.querySelector('a')?.getAttribute('href')).toBe('https://a.ru')
     expect(host.textContent).toContain('важно и ссылка')
-  })
-
-  it('consent: богатый текст рядом с галочкой (ссылка на политику — главный случай)', () => {
-    const block = {
-      id: 'c',
-      groupId: 'g',
-      type: 'consent',
-      required: true,
-      text: [{ t: 'Согласен с ' }, { t: 'политикой', href: 'https://a.ru/p' }],
-    } as Block
-    const c = render(<BlockField block={block} />).container
-    expect(c.querySelector('input[type="checkbox"]')).not.toBeNull()
-    expect(c.querySelector('.rf-consent a')?.getAttribute('href')).toBe('https://a.ru/p')
   })
 
   // Превью билдера рисуется тем же кодом, что и живая форма (BlockField, disabled по

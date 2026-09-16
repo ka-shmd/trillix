@@ -103,10 +103,6 @@ describe('formSchemaSchema — валидные', () => {
         { id: 'b1', groupId: 'g2', type: 'short_text', settings: {} },
       ],
     },
-    'consent несёт собственный текст': {
-      schemaVersion: SCHEMA_VERSION,
-      blocks: [{ id: 'c', groupId: 'g1', type: 'consent', text: [{ t: 'Согласен на обработку данных' }], required: true }],
-    },
     'картинка без ключа — черновик': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'image', settings: {} }],
     },
@@ -407,7 +403,12 @@ describe('formSchemaSchema — невалидные', () => {
     'v1-форма (label/description) — контракт строго v2': {
       blocks: [{ id: 'b', type: 'short_text', label: 'x' }],
     },
-    'text у отвечаемого не-consent': {
+    // Согласие перестало быть типом блока (design/privacy-consent.md).
+    'тип consent': {
+      schemaVersion: SCHEMA_VERSION,
+      blocks: [{ id: 'c', groupId: 'g1', type: 'consent', text: [{ t: 'Согласен' }], required: true }],
+    },
+    'text у отвечаемого': {
       blocks: [{ id: 'b', groupId: 'g1', type: 'short_text', text: [{ t: 'нельзя' }], settings: {} }],
     },
     'text у image': {

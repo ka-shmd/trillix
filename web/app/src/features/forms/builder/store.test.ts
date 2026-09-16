@@ -1105,20 +1105,20 @@ describe('createBuilderStore — undo/redo', () => {
     expect(store.getState().blocks).toEqual([])
   })
 
-  // Имя и текст — разные поля, и общий шаг откатывал бы вместе с именем весь
-  // набранный текст. Проверяется на ОДНОМ блоке (согласие несёт и text, и name):
-  // на разных блоках теги расходятся по id, и ключевая часть тега не сторожится
-  // вовсе — тест был зелёным при любом её устройстве (находка ревью 16.4).
-  it('имя и текст в ОДИН блок — разные шаги отмены', () => {
+  // Имя и подсказка — разные поля, и общий шаг откатывал бы вместе с именем всю
+  // набранную подсказку. Проверяется на ОДНОМ блоке: на разных блоках теги расходятся
+  // по id, и ключевая часть тега не сторожится вовсе — тест был зелёным при любом её
+  // устройстве (находка ревью 16.4).
+  it('имя и подсказка в ОДИН блок — разные шаги отмены', () => {
     const store = createBuilderStore()
-    const id = store.getState().addBlockAfter(null, 'consent')
-    store.getState().updateBlock(id, { text: textFromString('Соглашаюсь с обработкой') })
-    store.getState().updateBlock(id, { name: 'consent' })
+    const id = store.getState().addBlockAfter(null, 'short_text')
+    store.getState().updateBlock(id, { settings: { placeholder: 'Иван' } })
+    store.getState().updateBlock(id, { name: 'fio' })
 
     store.getState().undo()
     const after = store.getState().blocks[0]!
     expect(after.name).toBeUndefined()
-    expect(plainText(after.text)).toBe('Соглашаюсь с обработкой')
+    expect(after.settings?.placeholder).toBe('Иван')
   })
 
   it('hydrate очищает историю', () => {
@@ -2381,16 +2381,14 @@ describe('createBuilderStore — addCaptionFor', () => {
     expect(store.getState().past.length).toBe(past)
   })
 
-  it('согласию и контенту заголовок не даётся — свой текст у них уже есть', () => {
+  it('контенту заголовок не даётся — свой текст у него уже есть', () => {
     const store = createBuilderStore()
-    store.getState().addBlock('consent')
     store.getState().addBlock('text')
-    const [consent, text] = store.getState().blocks
+    const [text] = store.getState().blocks
 
     const before = store.getState().blocks
     const past = store.getState().past.length
 
-    expect(store.getState().addCaptionFor(consent!.id)).toBeNull()
     expect(store.getState().addCaptionFor(text!.id)).toBeNull()
     expect(store.getState().addCaptionFor('нет-такого')).toBeNull()
 

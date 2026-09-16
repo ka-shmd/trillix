@@ -26,7 +26,6 @@ const summarySchemaV1 = `{"blocks":[
 	{"id":"b_intro","groupId":"g_b_intro","type":"text","text":[{"t":"Здравствуйте"}],"required":false,"settings":{}},
 	{"id":"t_b_src","groupId":"g_b_src","type":"title","text":[{"t":"Источник"}]},{"id":"b_src","groupId":"g_b_src","type":"single_choice","required":false,"settings":{"options":[{"id":"o1","label":"Друзья"},{"id":"o2","label":"Поиск"}]}},
 	{"id":"t_b_rate","groupId":"g_b_rate","type":"title","text":[{"t":"Оценка"}]},{"id":"b_rate","groupId":"g_b_rate","type":"scale","required":false,"settings":{"scaleMin":1,"scaleMax":5}},
-	{"id":"b_ok","groupId":"g_b_ok","type":"consent","text":[{"t":"Согласен на рассылку"}],"required":false,"settings":{}},
 	{"id":"t_b_age","groupId":"g_b_age","type":"title","text":[{"t":"Возраст"}]},{"id":"b_age","groupId":"g_b_age","type":"number","required":false,"settings":{}},
 	{"id":"t_b_note","groupId":"g_b_note","type":"title","text":[{"t":"Комментарий"}]},{"id":"b_note","groupId":"g_b_note","type":"long_text","required":false,"settings":{}}
 ]}`
@@ -141,8 +140,8 @@ func TestSummary_AggregatesOnServer(t *testing.T) {
 	formID := publishSummaryForm(t, ownerID)
 	v1 := versionID(t, formID, 1)
 
-	insertAnswer(t, formID, v1, `{"b_src":"o1","b_rate":"5","b_ok":"yes","b_age":"30","b_note":"хорошо"}`)
-	insertAnswer(t, formID, v1, `{"b_src":"o1","b_rate":"3","b_ok":"","b_age":"20"}`)
+	insertAnswer(t, formID, v1, `{"b_src":"o1","b_rate":"5","b_age":"30","b_note":"хорошо"}`)
+	insertAnswer(t, formID, v1, `{"b_src":"o1","b_rate":"3","b_age":"20"}`)
 	insertAnswer(t, formID, v1, `{"b_rate":"5","b_age":"40"}`)
 
 	resp, err := owner.Get(srv.URL + "/api/v1/forms/" + formID.String() + "/submissions/summary")
@@ -178,11 +177,6 @@ func TestSummary_AggregatesOnServer(t *testing.T) {
 	_, rate := body.block(t, "b_rate")
 	if rate["5"] != 2 || rate["3"] != 1 || len(rate) != 5 {
 		t.Errorf("шкала: распределение = %v, ожидалось 5:2 3:1 при пяти делениях", rate)
-	}
-	// Согласие: «Нет» — и снявший галочку, и не тронувший вопрос.
-	_, ok := body.block(t, "b_ok")
-	if ok["Да"] != 1 || ok["Нет"] != 2 {
-		t.Errorf("согласие: распределение = %v, ожидалось Да:1 Нет:2", ok)
 	}
 	// Доля заполнивших: комментарий оставил один из трёх.
 	noteAnswered, _ := body.block(t, "b_note")

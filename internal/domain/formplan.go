@@ -47,7 +47,6 @@ var planKinds = map[BlockType]PlanKind{
 	BlockMultiChoice:  {Title: "Несколько из списка", Hint: "можно выбрать больше одного варианта"},
 	BlockMultiSelect:  {Title: "Теги", Hint: "то же, что «несколько из списка», но вариантов много (навыки, города, интересы): выбираются из выпадающего списка с поиском"},
 	BlockDate:         {Title: "Дата", Hint: "дата визита, рождения, мероприятия"},
-	BlockConsent:      {Title: "Согласие", Hint: "галочка с текстом согласия; текст согласия кладётся в text"},
 	BlockFile:         {Title: "Файл", Hint: "респондент прикладывает документ или фото"},
 	// Запись на время. Модель ставит САМ ВОПРОС, но расписание не выбирает — оно
 	// живёт в пространстве, его заводит человек, а форма ссылается на него живой
@@ -70,7 +69,7 @@ var planExcluded = map[BlockType]string{}
 var planTypeOrder = []BlockType{
 	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber,
 	BlockScale, BlockRating, BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockMultiSelect, BlockDate,
-	BlockConsent, BlockFile, BlockSlot, BlockText, BlockHeading, BlockPageBreak,
+	BlockFile, BlockSlot, BlockText, BlockHeading, BlockPageBreak,
 }
 
 // PlaceholderTypes — типы, у которых подсказка внутри поля видна. Считается из
@@ -99,8 +98,8 @@ type FormPlan struct {
 // равно поштучно.
 type PlanItem struct {
 	Type BlockType `json:"type"`
-	// Text — подпись вопроса; у пояснения и раздела это сам текст; у согласия —
-	// текст рядом с галочкой; у разрыва страницы не значит ничего.
+	// Text — подпись вопроса; у пояснения и раздела это сам текст; у разрыва
+	// страницы не значит ничего.
 	Text     string   `json:"text"`
 	Required bool     `json:"required"`
 	Options  []string `json:"options"`
@@ -143,12 +142,10 @@ type PlanItem struct {
 // Только при СОЗДАНИИ (ExpandPlan и add): у правки готового пункта жирность берётся
 // из ответа модели, иначе «сделай заголовки обычными» стало бы нечем выразить.
 //
-// Заголовками считаются подпись вопроса и заголовок раздела. Текст согласия и
-// пояснение — нет: они живут в самом блоке и заголовками не являются.
+// Заголовками считаются подпись вопроса и заголовок раздела. Пояснение — нет: оно
+// живёт в самом блоке и заголовком не является.
 func withCreatedBold(item PlanItem) PlanItem {
-	item.Bold = item.Bold ||
-		(item.Type.isAnswerable() && !item.Type.carriesText()) ||
-		item.Type.isHeading()
+	item.Bold = item.Bold || item.Type.isAnswerable() || item.Type.isHeading()
 	return item
 }
 
@@ -413,10 +410,10 @@ func checkTextLen(text string, max int) error {
 }
 
 // planItemBlocks — во сколько блоков развернётся пункт. Два у вопроса с отдельной
-// подписью, один у всего остального (согласие несёт свой текст само, пояснение и
-// раздел — это и есть текст, разрыв текста не несёт).
+// подписью, один у всего остального (пояснение и раздел — это и есть текст, разрыв
+// текста не несёт).
 func planItemBlocks(t BlockType) int {
-	if t.isAnswerable() && !t.carriesText() {
+	if t.isAnswerable() {
 		return 2
 	}
 	return 1
@@ -463,16 +460,13 @@ func ExpandPlan(p FormPlan) (FormSchema, error) {
 }
 
 func expandPlanItem(item PlanItem) []Block {
-	// Пояснение, раздел, согласие и разрыв — один блок: текст (или его отсутствие)
-	// живёт в самом блоке.
-	if !item.Type.isAnswerable() || item.Type.carriesText() {
+	// Пояснение, раздел и разрыв — один блок: текст (или его отсутствие) живёт в
+	// самом блоке.
+	if !item.Type.isAnswerable() {
 		id := newBlockID()
 		b := Block{ID: id, GroupID: groupIDOf(id), Type: item.Type}
 		if item.Type != BlockPageBreak {
 			b.Text = styledText(withCreatedBold(item))
-		}
-		if item.Type.isAnswerable() {
-			b.Required = item.Required
 		}
 		return []Block{b}
 	}
