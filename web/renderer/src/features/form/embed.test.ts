@@ -86,8 +86,22 @@ describe('createHostBridge', () => {
     bridge.page(2)
     bridge.submitted('01930000-0000-7000-8000-000000000000')
     bridge.redirect('https://example.org/done')
+    bridge.goal(12345678, 'trillix_open')
     expect(sent.every((m) => m.source === 'trillix' && m.v === 1)).toBe(true)
-    expect(sent.map((m) => m.type)).toEqual(['ready', 'resize', 'page', 'submit', 'redirect'])
+    expect(sent.map((m) => m.type)).toEqual(['ready', 'resize', 'page', 'submit', 'redirect', 'goal'])
+  })
+
+  // Цель Метрики — номер счётчика и имя цели, больше ничего: ответы через границу не едут.
+  it('о цели сообщает номером счётчика и именем', () => {
+    const { sent, post } = collect()
+    createHostBridge('block', post).goal(12345678, 'trillix_submit')
+    expect(sent.find((m) => m.type === 'goal')).toEqual({
+      source: 'trillix',
+      v: 1,
+      type: 'goal',
+      counter: 12345678,
+      name: 'trillix_submit',
+    })
   })
 
   // Высота меняется на каждый символ в textarea; одинаковое значение хосту не нужно.

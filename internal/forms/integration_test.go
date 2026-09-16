@@ -2818,6 +2818,11 @@ func TestPublicFormRef_AgreesWithPublicForm(t *testing.T) {
 		WHERE slug = $1`, form.Slug); err != nil {
 		t.Fatalf("увод колонок с умолчаний: %v", err)
 	}
+	// Счётчик Метрики — тоже не документ: номер едет обоими запросами (0067).
+	if _, err := testPool.Exec(ctx, `INSERT INTO form_counters (id, form_id, kind, counter)
+		SELECT gen_random_uuid(), id, 'yandex_metrika', '12345678' FROM forms WHERE slug = $1`, form.Slug); err != nil {
+		t.Fatalf("счётчик формы: %v", err)
+	}
 
 	// Опубликованная и закрытая — два разных набора значений в тех же колонках
 	// (status, close_at), и оба обязаны совпасть.

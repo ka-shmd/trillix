@@ -43,6 +43,9 @@ type fakePublicSvc struct {
 	cardErr     error
 	// password — пароль формы в фейке (пусто = пароля нет).
 	password string
+	// metrikaAllowed — разрешает ли тариф счётчик Метрики (form_counters).
+	metrikaAllowed bool
+	metrikaErr     error
 }
 
 func (f fakePublicSvc) PublicForm(_ context.Context, _ string) (PublicForm, error) {

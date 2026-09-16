@@ -570,6 +570,21 @@ if ! grep -q 'sc-tone-\${' web/app/src/features/schedules/eventClass.ts; then
 fi
 ok_if_clean "тона форм на полотне: класс собирается и правило для него есть"
 
+# --- 11. Cookie кабинета — только через cookies.go ----------------------------
+# На контуре с Secure имя cookie кабинета получает префикс `__Host-`
+# (httpserver.HostCookie, ADR §10). Чтение или запись мимо помощников пакета в
+# dev и тестах (без Secure) работают, а на прод-контуре молча не находят cookie:
+# вход, второй фактор или поход к провайдеру ломаются только там.
+# Мутация: вписать `r.Cookie("session")` в любой хендлер → краснеет.
+begin
+hits=$(grep -rn --include='*.go' --exclude='*_test.go' --exclude='cookies.go' \
+	-E '\.Cookie\(|http\.SetCookie\(' cmd internal 2>/dev/null || true)
+if [ -n "$hits" ]; then
+	err "Cookie читается или ставится мимо cookies.go: на прод-контуре имя без префикса __Host- не найдётся" "$hits"
+else
+	ok "cookie кабинета читаются и ставятся только в cookies.go"
+fi
+
 echo
 if [ $fail -ne 0 ]; then
 	echo "Проверка документов НЕ пройдена — почини расхождение и повтори."

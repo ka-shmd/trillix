@@ -61,3 +61,15 @@ export async function login(page: Page, email: string): Promise<void> {
     throw new Error(`login ${email}: ${res.status()} ${await res.text()}`)
   }
 }
+
+// csrfToken — токен double-submit из cookie контекста страницы. На prod-local
+// (COOKIE_SECURE=true) cookie называется `__Host-csrf_token`, в dev — `csrf_token`;
+// префиксная ищется первой, как и в кабинете (web/app/src/shared/api/csrf.ts).
+export async function csrfToken(page: Page): Promise<string> {
+  const cookies = await page.context().cookies()
+  const found =
+    cookies.find((c) => c.name === '__Host-csrf_token') ??
+    cookies.find((c) => c.name === 'csrf_token')
+  if (!found) throw new Error('нет CSRF-cookie: сессия не заведена')
+  return found.value
+}

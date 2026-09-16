@@ -1,5 +1,5 @@
 import { test, expect } from '@playwright/test'
-import { login, seedAccount } from './helpers/session'
+import { csrfToken, login, seedAccount } from './helpers/session'
 
 // Встроенная форма (фаза 20) против prod-local: блок на постороннем сайте и виджет.
 //
@@ -50,7 +50,7 @@ test('форма живёт блоком и виджетом на посторо
   const email = seedAccount('embed')
   await login(page, email)
 
-  const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')!.value
+  const csrf = await csrfToken(page)
   const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }
 
   const created = await page.request.post('/api/v1/forms', { headers, data: { title: formTitle } })

@@ -36,6 +36,9 @@ type publicFormService interface {
 	// LinkPreviewFor — своя карточка ссылки, действующая прямо сейчас: намерение
 	// автора плюс разрешение тарифа. nil = дефолты страницы.
 	LinkPreviewFor(ctx context.Context, workspaceID uuid.UUID, p *domain.LinkPreview) (*domain.LinkPreview, error)
+	// MetrikaFor — номер счётчика Яндекс Метрики для этой выдачи: подключённый и
+	// включённый номер плюс разрешение тарифа. nil = счётчика на странице нет.
+	MetrikaFor(ctx context.Context, workspaceID uuid.UUID, counter *string) (*string, error)
 	// VerifyUnlock — пускать ли к содержимому формы, закрытой паролем (0047).
 	// sealed — шифротекст пароля прямо сейчас; пустой = пароля нет, пропускаем всегда.
 	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
@@ -217,6 +220,10 @@ type publicFormResponse struct {
 	// Полем, а не выводом клиента из схемы, по той же причине, что CollectPartial:
 	// расписание живёт колонкой формы, и в снапшоте версии его нет вовсе.
 	Booking *bookingFacts `json:"booking"`
+	// Metrika — номер счётчика Яндекс Метрики (фаза 29) либо null. Решение СЕРВЕРА,
+	// как ShowBadge: подключён, включён и тариф разрешает (MetrikaFor). Номер, а не
+	// объект с тумблером: рендереру нужно одно — «есть номер, запускай счётчик».
+	Metrika *string `json:"metrika"`
 }
 
 // bookingFacts — то, что рендерер знает о расписании формы, не зная самого расписания.
@@ -397,13 +404,16 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// прежним телом — то есть бейдж оставался бы у всех, кто уже открывал форму,
 	// пока не сменится версия.
 	showBadge := h.showBadge(r, pf.WorkspaceID, pf.Branding)
+	// Счётчик Метрики — тоже свойство выдачи (тумблер автора плюс тариф), поэтому он
+	// решается здесь же и входит в ETag вместе с бейджем.
+	metrika := h.metrika(r, pf.WorkspaceID, pf.MetrikaCounter)
 	// Форма под паролем кэша не получает ВОВСЕ — ни публичного, ни ETag'а: no-store
 	// поставлен выше, и перебивать его здесь нельзя. Публичный max-age у тела с
 	// вопросами означал бы, что общий прокси раздаёт содержимое закрытой формы
 	// кому угодно, а сама выдача зависит от заголовка запроса, которого нет в ключе
 	// кэша. Минута кэша разблокированной формы того не стоит.
 	if len(pf.PasswordSealed) == 0 {
-		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally, pf.AllowBack) + `"`
+		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally, pf.AllowBack, metrika) + `"`
 		w.Header().Set("Cache-Control", "public, max-age=60")
 		w.Header().Set("ETag", etag)
 		if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -443,6 +453,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		SaveLocally:    pf.SaveLocally,
 		AllowBack:      pf.AllowBack,
 		Booking:        h.bookingFacts(r, pf.ScheduleID),
+		Metrika:        metrika,
 	})
 }
 
@@ -508,7 +519,7 @@ func (h *PublicHandler) showBadge(r *http.Request, workspaceID uuid.UUID, intent
 //
 // МИНА: забытый здесь признак означает 304 с прежним телом до самой перепубликации —
 // автор переключил тумблер, а все, кто форму уже открывал, видят старое.
-func viewETagSuffix(showBadge, progress, autoJump, saveLocally, allowBack bool) string {
+func viewETagSuffix(showBadge, progress, autoJump, saveLocally, allowBack bool, metrika *string) string {
 	suffix := ""
 	if showBadge {
 		suffix += "+b"
@@ -524,6 +535,11 @@ func viewETagSuffix(showBadge, progress, autoJump, saveLocally, allowBack bool) 
 	}
 	if allowBack {
 		suffix += "+k"
+	}
+	// Номер, а не признак «счётчик есть»: смена номера тоже меняет тело ответа. Номер —
+	// только цифры (CHECK миграции 0067), кавычку ETag он не порвёт.
+	if metrika != nil {
+		suffix += "+m" + *metrika
 	}
 	return suffix
 }

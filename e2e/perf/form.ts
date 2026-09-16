@@ -60,7 +60,10 @@ export function buildBlocks(authored: number, title: string): Block[] {
 // Заводит форму нужного размера и возвращает её slug. Всё через API: предмет
 // замера — полотно на готовой форме, а не её сборка.
 export async function createForm(page: Page, authored: number): Promise<string> {
-  const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')?.value
+  // `__Host-csrf_token` на prod-local (COOKIE_SECURE=true), `csrf_token` в dev.
+  const csrf = (await page.context().cookies()).find(
+    (c) => c.name === '__Host-csrf_token' || c.name === 'csrf_token',
+  )?.value
   if (!csrf) throw new Error('нет csrf-cookie: сессия не заведена')
   const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }
   const title = `Замер полотна ${authored} блоков`

@@ -17,13 +17,20 @@ import { planSnapshotQueryOptions } from './queries'
 // Пространство берётся из адреса либо из самой формы — что из двух, решает
 // `shared/workspaceContext.tsx`; перевод slug'а в id делает useCurrentWorkspace.
 export function useFeatureAllowed(key: string): boolean {
+  return useFeatureDecision(key) ?? true
+}
+
+// useFeatureDecision — то же решение без умолчания: `undefined` — «не знаем».
+// Нужно там, где экран УТВЕРЖДАЕТ, что возможность работает: у редактора снимок
+// тарифа закрыт правом `billing.view` (403), и «разрешено по умолчанию» стало бы
+// ложным «Работает».
+export function useFeatureDecision(key: string): boolean | undefined {
   const workspace = useCurrentWorkspace()
   const plan = useQuery({
     ...planSnapshotQueryOptions(workspace?.id ?? ''),
     enabled: workspace !== undefined,
   })
-  const feature = plan.data?.features.find((f) => f.key === key)
-  return feature?.allowed ?? true
+  return plan.data?.features.find((f) => f.key === key)?.allowed
 }
 
 // Квота тарифа числами: сколько израсходовано и сколько разрешено. Соседка

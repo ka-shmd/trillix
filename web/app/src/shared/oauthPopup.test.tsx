@@ -22,13 +22,14 @@ function setViewportWidth(width: number) {
 interface FakeWindow {
   closed: boolean
   close: () => void
+  focus: () => void
 }
 
 let fake: FakeWindow
 
 beforeEach(() => {
   vi.useFakeTimers()
-  fake = { closed: false, close: vi.fn() }
+  fake = { closed: false, close: vi.fn(), focus: vi.fn() }
   vi.spyOn(window, 'open').mockReturnValue(fake as unknown as Window)
   setViewportWidth(1280)
 })
@@ -51,6 +52,40 @@ function start() {
   })
   return { view, outcomes }
 }
+
+describe('useOAuthPopup — окно похода', () => {
+  // Повтор после неудачи: окно у похода одно (открывается по имени), и второй
+  // заход грузит новый адрес в него же. Без подъёма наверх человек видит перед
+  // собой прежнюю вкладку и прошлую страницу провайдера — то есть «ничего не
+  // произошло».
+  it('поднимает окно наверх на каждой попытке', () => {
+    const { view } = start()
+    expect(fake.focus).toHaveBeenCalledTimes(1)
+
+    act(() => {
+      view.result.current.cancel()
+    })
+    act(() => {
+      view.result.current.open('/api/v1/integrations/yandex/start')
+    })
+
+    expect(fake.focus).toHaveBeenCalledTimes(2)
+  })
+
+  // Вторая попытка начинается с ЧИСТОГО окна, а не с того, в котором лежит отказ
+  // провайдера: имя окна одно, и живое окно повторный window.open не открывает
+  // заново — он грузит в него адрес, показывая прежнюю страницу, пока новая не
+  // приедет. Снаружи это ровно «второй попытки нет».
+  it('закрывает прошлое окно, не дожидаясь, пока в нём сменится страница', () => {
+    const { view } = start()
+
+    act(() => {
+      view.result.current.open('/api/v1/integrations/yandex/start')
+    })
+
+    expect(fake.close).toHaveBeenCalled()
+  })
+})
 
 describe('useOAuthPopup — что вкладка принимает от окна', () => {
   it('своё сообщение доставляет исход и снимает ожидание', () => {

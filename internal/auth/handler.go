@@ -319,7 +319,7 @@ func (h *Handler) login(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *Handler) logout(w http.ResponseWriter, r *http.Request) {
-	if c, err := r.Cookie(sessionCookieName); err == nil {
+	if c, err := h.readCookie(r, sessionCookieName); err == nil {
 		if err := h.svc.Logout(r.Context(), c.Value); err != nil {
 			httpserver.WriteError(w, r, err)
 			return
@@ -439,7 +439,7 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 // контекста через UserFromContext.
 func (h *Handler) RequireAuth(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c, err := r.Cookie(sessionCookieName)
+		c, err := h.readCookie(r, sessionCookieName)
 		if err != nil {
 			httpserver.WriteError(w, r, domain.ErrUnauthorized)
 			return
@@ -468,7 +468,7 @@ func (h *Handler) RequireCSRF(next http.Handler) http.Handler {
 			httpserver.WriteError(w, r, fmt.Errorf("%w: недопустимый Origin", domain.ErrForbidden))
 			return
 		}
-		cookie, err := r.Cookie(csrfCookieName)
+		cookie, err := h.readCookie(r, csrfCookieName)
 		header := r.Header.Get(csrfHeaderName)
 		if err != nil || header == "" ||
 			subtle.ConstantTimeCompare([]byte(cookie.Value), []byte(header)) != 1 {
@@ -507,30 +507,6 @@ func (h *Handler) startSession(w http.ResponseWriter, token string) {
 func (h *Handler) clearSession(w http.ResponseWriter) {
 	h.expireCookie(w, sessionCookieName, true)
 	h.expireCookie(w, csrfCookieName, false)
-}
-
-func (h *Handler) setCookie(w http.ResponseWriter, name, value string, httpOnly bool) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    value,
-		Path:     "/",
-		HttpOnly: httpOnly,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(DefaultSessionTTL.Seconds()),
-	})
-}
-
-func (h *Handler) expireCookie(w http.ResponseWriter, name string, httpOnly bool) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    "",
-		Path:     "/",
-		HttpOnly: httpOnly,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   -1,
-	})
 }
 
 func newCSRFToken() string {

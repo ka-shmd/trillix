@@ -25,6 +25,19 @@ export function GoogleSheetsIcon({ className }: { className?: string }) {
   )
 }
 
+// Яндекс Метрика: фирменный знак — три столбца по возрастанию. Контуры и цвета —
+// из каталога сервисов Яндекса (yastatic.net/s3/home/services/block/metrika.svg);
+// viewBox обрезан по знаку, чтобы он был одного размера с соседними.
+export function MetrikaIcon({ className }: { className?: string }) {
+  return (
+    <svg viewBox="5 5 34 34" className={className} role="img" aria-label="Яндекс Метрика">
+      <path d="M15.85 26.48H6V38h9.85V26.48z" fill="#F33" />
+      <path d="M26.92 17.52h-9.84V38h9.84V17.52z" fill="#07F" />
+      <path d="M38 6h-9.85v32H38V6z" fill="#FC0" />
+    </svg>
+  )
+}
+
 // Вебхук — не сервис, своего бренда у него нет, но есть общепринятый знак: три
 // дуги, сходящиеся в петлю (он же у webhooks.fyi и в наборах иконок). Берём его
 // из lucide, а не рисуем свой: предметная картинка «запрос уходит из формы»

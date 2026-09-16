@@ -69,6 +69,16 @@ type Form struct {
 	AllowBack          bool
 }
 
+type FormCounter struct {
+	ID        uuid.UUID
+	FormID    uuid.UUID
+	Kind      string
+	Counter   string
+	Enabled   bool
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
 type FormIntegration struct {
 	ID                  uuid.UUID
 	FormID              uuid.UUID

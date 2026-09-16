@@ -8,11 +8,18 @@ import {
   sheetListSchema,
   spreadsheetListSchema,
   webhookSchema,
+  metrikaCounterListSchema,
+  metrikaCreatedSchema,
+  metrikaGoalsSchema,
   webhookSecretSchema,
   webhookTestSchema,
   type DeliveryPage,
   type FormIntegrations,
   type FormSheet,
+  type MetrikaCounter,
+  type MetrikaCounterRef,
+  type MetrikaCreated,
+  type MetrikaGoals,
   type SheetRef,
   type SpreadsheetRef,
   type Webhook,
@@ -224,6 +231,70 @@ export function updateWebhook(
 
 export function deleteWebhook(formId: string, webhookId: string): Promise<void> {
   return apiRequest(`/forms/${formId}/webhooks/${webhookId}`, { method: 'DELETE' })
+}
+
+// --- ЯНДЕКС МЕТРИКА (фаза 29) ---
+
+// Подключение, правка номера и тумблер строки — один и тот же PUT: счётчик у формы
+// один, заводить и править его разными ручками незачем. Номер проверяет сервер
+// (422 с человеческим текстом), ответ экрану не нужен — состояние перезапрашивается.
+export function setMetrika(formId: string, input: MetrikaCounter): Promise<void> {
+  return apiRequest(`/forms/${formId}/counters/yandex-metrika`, { method: 'PUT', body: input })
+}
+
+export function deleteMetrika(formId: string): Promise<void> {
+  return apiRequest(`/forms/${formId}/counters/yandex-metrika`, { method: 'DELETE' })
+}
+
+// Счётчики аккаунта Яндекса — из чего выбирают номер (фаза 29, §13.3). Адрес по
+// АККАУНТУ, а не по форме: счётчики лежат в чужой Метрике, и право на их список
+// даёт владение аккаунтом, а не роль в пространстве (ADR §10).
+export async function listMetrikaCounters(
+  accountId: string,
+  signal?: AbortSignal,
+): Promise<MetrikaCounterRef[]> {
+  const res = await apiRequest(`/integrations/yandex/accounts/${accountId}/counters`, {
+    schema: metrikaCounterListSchema,
+    signal,
+  })
+  return res.counters
+}
+
+// Завести в счётчике формы недостающие цели. Номер сюда не едет: счётчик берётся
+// у формы — цели заводятся тому номеру, который стоит на её странице.
+export function ensureMetrikaGoals(formId: string, accountId: string): Promise<MetrikaGoals> {
+  return apiRequest(`/forms/${formId}/counters/yandex-metrika/goals`, {
+    method: 'POST',
+    body: { accountId },
+    schema: metrikaGoalsSchema,
+  })
+}
+
+// Завести НОВЫЙ счётчик в аккаунте: одним действием счётчик, номер у формы и три
+// цели. Имя и сайт задаёт сервер — счётчик ставится ровно на страницу формы.
+// name — имя счётчика; пустое — имя по умолчанию от сервера.
+export function createMetrikaCounter(
+  formId: string,
+  accountId: string,
+  name: string,
+): Promise<MetrikaCreated> {
+  return apiRequest(`/forms/${formId}/counters/yandex-metrika/counter`, {
+    method: 'POST',
+    body: { accountId, name },
+    schema: metrikaCreatedSchema,
+  })
+}
+
+// Отключения аккаунта Яндекса здесь нет (решение владельца 2026-09-16), как и у
+// Google: оно про аккаунт целиком, а окно счётчика — про одну форму. Ручка на
+// бэке есть (API.md), её место — будущий экран аккаунта.
+
+// yandexStartUrl — НАВИГАЦИЯ к экрану согласия Яндекса, а не вызов API: бэк
+// отвечает редиректом и ставит cookie похода. reconnect — id переподключаемого
+// аккаунта, его почта уезжает подсказкой login_hint.
+export function yandexStartUrl(reconnect?: string): string {
+  const base = '/api/v1/integrations/yandex/start'
+  return reconnect ? `${base}?accountId=${encodeURIComponent(reconnect)}` : base
 }
 
 // Секрет подписи — отдельной ручкой по нажатию «Показать», а не в состоянии

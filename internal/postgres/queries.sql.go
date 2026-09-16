@@ -1342,6 +1342,24 @@ func (q *Queries) DeleteForm(ctx context.Context, arg DeleteFormParams) (int64, 
 	return result.RowsAffected(), nil
 }
 
+const deleteFormCounter = `-- name: DeleteFormCounter :execrows
+DELETE FROM form_counters WHERE form_id = $1 AND kind = $2
+`
+
+type DeleteFormCounterParams struct {
+	FormID uuid.UUID
+	Kind   string
+}
+
+// Снятие счётчика вида kind с формы.
+func (q *Queries) DeleteFormCounter(ctx context.Context, arg DeleteFormCounterParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteFormCounter, arg.FormID, arg.Kind)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteFormIntegration = `-- name: DeleteFormIntegration :execrows
 DELETE FROM form_integrations WHERE id = $1 AND form_id = $2
 `
@@ -1403,13 +1421,14 @@ func (q *Queries) DeleteIdentity(ctx context.Context, arg DeleteIdentityParams) 
 
 const deleteIntegrationAccount = `-- name: DeleteIntegrationAccount :one
 DELETE FROM integration_accounts
-WHERE id = $1 AND user_id = $2
+WHERE id = $1 AND user_id = $2 AND provider = $3
 RETURNING refresh_token
 `
 
 type DeleteIntegrationAccountParams struct {
-	ID     uuid.UUID
-	UserID uuid.UUID
+	ID       uuid.UUID
+	UserID   uuid.UUID
+	Provider string
 }
 
 // Отключение ОДНОГО аккаунта. RETURNING отдаёт токен на отзыв у провайдера:
@@ -1419,7 +1438,7 @@ type DeleteIntegrationAccountParams struct {
 // user_id в условии не украшение: id аккаунта приезжает из адреса и правом
 // доступа не является (инвариант 1). Чужой аккаунт отсюда не отключить.
 func (q *Queries) DeleteIntegrationAccount(ctx context.Context, arg DeleteIntegrationAccountParams) ([]byte, error) {
-	row := q.db.QueryRow(ctx, deleteIntegrationAccount, arg.ID, arg.UserID)
+	row := q.db.QueryRow(ctx, deleteIntegrationAccount, arg.ID, arg.UserID, arg.Provider)
 	var refresh_token []byte
 	err := row.Scan(&refresh_token)
 	return refresh_token, err
@@ -2960,6 +2979,30 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 	return i, err
 }
 
+const getFormCounter = `-- name: GetFormCounter :one
+SELECT kind, counter, enabled FROM form_counters WHERE form_id = $1 AND kind = $2
+`
+
+type GetFormCounterParams struct {
+	FormID uuid.UUID
+	Kind   string
+}
+
+type GetFormCounterRow struct {
+	Kind    string
+	Counter string
+	Enabled bool
+}
+
+// Счётчик вида kind у формы. form_id в условии — право доступа уже проверено
+// сервисом по форме, id счётчика из адреса не приезжает вовсе.
+func (q *Queries) GetFormCounter(ctx context.Context, arg GetFormCounterParams) (GetFormCounterRow, error) {
+	row := q.db.QueryRow(ctx, getFormCounter, arg.FormID, arg.Kind)
+	var i GetFormCounterRow
+	err := row.Scan(&i.Kind, &i.Counter, &i.Enabled)
+	return i, err
+}
+
 const getFormIntegrationByID = `-- name: GetFormIntegrationByID :one
 SELECT fi.id, fi.form_id, fi.account_id, fi.name, fi.spreadsheet_id, fi.spreadsheet_url,
        fi.sheet_id, fi.sheet_title, fi.columns, fi.enabled, fi.status,
@@ -3386,6 +3429,10 @@ SELECT f.id AS form_id, f.workspace_id, f.title,
     -- и приём ответа с бронью), и каждый обязан пройти те же четыре отказа, что
     -- отдача формы (design/booking.md §7).
     f.schedule_id,
+    -- metrika_counter: номер счётчика Яндекс Метрики (0067), если автор его подключил
+    -- и тумблер включён; NULL — счётчика нет. Право тарифа поверх номера спрашивает
+    -- сервис (MetrikaFor): счётчик, как и бейдж, свойство выдачи, а не документа.
+    fc.counter AS metrika_counter,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -3393,6 +3440,7 @@ FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
+LEFT JOIN form_counters fc ON fc.form_id = f.id AND fc.kind = 'yandex_metrika' AND fc.enabled
 WHERE f.slug = $1
 `
 
@@ -3420,6 +3468,7 @@ type GetPublicFormBySlugRow struct {
 	AllowBack          bool
 	Password           []byte
 	ScheduleID         pgtype.UUID
+	MetrikaCounter     pgtype.Text
 	SubmissionCount    int64
 }
 
@@ -3443,6 +3492,7 @@ type GetPublicFormBySlugRow struct {
 // разбирать. Ноль строк → 404 — тот же ответ, что у черновика, инвариант 5 не
 // трогается. Джойн INNER и по этой же причине отправляет в 404 формы
 // осиротевшего пространства (без владельца) — они и так недостижимы (TD-53).
+// LEFT JOIN по UNIQUE (form_id, kind): не больше одной строки, форму не размножает.
 func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPublicFormBySlugRow, error) {
 	row := q.db.QueryRow(ctx, getPublicFormBySlug, slug)
 	var i GetPublicFormBySlugRow
@@ -3470,6 +3520,7 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.AllowBack,
 		&i.Password,
 		&i.ScheduleID,
+		&i.MetrikaCounter,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -3481,7 +3532,7 @@ SELECT f.id AS form_id, f.workspace_id, coalesce(f.name, f.title) AS cabinet_nam
     f.status, f.close_at, f.response_limit, f.closed_message, f.closed_title,
     f.notify_on_submission, f.notify_respondent, f.collect_partial, f.link_preview,
     f.branding, f.progress, f.auto_jump, f.save_locally, f.allow_back,
-    f.password, f.schedule_id,
+    f.password, f.schedule_id, fc.counter AS metrika_counter,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -3489,6 +3540,7 @@ FROM forms f
 JOIN form_versions fv ON fv.id = f.published_version_id
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
+LEFT JOIN form_counters fc ON fc.form_id = f.id AND fc.kind = 'yandex_metrika' AND fc.enabled
 WHERE f.slug = $1
 `
 
@@ -3514,6 +3566,7 @@ type GetPublicFormRefBySlugRow struct {
 	AllowBack          bool
 	Password           []byte
 	ScheduleID         pgtype.UUID
+	MetrikaCounter     pgtype.Text
 	SubmissionCount    int64
 }
 
@@ -3559,6 +3612,7 @@ func (q *Queries) GetPublicFormRefBySlug(ctx context.Context, slug string) (GetP
 		&i.AllowBack,
 		&i.Password,
 		&i.ScheduleID,
+		&i.MetrikaCounter,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -8454,6 +8508,36 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.IsAdmin,
 	)
 	return i, err
+}
+
+const upsertFormCounter = `-- name: UpsertFormCounter :exec
+
+INSERT INTO form_counters (id, form_id, kind, counter, enabled)
+VALUES ($1, $2, $3, $4, $5)
+ON CONFLICT (form_id, kind) DO UPDATE
+SET counter = EXCLUDED.counter, enabled = EXCLUDED.enabled, updated_at = now()
+`
+
+type UpsertFormCounterParams struct {
+	ID      uuid.UUID
+	FormID  uuid.UUID
+	Kind    string
+	Counter string
+	Enabled bool
+}
+
+// СЧЁТЧИКИ АНАЛИТИКИ (фаза 29 DEV-PLAN, миграция 0067, спека docs/design/yandex-metrika.md).
+// Подключение или правка счётчика вида kind: у формы один счётчик вида, поэтому
+// повторное подключение правит номер и тумблер существующего, а не заводит второй.
+func (q *Queries) UpsertFormCounter(ctx context.Context, arg UpsertFormCounterParams) error {
+	_, err := q.db.Exec(ctx, upsertFormCounter,
+		arg.ID,
+		arg.FormID,
+		arg.Kind,
+		arg.Counter,
+		arg.Enabled,
+	)
+	return err
 }
 
 const upsertFormVisit = `-- name: UpsertFormVisit :exec

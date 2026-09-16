@@ -1,5 +1,5 @@
 import { test, expect, devices } from '@playwright/test'
-import { login, seedAccount } from './helpers/session'
+import { csrfToken, login, seedAccount } from './helpers/session'
 
 // Оформление формы (фаза 22) против prod-local: то, что автор задал в шторке, —
 // глазами респондента и в сыром HTML, который отдаёт Go.
@@ -49,7 +49,7 @@ test('оформление: тёмная форма с первого кадра
   const email = seedAccount('design')
   await login(page, email)
 
-  const csrf = (await page.context().cookies()).find((c) => c.name === 'csrf_token')!.value
+  const csrf = await csrfToken(page)
   const headers = { 'Content-Type': 'application/json', 'X-CSRF-Token': csrf }
 
   const created = await page.request.post('/api/v1/forms', { headers, data: { title: formTitle } })

@@ -77,6 +77,12 @@ func newStack(t *testing.T, provider integrations.Provider) *httptest.Server {
 // тестам доставки нужен получатель на loopback, а боевой Guard туда не пустит.
 func newStackWithEgress(t *testing.T, provider integrations.Provider, egress integrations.Egress) *httptest.Server {
 	t.Helper()
+	return newStackWith(t, provider, nil, egress)
+}
+
+// newStackWith — полная вертикаль; yandex == nil — приложение Яндекса не настроено.
+func newStackWith(t *testing.T, provider integrations.Provider, yandex integrations.MetrikaProvider, egress integrations.Egress) *httptest.Server {
+	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false)
 
@@ -87,7 +93,11 @@ func newStackWithEgress(t *testing.T, provider integrations.Provider, egress int
 
 	svc := integrations.NewService(testPool, postgres.TxRunner{Pool: testPool}, integrations.Repo{},
 		wsSvc, formsSvc, provider, testKey).
-		WithWebhooks(integrations.Repo{}, egress)
+		WithWebhooks(integrations.Repo{}, egress).
+		WithCounters(integrations.Repo{}, "https://f.example", plans)
+	if yandex != nil {
+		svc = svc.WithYandex(yandex)
+	}
 	// Лимитер инжектируется пермиссивной реализацией, а не выключается (инвариант 6).
 	h := integrations.NewHandler(svc, authH.RequireAuth, authH.RequireCSRF, appOrigin, false, testKey,
 		ratelimit.AllowAll{})
@@ -134,6 +144,7 @@ type formStatusDTO struct {
 	WorkspaceID string     `json:"workspaceId"`
 	Account     accountDTO `json:"account"`
 	Connections []sheetDTO `json:"connections"`
+	Yandex      accountDTO `json:"yandex"`
 }
 
 // formStatus читает состояние интеграций формы — то, что рисует таб.

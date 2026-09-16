@@ -7,6 +7,7 @@ import type {
   ConnectedAccount,
   FormIntegrations,
   FormSheet,
+  MetrikaCounterRef,
   Webhook,
 } from '../../entities/integration'
 import { IntegrationsView } from './IntegrationsView'
@@ -28,7 +29,7 @@ const popup = vi.hoisted(() => ({
 // fetch нельзя: в happy-dom он падает на ECONNREFUSED за миллисекунды, и тест
 // проверял бы, кто успел первым. Мок трогает только один вызов; остальные тесты
 // сеют список в кэш и до него не доходят (staleTime 30 с).
-const hangingList = vi.hoisted(() => ({ enabled: false }))
+const hangingList = vi.hoisted(() => ({ enabled: false, signal: null as AbortSignal | null }))
 
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()
@@ -36,8 +37,33 @@ vi.mock('./api', async (importOriginal) => {
     ...actual,
     listSpreadsheets: (accountId: string) =>
       hangingList.enabled ? new Promise<never>(() => {}) : actual.listSpreadsheets(accountId),
+    listMetrikaCounters: (accountId: string, signal?: AbortSignal) => {
+      hangingList.signal = signal ?? null
+      return hangingList.enabled
+        ? new Promise<never>(() => {})
+        : actual.listMetrikaCounters(accountId, signal)
+    },
   }
 })
+
+// Тариф пространства: разрешает ли он счётчик Метрики. undefined — «не знаем»
+// (снимок едет или закрыт правом, как у редактора).
+const plan = vi.hoisted(() => ({ allowed: true as boolean | undefined }))
+
+vi.mock('../plan/useFeature', () => ({
+  useFeatureAllowed: () => plan.allowed ?? true,
+  useFeatureDecision: () => plan.allowed,
+}))
+
+// Метка тарифа и оверлей тарифа ведут ссылкой на страницу тарифа — роутера в тесте
+// нет, поэтому подменены своим текстом: проверяется, КОГДА они появляются.
+vi.mock('../../shared/ProTag', () => ({
+  ProTag: () => <span>ПРО</span>,
+}))
+
+vi.mock('../plan/PlanUpsell', () => ({
+  PlanUpsell: ({ open }: { open: boolean }) => (open ? <p>Это на платном тарифе</p> : null),
+}))
 
 vi.mock('../../shared/oauthPopup', () => ({
   useOAuthPopup: (onOutcome: (outcome: string) => void) => {
@@ -115,6 +141,8 @@ function state(patch: Partial<FormIntegrations> = {}): FormIntegrations {
     },
     connections: [],
     webhooks: [],
+    metrika: null,
+    yandex: { enabled: false, accounts: [] },
     ...patch,
   }
 }
@@ -137,7 +165,10 @@ function newTestClient() {
 // ради которого в окне есть индикатор.
 // Отдаёт клиент: часть проверок доигрывает приезд НОВЫХ данных (аккаунт
 // подключился в соседнем окне) — для этого их надо положить в кеш после рендера.
-function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
+function renderView(
+  data: FormIntegrations,
+  { seedSpreadsheets = true, counters }: { seedSpreadsheets?: boolean; counters?: MetrikaCounterRef[] } = {},
+) {
   const qc = newTestClient()
   qc.setQueryData(integrationKeys.form(FORM_ID), data)
   if (seedSpreadsheets) {
@@ -145,12 +176,19 @@ function renderView(data: FormIntegrations, { seedSpreadsheets = true } = {}) {
       { id: 'ss-old', name: 'Прошлая форма' },
     ])
   }
+  // Счётчики Метрики сеются каждому аккаунту Яндекса: окно спрашивает их у
+  // выбранного, а выбранным бывает любой.
+  if (counters) {
+    for (const a of data.yandex.accounts) {
+      qc.setQueryData(integrationKeys.metrikaCounters(FORM_ID, a.id), counters)
+    }
+  }
   // TooltipProvider повторяет окружение приложения: в кабинете его даёт
   // SidebarProvider выше по дереву. Без него точка состояния роняет рендер.
   render(
     <QueryClientProvider client={qc}>
       <TooltipProvider>
-        <IntegrationsView formId={FORM_ID} />
+        <IntegrationsView formId={FORM_ID} formName="Опрос" />
       </TooltipProvider>
     </QueryClientProvider>,
   )
@@ -841,7 +879,7 @@ describe('оверлей настройки Google Таблиц', () => {
     render(
       <QueryClientProvider client={qc}>
         <TooltipProvider>
-          <IntegrationsView formId={FORM_ID} />
+          <IntegrationsView formId={FORM_ID} formName="Опрос" />
         </TooltipProvider>
       </QueryClientProvider>,
     )
@@ -1554,3 +1592,638 @@ function mockWebhookCalls(
   vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
   return calls
 }
+
+// --- Яндекс Метрика (фаза 29) ---
+
+const COUNTER: NonNullable<FormIntegrations['metrika']> = { counter: '12345678', enabled: true }
+
+// mockCounterCalls — записывает правки счётчика; GET состояния после мутации отвечает
+// тем же состоянием, иначе перезапрос уронил бы экран в отказ.
+function mockCounterCalls(data: FormIntegrations, reply?: Response) {
+  const calls: { method: string; url: string; body: unknown }[] = []
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    if (method === 'GET') {
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    return reply ?? new Response(null, { status: 204 })
+  })
+  vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+  return calls
+}
+
+describe('Яндекс Метрика на экране интеграций', () => {
+  afterEach(() => {
+    plan.allowed = true
+    vi.unstubAllGlobals()
+  })
+
+  it('каталог предлагает Метрику плиткой с меткой тарифа', () => {
+    renderView(state())
+
+    expect(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' })).toBeTruthy()
+    expect(screen.getByText('Отмечайте цели формы в своём счётчике')).toBeTruthy()
+    expect(screen.getByText('ПРО')).toBeTruthy()
+  })
+
+  it('на тарифе без счётчика «Подключить» открывает предложение тарифа, а не окно', () => {
+    plan.allowed = false
+    renderView(state())
+
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    expect(screen.getByText('Это на платном тарифе')).toBeTruthy()
+    expect(screen.queryByLabelText('Номер счётчика')).toBeNull()
+  })
+
+  it('окно — номер, цели одной строкой текстом и условия работы', () => {
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    expect(screen.getByLabelText('Номер счётчика')).toBeTruthy()
+    // Цели — одна строка: все три идентификатора в одном абзаце, без списка и кнопок.
+    const line = screen.getByText(/«JavaScript-событие»/)
+    expect(line.textContent).toContain('trillix_open, trillix_start и trillix_submit.')
+    expect(screen.queryByRole('button', { name: /Скопировать/ })).toBeNull()
+    expect(screen.getByText('Где отмечаются цели')).toBeTruthy()
+    expect(screen.getByText(/цели не отмечаются/)).toBeTruthy()
+    expect(screen.getByText(/Вебвизор на форме не работает/)).toBeTruthy()
+  })
+
+  it('«Подключить» без номера не нажимается', () => {
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    const connect = screen.getByRole('button', { name: 'Подключить' }) as HTMLButtonElement
+    expect(connect.disabled).toBe(true)
+  })
+
+  it('подключение шлёт номер включённым и закрывает окно', async () => {
+    const calls = mockCounterCalls(state())
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: ' 12345678 ' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls).toEqual([
+      {
+        method: 'PUT',
+        url: expect.stringContaining('/forms/form-1/counters/yandex-metrika'),
+        body: { counter: '12345678', enabled: true },
+      },
+    ])
+  })
+
+  it('отказ сервера показан его текстом, окно остаётся открытым', async () => {
+    mockCounterCalls(
+      state(),
+      new Response(
+        JSON.stringify({
+          error: {
+            code: 'validation_failed',
+            message: 'номер счётчика — от 1 до 12 цифр, как в настройках Метрики',
+          },
+        }),
+        { status: 422, headers: { 'content-type': 'application/json' } },
+      ),
+    )
+    renderView(state())
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: 'abc' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('от 1 до 12 цифр')
+    expect(screen.getByRole('dialog')).toBeTruthy()
+  })
+
+  it('подключённый счётчик — строка в «Моих подключениях» с номером и без журнала', () => {
+    renderView(state({ metrika: COUNTER }))
+
+    expect(screen.getByText('Мои подключения')).toBeTruthy()
+    expect(screen.getByText('Цели отмечаются в счётчике 12345678')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Работает' })).toBeTruthy()
+    // Доставки у счётчика нет — и журнала тоже.
+    expect(screen.queryByRole('button', { name: 'Журнал доставок' })).toBeNull()
+  })
+
+  it('«Настроить» открывает окно с номером и кнопкой «Сохранить»', () => {
+    renderView(state({ metrika: COUNTER }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить счётчик' }))
+
+    expect((screen.getByLabelText('Номер счётчика') as HTMLInputElement).value).toBe('12345678')
+    expect(screen.getByRole('button', { name: 'Сохранить' })).toBeTruthy()
+  })
+
+  it('правка номера у выключенного счётчика его не включает', async () => {
+    const calls = mockCounterCalls(state({ metrika: { ...COUNTER, enabled: false } }))
+    renderView(state({ metrika: { ...COUNTER, enabled: false } }))
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить счётчик' }))
+
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: '87654321' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Сохранить' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    expect(calls[0]!.body).toEqual({ counter: '87654321', enabled: false })
+  })
+
+  it('тумблер строки выключает счётчик, сохраняя номер', async () => {
+    const calls = mockCounterCalls(state({ metrika: COUNTER }))
+    renderView(state({ metrika: COUNTER }))
+
+    fireEvent.click(screen.getByRole('switch', { name: 'Выключить счётчик' }))
+
+    await waitFor(() => expect(calls.length).toBe(1))
+    expect(calls[0]).toEqual({
+      method: 'PUT',
+      url: expect.stringContaining('/forms/form-1/counters/yandex-metrika'),
+      body: { counter: '12345678', enabled: false },
+    })
+  })
+
+  it('удаление спрашивает и обещает сохранить данные в Метрике', async () => {
+    const calls = mockCounterCalls(state({ metrika: COUNTER }))
+    renderView(state({ metrika: COUNTER }))
+
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить счётчик' }))
+    expect(screen.getByText('Удалить счётчик?')).toBeTruthy()
+    expect(screen.getByText(/останутся в\s+Метрике/)).toBeTruthy()
+    expect(calls).toEqual([])
+
+    fireEvent.click(screen.getByRole('button', { name: 'Удалить' }))
+    await waitFor(() => expect(calls.map((c) => c.method)).toEqual(['DELETE']))
+  })
+
+  it('на тарифе без счётчика строка говорит, что он не работает', () => {
+    plan.allowed = false
+    renderView(state({ metrika: COUNTER }))
+
+    expect(screen.getByRole('button', { name: 'Не работает на текущем тарифе' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Работает' })).toBeNull()
+  })
+
+  // Редактору снимок тарифа не отдаётся (billing.view): «Работает» по умолчанию
+  // было бы ложью, если пространство на бесплатном тарифе.
+  it('тариф неизвестен — строка не утверждает, что счётчик работает', () => {
+    plan.allowed = undefined
+    renderView(state({ metrika: COUNTER }))
+
+    expect(screen.getByRole('button', { name: 'Включено' })).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Работает' })).toBeNull()
+  })
+
+  it('выключенный счётчик помечен выключенным и на бесплатном тарифе', () => {
+    plan.allowed = false
+    renderView(state({ metrika: { ...COUNTER, enabled: false } }))
+
+    expect(screen.getByRole('button', { name: 'Выключено' })).toBeTruthy()
+  })
+})
+
+// --- Метрика через аккаунт Яндекса (фаза 29, спека §13.5) ---
+//
+// Два пути к одному номеру: выбрать счётчик в аккаунте (цели заводит продукт) и
+// вписать номер руками. Разница между ними не косметическая — на контуре без
+// приложения Яндекса ручной путь единственный, и обещать в нём кнопку, которой не
+// появится, значит отправить человека искать несуществующее.
+
+const YA_ACCOUNT_ID = 'ya-1'
+
+function yandexAccount(patch: Partial<ConnectedAccount> = {}): ConnectedAccount {
+  return {
+    id: YA_ACCOUNT_ID,
+    email: 'author@yandex.ru',
+    needsReconnect: false,
+    connectedAt: '2026-09-16T10:00:00Z',
+    ...patch,
+  }
+}
+
+const YANDEX_ON = { enabled: true, accounts: [yandexAccount()] }
+
+const COUNTERS: MetrikaCounterRef[] = [
+  { id: 12345678, name: 'Сайт агентства', site: 'agency.example' },
+  { id: 999, name: 'Лендинг', site: 'land.example' },
+]
+
+// mockYandexCalls — записывает мутации окна и отвечает на заведение целей. Ответ
+// целей — функция, а не готовый Response: тело читается один раз, а повтор в этих
+// проверках как раз второй заход.
+function mockYandexCalls(
+  data: FormIntegrations,
+  goals: () => Response = () =>
+    new Response(JSON.stringify({ created: 3, existing: 0 }), {
+      status: 200,
+      headers: { 'content-type': 'application/json' },
+    }),
+) {
+  const calls: { method: string; url: string; body: unknown }[] = []
+  const fetchMock = vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method ?? 'GET'
+    // Список счётчиков лежит под ключом формы и перезапрашивается её инвалидацией.
+    if (method === 'GET' && url.includes('/counters')) {
+      return new Response(JSON.stringify({ counters: COUNTERS }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    if (method === 'GET') {
+      return new Response(JSON.stringify(data), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+    calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined })
+    if (url.includes('/goals')) return goals()
+    return new Response(null, { status: 204 })
+  })
+  vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+  return calls
+}
+
+function openMetrika() {
+  fireEvent.click(screen.getByRole('button', { name: 'Подключить Яндекс Метрику' }))
+}
+
+describe('Метрика через аккаунт Яндекса', () => {
+  afterEach(() => {
+    plan.allowed = true
+    vi.unstubAllGlobals()
+  })
+
+  it('приложение настроено, аккаунта нет — окно зовёт подключить аккаунт Яндекса', () => {
+    renderView(state({ yandex: { enabled: true, accounts: [] } }))
+    openMetrika()
+
+    expect(screen.getByRole('link', { name: 'Подключить аккаунт Яндекса' })).toBeTruthy()
+    // Ручной ввод остаётся выходом с этого шага: у агентства бывает доступ к
+    // форме и нет доступа к Метрике клиента.
+    expect(screen.getByRole('button', { name: 'Ввести номер вручную' })).toBeTruthy()
+    expect(screen.queryByLabelText('Номер счётчика')).toBeNull()
+  })
+
+  // Контур без ключей приложения (критерий приёмки, п. 10): кнопки подключения
+  // аккаунта нет вовсе, ручной номер работает как прежде.
+  it('контур без приложения Яндекса — сразу номер, подключения аккаунта в окне нет', () => {
+    renderView(state())
+    openMetrika()
+
+    expect(screen.getByLabelText('Номер счётчика')).toBeTruthy()
+    expect(screen.queryByRole('link', { name: /Подключить аккаунт Яндекса/ })).toBeNull()
+    expect(screen.queryByRole('button', { name: /Выбрать счётчик в аккаунте/ })).toBeNull()
+  })
+
+  it('аккаунт подключён — счётчик выбирается из списка, идентификаторов целей в окне нет', () => {
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    expect(screen.getByLabelText('Аккаунт Яндекса')).toBeTruthy()
+    expect(screen.getByLabelText('Счётчик')).toBeTruthy()
+    expect(screen.queryByLabelText('Номер счётчика')).toBeNull()
+    // Цели заводит продукт — читать их идентификаторы человеку незачем.
+    expect(screen.queryByText(/«JavaScript-событие»/)).toBeNull()
+    // Условия работы остаются: вопрос не про то, как выбран номер.
+    expect(screen.getByText('Где отмечаются цели')).toBeTruthy()
+  })
+
+  it('счётчик в списке подписан названием, сайтом и номером', () => {
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    expect(screen.getByRole('option', { name: 'Сайт агентства · agency.example · 12345678' })).toBeTruthy()
+    expect(screen.getByRole('option', { name: 'Лендинг · land.example · 999' })).toBeTruthy()
+  })
+
+  // Порядок обязателен: цели заводятся счётчику ФОРМЫ, и до сохранения номера
+  // заводить их некуда.
+  it('подключение шлёт сначала номер, потом цели, и закрывает окно', async () => {
+    const calls = mockYandexCalls(state({ yandex: YANDEX_ON }))
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: /Сайт агентства/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls).toEqual([
+      {
+        method: 'PUT',
+        url: expect.stringContaining('/forms/form-1/counters/yandex-metrika'),
+        body: { counter: '12345678', enabled: true },
+      },
+      {
+        method: 'POST',
+        url: expect.stringContaining('/forms/form-1/counters/yandex-metrika/goals'),
+        body: { accountId: YA_ACCOUNT_ID },
+      },
+    ])
+  })
+
+  // Отказ по целям НЕ отменяет подключения: счётчик уже сохранён, и закрытое окно
+  // выглядело бы как «ничего не произошло». Повтор шлёт только цели — второй PUT
+  // ничего не менял бы.
+  // failingGoalsOnce — первое заведение целей отказывает, следующие проходят.
+  function failingGoalsOnce() {
+    let first = true
+    return () => {
+      if (first) {
+        first = false
+        return new Response(
+          JSON.stringify({
+            error: {
+              code: 'validation_failed',
+              message: 'Яндекс не дал доступа к счётчику — проверьте, что аккаунт вправе его править',
+            },
+          }),
+          { status: 422, headers: { 'content-type': 'application/json' } },
+        )
+      }
+      return new Response(JSON.stringify({ created: 3, existing: 0 }), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    }
+  }
+
+  // Отдельного «Завести цели» нет: повтор — то же «Подключить», и номер
+  // сохраняется заново. Иначе смена счётчика между попытками молча завела бы цели
+  // в прежнем.
+  it('цели не завелись — окно осталось, повтор с другим счётчиком сохраняет его номер', async () => {
+    const calls = mockYandexCalls(state({ yandex: YANDEX_ON }), failingGoalsOnce())
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: /Сайт агентства/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    const alert = await screen.findByRole('alert')
+    expect(alert.textContent).toContain('Счётчик подключён, но цели завести не удалось')
+    expect(alert.textContent).toContain('аккаунт вправе его править')
+    expect(screen.getByRole('dialog')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Завести цели' })).toBeNull()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: /Лендинг/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls.map((c) => c.method)).toEqual(['PUT', 'POST', 'PUT', 'POST'])
+    expect(calls[2]!.body).toEqual({ counter: '999', enabled: true })
+  })
+
+  it('цели не завелись — номер, вписанный после этого руками, сохраняется', async () => {
+    const calls = mockYandexCalls(state({ yandex: YANDEX_ON }), failingGoalsOnce())
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: /Сайт агентства/ }))
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+    await screen.findByRole('alert')
+
+    fireEvent.click(screen.getByRole('button', { name: /Ввести номер вручную/ }))
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: '55555' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls.map((c) => c.method)).toEqual(['PUT', 'POST', 'PUT'])
+    expect(calls[2]!.body).toEqual({ counter: '55555', enabled: true })
+  })
+
+  it('ручной номер остаётся запасным путём при подключённом аккаунте', async () => {
+    const calls = mockYandexCalls(state({ yandex: YANDEX_ON }))
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByRole('button', { name: /Ввести номер вручную/ }))
+    expect(screen.getByText(/«JavaScript-событие»/)).toBeTruthy()
+    fireEvent.change(screen.getByLabelText('Номер счётчика'), { target: { value: '55555' } })
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // Целей в ручном пути нет: счётчик выбран не в аккаунте, и права на него у
+    // нас никто не спрашивал.
+    expect(calls.map((c) => c.method)).toEqual(['PUT'])
+    expect(calls[0]!.body).toEqual({ counter: '55555', enabled: true })
+  })
+
+  it('правка подключённого счётчика: номер виден, отдельного «Завести цели» нет', () => {
+    renderView(state({ metrika: COUNTER, yandex: YANDEX_ON }), { counters: COUNTERS })
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить счётчик' }))
+
+    expect(screen.getByLabelText('Счётчик').textContent).toContain('12345678')
+    // Кнопки-повтора нет (решение владельца 2026-09-16): на боевом счётчике она
+    // стоила автору собранной статистики по целям.
+    expect(screen.queryByRole('button', { name: /Завести цели/ })).toBeNull()
+    // Вместо неё — предупреждение о том, что подключение сделает с его счётчиком.
+    expect(screen.getByText(/будут созданы три цели формы/)).toBeTruthy()
+  })
+
+  // Счётчик, вписанный руками или принадлежащий другому аккаунту, в списке
+  // аккаунта не появится — а поле не должно выглядеть пустым.
+  it('счётчик не из аккаунта показан отдельным пунктом', () => {
+    renderView(state({ metrika: COUNTER, yandex: YANDEX_ON }), { counters: [COUNTERS[1]!] })
+    fireEvent.click(screen.getByRole('button', { name: 'Настроить счётчик' }))
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    expect(screen.getByRole('option', { name: 'Текущий счётчик 12345678' })).toBeTruthy()
+  })
+
+  // «Переподключить» стоит ПОСТОЯННО, а не по признаку поломки: отзыв согласия в
+  // Яндекс ID виден нам только в момент похода к Метрике, и кнопка «когда есть
+  // что чинить» не появлялась бы ровно тогда, когда нужна. Отличает её от
+  // «подключить другой» подсказка с почтой выбранного аккаунта — адрес у обеих
+  // кнопок один.
+  it('переподключение уводит на согласие с подсказкой, какой аккаунт открывать', () => {
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    // Отключения аккаунта в окне счётчика нет: оно про аккаунт целиком.
+    expect(screen.queryByRole('button', { name: /Отключить аккаунт/ })).toBeNull()
+
+    fireEvent.click(screen.getByRole('button', { name: 'Переподключить' }))
+
+    expect(screen.getByText(/Войдите в/).textContent).toContain('author@yandex.ru')
+    const link = screen.getByRole('link', { name: 'Подключить заново' }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toContain('accountId=' + YA_ACCOUNT_ID)
+  })
+
+  // Загрузка счётчиков закрывает окно тем же слоем, что поход за согласием, — как
+  // списки в окне Таблиц: пока что-то едет, трогать в окне нечего.
+  it('счётчики ещё едут — окно закрыто общим слоем, поля выключены', async () => {
+    hangingList.enabled = true
+    try {
+      renderView(state({ yandex: YANDEX_ON }))
+      openMetrika()
+
+      await waitFor(() => expect(screen.getByText('Загружаем данные Яндекса…')).toBeTruthy())
+      expect(screen.getByLabelText('Аккаунт Яндекса').closest('[inert]')).not.toBeNull()
+      // «Отменить» — только у похода за согласием: загрузку отменяет закрытие окна.
+      expect(screen.queryByRole('button', { name: 'Отменить' })).toBeNull()
+    } finally {
+      hangingList.enabled = false
+    }
+  })
+
+  it('счётчики приехали — слоя нет и поля живые', async () => {
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    await waitFor(() => expect(screen.queryByText('Загружаем данные Яндекса…')).toBeNull())
+    expect(screen.getByLabelText('Аккаунт Яндекса').closest('[inert]')).toBeNull()
+  })
+
+  // Закрытое окно обрывает поход за списком: за ним стоит запрос к Метрике на
+  // секунды, и брошенный он держит одно из шести соединений браузера к origin —
+  // а накопившись, они и дают «вечную загрузку», которая лечится перезагрузкой
+  // страницы.
+  it('окно закрыли — запрос за счётчиками обрывается', async () => {
+    hangingList.enabled = true
+    hangingList.signal = null
+    try {
+      renderView(state({ yandex: YANDEX_ON }))
+      openMetrika()
+      await waitFor(() => expect(hangingList.signal).not.toBeNull())
+      expect(hangingList.signal!.aborted).toBe(false)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+      await waitFor(() => expect(hangingList.signal!.aborted).toBe(true))
+    } finally {
+      hangingList.enabled = false
+    }
+  })
+
+  it('счётчики не загрузились — поле говорит об этом и даёт повтор', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/counters')) return new Response(null, { status: 500 })
+      return new Response(JSON.stringify(state({ yandex: YANDEX_ON })), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    renderView(state({ yandex: YANDEX_ON }))
+    openMetrika()
+
+    // Ждём дольше обычного: у запроса есть один повтор с паузой (queries.ts), и
+    // это ровно то, ради чего повтор один, а не три.
+    await waitFor(
+      () => expect(screen.getByLabelText('Счётчик').textContent).toContain('Счётчики не загрузились'),
+      { timeout: 4000 },
+    )
+    const before = fetchMock.mock.calls.filter(([u]) => String(u).includes('/counters')).length
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([u]) => String(u).includes('/counters')).length,
+      ).toBeGreaterThan(before),
+    )
+  })
+
+  // Создание счётчика — путь для того, у кого Метрики ещё нет: пункт стоит
+  // ПЕРВЫМ, а не под списком чужих счётчиков.
+  it('счётчик можно завести новый — одним действием', async () => {
+    const created = state({ metrika: COUNTER, yandex: YANDEX_ON })
+    const calls = mockYandexCalls(created, () =>
+      new Response(JSON.stringify({ counter: '112704693', created: 3, existing: 0 }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: 'Создать новый счётчик' }))
+    expect(screen.getByText(/Заведём новый счётчик/)).toBeTruthy()
+    // Служебное значение пункта номером не притворяется.
+    expect(screen.getByLabelText('Счётчик').textContent).not.toContain('Текущий счётчик')
+    fireEvent.change(screen.getByLabelText('Название счётчика'), {
+      target: { value: '  Сайт компании ' },
+    })
+
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    // Одно действие: ни PUT номера, ни отдельного заведения целей — их делает
+    // сервер, и половинки по отдельности бессмысленны.
+    expect(calls).toEqual([
+      {
+        method: 'POST',
+        url: expect.stringContaining('/forms/form-1/counters/yandex-metrika/counter'),
+        body: { accountId: YA_ACCOUNT_ID, name: 'Сайт компании' },
+      },
+    ])
+  })
+
+  // Подсказка в поле имени и имя по умолчанию — одна строка с настоящим названием
+  // формы: пустое поле уходит в запросе ею же.
+  it('имя нового счётчика по умолчанию — «Trillix: <название формы>»', async () => {
+    const calls = mockYandexCalls(state({ metrika: COUNTER, yandex: YANDEX_ON }), () =>
+      new Response(JSON.stringify({ counter: '112704693', created: 3, existing: 0 }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: 'Создать новый счётчик' }))
+    const input = screen.getByLabelText('Название счётчика') as HTMLInputElement
+    expect(input.placeholder).toBe('Trillix: Опрос')
+    expect(input.value).toBe('')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls[0]!.body).toEqual({ accountId: YA_ACCOUNT_ID, name: 'Trillix: Опрос' })
+  })
+
+  // Счётчик создался, а цели — нет: номер уже у формы, и повтор обязан пойти
+  // целями, а не вторым счётчиком.
+  it('создание сорвалось на целях — выбор переезжает на созданный счётчик', async () => {
+    const qc = renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: 'Создать новый счётчик' }))
+
+    act(() => {
+      qc.setQueryData(
+        integrationKeys.form(FORM_ID),
+        state({ metrika: { counter: '112704693', enabled: true }, yandex: YANDEX_ON }),
+      )
+    })
+
+    await waitFor(() =>
+      expect(screen.getByLabelText('Счётчик').textContent).toContain('112704693'),
+    )
+    expect(screen.queryByText(/Заведём новый счётчик/)).toBeNull()
+  })
+
+  // Аккаунт подключается в соседнем окне: вернувшись с согласием, окно обязано
+  // само уйти с шага согласия к полям — иначе человек жмёт кнопку второй раз.
+  it('вернулся с согласием — окно показывает поля аккаунта', async () => {
+    const qc = renderView(state({ yandex: { enabled: true, accounts: [] } }))
+    openMetrika()
+    expect(screen.getByRole('link', { name: 'Подключить аккаунт Яндекса' })).toBeTruthy()
+
+    act(() => {
+      qc.setQueryData(integrationKeys.form(FORM_ID), state({ yandex: YANDEX_ON }))
+      qc.setQueryData(integrationKeys.metrikaCounters(FORM_ID, YA_ACCOUNT_ID), COUNTERS)
+      popupOutcome('integration_ok')
+    })
+
+    await waitFor(() => expect(screen.getByLabelText('Аккаунт Яндекса')).toBeTruthy())
+    expect(screen.getByLabelText('Аккаунт Яндекса').textContent).toContain('author@yandex.ru')
+  })
+})

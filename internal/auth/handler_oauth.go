@@ -121,7 +121,7 @@ func (h *Handler) setPopupMode(w http.ResponseWriter, r *http.Request) {
 
 // readPopupMode отвечает, начат ли этот поход из отдельного окна.
 func (h *Handler) readPopupMode(r *http.Request) bool {
-	c, err := r.Cookie(oauthModeCookie)
+	c, err := h.readCookie(r, oauthModeCookie)
 	return err == nil && c.Value == oauthModePopup
 }
 
@@ -242,7 +242,7 @@ type oauthLinkRequest struct {
 }
 
 func (h *Handler) oauthLink(w http.ResponseWriter, r *http.Request) {
-	c, err := r.Cookie(oauthPendingCookie)
+	c, err := h.readCookie(r, oauthPendingCookie)
 	if err != nil {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: привязка не начата или истекла", domain.ErrUnauthorized))
 		return
@@ -354,30 +354,6 @@ func (h *Handler) redirectToApp(w http.ResponseWriter, r *http.Request, path str
 	http.Redirect(w, r, h.appOrigin+path, http.StatusFound)
 }
 
-func (h *Handler) setFlowCookie(w http.ResponseWriter, name, value string) {
-	http.SetCookie(w, &http.Cookie{
-		Name:     name,
-		Value:    value,
-		Path:     "/",
-		HttpOnly: true,
-		Secure:   h.cookieSecure,
-		SameSite: http.SameSiteLaxMode,
-		MaxAge:   int(oauthFlowTTL.Seconds()),
-	})
-}
-
-func (h *Handler) readFlowCookie(r *http.Request, name string) (first, second string, ok bool) {
-	c, err := r.Cookie(name)
-	if err != nil {
-		return "", "", false
-	}
-	a, b, found := strings.Cut(c.Value, ":")
-	if !found || a == "" || b == "" {
-		return "", "", false
-	}
-	return a, b, true
-}
-
 // signPending подписывает «провайдер + личность + срок». Ключ — тот же
 // FORM_TOKEN_SECRET, но сообщение начинается с метки назначения: без неё
 // подпись из одного контекста теоретически принимается в другом.
@@ -427,7 +403,7 @@ func (h *Handler) signLinkIntent(userID uuid.UUID) string {
 // Плохая подпись, истёкший срок и отсутствие cookie неразличимы снаружи — все
 // они означают «это обычный вход».
 func (h *Handler) readLinkIntent(r *http.Request) (uuid.UUID, bool) {
-	c, err := r.Cookie(oauthLinkCookie)
+	c, err := h.readCookie(r, oauthLinkCookie)
 	if err != nil {
 		return uuid.Nil, false
 	}
@@ -488,7 +464,7 @@ func (h *Handler) finishLink(w http.ResponseWriter, r *http.Request, linkUserID 
 	// Подписанная cookie говорит, ЧЕЙ поход, но живой должна быть и сессия, и
 	// именно та же: иначе привязка доезжает до аккаунта, из которого человек уже
 	// вышел, а браузер тем временем занят другим.
-	c, err := r.Cookie(sessionCookieName)
+	c, err := h.readCookie(r, sessionCookieName)
 	if err != nil {
 		h.finishOAuth(w, r, provider, popup, outcomeLinkExpired)
 		return

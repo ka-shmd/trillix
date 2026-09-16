@@ -341,6 +341,11 @@ export type FrameMessage =
   | { type: 'page'; index: number }
   | { type: 'submit'; submissionId: string }
   | { type: 'redirect'; url: string }
+  | { type: 'goal'; counter: number; name: string }
+
+/** Номер счётчика Метрики: целое от 1 до 12 цифр — тот же CHECK, что у form_counters. */
+const isCounter = (raw: unknown): raw is number =>
+  Number.isSafeInteger(raw) && (raw as number) > 0 && (raw as number) < 1e12
 
 /**
  * readFrameMessage — разбор `event.data`; null, если это не наше сообщение.
@@ -368,6 +373,11 @@ export function readFrameMessage(data: unknown): FrameMessage | null {
         : null
     case 'redirect':
       return isHttpUrl(msg.url) ? { type: 'redirect', url: msg.url } : null
+    case 'goal':
+      // Имя уходит в ym чужой страницы: только наши цели `trillix_…`, не произвольная строка.
+      return isCounter(msg.counter) && typeof msg.name === 'string' && /^trillix_[a-z]+$/.test(msg.name)
+        ? { type: 'goal', counter: msg.counter, name: msg.name }
+        : null
     default:
       return null
   }

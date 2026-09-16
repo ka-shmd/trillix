@@ -5,22 +5,27 @@ import {
   useQueryClient,
 } from '@tanstack/react-query'
 
-import type { WebhookHeader } from '../../entities/integration'
+import type { MetrikaCounter, WebhookHeader } from '../../entities/integration'
 import { integrationKeys } from './keys'
 import {
   createSheet,
   createWebhook,
+  deleteMetrika,
+  createMetrikaCounter,
   deleteWebhook,
+  ensureMetrikaGoals,
   disableWebhookSignature,
   getFormIntegrations,
   listDeliveries,
   listWebhookDeliveries,
+  listMetrikaCounters,
   listSheets,
   listSpreadsheets,
   recheckSheet,
   refillSheet,
   retryDelivery,
   retryWebhookDelivery,
+  setMetrika,
   setWebhookSecret,
   testWebhook,
   unlinkSheet,
@@ -222,6 +227,50 @@ export function useDeleteWebhook(formId: string) {
   })
 }
 
+// --- ЯНДЕКС МЕТРИКА (фаза 29) ---
+
+// Одна мутация на подключение, правку номера и тумблер: ручка у них общая (PUT).
+export function useSetMetrika(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (input: MetrikaCounter) => setMetrika(formId, input),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+export function useDeleteMetrika(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: () => deleteMetrika(formId),
+    onSuccess: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
+  })
+}
+
+// Счётчики выбранного аккаунта. Поход к Метрике, поэтому спрашиваются только при
+// открытом окне и выбранном аккаунте — как таблицы Google.
+export function metrikaCountersQueryOptions(formId: string, accountId: string) {
+  return queryOptions({
+    queryKey: integrationKeys.metrikaCounters(formId, accountId),
+    // signal — брошенный запрос обрывается вместе с окном: за списком стоит поход
+    // к Метрике на секунды, и оставленный висеть он держит одно из шести
+    // соединений браузера к origin.
+    queryFn: ({ signal }) => listMetrikaCounters(accountId, signal),
+    // Один повтор, а не три по умолчанию: поход сюда долгий (обновление токена
+    // плюс запрос к Метрике), и четыре попытки подряд — минуты ожидания вместо
+    // честного «не загрузилось».
+    retry: 1,
+    staleTime: 30_000,
+  })
+}
+
+// Заведение целей состояния вкладки НЕ меняет: цели живут в Метрике, и у нас о
+// них не записано ничего. Инвалидировать нечего — окно показывает исход само.
+export function useEnsureMetrikaGoals(formId: string) {
+  return useMutation({
+    mutationFn: (accountId: string) => ensureMetrikaGoals(formId, accountId),
+  })
+}
+
 // Выключение подписи МЕНЯЕТ состояние таба (признак signed), поэтому
 // инвалидирует его.
 export function useDisableWebhookSignature(formId: string) {
@@ -263,5 +312,20 @@ export function useRetryWebhookDelivery(formId: string, webhookId: string) {
       void qc.invalidateQueries({ queryKey: integrationKeys.form(formId) })
       void qc.invalidateQueries({ queryKey: integrationKeys.webhookDeliveries(formId, webhookId) })
     },
+  })
+}
+
+// Новый счётчик меняет и состояние формы (появился номер), и список счётчиков
+// аккаунта (в нём появился ещё один) — инвалидируются оба: ключ формы накрывает
+// список, потому что тот лежит под ним.
+export function useCreateMetrikaCounter(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ accountId, name }: { accountId: string; name: string }) =>
+      createMetrikaCounter(formId, accountId, name),
+    // onSettled, а не onSuccess: счётчик мог создаться, а цели — нет, и тогда
+    // номер у формы уже стоит. Экран обязан увидеть его и в этом случае, иначе
+    // повтор завёл бы ВТОРОЙ счётчик.
+    onSettled: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }

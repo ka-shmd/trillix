@@ -145,7 +145,7 @@ func (f *fakeStore) UpdateToken(_ context.Context, _ postgres.DBTX, _ uuid.UUID,
 	return nil
 }
 
-func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID) ([]byte, error) {
+func (f *fakeStore) Delete(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, _ string) ([]byte, error) {
 	if f.deleteErr != nil {
 		return nil, f.deleteErr
 	}
@@ -495,7 +495,7 @@ func TestStatus_ListsAccountsOfAsker(t *testing.T) {
 	conn := sealedConn(t)
 	svc := newService(fakeAccess{}, &fakeStore{conn: conn}, &fakeProvider{})
 
-	st, err := svc.Status(context.Background(), testUser)
+	st, err := svc.Status(context.Background(), integrations.ProviderGoogle, testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -515,7 +515,7 @@ func TestStatus_ListsAccountsOfAsker(t *testing.T) {
 func TestStatus_NothingConnected(t *testing.T) {
 	svc := newService(fakeAccess{}, &fakeStore{}, &fakeProvider{})
 
-	st, err := svc.Status(context.Background(), testUser)
+	st, err := svc.Status(context.Background(), integrations.ProviderGoogle, testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -531,7 +531,7 @@ func TestConnect_NeedsNoWorkspaceRole(t *testing.T) {
 	store := &fakeStore{}
 	svc := newService(readerAccess(), store, &fakeProvider{})
 
-	if _, err := svc.Connect(context.Background(), testUser, "code", "verifier"); err != nil {
+	if _, err := svc.Connect(context.Background(), integrations.ProviderGoogle, testUser, "code", "verifier"); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	if store.upserted == nil {
@@ -544,7 +544,7 @@ func TestConnect_StoresSealedToken(t *testing.T) {
 	store := &fakeStore{}
 	svc := newService(fakeAccess{}, store, &fakeProvider{})
 
-	if _, err := svc.Connect(context.Background(), testUser, "code", "verifier"); err != nil {
+	if _, err := svc.Connect(context.Background(), integrations.ProviderGoogle, testUser, "code", "verifier"); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	if store.upserted == nil {
@@ -570,7 +570,7 @@ func TestStartURL_ReconnectPassesLoginHint(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newService(fakeAccess{}, &fakeStore{conn: conn}, provider)
 
-	if _, err := svc.StartURL(context.Background(), testUser, conn.ID, "s", "v"); err != nil {
+	if _, err := svc.StartURL(context.Background(), integrations.ProviderGoogle, testUser, conn.ID, "s", "v"); err != nil {
 		t.Fatalf("start url: %v", err)
 	}
 	if provider.loginHint != conn.Email {
@@ -586,7 +586,7 @@ func TestStartURL_ForeignAccountRefused(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newService(fakeAccess{}, &fakeStore{conn: foreign}, provider)
 
-	_, err := svc.StartURL(context.Background(), testUser, foreign.ID, "s", "v")
+	_, err := svc.StartURL(context.Background(), integrations.ProviderGoogle, testUser, foreign.ID, "s", "v")
 	if !errors.Is(err, domain.ErrValidation) {
 		t.Fatalf("ошибка = %v, ожидалась ErrValidation", err)
 	}
@@ -600,7 +600,7 @@ func TestDisconnect_Idempotent(t *testing.T) {
 	provider := &fakeProvider{}
 	svc := newService(fakeAccess{}, &fakeStore{deleteErr: pgx.ErrNoRows}, provider)
 
-	if err := svc.Disconnect(context.Background(), testUser, uuid.New()); err != nil {
+	if err := svc.Disconnect(context.Background(), integrations.ProviderGoogle, testUser, uuid.New()); err != nil {
 		t.Fatalf("повторное отключение вернуло ошибку: %v", err)
 	}
 	if provider.revoked != "" {
@@ -614,13 +614,13 @@ func TestDisconnect_RevokesAtProvider(t *testing.T) {
 	// расшифровки при отключении проверялся целиком, а не с подставным байтом.
 	store := &fakeStore{}
 	if _, err := newService(fakeAccess{}, store, &fakeProvider{}).
-		Connect(context.Background(), testUser, "code", "verifier"); err != nil {
+		Connect(context.Background(), integrations.ProviderGoogle, testUser, "code", "verifier"); err != nil {
 		t.Fatalf("подготовка: %v", err)
 	}
 
 	provider := &fakeProvider{}
 	svc := newService(fakeAccess{}, &fakeStore{deleted: store.upserted.RefreshSealed}, provider)
-	if err := svc.Disconnect(context.Background(), testUser, store.upserted.ID); err != nil {
+	if err := svc.Disconnect(context.Background(), integrations.ProviderGoogle, testUser, store.upserted.ID); err != nil {
 		t.Fatalf("disconnect: %v", err)
 	}
 	if provider.revoked != testRefreshToken {
@@ -634,7 +634,7 @@ func TestDisconnect_RevokesAtProvider(t *testing.T) {
 func TestDisabledProvider(t *testing.T) {
 	svc := newService(fakeAccess{}, &fakeStore{}, nil)
 
-	st, err := svc.Status(context.Background(), testUser)
+	st, err := svc.Status(context.Background(), integrations.ProviderGoogle, testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -642,13 +642,13 @@ func TestDisabledProvider(t *testing.T) {
 		t.Errorf("состояние = %+v, ожидалось «не настроено»", st)
 	}
 
-	if _, err := svc.StartURL(context.Background(), testUser, uuid.Nil, "s", "v"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.StartURL(context.Background(), integrations.ProviderGoogle, testUser, uuid.Nil, "s", "v"); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("StartURL = %v, ожидалась ErrNotFound", err)
 	}
-	if _, err := svc.Connect(context.Background(), testUser, "c", "v"); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := svc.Connect(context.Background(), integrations.ProviderGoogle, testUser, "c", "v"); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("Connect = %v, ожидалась ErrNotFound", err)
 	}
-	if err := svc.Disconnect(context.Background(), testUser, uuid.New()); !errors.Is(err, domain.ErrNotFound) {
+	if err := svc.Disconnect(context.Background(), integrations.ProviderGoogle, testUser, uuid.New()); !errors.Is(err, domain.ErrNotFound) {
 		t.Errorf("Disconnect = %v, ожидалась ErrNotFound", err)
 	}
 }
@@ -824,11 +824,12 @@ func sealedConn(t *testing.T) integrations.Connection {
 	t.Helper()
 	store := &fakeStore{}
 	if _, err := newService(fakeAccess{}, store, &fakeProvider{}).
-		Connect(context.Background(), testUser, "code", "verifier"); err != nil {
+		Connect(context.Background(), integrations.ProviderGoogle, testUser, "code", "verifier"); err != nil {
 		t.Fatalf("подготовка подключения: %v", err)
 	}
 	return integrations.Connection{
 		ID:            store.upserted.ID,
+		Provider:      store.upserted.Provider,
 		UserID:        testUser,
 		Email:         store.upserted.Email,
 		RefreshSealed: store.upserted.RefreshSealed,
@@ -975,7 +976,7 @@ func TestPicker_NotConfigured(t *testing.T) {
 	if _, err := svc.Picker(context.Background(), testUser, conn.ID); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ожидалась ErrNotFound", err)
 	}
-	st, err := svc.Status(context.Background(), testUser)
+	st, err := svc.Status(context.Background(), integrations.ProviderGoogle, testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -1345,9 +1346,9 @@ func TestStatus_TokenFromAnotherKeyAsksToReconnect(t *testing.T) {
 	account := uuid.New()
 
 	live := newService(fakeAccess{}, &fakeStore{
-		conn: integrations.Connection{ID: account, UserID: testUser, Email: "author@gmail.com", RefreshSealed: sealed},
+		conn: integrations.Connection{ID: account, Provider: integrations.ProviderGoogle, UserID: testUser, Email: "author@gmail.com", RefreshSealed: sealed},
 	}, &fakeProvider{})
-	st, err := live.Status(context.Background(), testUser)
+	st, err := live.Status(context.Background(), integrations.ProviderGoogle, testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -1358,9 +1359,9 @@ func TestStatus_TokenFromAnotherKeyAsksToReconnect(t *testing.T) {
 	// Тот же шифротекст, но открывать его нечем: так выглядит строка, пережившая
 	// смену секрета.
 	stale := newService(fakeAccess{}, &fakeStore{
-		conn: integrations.Connection{ID: account, UserID: testUser, Email: "author@gmail.com", RefreshSealed: append([]byte{0}, sealed...)},
+		conn: integrations.Connection{ID: account, Provider: integrations.ProviderGoogle, UserID: testUser, Email: "author@gmail.com", RefreshSealed: append([]byte{0}, sealed...)},
 	}, &fakeProvider{})
-	st, err = stale.Status(context.Background(), testUser)
+	st, err = stale.Status(context.Background(), integrations.ProviderGoogle, testUser)
 	if err != nil {
 		t.Fatalf("status: %v", err)
 	}
@@ -1377,7 +1378,7 @@ func TestStatus_TokenFromAnotherKeyAsksToReconnect(t *testing.T) {
 // старый.
 func TestAccessToken_RotatedRefreshIsStored(t *testing.T) {
 	account := uuid.New()
-	store := &fakeStore{conn: integrations.Connection{ID: account, UserID: testUser, RefreshSealed: sealedRefreshToken(t)}}
+	store := &fakeStore{conn: integrations.Connection{ID: account, Provider: integrations.ProviderGoogle, UserID: testUser, RefreshSealed: sealedRefreshToken(t)}}
 	store.link = integrations.FormLink{ID: uuid.New(), FormID: testForm, SpreadsheetID: "ss-1"}
 	svc := newService(fakeAccess{}, store, &fakeProvider{rotated: testRotatedToken})
 
@@ -1395,7 +1396,7 @@ func TestAccessToken_RotatedRefreshIsStored(t *testing.T) {
 // Google новый refresh не присылает — лишней записи в базу быть не должно.
 func TestAccessToken_UnchangedRefreshIsNotRewritten(t *testing.T) {
 	account := uuid.New()
-	store := &fakeStore{conn: integrations.Connection{ID: account, UserID: testUser, RefreshSealed: sealedRefreshToken(t)}}
+	store := &fakeStore{conn: integrations.Connection{ID: account, Provider: integrations.ProviderGoogle, UserID: testUser, RefreshSealed: sealedRefreshToken(t)}}
 	svc := newService(fakeAccess{}, store, &fakeProvider{})
 
 	if _, err := svc.Spreadsheets(context.Background(), testUser, account); err != nil {
@@ -1412,7 +1413,7 @@ func sealedRefreshToken(t *testing.T) []byte {
 	t.Helper()
 	store := &fakeStore{}
 	svc := newService(fakeAccess{}, store, &fakeProvider{})
-	if _, err := svc.Connect(context.Background(), testUser, "code", "verifier"); err != nil {
+	if _, err := svc.Connect(context.Background(), integrations.ProviderGoogle, testUser, "code", "verifier"); err != nil {
 		t.Fatalf("connect: %v", err)
 	}
 	return store.upserted.RefreshSealed

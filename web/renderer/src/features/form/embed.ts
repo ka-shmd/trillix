@@ -154,6 +154,7 @@ type HostPayload =
   | { type: 'page'; index: number }
   | { type: 'submit'; submissionId: string }
   | { type: 'redirect'; url: string }
+  | { type: 'goal'; counter: number; name: string }
 
 /** Сообщение фрейма хосту. Версия — часть контракта: `v1.js` живёт на чужих сайтах вечно. */
 export type HostMessage = { source: 'trillix'; v: 1 } & HostPayload
@@ -168,6 +169,11 @@ export interface HostBridge {
   submitted(submissionId: string): void
   /** Переход после отправки делает хост: внутри фрейма он увёл бы в сайт внутри сайта. */
   redirect(url: string): void
+  /**
+   * Цель Метрики автора (фаза 29): отмечает её счётчик страницы-хозяина через загрузчик.
+   * Номер счётчика не секрет — он виден в коде любой страницы с Метрикой.
+   */
+  goal(counter: number, name: string): void
 }
 
 /**
@@ -197,5 +203,6 @@ export function createHostBridge(mode: EmbedMode, post: (msg: HostMessage) => vo
     page: (index) => send({ type: 'page', index }),
     submitted: (submissionId) => send({ type: 'submit', submissionId }),
     redirect: (url) => send({ type: 'redirect', url }),
+    goal: (counter, name) => send({ type: 'goal', counter, name }),
   }
 }

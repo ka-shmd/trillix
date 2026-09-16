@@ -113,7 +113,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 |---|---|---|
 | `id` | `UUID` | PK — UUIDv7 (`domain.NewID`) |
 | `user_id` | `UUID` | `NOT NULL`, FK -> `users(id)` `ON DELETE CASCADE` |
-| `token_hash` | `BYTEA` | `NOT NULL` — SHA-256 случайного токена из cookie `known_device`, а не сам токен: тот же приём и тот же довод, что у `sessions` |
+| `token_hash` | `BYTEA` | `NOT NULL` — SHA-256 случайного токена из cookie `known_device` (на контуре с `Secure` — `__Host-known_device`), а не сам токен: тот же приём и тот же довод, что у `sessions` |
 | `label` | `TEXT` | `NOT NULL` — «Chrome на Windows», разбор `User-Agent`. IP не хранится сознательно: персональные данные, а узнать свой компьютер в списке не помогает |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
 | `last_seen_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()`; обновляется на каждом входе с этого браузера — это и есть содержимое списка в настройках |
@@ -916,7 +916,7 @@ SHA-256: утечка дампа не даёт рабочих ссылок. Зд
 |---|---|---|
 | `id` | `UUID` | PK (UUIDv7) |
 | `user_id` | `UUID` | `NOT NULL`, FK → `users(id)` `ON DELETE CASCADE` — чьё подключение |
-| `provider` | `TEXT` | `NOT NULL` — `google` |
+| `provider` | `TEXT` | `NOT NULL` — `google` (Таблицы) или `yandex` (счётчик Метрики, фаза 29); миграции не потребовалось — колонка задумана под нескольких провайдеров с `0029` |
 | `external_account_id` | `TEXT` | `NOT NULL` — `sub` провайдера: стабилен при смене почты |
 | `external_email` | `TEXT` | `NOT NULL` — «подключено как …» на экране; не идентификатор |
 | `refresh_token` | `BYTEA` | `NOT NULL` — **шифротекст** AES-256-GCM (ключ — HKDF от `FORM_TOKEN_SECRET`). В логи, ответы API и отчёты не попадает |
@@ -1112,6 +1112,22 @@ SHA-256: утечка дампа не даёт рабочих ссылок. Зд
 цели; `idx_webhook_queue_age (enqueued_at)` — уборка по сроку.
 
 ---
+
+## `form_counters` (0067)
+
+Счётчики аналитики автора на форме (фаза 29 `DEV-PLAN`, спека [`design/yandex-metrika.md`](design/yandex-metrika.md) §4). Не цель доставки: ответы никуда не едут, номер нужен странице формы и загрузчику встраивания. Живая настройка, а не поле схемы: подключение и тумблер действуют без перепубликации.
+
+| Колонка | Тип | Ограничения |
+|---|---|---|
+| `id` | `UUID` | PK |
+| `form_id` | `UUID` | `NOT NULL`, FK → `forms(id)` `ON DELETE CASCADE` |
+| `kind` | `TEXT` | `NOT NULL`, `CHECK (kind IN ('yandex_metrika'))` — вид счётчика; новый вид (VK Pixel, GA) — значение в `CHECK`, а не новая таблица |
+| `counter` | `TEXT` | `NOT NULL`, `CHECK (counter ~ '^[1-9][0-9]{0,11}$')` — номер счётчика в сервисе: идентификатор, а не число. Зеркало проверки — `counterNumberRe` в `internal/integrations/counter.go` |
+| `enabled` | `BOOLEAN` | `NOT NULL DEFAULT true` — тумблер: выключенный счётчик на странице формы не запускается |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+| `updated_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` — двигается при правке номера или тумблера |
+
+**Ограничения:** `UNIQUE (form_id, kind)` — у формы один счётчик вида, повторное подключение правит существующий (`ON CONFLICT`); тот же индекс обслуживает чтение счётчика формы. Номер не секрет — в состоянии таба приходит всем, кто видит форму. Той же миграцией в `plans.limits` заведён ключ `form_counters`: `false` у `free` и `legacy_free`, `true` у `pro`.
 
 ## `schedules` (0050)
 

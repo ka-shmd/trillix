@@ -132,6 +132,13 @@ type Config struct {
 	// а не секрет приложения. Пусто — кнопка «Выбрать на Google Диске» не
 	// показывается, остальная интеграция работает как раньше.
 	GooglePickerAPIKey string
+	// YandexIntegration* — приложение Яндекс ID «Trillix — интеграции» (фаза 29,
+	// design/yandex-metrika.md §13): счётчик Метрики из аккаунта и цели. Отдельное
+	// от приложения входа (YandexOAuth*): вход не передаёт scope, и права Метрики в
+	// его приложении спрашивались бы при каждом входе. Опциональные и парные — нет
+	// ключей, и подключения аккаунта в окне Метрики нет, ручной номер работает.
+	YandexIntegrationClientID     string
+	YandexIntegrationClientSecret string
 
 	// Mail* — исходящая транзакционная почта (почтовая фаза). Транспорт — смысловой
 	// флаг контура (не имя окружения): dev/prod-local пишут письма в лог (провайдер
@@ -180,6 +187,11 @@ func (c Config) AIEnabled() bool { return c.AITransport == AITransportOpenAI }
 // GoogleOAuthEnabled — задано ли приложение Google для интеграций.
 func (c Config) GoogleOAuthEnabled() bool {
 	return c.GoogleOAuthClientID != "" && c.GoogleOAuthClientSecret != ""
+}
+
+// YandexIntegrationEnabled — задано ли приложение Яндекс ID для интеграций.
+func (c Config) YandexIntegrationEnabled() bool {
+	return c.YandexIntegrationClientID != "" && c.YandexIntegrationClientSecret != ""
 }
 
 // YandexOAuthEnabled — заданы ли обе половины приложения Яндекс ID.
@@ -273,6 +285,8 @@ func Load() (Config, error) {
 	cfg.GoogleOAuthClientID = os.Getenv("GOOGLE_OAUTH_CLIENT_ID")
 	cfg.GoogleOAuthClientSecret = os.Getenv("GOOGLE_OAUTH_CLIENT_SECRET")
 	cfg.GooglePickerAPIKey = os.Getenv("GOOGLE_PICKER_API_KEY")
+	cfg.YandexIntegrationClientID = os.Getenv("YANDEX_INTEGRATION_CLIENT_ID")
+	cfg.YandexIntegrationClientSecret = os.Getenv("YANDEX_INTEGRATION_CLIENT_SECRET")
 	// Опциональные (нет провайдера модели — генерация форм просто выключена).
 	cfg.AITransport = os.Getenv("AI_TRANSPORT")
 	cfg.AIBaseURL = strings.TrimRight(os.Getenv("AI_BASE_URL"), "/")
@@ -340,6 +354,9 @@ func Load() (Config, error) {
 	// искать причину в консоли Google, где всё в порядке.
 	if (cfg.GoogleOAuthClientID == "") != (cfg.GoogleOAuthClientSecret == "") {
 		return Config{}, fmt.Errorf("GOOGLE_OAUTH_CLIENT_ID and GOOGLE_OAUTH_CLIENT_SECRET: set both or neither")
+	}
+	if (cfg.YandexIntegrationClientID == "") != (cfg.YandexIntegrationClientSecret == "") {
+		return Config{}, fmt.Errorf("YANDEX_INTEGRATION_CLIENT_ID and YANDEX_INTEGRATION_CLIENT_SECRET: set both or neither")
 	}
 
 	// Транспорт почты валидируется по явному списку: неизвестное значение — почти

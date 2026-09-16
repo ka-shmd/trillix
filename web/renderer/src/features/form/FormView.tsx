@@ -55,6 +55,14 @@ import {
   savePage,
   saveSubmissionId,
 } from './answers'
+import {
+  browserHost,
+  GOAL_OPEN,
+  GOAL_START,
+  GOAL_SUBMIT,
+  goalSink,
+  type GoalSink,
+} from './metrika'
 import { firstErrorPage, firstQuestionIndex } from './pages'
 import { makeSlotSource } from './slots'
 import { uuidv7 } from './submissionId'
@@ -407,7 +415,12 @@ export function FormView({
   // рендера группы (renderGroup ниже). Обёртка useCallback обязательна: правка ref'а
   // прямо в теле такой функции — ошибка линта (react-hooks/refs), и правило право по
   // существу — читать/писать ref во время рендера нельзя, можно только в обработчике.
+  // Цели Метрики автора (фаза 29): null — счётчика нет (не подключён, тариф, предпросмотр,
+  // фрейм). Заводится в эффекте визита ниже, рядом с биконом «открыли».
+  const goals = useRef<GoalSink | null>(null)
   const markFurthest = useCallback((index: number) => {
+    // «Начал» — первое касание поля; повтор модуль Метрики гасит сам.
+    goals.current?.reach(GOAL_START)
     if (index > furthest.current) furthest.current = index
   }, [])
 
@@ -417,6 +430,15 @@ export function FormView({
     if (!started.current) {
       started.current = true
       tracker.start()
+      // Цели Метрики заводятся там же, где визит: «открыл» у обоих — одно событие.
+      // Трекера нет в предпросмотре, поэтому и сюда он не доходит; preview передан ради
+      // явного правила в goalSink. Во фрейме цели уходят хосту через мост.
+      goals.current = goalSink(
+        form.metrika,
+        { preview: token === null, framed: window.parent !== window, bridge },
+        browserHost(),
+      )
+      goals.current?.reach(GOAL_OPEN)
     }
 
     const leave = () => {
@@ -435,7 +457,7 @@ export function FormView({
       window.removeEventListener('pagehide', leave)
       document.removeEventListener('visibilitychange', onHidden)
     }
-  }, [blocks])
+  }, [blocks, bridge, form.metrika, token])
 
   // ЧЕРНОВИК (спека design/analytics-tally.md §10). Сохраняем набранное, пока
   // человек печатает, — но только если СЕРВЕР разрешил: `collectPartial` это тумблер
@@ -614,6 +636,7 @@ export function FormView({
         // Хост узнаёт об успехе тем же сообщением, каким пользуется онбординг внутри
         // чужого приложения: по нему оно продолжает свой сценарий (design/embed.md §5).
         bridge?.submitted(submissionId)
+        goals.current?.reach(GOAL_SUBMIT)
         setPhase('done')
         return
       case 'invalid': {

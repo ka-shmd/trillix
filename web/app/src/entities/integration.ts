@@ -117,12 +117,61 @@ export const webhookTestSchema = z.object({
   ms: z.number().default(0),
 })
 
+// Счётчик Яндекс Метрики формы (фаза 29). Номер не секрет — он виден в коде любой
+// страницы со счётчиком, поэтому приходит всем, кто видит форму.
+export const metrikaCounterSchema = z.object({
+  counter: z.string(),
+  // enabled — тумблер. Выключенный счётчик на странице формы не запускается.
+  enabled: z.boolean(),
+})
+
+// Счётчик аккаунта в списке выбора (фаза 29, §13.3). Зеркалит
+// metrikaCounterResponse в internal/integrations/handler_counter.go. Номер здесь
+// ЧИСЛО — таким его отдаёт Метрика; в форму подключения он едет строкой.
+export const metrikaCounterRefSchema = z.object({
+  id: z.number().int(),
+  name: z.string(),
+  // site — сайт счётчика. Подпись в списке, а не адрес формы: у автора десяток
+  // счётчиков с похожими названиями, и различает их домен. Пусто — счётчик без
+  // сайта, такое бывает.
+  site: z.string().default(''),
+})
+
+export const metrikaCounterListSchema = z.object({
+  counters: z.array(metrikaCounterRefSchema).default([]),
+})
+
+// Итог заведения целей: сколько завели и сколько уже было. Второе число — ответ
+// «всё на месте», а не «ничего не произошло».
+export const metrikaGoalsSchema = z.object({
+  created: z.number().int().default(0),
+  existing: z.number().int().default(0),
+})
+
+// Ответ на создание счётчика: его номер и итог по целям.
+export const metrikaCreatedSchema = z.object({
+  counter: z.string(),
+  created: z.number().int().default(0),
+  existing: z.number().int().default(0),
+})
+
 export const formIntegrationsSchema = z.object({
   workspaceId: z.string(),
   account: integrationAccountSchema,
   // Пустой список — состояние экрана, а не ошибка: у формы просто нет связок.
   connections: z.array(formSheetSchema),
   webhooks: z.array(webhookSchema).default([]),
+  // null — счётчик не подключён.
+  metrika: metrikaCounterSchema.nullable().default(null),
+  // yandex — аккаунты Яндекса спрашивающего (фаза 29): из них выбирается счётчик
+  // Метрики. enabled — настроено ли приложение на контуре; нет — счётчик вписывается
+  // номером вручную. Умолчание «не настроено»: ответ без поля не обещает кнопки.
+  yandex: z
+    .object({
+      enabled: z.boolean(),
+      accounts: z.array(connectedAccountSchema).default([]),
+    })
+    .default({ enabled: false, accounts: [] }),
 })
 
 // Одна попытка доставки в журнале связки (INTEGRATIONS.md §12). Зеркалит
@@ -186,6 +235,10 @@ export type IntegrationAccount = z.infer<typeof integrationAccountSchema>
 export type FormSheet = z.infer<typeof formSheetSchema>
 export type SheetStatus = z.infer<typeof sheetStatusSchema>
 export type FormIntegrations = z.infer<typeof formIntegrationsSchema>
+export type MetrikaCounter = z.infer<typeof metrikaCounterSchema>
+export type MetrikaCounterRef = z.infer<typeof metrikaCounterRefSchema>
+export type MetrikaGoals = z.infer<typeof metrikaGoalsSchema>
+export type MetrikaCreated = z.infer<typeof metrikaCreatedSchema>
 export type Delivery = z.infer<typeof deliverySchema>
 export type DeliveryOutcome = z.infer<typeof deliveryOutcomeSchema>
 export type DeliveryPage = z.infer<typeof deliveryPageSchema>

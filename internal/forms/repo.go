@@ -225,6 +225,10 @@ type PublicFormRef struct {
 	// Право тарифа поверх него спрашивает service при отдаче страницы — карточка
 	// это свойство выдачи, а не документа (тот же приём, что у бейджа).
 	LinkPreview *domain.LinkPreview
+	// MetrikaCounter — номер счётчика Яндекс Метрики, подключённого автором и
+	// включённого (0067); nil — счётчика нет. Право тарифа поверх номера спрашивает
+	// service.MetrikaFor при отдаче формы — счётчик, как бейдж, свойство выдачи.
+	MetrikaCounter *string
 }
 
 // PublicForm — та же форма ВМЕСТЕ с документом: сырая схема опубликованной версии,
@@ -879,6 +883,7 @@ func (Repo) GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug stri
 			PasswordSealed:     row.Password,
 			ScheduleID:         ptrUUID(row.ScheduleID),
 			LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
+			MetrikaCounter:     ptrStr(row.MetrikaCounter),
 		},
 		Title:  row.Title,
 		Schema: json.RawMessage(row.Schema),
@@ -917,6 +922,7 @@ func (Repo) GetPublicFormRefBySlug(ctx context.Context, db postgres.DBTX, slug s
 		PasswordSealed:     row.Password,
 		ScheduleID:         ptrUUID(row.ScheduleID),
 		LinkPreview:        linkPreviewFromJSON(row.LinkPreview),
+		MetrikaCounter:     ptrStr(row.MetrikaCounter),
 	}, nil
 }
 
