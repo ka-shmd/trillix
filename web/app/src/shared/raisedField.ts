@@ -18,8 +18,10 @@
 // `data-[size=default]:h-8`, у Input кегль — `md:text-sm`.
 // FIELD_CONTOUR отдельно — у полей, которым нужен только контур при штатных размерах и
 // кегле (окно «Карточка ссылки»: оба поля и многострочное описание).
+// Тень на hover зеркалит `.rf-input.canvas-field:hover` в builder/kinds/fieldWrap.css. Фокус
+// её перебивает: вариант `focus-visible` Tailwind ставит после `hover`.
 export const FIELD_CONTOUR =
-  'border-0 shadow-(--rf-field-shadow) focus-visible:ring-0 focus-visible:shadow-(--rf-focus-shadow)'
+  'border-0 shadow-(--rf-field-shadow) hover:shadow-[0_1px_1px_0_var(--rf-shadow-near),0_0_0_1px_var(--rf-ring),0_4px_12px_0_var(--rf-shadow-far)] focus-visible:ring-0 focus-visible:shadow-(--rf-focus-shadow)'
 export const RAISED_INPUT = `h-10 py-0 font-medium md:text-base ${FIELD_CONTOUR}`
 export const CONTOUR_INPUT = `py-0 font-medium md:text-base ${FIELD_CONTOUR}`
 export const RAISED_SELECT = `data-[size=default]:h-10 py-0 text-base font-medium ${FIELD_CONTOUR}`
