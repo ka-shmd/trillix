@@ -324,6 +324,13 @@
   * {
     @apply border-border outline-ring/50;
   }
+  /* Preflight Tailwind v4 оставляет кнопкам `cursor: default`. Указатель — всем
+     нажимаемым; класс `cursor-*` на элементе перебивает правило (слой utilities
+     старше base). */
+  button:not(:disabled),
+  [role='button']:not([aria-disabled='true']) {
+    cursor: pointer;
+  }
   /* МЕСТО ПОД ПОЛОСУ ПРОКРУТКИ РЕЗЕРВИРУЕТСЯ ВСЕГДА, и это не косметика.
      Любой всплывающий слой Radix (Select, Dialog, диалоги правил логики, шторка
      оформления) на время открытия ставит body `overflow: hidden` — а компенсации
