@@ -16,6 +16,13 @@ import {
   type NotifyEmail,
   type RespondentEmail,
 } from '../../entities/form'
+import {
+  consentPreviewSchema,
+  consentStateSchema,
+  type ConsentPreview,
+  type ConsentSettings,
+  type ConsentState,
+} from '../../entities/consent'
 
 // Транспорт forms: каждый ответ парсится Zod-схемой на границе; delete — 204 без тела.
 
@@ -238,4 +245,27 @@ export function publishForm(id: string): Promise<Form> {
 // Снятие с публикации: форма становится closed (последняя версия сохраняется).
 export function unpublishForm(id: string): Promise<Form> {
   return apiRequest(`/forms/${id}/unpublish`, { method: 'POST', schema: formSchema })
+}
+
+// Раздел «Персональные данные» (0069): согласие на обработку персональных данных.
+// Своя ручка, а не фасет PATCH формы: у раздела ревизии, и он не двигает updatedAt.
+export function getFormConsent(id: string): Promise<ConsentState> {
+  return apiRequest(`/forms/${id}/consent`, { schema: consentStateSchema })
+}
+
+export function saveFormConsent(
+  id: string,
+  body: ConsentSettings & { enabled: boolean },
+): Promise<ConsentState> {
+  return apiRequest(`/forms/${id}/consent`, { method: 'PUT', body, schema: consentStateSchema })
+}
+
+// previewFormConsent — оба документа по несохранённым настройкам. POST: реквизиты
+// едут телом, в адрес их не кладём.
+export function previewFormConsent(id: string, body: ConsentSettings): Promise<ConsentPreview> {
+  return apiRequest(`/forms/${id}/consent/preview`, {
+    method: 'POST',
+    body,
+    schema: consentPreviewSchema,
+  })
 }

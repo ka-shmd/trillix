@@ -10,7 +10,9 @@ import {
   deleteForm,
   duplicateForm,
   getFormBySlug,
+  getFormConsent,
   listForms,
+  saveFormConsent,
   searchForms,
   publishForm,
   unpublishForm,
@@ -28,6 +30,7 @@ import {
   updateFormPassword,
   updateNotifyOnSubmission,
 } from './api'
+import { type ConsentSettings } from '../../entities/consent'
 import { discardDraft, saveDraftSchema } from './builder/api'
 import {
   type CloseSettingsInput,
@@ -107,6 +110,28 @@ export function formDetailQueryOptions(slug: string) {
   return queryOptions({
     queryKey: formKeys.detail(slug),
     queryFn: () => getFormBySlug(slug),
+  })
+}
+
+// Раздел «Персональные данные» (0069) — своя ручка: у раздела ревизии, и он не входит
+// в деталь формы (тексты документов тяжёлые, а деталь читают все экраны формы).
+export function formConsentQueryOptions(id: string) {
+  return queryOptions({
+    queryKey: formKeys.consent(id),
+    queryFn: () => getFormConsent(id),
+  })
+}
+
+// Сохранение раздела кладёт ответ в кэш раздела целиком: сервер возвращает то, что
+// записал (нормализованные поля, ревизию), и страница сверяется с ним же.
+export function useSaveFormConsent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, value }: { id: string; value: ConsentSettings & { enabled: boolean } }) =>
+      saveFormConsent(id, value),
+    onSuccess: (state, { id }) => {
+      qc.setQueryData(formKeys.consent(id), state)
+    },
   })
 }
 
