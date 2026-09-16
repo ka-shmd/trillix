@@ -1,6 +1,7 @@
 import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 
+import { displayFormName } from '../../entities/form'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { IntegrationsView } from '../../features/integrations/IntegrationsView'
 
@@ -22,5 +23,5 @@ function IntegrationsPage() {
   if (!form.data) {
     return <p className="text-sm text-muted-foreground">Загрузка…</p>
   }
-  return <IntegrationsView formId={form.data.id} />
+  return <IntegrationsView formId={form.data.id} formName={displayFormName(form.data)} />
 }

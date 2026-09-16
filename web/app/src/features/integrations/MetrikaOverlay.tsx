@@ -62,11 +62,13 @@ const NEW_COUNTER = 'new'
 
 export function MetrikaOverlay({
   formId,
+  formName,
   metrika,
   yandex,
   onClose,
 }: {
   formId: string
+  formName: string
   // metrika — правим подключённый счётчик; null — подключаем.
   metrika: MetrikaCounter | null
   // yandex — аккаунты Яндекса спрашивающего и настроено ли приложение на контуре.
@@ -89,6 +91,10 @@ export function MetrikaOverlay({
   const [counter, setCounter] = useState(metrika?.counter ?? '')
   // counterName — имя нового счётчика; спрашивается, только когда выбран NEW_COUNTER.
   const [counterName, setCounterName] = useState('')
+  // Имя по умолчанию — оно же подсказка в поле. Уходит в запросе явно, а не
+  // пустым: серверное умолчание берёт сырой заголовок, и у безымянной формы
+  // подсказка и имя в Метрике разошлись бы.
+  const defaultCounterName = `Trillix: ${formName}`
 
   const save = useSetMetrika(formId)
   const goals = useEnsureMetrikaGoals(formId)
@@ -149,7 +155,7 @@ export function MetrikaOverlay({
     // Новый счётчик — одно действие сервера: счётчик, номер у формы, цели.
     if (counter === NEW_COUNTER) {
       try {
-        await create.mutateAsync({ accountId, name: counterName.trim() })
+        await create.mutateAsync({ accountId, name: counterName.trim() || defaultCounterName })
       } catch {
         // Счётчик мог создаться, а цели — нет; тогда номер уже у формы, и выбор
         // переедет на него эффектом ниже. Повтор пойдёт целями, а не вторым
@@ -247,6 +253,7 @@ export function MetrikaOverlay({
                   setCounter={setCounter}
                   counterName={counterName}
                   setCounterName={setCounterName}
+                  defaultCounterName={defaultCounterName}
                   list={counters.data ?? []}
                   listFailed={counters.isError}
                   onRetryList={() => void counters.refetch()}
@@ -405,6 +412,7 @@ function AccountFields({
   setCounter,
   counterName,
   setCounterName,
+  defaultCounterName,
   list,
   listFailed,
   onRetryList,
@@ -418,6 +426,7 @@ function AccountFields({
   setCounter: (value: string) => void
   counterName: string
   setCounterName: (value: string) => void
+  defaultCounterName: string
   list: { id: number; name: string; site: string }[]
   listFailed: boolean
   onRetryList: () => void
@@ -519,20 +528,6 @@ function AccountFields({
               : 'В этом счётчике будут созданы три цели формы. Уже заведённые с теми же идентификаторами мы не трогаем.'}
           </p>
         )}
-        {counter === NEW_COUNTER && (
-          <div className="flex flex-col gap-2 pt-2">
-            <Label htmlFor="metrika-counter-name">Название счётчика</Label>
-            <Input
-              id="metrika-counter-name"
-              className={RAISED_INPUT}
-              value={counterName}
-              // Зеркало MaxConnectionNameLen в internal/integrations.
-              maxLength={80}
-              placeholder="Необязательно — по умолчанию «Trillix: название формы»"
-              onChange={(e) => setCounterName(e.target.value)}
-            />
-          </div>
-        )}
         <div className="flex justify-end">
           {/* Список не приехал — человеку нужны оба выхода: попробовать ещё раз
               и вписать номер руками. Второй рядом и так. */}
@@ -540,6 +535,23 @@ function AccountFields({
           <CompactAction icon={Hash} label="Ввести номер вручную" onClick={onManual} />
         </div>
       </div>
+
+      {/* Имя — отдельным полем ПОСЛЕ действий счётчика: «Ввести номер вручную»
+          относится к выбору счётчика и стоит под ним, как у аккаунта. */}
+      {counter === NEW_COUNTER && (
+        <div className="flex flex-col gap-2">
+          <Label htmlFor="metrika-counter-name">Название счётчика</Label>
+          <Input
+            id="metrika-counter-name"
+            className={RAISED_INPUT}
+            value={counterName}
+            // Зеркало MaxConnectionNameLen в internal/integrations.
+            maxLength={80}
+            placeholder={defaultCounterName}
+            onChange={(e) => setCounterName(e.target.value)}
+          />
+        </div>
+      )}
     </>
   )
 }

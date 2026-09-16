@@ -188,7 +188,7 @@ function renderView(
   render(
     <QueryClientProvider client={qc}>
       <TooltipProvider>
-        <IntegrationsView formId={FORM_ID} />
+        <IntegrationsView formId={FORM_ID} formName="Опрос" />
       </TooltipProvider>
     </QueryClientProvider>,
   )
@@ -879,7 +879,7 @@ describe('оверлей настройки Google Таблиц', () => {
     render(
       <QueryClientProvider client={qc}>
         <TooltipProvider>
-          <IntegrationsView formId={FORM_ID} />
+          <IntegrationsView formId={FORM_ID} formName="Опрос" />
         </TooltipProvider>
       </QueryClientProvider>,
     )
@@ -2164,6 +2164,29 @@ describe('Метрика через аккаунт Яндекса', () => {
         body: { accountId: YA_ACCOUNT_ID, name: 'Сайт компании' },
       },
     ])
+  })
+
+  // Подсказка в поле имени и имя по умолчанию — одна строка с настоящим названием
+  // формы: пустое поле уходит в запросе ею же.
+  it('имя нового счётчика по умолчанию — «Trillix: <название формы>»', async () => {
+    const calls = mockYandexCalls(state({ metrika: COUNTER, yandex: YANDEX_ON }), () =>
+      new Response(JSON.stringify({ counter: '112704693', created: 3, existing: 0 }), {
+        status: 201,
+        headers: { 'content-type': 'application/json' },
+      }),
+    )
+    renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
+    openMetrika()
+
+    fireEvent.click(screen.getByLabelText('Счётчик'))
+    fireEvent.click(screen.getByRole('option', { name: 'Создать новый счётчик' }))
+    const input = screen.getByLabelText('Название счётчика') as HTMLInputElement
+    expect(input.placeholder).toBe('Trillix: Опрос')
+    expect(input.value).toBe('')
+
+    fireEvent.click(screen.getByRole('button', { name: 'Подключить' }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).toBeNull())
+    expect(calls[0]!.body).toEqual({ accountId: YA_ACCOUNT_ID, name: 'Trillix: Опрос' })
   })
 
   // Счётчик создался, а цели — нет: номер уже у формы, и повтор обязан пойти

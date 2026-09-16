@@ -60,7 +60,15 @@ const SERVICE_ICON = 'size-10'
 // Счётчик Метрики у формы один, поэтому id у его окна всегда null.
 type Overlay = { kind: 'sheet' | 'webhook' | 'metrika'; id: string | null }
 
-export function IntegrationsView({ formId }: { formId: string }) {
+export function IntegrationsView({
+  formId,
+  formName,
+}: {
+  formId: string
+  // formName — название формы для показа: из него окно Метрики собирает имя
+  // нового счётчика.
+  formName: string
+}) {
   const state = useQuery(formIntegrationsQueryOptions(formId))
   const [overlay, setOverlay] = useState<Overlay | null>(null)
   // Тариф спрашивается ДО ранних возвратов: условный вызов хука ломает их порядок.
@@ -222,6 +230,7 @@ export function IntegrationsView({ formId }: { formId: string }) {
       {overlay?.kind === 'metrika' && (
         <MetrikaOverlay
           formId={formId}
+          formName={formName}
           metrika={metrika}
           yandex={state.data.yandex}
           onClose={() => setOverlay(null)}
@@ -743,7 +752,7 @@ function metrikaStatus(metrika: MetrikaCounter, allowed: boolean | undefined): D
   return {
     color: 'bg-success',
     label: 'Работает',
-    text: 'Счётчик стоит на странице формы. Засчитанные цели видны в самой Метрике.',
+    text: 'Счётчик установлен на форме.',
     pulsing: false,
   }
 }
