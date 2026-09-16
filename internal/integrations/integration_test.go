@@ -81,7 +81,7 @@ func newStackWithEgress(t *testing.T, provider integrations.Provider, egress int
 }
 
 // newStackWith — полная вертикаль; yandex == nil — приложение Яндекса не настроено.
-func newStackWith(t *testing.T, provider integrations.Provider, yandex integrations.AccountProvider, egress integrations.Egress) *httptest.Server {
+func newStackWith(t *testing.T, provider integrations.Provider, yandex integrations.MetrikaProvider, egress integrations.Egress) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false)

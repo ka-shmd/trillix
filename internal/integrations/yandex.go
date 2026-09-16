@@ -36,6 +36,8 @@ type Yandex struct {
 	authURL  string
 	tokenURL string
 	infoURL  string
+	// metrikaURL — база API управления Метрики (metrika.go).
+	metrikaURL string
 
 	http *http.Client
 }
@@ -48,6 +50,7 @@ func NewYandex(clientID, clientSecret, redirectURI string) *Yandex {
 		authURL:      yandexAuthURL,
 		tokenURL:     yandexTokenURL,
 		infoURL:      yandexInfoURL,
+		metrikaURL:   metrikaAPIURL,
 		http:         &http.Client{Timeout: requestTimeout},
 	}
 }

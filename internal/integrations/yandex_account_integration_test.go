@@ -18,13 +18,61 @@ import (
 // состоянии вкладки и границы отключения. Провайдер подставной — живой Яндекс
 // означал бы тест, зелёный только с ключами и интернетом.
 
-// fakeYandex — аккаунтная часть fakeProvider под именем Яндекса.
-type fakeYandex struct{ fakeProvider }
+// fakeYandex — аккаунтная часть fakeProvider под именем Яндекса плюс API
+// управления Метрики: список счётчиков и цели, уже заведённые в каждом.
+type fakeYandex struct {
+	fakeProvider
+	counters []integrations.MetrikaCounter
+	// goals — что уже заведено в счётчике: номер → идентификаторы целей. Общая с
+	// продуктом память, поэтому повторный заход видит заведённое первым.
+	goals map[int64]map[string]bool
+	// calls — сколько раз ходили в Яндекс. Им проверяется, что отказ по правам
+	// случается РАНЬШЕ похода.
+	calls int
+	// refuse — чем Яндекс отвечает вместо работы.
+	refuse error
+}
 
 func (f *fakeYandex) Provider() string { return integrations.ProviderYandex }
 
+func (f *fakeYandex) ListCounters(_ context.Context, _ string) ([]integrations.MetrikaCounter, error) {
+	f.calls++
+	if f.refuse != nil {
+		return nil, f.refuse
+	}
+	return f.counters, nil
+}
+
+func (f *fakeYandex) EnsureGoals(_ context.Context, _ string, counterID int64, goals []integrations.MetrikaGoal) (integrations.GoalsResult, error) {
+	f.calls++
+	if f.refuse != nil {
+		return integrations.GoalsResult{}, f.refuse
+	}
+	if f.goals == nil {
+		f.goals = map[int64]map[string]bool{}
+	}
+	if f.goals[counterID] == nil {
+		f.goals[counterID] = map[string]bool{}
+	}
+	var res integrations.GoalsResult
+	for _, g := range goals {
+		if f.goals[counterID][g.ID] {
+			res.Existing++
+			continue
+		}
+		f.goals[counterID][g.ID] = true
+		res.Created++
+	}
+	return res, nil
+}
+
 func newFakeYandexProvider() *fakeYandex {
-	return &fakeYandex{fakeProvider{accounts: []integrations.Account{{ID: "ya-1", Email: "author@yandex.ru"}}}}
+	return &fakeYandex{
+		fakeProvider: fakeProvider{accounts: []integrations.Account{{ID: "ya-1", Email: "author@yandex.ru"}}},
+		counters: []integrations.MetrikaCounter{
+			{ID: 12345678, Name: "Сайт агентства", Site: "agency.example"},
+		},
+	}
 }
 
 // connectYandex проходит поход за согласием Яндекса и отдаёт id аккаунта.
