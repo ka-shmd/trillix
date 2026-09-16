@@ -29,10 +29,6 @@ func sampleForm() FormSchema {
 			{ID: "blk_pic", GroupID: "g_blk_pic", Type: BlockImage, Settings: BlockSettings{ImageKey: "ws/pic.png"}},
 			{ID: "blk_break", GroupID: "g_blk_break", Type: BlockPageBreak, Settings: BlockSettings{PageName: "Второй шаг"}},
 			{ID: "blk_scale", GroupID: "g_blk_scale", Type: BlockScale, Settings: BlockSettings{ScaleMin: &lo, ScaleMax: &hi}},
-			{
-				ID: "blk_ok", GroupID: "g_blk_ok", Type: BlockConsent, Required: true,
-				Text: TextFromString("Согласен на обработку данных"),
-			},
 		},
 	}
 }
@@ -64,7 +60,6 @@ func TestProjectForm(t *testing.T) {
 		{"q3", BlockImage, ""},
 		{"q4", BlockPageBreak, ""},
 		{"q5", BlockScale, ""},
-		{"q6", BlockConsent, "Согласен на обработку данных"},
 	}
 	if len(got.Items) != len(want) {
 		t.Fatalf("пунктов = %d, ожидалось %d: %+v", len(got.Items), len(want), got.Items)
@@ -110,11 +105,11 @@ func TestApplyChatOps(t *testing.T) {
 		}
 
 		got := ProjectForm(out)
-		if len(got.Items) != 7 || got.Items[1].Type != BlockPhone || got.Items[1].Text != "Телефон" {
+		if len(got.Items) != 6 || got.Items[1].Type != BlockPhone || got.Items[1].Text != "Телефон" {
 			t.Fatalf("после правки пункты = %+v", got.Items)
 		}
 		// Все прежние id на месте — на них ссылаются ответы и воронка.
-		for _, id := range []string{"blk_title", "blk_cap1", "blk_name", "blk_master", "blk_pic", "blk_break", "blk_scale", "blk_ok"} {
+		for _, id := range []string{"blk_title", "blk_cap1", "blk_name", "blk_master", "blk_pic", "blk_break", "blk_scale"} {
 			blockOf(t, out, id)
 		}
 	})
@@ -254,7 +249,7 @@ func TestApplyChatOps_ChainKeepsIDs(t *testing.T) {
 	}
 
 	// Пережившие цепочку блоки — те же самые: их id держат ответы и воронку.
-	for _, id := range []string{"blk_title", "blk_name", "blk_master", "blk_scale", "blk_ok"} {
+	for _, id := range []string{"blk_title", "blk_name", "blk_master", "blk_scale"} {
 		blockOf(t, form, id)
 	}
 	if opts := blockOf(t, form, "blk_master").Settings.Options; opts[0].ID != "opt_a" {

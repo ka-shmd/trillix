@@ -6,7 +6,7 @@ import { DndContext } from '@dnd-kit/core'
 import { SortableContext } from '@dnd-kit/sortable'
 
 import { type Block, type FormSchema, textFromString, SCHEMA_VERSION } from '@entities/formSchema'
-import { carriesText, isAnswerableType, isCaptionType } from '@entities/formSchema'
+import { isAnswerableType, isCaptionType } from '@entities/formSchema'
 import { createBuilderStore } from './store'
 import { BuilderStoreContext } from './storeContext'
 import { createFocusEngine, FocusEngineProvider } from './focusEngine'
@@ -77,11 +77,8 @@ function setup(schema: FormSchema, groupHandle: GroupHandle | null = null) {
                       groupHandle={isCaptionType(b.type) ? groupHandle : null}
                       requiredFor={requiredFor(b, i)}
                       // Как в GroupRow: голая строка ответа подсказывает, чего ей не
-                      // хватает (§4.4 спеки фазы 15); consent исключён — его текст и
-                      // есть строка вопроса.
-                      needsCaption={
-                        isAnswerableType(b.type) && !carriesText(b.type) && !hasCaption(b)
-                      }
+                      // хватает (§4.4 спеки фазы 15).
+                      needsCaption={isAnswerableType(b.type) && !hasCaption(b)}
                       openMenuOnMount={false}
                       {...handlers}
                     />
@@ -342,13 +339,6 @@ describe('голая строка ответа', () => {
     schemaVersion: SCHEMA_VERSION,
     blocks: [
       { id: 'txt', groupId: 'g1', type: 'short_text', settings: {} },
-      {
-        id: 'ok',
-        groupId: 'g2',
-        type: 'consent',
-        text: textFromString('Согласен'),
-        required: true,
-      },
       { id: 'cap', groupId: 'g3', type: 'title', text: textFromString('Откуда узнали?') },
       {
         id: 'ch',
@@ -375,7 +365,6 @@ describe('голая строка ответа', () => {
     expect(blocks.map((b) => b.type)).toEqual([
       'title',
       'short_text',
-      'consent',
       'title',
       'single_choice',
     ])
@@ -399,21 +388,6 @@ describe('голая строка ответа', () => {
     // Ни блока, ни шага истории: жест не обещан, значит и не сработал.
     expect(store.getState().blocks).toBe(before)
     expect(store.getState().dirty).toBe(false)
-  })
-
-  it('согласию жест не положен — его текст и есть строка вопроса', () => {
-    const { store, engine } = setup(BARE)
-    const before = store.getState().blocks
-
-    engine.focusBlock('ok')
-    fireEvent.keyDown(document.activeElement!, {
-      code: 'KeyT',
-      key: 't',
-      ctrlKey: true,
-      altKey: true,
-    })
-
-    expect(store.getState().blocks).toBe(before)
   })
 })
 

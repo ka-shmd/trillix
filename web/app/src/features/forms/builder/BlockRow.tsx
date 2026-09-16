@@ -133,7 +133,7 @@ export interface BlockRowProps {
   // состояние (правило requiresCaption понижено до правила вставки, §4.4 спеки), и
   // вместо сопротивления строка предлагает недостающее действие: чип «Mod+Alt+T —
   // Заголовок», по которому можно и кликнуть. Считает GroupRow — состав группы знает
-  // он; исключены contentные типы и consent (его текст и есть строка вопроса).
+  // он; исключены contentные типы.
   needsCaption?: boolean
   // openMenuOnMount — строку создали по «/» или «+»: сразу открыть меню выбора типа.
   openMenuOnMount: boolean
@@ -658,7 +658,6 @@ const BlockRowBody = memo(function BlockRowBody({
   const captionPh =
     isTextRow && row.placeholderOnFocusOnly ? (labelFocused ? captionName : undefined) : captionName
   const isContent = isContentType(block.type)
-  const isConsent = isTextRow && row.mark === 'check'
   // ОТМЕТКИ ВОПРОСА — звёздочка обязательности и два значка условий. Считаются ЗДЕСЬ, а
   // не внутри RowMarks: от их наличия зависит раскладка текстовой строки (см. ниже).
   //
@@ -668,7 +667,7 @@ const BlockRowBody = memo(function BlockRowBody({
   // Обратный вход в обязательность — тумблер в попапе.
   const showRequired = requiredFor?.required === true
   const showMarks = showRequired
-  // hasTextLine — у блока есть редактируемая строка текста: подписи/контент и consent.
+  // hasTextLine — у блока есть редактируемая строка текста: подписи и контент.
   // Поля ввода строки не несут — их подпись живёт отдельным блоком.
   const hasTextLine = isTextRow
   const captionCls = isTextRow ? row.className : ''
@@ -842,8 +841,7 @@ const BlockRowBody = memo(function BlockRowBody({
   // фильтр от каретки; каретка ушла за «/», там пробел/перенос, или ни один тип не
   // совпал — закрываем, текст (включая «/») остаётся. Меню закрыто — «/» прямо перед
   // кареткой открывает его на ЛЮБОМ неотвечаемом блоке (isContent: подписи title/label,
-  // heading, абзац text), а не только на абзаце. Не открывает на consent: тот текст
-  // несёт, но отвечаем — «/» там литерал. Печать всегда идёт в текст.
+  // heading, абзац text), а не только на абзаце. Печать всегда идёт в текст.
   // Принимает уже разобранную МОДЕЛЬ и позицию каретки в плоском тексте, а не событие:
   // логика слеша живёт в координатах текста и о поверхности ничего не знает — ровно
   // поэтому переход textarea → contenteditable её не переписал.
@@ -938,7 +936,7 @@ const BlockRowBody = memo(function BlockRowBody({
         <CaptionChip rowId={block.id} lineH={rowLineH} onAddCaption={onAddCaption} />
       )}
 
-      {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент/consent) —
+      {/* Поверхность строки по типу (§2.1): текстовая (подписи/контент) —
           textarea со слеш-меню; choice — инпуты вариантов; текстовые поля —
           инпут плейсхолдера; image/date/scale — объектная остановка (§2.2).
           Каждая ветка регистрирует свою фокус-цель в движке. */}
@@ -953,11 +951,8 @@ const BlockRowBody = memo(function BlockRowBody({
         >
           <div className="min-w-0">
             <div
-              className={isConsent || showMarks || foldable ? 'flex items-start gap-2' : undefined}
+              className={showMarks || foldable ? 'flex items-start gap-2' : undefined}
             >
-              {isConsent && (
-                <span className="rf-mark rf-mark--check mt-0.5 shrink-0" aria-hidden="true" />
-              )}
               <RichLine
                 elRef={(el) => {
                   labelRef.current = el
@@ -966,8 +961,8 @@ const BlockRowBody = memo(function BlockRowBody({
                 placeholder={captionPh}
                 label={captionName}
                 // Подстановка ответа по «@» (docs/design/mentions.md): доступна в любой
-                // текстовой строке полотна — подписи вопроса, заголовке раздела, абзаце,
-                // тексте согласия. Источники считает ПОЛОТНО (они его, а не строки),
+                // текстовой строке полотна — подписи вопроса, заголовке раздела, абзаце.
+                // Источники считает ПОЛОТНО (они его, а не строки),
                 // строка их только показывает и рисует чипы.
                 mentionSources={mentionSources}
                 mentionLive={mentionLive}

@@ -264,7 +264,7 @@ function sampleBlocks(item: MenuItem): Block[] {
     groupId: SAMPLE_GROUP,
     text: sampleText(type),
     // Звёздочку обязательности пример не показывает (решение владельца 2026-09-15). Флаг
-    // снимается у блока, а не у подписи: согласие рисует звёздочку само, по required.
+    // снимается у блока, а не у подписи.
     required: false,
   })
   const field = make(item.type, item.preset)
@@ -288,9 +288,7 @@ function sampleText(type: BlockType): Block['text'] {
       ? 'Пример пояснительного текста для респондента.'
       : type.startsWith('heading')
         ? editorKind(type).label
-        : type === 'consent'
-          ? 'Соглашаюсь с условиями'
-          : 'Ваш вопрос'
+        : 'Ваш вопрос'
     : ''
   // Жирность заголовков и подписей живёт в ТЕКСТЕ (марка `b`), поэтому образец обязан
   // её нести: без марки картинка обещала бы обычный вес, а вставленный блок оказался

@@ -52,18 +52,6 @@ func TestMentionAnswerText(t *testing.T) {
 			answer: []string{"o1", "o2"},
 			want:   "Красный, Синий",
 		},
-		{
-			name:   "согласие: отмеченное — «Да»",
-			block:  Block{ID: "b1", Type: BlockConsent},
-			answer: ConsentYes,
-			want:   "Да",
-		},
-		{
-			name:   "согласие: неотмеченное — пусто",
-			block:  Block{ID: "b1", Type: BlockConsent},
-			answer: "",
-			want:   "",
-		},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

@@ -15,8 +15,7 @@ import (
 
 const goodPlan = `{"title":"Запись в барбершоп","items":[
   {"type":"short_text","text":"Ваше имя","required":true,"options":[],"scaleMin":0,"scaleMax":0},
-  {"type":"single_choice","text":"Мастер","required":false,"options":["Иван","Пётр"],"scaleMin":0,"scaleMax":0},
-  {"type":"consent","text":"Согласен на обработку данных","required":true,"options":[],"scaleMin":0,"scaleMax":0}
+  {"type":"single_choice","text":"Мастер","required":false,"options":["Иван","Пётр"],"scaleMin":0,"scaleMax":0}
 ]}`
 
 func generateService(store *fakeStore, plans *fakePlans, gen Generator) *Service {
@@ -50,7 +49,7 @@ func TestGenerate(t *testing.T) {
 		if err != nil {
 			t.Fatalf("сохранённая схема не проходит ValidateSchema: %v", err)
 		}
-		if len(schema.Blocks) != 1+2+2+1 {
+		if len(schema.Blocks) != 1+2+2 {
 			t.Errorf("блоков в схеме = %d", len(schema.Blocks))
 		}
 
@@ -80,7 +79,7 @@ func TestGenerate(t *testing.T) {
 		if reqs[0].User != "опрос гостей кофейни" {
 			t.Errorf("просьба автора = %q", reqs[0].User)
 		}
-		for _, want := range []string{"single_choice", "page_break", "consent"} {
+		for _, want := range []string{"single_choice", "page_break", "file"} {
 			if !strings.Contains(reqs[0].System, want) {
 				t.Errorf("в инструкции нет типа %q — реестр до модели не доехал", want)
 			}

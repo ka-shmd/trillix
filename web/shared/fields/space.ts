@@ -31,7 +31,6 @@ const SPACE: Record<BlockType, SpaceStep> = {
   multi_choice: 'base',
   multi_select: 'base',
   date: 'base',
-  consent: 'base',
   file: 'base',
   slot: 'base',
   // Подписи открывают вопрос — воздух перед ними и есть воздух между вопросами.

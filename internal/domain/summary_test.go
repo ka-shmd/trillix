@@ -147,28 +147,6 @@ func TestSummary_ScaleBucketsCoverRange(t *testing.T) {
 	}
 }
 
-// Согласие: «Нет» — это те, кого спросили и кто не отметил, а не только приславшие
-// пустую строку. Неотмеченный чекбокс приходит и пустым значением, и вовсе без
-// ключа — обе формы обязаны попасть в «Нет» одинаково.
-func TestSummary_ConsentNoCountsUnchecked(t *testing.T) {
-	src := Block{ID: "c", Type: BlockConsent}
-	b := NewSummaryBuilder([]VersionedSchema{vs(1, src)})
-	b.Add(1, sampleTime, ans(map[string]any{"c": ConsentYes}))
-	b.Add(1, sampleTime, ans(map[string]any{"c": ""})) // снял галочку
-	b.Add(1, sampleTime, ans(map[string]any{}))        // не трогал вовсе
-
-	bs, counts := bucketsOf(t, b.Result(), "c")
-	if counts["Да"] != 1 {
-		t.Fatalf("согласий = %d, ожидалось 1 (%v)", counts["Да"], counts)
-	}
-	if counts["Нет"] != 2 {
-		t.Fatalf("отказов = %d, ожидалось 2 — пустое значение и отсутствие ключа равны (%v)", counts["Нет"], counts)
-	}
-	if bs.Asked != 3 {
-		t.Fatalf("спросили = %d, ожидалось 3", bs.Asked)
-	}
-}
-
 // Числа: среднее/мин/макс по ответившим, а не по всем ответам формы.
 func TestSummary_NumberStats(t *testing.T) {
 	src := Block{ID: "n", Type: BlockNumber}

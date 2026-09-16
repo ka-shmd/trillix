@@ -78,9 +78,6 @@ export function valueChoices(source: Block): { value: string; label: string }[] 
       label: String(min + i),
     }))
   }
-  if (source.type === 'consent') {
-    return [{ value: 'yes', label: 'Отмечено' }]
-  }
   return []
 }
 

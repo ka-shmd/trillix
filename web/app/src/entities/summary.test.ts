@@ -67,18 +67,6 @@ const realServerPayload = {
         { key: '10', label: '10', count: 0 },
       ],
     },
-    {
-      blockId: 'pd',
-      label: 'Согласен на обработку данных',
-      type: 'consent',
-      kind: 'distribution',
-      asked: 1,
-      answered: 1,
-      buckets: [
-        { key: 'yes', label: 'Да', count: 1 },
-        { key: '', label: 'Нет', count: 0 },
-      ],
-    },
   ],
 }
 
@@ -86,7 +74,7 @@ describe('formSummarySchema', () => {
   it('принимает реальный ответ сервера', () => {
     const parsed = formSummarySchema.parse(realServerPayload)
     expect(parsed.total).toBe(1)
-    expect(parsed.blocks).toHaveLength(4)
+    expect(parsed.blocks).toHaveLength(3)
   })
 
   // Вопрос без распределения (fill) приходит вовсе без ключа buckets: схема обязана

@@ -145,8 +145,6 @@ func sampleValue(t BlockType, options []string) string {
 			return options[0] + "; " + options[1]
 		}
 		return options[0]
-	case t == BlockConsent:
-		return "Да"
 	case t == BlockEmail:
 		return "primer@example.com"
 	case t == BlockPhone:

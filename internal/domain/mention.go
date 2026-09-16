@@ -135,9 +135,6 @@ func (c MentionContext) allAnswers() string {
 //
 //   - несколько вариантов — через «, », а не «; »: в тексте письма точка с запятой
 //     читается разделителем предложений, в ячейке таблицы — разделителем значений;
-//   - согласие — «Да» либо ПУСТО, а не «Нет»: пустая подстановка и есть отсутствие
-//     ответа, а «Нет» посреди фразы было бы утверждением, которого респондент
-//     не делал. Строку «без ответа» ставит уже allAnswers, где вопрос назван.
 //
 // Ошибка разбора даёт пустоту: ответ в JSONB прошёл ValidateAnswers при приёме, но
 // версия и тип могли разойтись, и уронить из-за этого письмо нельзя.
@@ -180,15 +177,6 @@ func (c MentionContext) answerText(q Question) string {
 			}
 		}
 		return strings.Join(names, ", ")
-	case BlockConsent:
-		var v string
-		if json.Unmarshal(raw, &v) != nil {
-			return ""
-		}
-		if v == ConsentYes {
-			return "Да"
-		}
-		return ""
 	default:
 		var v string
 		if json.Unmarshal(raw, &v) != nil {
