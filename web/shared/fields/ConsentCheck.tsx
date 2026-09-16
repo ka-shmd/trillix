@@ -6,6 +6,7 @@
 // отдельно от иных документов (ч. 1 ст. 9 152-ФЗ), и «ознакомлен с политикой» в ту же
 // отметку не вписывается. Пустая по умолчанию: предзаполненная отметка согласием не
 // считается, поэтому состояние живёт у вызывающего в памяти и в черновик не попадает.
+// Без отметки кнопка отправки неактивна — отдельной ошибки у галочки поэтому нет.
 //
 // Ссылка внутри <label> отметку не переключает: активация метки не срабатывает на
 // интерактивном потомке. У респондента открывается в новой вкладке — и из фрейма
@@ -20,13 +21,11 @@ export function ConsentCheck({
   hrefs,
   checked,
   onChange,
-  error,
   disabled,
 }: {
   hrefs?: { consent: string; policy: string }
   checked: boolean
   onChange: (checked: boolean) => void
-  error: boolean
   disabled: boolean
 }) {
   const link = (kind: 'consent' | 'policy', text: string) => (
@@ -49,18 +48,11 @@ export function ConsentCheck({
           checked={checked}
           onChange={(e) => onChange(e.currentTarget.checked)}
           disabled={disabled}
-          aria-invalid={error || undefined}
-          aria-describedby={error ? 'rf-consent-error' : undefined}
         />
         <span className="rf-consent">
           Я даю {link('consent', 'согласие на обработку персональных данных')}
         </span>
       </label>
-      {error && (
-        <p className="rf-error" id="rf-consent-error" role="alert">
-          Отметьте согласие, чтобы отправить форму.
-        </p>
-      )}
       <p className="rf-consent">{link('policy', 'Политика обработки персональных данных')}</p>
     </div>
   )

@@ -2,6 +2,7 @@ import { z } from 'zod'
 
 import { type Block, isContentType, isValidPhone, markRange } from '@entities/formSchema'
 import { type Answer } from '@fields/answer'
+import { isEmptyAnswer } from '@fields/required'
 
 import { type Answers } from './answers'
 
@@ -14,11 +15,6 @@ export type Errors = Record<string, string>
 const REQUIRED = 'Обязательное поле'
 
 const emailCheck = z.email()
-
-function isEmpty(value: Answer | undefined): boolean {
-  if (value == null || value === '') return true
-  return Array.isArray(value) && value.length === 0
-}
 
 // Проверка одного блока: null — ок. Пустое необязательное поле валидно; формат
 // проверяется только у заполненного значения.
@@ -33,7 +29,7 @@ export function validateBlock(
 ): string | null {
   // Неотвечаемый блок (text) не собирает ответ — всегда валиден.
   if (isContentType(block.type)) return null
-  if (isEmpty(value)) {
+  if (isEmptyAnswer(value)) {
     return required ? REQUIRED : null
   }
   // Дальше значение непустое. Формат — только у текстовых типов (choice-значения

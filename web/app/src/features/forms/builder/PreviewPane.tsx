@@ -17,6 +17,7 @@ import { SlotStubProvider } from '@fields/booking'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { Badge } from '@fields/Badge'
 import { ConsentCheck } from '@fields/ConsentCheck'
+import { missingRequired } from '@fields/required'
 import { customStyleSheet } from '@fields/customCss'
 import { designClasses, designToVars } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
@@ -105,10 +106,8 @@ export function PreviewPane({
   // показывать есть что: формы без такой страницы получают экран-заглушку, а он живёт в
   // рендерере (свой .status), и второй его экземпляр здесь разъехался бы с первым.
   const [done, setDone] = useState(false)
-  // Галочка согласия — состояние просмотра, как ответы: без отметки «отправка» не
-  // проходит, ровно как у респондента.
+  // Галочка согласия — состояние просмотра, как ответы.
   const [consentChecked, setConsentChecked] = useState(false)
-  const [consentError, setConsentError] = useState(false)
   const page = Math.min(rawPage, lastPage)
   // Хром (обложка, логотип, заголовок) — только на первой странице, как у респондента
   // (решение владельца 2026-08-05). Расхождение здесь и означало бы, что превью врёт.
@@ -118,6 +117,10 @@ export function PreviewPane({
   const rows = packRows(groupBlocks(done ? (thankYou ?? []) : (pages[page] ?? [])))
   // Есть ли в форме условия вообще — от этого зависит, чем объяснять пустой экран.
   const hasRules = blocks.some((b) => b.type === 'logic')
+  // Кнопка отправки неактивна по тому же правилу, что у респондента (FormView): пустое
+  // обязательное у видимых вопросов или неотмеченное согласие.
+  const canSubmit =
+    !missingRequired(pages.flat(), answers, plan.required) && (!consent || consentChecked)
   const onChange = (blockId: string, value: Answer) =>
     setAnswers((prev) => ({ ...prev, [blockId]: value }))
 
@@ -269,21 +272,15 @@ export function PreviewPane({
                       {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
                     </button>
                   ) : (
-                    // Кнопка отправки ведёт на экран после отправки ВСЕГДА, в том числе у
-                    // формы без страницы «Спасибо»: обработчик не условный. Контрол,
-                    // который выглядит живым и не делает по нажатию ничего, читается как
-                    // поломка продукта, а не как «этой страницы у вас нет». Что показать
-                    // форме без страницы — выше, в ветке `done`.
+                    // Активная кнопка отправки ведёт на экран после отправки ВСЕГДА, в том
+                    // числе у формы без страницы «Спасибо»: контрол, который выглядит живым
+                    // и не делает по нажатию ничего, читается как поломка продукта. Что
+                    // показать форме без страницы — выше, в ветке `done`.
                     <button
                       type="button"
                       className="rf-submit"
-                      onClick={() => {
-                        if (consent && !consentChecked) {
-                          setConsentError(true)
-                          return
-                        }
-                        setDone(true)
-                      }}
+                      disabled={!canSubmit}
+                      onClick={() => setDone(true)}
                     >
                       {label}
                     </button>
@@ -300,11 +297,7 @@ export function PreviewPane({
             {!done && consent && page === lastPage && !plan.blocked && (
               <ConsentCheck
                 checked={consentChecked}
-                onChange={(checked) => {
-                  setConsentChecked(checked)
-                  if (checked) setConsentError(false)
-                }}
-                error={consentError}
+                onChange={setConsentChecked}
                 disabled={false}
               />
             )}

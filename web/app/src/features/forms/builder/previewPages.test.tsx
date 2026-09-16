@@ -258,15 +258,14 @@ describe('превью и согласие', () => {
     ).toBeTruthy()
   })
 
-  it('без отметки отправка не проходит и показывает ошибку, с отметкой — проходит', () => {
+  it('кнопка отправки неактивна без отметки согласия и оживает с ней', () => {
     renderPreview(question('a', 'Имя'), { consent: true })
-    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
-    expect(screen.getByRole('alert').textContent).toContain('Отметьте согласие')
-    expect(screen.queryByRole('button', { name: /Вернуться к форме/ })).toBeNull()
+    const submit = screen.getByRole('button', { name: 'Отправить' }) as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
 
     fireEvent.click(screen.getByRole('checkbox'))
-    expect(screen.queryByRole('alert')).toBeNull()
-    fireEvent.click(screen.getByRole('button', { name: 'Отправить' }))
+    expect(submit.disabled).toBe(false)
+    fireEvent.click(submit)
     expect(screen.getByRole('button', { name: /Вернуться к форме/ })).toBeTruthy()
   })
 
@@ -277,5 +276,32 @@ describe('превью и согласие', () => {
     // метки не переключает галочку, здесь не проверить: happy-dom переключает её вопреки
     // спецификации, браузеры — нет.
     expect(fireEvent.click(link)).toBe(false)
+  })
+})
+
+// Кнопка отправки неактивна, пока не заполнено обязательное (решение владельца
+// 2026-09-17) — в превью ровно как у респондента.
+describe('превью и обязательные поля', () => {
+  const required = (): Block[] => [
+    { id: 't_a', groupId: '', type: 'title', text: textFromString('Имя') },
+    { id: 'a', groupId: '', type: 'short_text', required: true },
+  ]
+
+  it('пустое обязательное держит кнопку неактивной, заполненное — отпускает', () => {
+    renderPreview(required())
+    const submit = screen.getByRole('button', { name: 'Отправить' }) as HTMLButtonElement
+    expect(submit.disabled).toBe(true)
+
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Анна' } })
+    expect(submit.disabled).toBe(false)
+  })
+
+  it('с согласием нужны и поле, и отметка', () => {
+    renderPreview(required(), { consent: true })
+    const submit = screen.getByRole('button', { name: 'Отправить' }) as HTMLButtonElement
+    fireEvent.click(screen.getByRole('checkbox'))
+    expect(submit.disabled).toBe(true)
+    fireEvent.change(screen.getByRole('textbox'), { target: { value: 'Анна' } })
+    expect(submit.disabled).toBe(false)
   })
 })
