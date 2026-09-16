@@ -99,6 +99,7 @@ export function PreviewOverlay({
   badge,
   progress = false,
   allowBack = false,
+  consent = false,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -108,6 +109,7 @@ export function PreviewOverlay({
   // Как и badge — живые свойства формы, а не документ (см. PreviewPane).
   progress?: boolean
   allowBack?: boolean
+  consent?: boolean
 }) {
   const returnFocus = useReturnFocus(open)
   return (
@@ -138,7 +140,13 @@ export function PreviewOverlay({
             документа фрейма — сам фрейм (событие через границу документов не
             всплывает, а курсор автора почти всегда внутри формы). */}
         <PreviewFrame store={store} onEscape={() => onOpenChange(false)}>
-          <PreviewPane title={title} badge={badge} progress={progress} allowBack={allowBack} />
+          <PreviewPane
+            title={title}
+            badge={badge}
+            progress={progress}
+            allowBack={allowBack}
+            consent={consent}
+          />
         </PreviewFrame>
       </SheetContent>
     </Sheet>
