@@ -34,7 +34,9 @@ type Access interface {
 type Store interface {
 	Upsert(ctx context.Context, db postgres.DBTX, c NewConnection) (uuid.UUID, error)
 	ListByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID, provider string) ([]Connection, error)
-	Delete(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID) ([]byte, error)
+	// Delete удаляет аккаунт человека у НАЗВАННОГО провайдера: адрес отключения
+	// Яндекса не трогает аккаунт Google (фильтр в самом SQL).
+	Delete(ctx context.Context, db postgres.DBTX, id, userID uuid.UUID, provider string) ([]byte, error)
 	UpdateToken(ctx context.Context, db postgres.DBTX, id uuid.UUID, sealed []byte) error
 	GetAccountByID(ctx context.Context, db postgres.DBTX, id uuid.UUID) (Connection, error)
 	InsertLink(ctx context.Context, db postgres.DBTX, l NewFormLink) error
@@ -69,20 +71,30 @@ type Store interface {
 
 var _ Store = Repo{}
 
-// Provider — внешний сервис, к которому подключаются. Интерфейс, а не *Google:
-// на его место в тестах встаёт httptest-сервер, а вторым провайдером (Excel
-// Online, Airtable) станет вторая реализация без правки сервиса.
-type Provider interface {
+// Имена провайдеров — значения колонки integration_accounts.provider и сегмент
+// адреса ручек подключения.
+const (
+	ProviderGoogle = "google"
+	ProviderYandex = "yandex"
+)
+
+// AccountProvider — провайдер, к которому человек подключает СВОЙ аккаунт:
+// согласие, обмен кода, обновление токена, профиль, отзыв. Его реализуют Google
+// (Таблицы) и Яндекс (Метрика, фаза 29).
+type AccountProvider interface {
 	Provider() string
 	AuthURL(state, verifier, loginHint string) string
 	Exchange(ctx context.Context, code, verifier string) (Tokens, error)
 	Refresh(ctx context.Context, refresh string) (Tokens, error)
 	Account(ctx context.Context, accessToken string) (Account, error)
 	Revoke(ctx context.Context, refresh string) error
+}
 
-	// Операции с таблицами живут в том же интерфейсе, а не в отдельном:
-	// провайдер сегодня один, и делить его надвое стоит тогда, когда появится
-	// второй, у которого таблиц нет (YAGNI, PROCESS §2).
+// Provider — Google: аккаунт плюс таблицы. Интерфейс, а не *Google: на его место
+// в тестах встаёт httptest-сервер.
+type Provider interface {
+	AccountProvider
+
 	CreateSpreadsheet(ctx context.Context, accessToken, title, sheetTitle string) (Spreadsheet, error)
 	AddSheet(ctx context.Context, accessToken, spreadsheetID, title string) (Spreadsheet, error)
 	ListSpreadsheets(ctx context.Context, accessToken string) ([]SpreadsheetRef, error)
@@ -129,6 +141,9 @@ type Service struct {
 	// pickerKey — браузерный ключ для окна выбора файла (см. WithPicker).
 	pickerKey string
 	google    Provider
+	// yandex — аккаунт Яндекса для счётчика Метрики (WithYandex); nil — приложение
+	// не настроено на контуре, счётчик вписывается номером вручную.
+	yandex AccountProvider
 	// key — общий секрет приложения (FORM_TOKEN_SECRET). Из него HKDF выводит
 	// ключ шифрования refresh-токенов; сам он здесь не используется ни для чего
 	// другого и наружу не отдаётся.
@@ -145,6 +160,38 @@ func NewService(db postgres.DBTX, tx Transactor, repo Store, access Access, f Fo
 func (s *Service) WithPicker(apiKey string) *Service {
 	s.pickerKey = apiKey
 	return s
+}
+
+// WithYandex включает подключение аккаунта Яндекса (фаза 29, design/yandex-metrika.md
+// §13). Звать только с настоящим провайдером: типизированный nil в интерфейсе
+// сервис счёл бы настроенным.
+func (s *Service) WithYandex(p AccountProvider) *Service {
+	s.yandex = p
+	return s
+}
+
+// accountProvider — провайдер по имени; nil — не настроен на контуре. Всё, что не
+// Яндекс, — Google: таблицы есть только у него, и путь доставки зовёт обновление
+// токена, не разбирая имя.
+func (s *Service) accountProvider(name string) AccountProvider {
+	if name == ProviderYandex {
+		if s.yandex == nil {
+			return nil
+		}
+		return s.yandex
+	}
+	if s.google == nil {
+		return nil
+	}
+	return s.google
+}
+
+// providerTitle — провайдер в тексте отказа человеку.
+func providerTitle(name string) string {
+	if name == ProviderYandex {
+		return "Яндекса"
+	}
+	return "Google"
 }
 
 // Enabled отвечает, настроен ли провайдер на этом контуре. Не настроен (нет
@@ -196,15 +243,18 @@ type Status struct {
 // Прав пространства здесь не спрашивают вовсе: с миграции 0037 аккаунт
 // принадлежит человеку (ADR §10), и «мои подключения» — вопрос о себе. Роль в
 // какой бы то ни было команде на ответ не влияет.
-func (s *Service) Status(ctx context.Context, userID uuid.UUID) (Status, error) {
-	if !s.Enabled() {
+func (s *Service) Status(ctx context.Context, provider string, userID uuid.UUID) (Status, error) {
+	p := s.accountProvider(provider)
+	if p == nil {
 		return Status{}, nil
 	}
-	conns, err := s.repo.ListByUser(ctx, s.db, userID, s.google.Provider())
+	conns, err := s.repo.ListByUser(ctx, s.db, userID, p.Provider())
 	if err != nil {
 		return Status{}, fmt.Errorf("integration status: %w", err)
 	}
-	out := Status{Enabled: true, PickerEnabled: s.PickerAvailable(), Accounts: make([]ConnectedAccount, 0, len(conns))}
+	// Окно выбора файла — только у Google.
+	picker := provider != ProviderYandex && s.PickerAvailable()
+	out := Status{Enabled: true, PickerEnabled: picker, Accounts: make([]ConnectedAccount, 0, len(conns))}
 	for _, c := range conns {
 		// Расшифровка — не поход к провайдеру, а AES-GCM над сотней байт: платить
 		// за неё показом таба дешевле, чем врать про рабочее подключение.
@@ -250,9 +300,16 @@ func (s *Service) accountForLink(ctx context.Context, link FormLink) (Connection
 // (инвариант 1). Чужой аккаунт неотличим от несуществующего — один и тот же
 // текст на оба случая, чтобы отказ не подтверждал существование чужого.
 func (s *Service) accountOf(ctx context.Context, userID, accountID uuid.UUID) (Connection, error) {
+	return s.accountOfProvider(ctx, ProviderGoogle, userID, accountID)
+}
+
+// accountOfProvider — accountOf для названного провайдера. Аккаунт ДРУГОГО
+// провайдера неотличим от чужого: токен Яндекса в походе к Google (и наоборот)
+// ни к чему не ведёт, а подсказка переподключения несла бы его почту.
+func (s *Service) accountOfProvider(ctx context.Context, provider string, userID, accountID uuid.UUID) (Connection, error) {
 	conn, err := s.repo.GetAccountByID(ctx, s.db, accountID)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && conn.UserID != userID) {
-		return Connection{}, fmt.Errorf("%w: аккаунт Google не подключён", domain.ErrValidation)
+	if errors.Is(err, pgx.ErrNoRows) || (err == nil && (conn.UserID != userID || conn.Provider != provider)) {
+		return Connection{}, fmt.Errorf("%w: аккаунт %s не подключён", domain.ErrValidation, providerTitle(provider))
 	}
 	if err != nil {
 		return Connection{}, fmt.Errorf("integration account: %w", err)
@@ -272,19 +329,20 @@ func (s *Service) accountOf(ctx context.Context, userID, accountID uuid.UUID) (C
 // «переподключить»: адрес и обработка возврата у них одни и те же. Чужой или
 // несуществующий id — отказ, а не молчаливое игнорирование: подсказка несёт
 // ЧУЖУЮ ПОЧТУ, и отдавать её по перебору id нельзя.
-func (s *Service) StartURL(ctx context.Context, userID, reconnect uuid.UUID, state, verifier string) (string, error) {
-	if !s.Enabled() {
+func (s *Service) StartURL(ctx context.Context, provider string, userID, reconnect uuid.UUID, state, verifier string) (string, error) {
+	p := s.accountProvider(provider)
+	if p == nil {
 		return "", domain.ErrNotFound
 	}
 	hint := ""
 	if reconnect != uuid.Nil {
-		conn, err := s.accountOf(ctx, userID, reconnect)
+		conn, err := s.accountOfProvider(ctx, provider, userID, reconnect)
 		if err != nil {
 			return "", err
 		}
 		hint = conn.Email
 	}
-	return s.google.AuthURL(state, verifier, hint), nil
+	return p.AuthURL(state, verifier, hint), nil
 }
 
 // Connect завершает подключение: меняет код на токены, узнаёт аккаунт и кладёт
@@ -299,16 +357,17 @@ func (s *Service) StartURL(ctx context.Context, userID, reconnect uuid.UUID, sta
 // вторую: арбитр ON CONFLICT — внешний аккаунт. Другим аккаунтом — заводит, и в
 // этом вся задача: прежде он затирал первый, оставляя связки писать чужим
 // токеном в таблицы, которых тот не видит.
-func (s *Service) Connect(ctx context.Context, userID uuid.UUID, code, verifier string) (uuid.UUID, error) {
-	if !s.Enabled() {
+func (s *Service) Connect(ctx context.Context, provider string, userID uuid.UUID, code, verifier string) (uuid.UUID, error) {
+	p := s.accountProvider(provider)
+	if p == nil {
 		return uuid.Nil, domain.ErrNotFound
 	}
 
-	tokens, err := s.google.Exchange(ctx, code, verifier)
+	tokens, err := p.Exchange(ctx, code, verifier)
 	if err != nil {
 		return uuid.Nil, err
 	}
-	account, err := s.google.Account(ctx, tokens.Access)
+	account, err := p.Account(ctx, tokens.Access)
 	if err != nil {
 		return uuid.Nil, err
 	}
@@ -320,7 +379,7 @@ func (s *Service) Connect(ctx context.Context, userID uuid.UUID, code, verifier 
 	return s.repo.Upsert(ctx, s.db, NewConnection{
 		ID:            domain.NewID(),
 		UserID:        userID,
-		Provider:      s.google.Provider(),
+		Provider:      p.Provider(),
 		ExternalID:    account.ID,
 		Email:         account.Email,
 		RefreshSealed: sealed,
@@ -335,8 +394,9 @@ func (s *Service) Connect(ctx context.Context, userID uuid.UUID, code, verifier 
 // Отзыв согласия у провайдера — best effort и НЕ гейтит удаление: недоступный
 // Google не должен запирать человека в подключении, которое он разрывает.
 // Неудача уходит в лог — там же, где её увидит человек за логом.
-func (s *Service) Disconnect(ctx context.Context, userID, accountID uuid.UUID) error {
-	if !s.Enabled() {
+func (s *Service) Disconnect(ctx context.Context, provider string, userID, accountID uuid.UUID) error {
+	p := s.accountProvider(provider)
+	if p == nil {
 		return domain.ErrNotFound
 	}
 
@@ -351,7 +411,7 @@ func (s *Service) Disconnect(ctx context.Context, userID, accountID uuid.UUID) e
 			slog.String("account_id", accountID.String()), slog.String("error", linksErr.Error()))
 	}
 
-	sealed, err := s.repo.Delete(ctx, s.db, accountID, userID)
+	sealed, err := s.repo.Delete(ctx, s.db, accountID, userID, p.Provider())
 	if errors.Is(err, pgx.ErrNoRows) {
 		// Отключать нечего — уже отключено (или аккаунт чужой, что снаружи
 		// неотличимо). Идемпотентно: повторный запрос из второй вкладки не
@@ -374,7 +434,7 @@ func (s *Service) Disconnect(ctx context.Context, userID, accountID uuid.UUID) e
 			slog.String("account_id", accountID.String()))
 		return nil
 	}
-	if err := s.google.Revoke(ctx, refresh); err != nil {
+	if err := p.Revoke(ctx, refresh); err != nil {
 		httpserver.LoggerFrom(ctx).Warn("integration token not revoked at provider",
 			slog.String("account_id", accountID.String()),
 			slog.String("error", err.Error()))
@@ -420,6 +480,8 @@ type FormStatus struct {
 	Webhooks []Webhook
 	// Metrika — счётчик Яндекс Метрики формы; nil — не подключён.
 	Metrika *Counter
+	// Yandex — аккаунты Яндекса спрашивающего (фаза 29): из них выбирается счётчик.
+	Yandex Status
 }
 
 // FormStatus читает состояние интеграций формы. Право — ActionFormRead внутри
@@ -430,7 +492,11 @@ func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (For
 		return FormStatus{}, err
 	}
 
-	account, err := s.Status(ctx, userID)
+	account, err := s.Status(ctx, ProviderGoogle, userID)
+	if err != nil {
+		return FormStatus{}, err
+	}
+	yandex, err := s.Status(ctx, ProviderYandex, userID)
 	if err != nil {
 		return FormStatus{}, err
 	}
@@ -457,6 +523,7 @@ func (s *Service) FormStatus(ctx context.Context, userID, formID uuid.UUID) (For
 		Connections: links,
 		Webhooks:    webhooks,
 		Metrika:     metrika,
+		Yandex:      yandex,
 	}, nil
 }
 
@@ -1283,7 +1350,14 @@ func (s *Service) accessToken(ctx context.Context, conn Connection) (string, err
 	if err != nil {
 		return "", err
 	}
-	tokens, err := s.google.Refresh(ctx, refresh)
+	// Токен обновляет провайдер САМОЙ строки: аккаунт Яндекса обменивается у
+	// Яндекса, как бы его ни достали. Ключи провайдера сняли с контура — ходить не
+	// к кому, и это отказ, а не паника на nil.
+	p := s.accountProvider(conn.Provider)
+	if p == nil {
+		return "", fmt.Errorf("%w: провайдер %s не настроен на контуре", domain.ErrNotFound, conn.Provider)
+	}
+	tokens, err := p.Refresh(ctx, refresh)
 	if err != nil {
 		// Умер не лист, а ПОДКЛЮЧЕНИЕ: не работает ни одна его связка, во всех
 		// формах и пространствах. Пометка стоит ЗДЕСЬ, а не на разборе отказа

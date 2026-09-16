@@ -59,9 +59,9 @@ type integrationsService interface {
 	RefillForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	RecheckForm(ctx context.Context, userID, formID, linkID uuid.UUID) error
 	UpdateConnection(ctx context.Context, userID, formID, linkID uuid.UUID, patch ConnectionPatch) error
-	StartURL(ctx context.Context, userID, reconnect uuid.UUID, state, verifier string) (string, error)
-	Connect(ctx context.Context, userID uuid.UUID, code, verifier string) (uuid.UUID, error)
-	Disconnect(ctx context.Context, userID, accountID uuid.UUID) error
+	StartURL(ctx context.Context, provider string, userID, reconnect uuid.UUID, state, verifier string) (string, error)
+	Connect(ctx context.Context, provider string, userID uuid.UUID, code, verifier string) (uuid.UUID, error)
+	Disconnect(ctx context.Context, provider string, userID, accountID uuid.UUID) error
 	Deliveries(ctx context.Context, userID, formID, linkID, cursor uuid.UUID) ([]Delivery, error)
 	RetryDelivery(ctx context.Context, userID, formID, linkID, deliveryID uuid.UUID) error
 	CreateWebhook(ctx context.Context, userID, formID uuid.UUID, in WebhookInput) (Webhook, error)
@@ -192,13 +192,13 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// общий, а различает их необязательный accountId — почта названного аккаунта
 	// уезжает провайдеру подсказкой, и человек попадает сразу в нужный аккаунт.
 	mux.Handle("GET /api/v1/integrations/google/start",
-		h.requireAuth(http.HandlerFunc(h.start)))
+		h.requireAuth(h.start(ProviderGoogle)))
 	// Колбэк без RequireAuth: сюда возвращается браузер по редиректу Google, и
 	// JSON-ошибка 401 в окне 560×680 оставила бы человека на origin API без
 	// пути назад. Доказательство личности — подписанная HttpOnly-cookie.
-	mux.Handle("GET /api/v1/integrations/google/callback", http.HandlerFunc(h.callback))
+	mux.Handle("GET /api/v1/integrations/google/callback", h.callback(ProviderGoogle))
 	mux.Handle("DELETE /api/v1/integrations/google/accounts/{accountId}",
-		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.disconnect))))
+		h.requireAuth(h.requireCSRF(h.disconnect(ProviderGoogle))))
 	// Список таблиц аккаунта: только созданные нами (scope drive.file), поэтому
 	// чужих файлов Диска он не раскрывает — и это СВОЙ аккаунт спрашивающего.
 	mux.Handle("GET /api/v1/integrations/google/accounts/{accountId}/spreadsheets",
@@ -213,6 +213,15 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// нельзя — только по нажатию кнопки выбора.
 	mux.Handle("GET /api/v1/integrations/google/accounts/{accountId}/picker",
 		h.requireAuth(http.HandlerFunc(h.picker)))
+
+	// Аккаунт Яндекса (фаза 29, design/yandex-metrika.md §13): тот же поход за
+	// согласием и то же отключение, что у Google, — другое приложение и другой
+	// провайдер в строке аккаунта.
+	mux.Handle("GET /api/v1/integrations/yandex/start",
+		h.requireAuth(h.start(ProviderYandex)))
+	mux.Handle("GET /api/v1/integrations/yandex/callback", h.callback(ProviderYandex))
+	mux.Handle("DELETE /api/v1/integrations/yandex/accounts/{accountId}",
+		h.requireAuth(h.requireCSRF(h.disconnect(ProviderYandex))))
 }
 
 // accountResponse — подключения СПРАШИВАЮЩЕГО: то, из чего он выбирает в окне
@@ -276,6 +285,31 @@ type formStatusResponse struct {
 	Webhooks []webhookResponse `json:"webhooks"`
 	// Metrika — счётчик Яндекс Метрики формы; `null` — не подключён.
 	Metrika *counterResponse `json:"metrika"`
+	// Yandex — аккаунты Яндекса спрашивающего (фаза 29, §13): из них выбирается
+	// счётчик. Отдельно от Account (Google): провайдеры разные, и аккаунт одного в
+	// списке другого был бы выбором, который ни к чему не ведёт.
+	Yandex yandexAccountResponse `json:"yandex"`
+}
+
+// yandexAccountResponse — подключения Яндекса спрашивающего. Окна выбора файла у
+// Яндекса нет, поэтому и признака pickerEnabled здесь нет.
+type yandexAccountResponse struct {
+	Enabled  bool                       `json:"enabled"`
+	Accounts []connectedAccountResponse `json:"accounts"`
+}
+
+// connectedAccounts — аккаунты глазами экрана; пустой список, а не null.
+func connectedAccounts(list []ConnectedAccount) []connectedAccountResponse {
+	out := make([]connectedAccountResponse, 0, len(list))
+	for _, a := range list {
+		out = append(out, connectedAccountResponse{
+			ID:             a.ID.String(),
+			Email:          a.Email,
+			NeedsReconnect: a.NeedsReconnect,
+			ConnectedAt:    a.ConnectedAt.UTC().Format(time.RFC3339),
+		})
+	}
+	return out
 }
 
 // webhookResponse — вебхук глазами экрана.
@@ -365,6 +399,10 @@ func (h *Handler) formStatus(w http.ResponseWriter, r *http.Request) {
 			NeedsReconnect: a.NeedsReconnect,
 			ConnectedAt:    a.ConnectedAt.UTC().Format(time.RFC3339),
 		})
+	}
+	resp.Yandex = yandexAccountResponse{
+		Enabled:  st.Yandex.Enabled,
+		Accounts: connectedAccounts(st.Yandex.Accounts),
 	}
 	resp.Connections = make([]sheetResponse, 0, len(st.Connections))
 	for _, link := range st.Connections {
@@ -974,7 +1012,21 @@ func toSheetResponse(l FormLink) *sheetResponse {
 	return out
 }
 
-func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
+// start, callback и disconnect — фабрики по провайдеру: у Google и Яндекса
+// поход за согласием один, различается только, чьё приложение и чья строка.
+func (h *Handler) start(provider string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.startFlow(w, r, provider) })
+}
+
+func (h *Handler) callback(provider string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.finishFlow(w, r, provider) })
+}
+
+func (h *Handler) disconnect(provider string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { h.disconnectAccount(w, r, provider) })
+}
+
+func (h *Handler) startFlow(w http.ResponseWriter, r *http.Request, provider string) {
 	user, ok := auth.UserFromContext(r.Context())
 	if !ok {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
@@ -1005,7 +1057,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
-	url, err := h.svc.StartURL(r.Context(), user.ID, reconnect, state, verifier)
+	url, err := h.svc.StartURL(r.Context(), provider, user.ID, reconnect, state, verifier)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -1016,7 +1068,7 @@ func (h *Handler) start(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, url, http.StatusFound)
 }
 
-func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) finishFlow(w http.ResponseWriter, r *http.Request, provider string) {
 	// Обе cookie одноразовые: гасим их до любого ответа. Через defer было бы
 	// нельзя — http.Redirect к тому моменту уже записал заголовки, и Set-Cookie
 	// не уехал бы, оставив state жить все 15 минут TTL.
@@ -1051,7 +1103,7 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	_, err := h.svc.Connect(r.Context(), userID, code, verifier)
+	_, err := h.svc.Connect(r.Context(), provider, userID, code, verifier)
 	switch {
 	case err == nil:
 		h.finish(w, r, outcomeOK)
@@ -1064,18 +1116,18 @@ func (h *Handler) callback(w http.ResponseWriter, r *http.Request) {
 		// Колбэк — навигация браузера, а не вызов API: JSON-ошибка оставила бы
 		// человека на origin API без пути назад. Причина уходит в лог.
 		httpserver.LoggerFrom(r.Context()).Error("integration connect failed",
-			slog.String("provider", "google"),
+			slog.String("provider", provider),
 			slog.String("error", err.Error()))
 		h.finish(w, r, outcomeFailed)
 	}
 }
 
-func (h *Handler) disconnect(w http.ResponseWriter, r *http.Request) {
+func (h *Handler) disconnectAccount(w http.ResponseWriter, r *http.Request, provider string) {
 	user, accountID, ok := h.userAndAccount(w, r)
 	if !ok {
 		return
 	}
-	if err := h.svc.Disconnect(r.Context(), user.ID, accountID); err != nil {
+	if err := h.svc.Disconnect(r.Context(), provider, user.ID, accountID); err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}

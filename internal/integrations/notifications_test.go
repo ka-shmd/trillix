@@ -246,7 +246,7 @@ func TestDisconnectAccount_ClearsNoticesOfItsLinks(t *testing.T) {
 	svc := newFormService(fakeAccess{}, store, fakeForms{}, &fakeProvider{}).
 		WithNotifications(notes)
 
-	if err := svc.Disconnect(context.Background(), testUser, uuid.New()); err != nil {
+	if err := svc.Disconnect(context.Background(), integrations.ProviderGoogle, testUser, uuid.New()); err != nil {
 		t.Fatalf("отключение аккаунта: %v", err)
 	}
 	if len(notes.cleared) != 2 || notes.cleared[0] != first || notes.cleared[1] != second {

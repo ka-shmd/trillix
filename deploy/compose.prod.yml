@@ -62,6 +62,9 @@ x-app-env: &app-env
   GOOGLE_OAUTH_CLIENT_ID: ${GOOGLE_OAUTH_CLIENT_ID:-}
   GOOGLE_OAUTH_CLIENT_SECRET: ${GOOGLE_OAUTH_CLIENT_SECRET:-}
   GOOGLE_PICKER_API_KEY: ${GOOGLE_PICKER_API_KEY:-}
+  # Счётчик Метрики из аккаунта Яндекса (фаза 29) — отдельное приложение, не вход.
+  YANDEX_INTEGRATION_CLIENT_ID: ${YANDEX_INTEGRATION_CLIENT_ID:-}
+  YANDEX_INTEGRATION_CLIENT_SECRET: ${YANDEX_INTEGRATION_CLIENT_SECRET:-}
   # Сервис печати PDF (ADR §10). ОПЦИОНАЛЬНАЯ (`:-`): контур без принтера
   # поднимается, кнопка «Скачать PDF» отвечает 503 «печать не настроена».
   PRINTER_URL: ${PRINTER_URL:-}

@@ -137,7 +137,7 @@ func NewGoogle(clientID, clientSecret, redirectURI string) *Google {
 }
 
 // Provider — имя в колонке integration_accounts.provider и в адресах.
-func (g *Google) Provider() string { return "google" }
+func (g *Google) Provider() string { return ProviderGoogle }
 
 // AppID — номер проекта Google Cloud. Он же префикс client_id
 // («442272803444-xxxx.apps.googleusercontent.com»), поэтому отдельной
@@ -266,7 +266,13 @@ func (g *Google) Revoke(ctx context.Context, refresh string) error {
 
 // token — общий обмен на эндпоинте токенов (код и refresh отличаются только формой).
 func (g *Google) token(ctx context.Context, form url.Values) (Tokens, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, g.tokenURL, strings.NewReader(form.Encode()))
+	return postToken(ctx, g.http, g.tokenURL, form)
+}
+
+// postToken — обмен на токен-ручке OAuth 2.0. Общий у Google и Яндекса: поля
+// ответа и код отказа invalid_grant у них одни и те же.
+func postToken(ctx context.Context, client *http.Client, tokenURL string, form url.Values) (Tokens, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, tokenURL, strings.NewReader(form.Encode()))
 	if err != nil {
 		return Tokens{}, fmt.Errorf("build token request: %w", err)
 	}
@@ -283,7 +289,7 @@ func (g *Google) token(ctx context.Context, form url.Values) (Tokens, error) {
 		// вечно. Текст тела по-прежнему наружу не отдаётся — в нём токены.
 		Error string `json:"error"`
 	}
-	if err := g.do(req, &body); err != nil {
+	if err := providerRequest(client, req, &body, false); err != nil {
 		if body.Error == errInvalidGrant {
 			return Tokens{}, errRefusedGrant
 		}
@@ -318,10 +324,15 @@ func (g *Google) do(req *http.Request, out any) error {
 	return g.request(req, out, false)
 }
 
-// request — общий транспорт. Тело читается через LimitReader: потолок общий для
-// всех ответов провайдера.
+// request — общий транспорт Google.
 func (g *Google) request(req *http.Request, out any, explain bool) error {
-	resp, err := g.http.Do(req)
+	return providerRequest(g.http, req, out, explain)
+}
+
+// providerRequest — транспорт к провайдеру, общий у Google и Яндекса. Тело
+// читается через LimitReader: потолок общий для всех ответов провайдера.
+func providerRequest(client *http.Client, req *http.Request, out any, explain bool) error {
+	resp, err := client.Do(req)
 	if err != nil {
 		return err
 	}

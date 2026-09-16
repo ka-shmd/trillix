@@ -133,6 +133,15 @@ export const formIntegrationsSchema = z.object({
   webhooks: z.array(webhookSchema).default([]),
   // null — счётчик не подключён.
   metrika: metrikaCounterSchema.nullable().default(null),
+  // yandex — аккаунты Яндекса спрашивающего (фаза 29): из них выбирается счётчик
+  // Метрики. enabled — настроено ли приложение на контуре; нет — счётчик вписывается
+  // номером вручную. Умолчание «не настроено»: ответ без поля не обещает кнопки.
+  yandex: z
+    .object({
+      enabled: z.boolean(),
+      accounts: z.array(connectedAccountSchema).default([]),
+    })
+    .default({ enabled: false, accounts: [] }),
 })
 
 // Одна попытка доставки в журнале связки (INTEGRATIONS.md §12). Зеркалит
