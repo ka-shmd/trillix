@@ -5,6 +5,8 @@ import (
 	"fmt"
 	"net/http"
 
+	"github.com/google/uuid"
+
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 )
@@ -64,4 +66,71 @@ func (h *Handler) deleteMetrika(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.WriteHeader(http.StatusNoContent)
+}
+
+// Счётчики аккаунта Яндекса и заведение целей (спека §13.3). Сервис — counter.go.
+
+// metrikaCounterResponse — счётчик в списке выбора. Номер числом, как его отдаёт
+// Метрика; строкой он становится в теле PUT, которым счётчик сохраняется.
+type metrikaCounterResponse struct {
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Site string `json:"site"`
+}
+
+func (h *Handler) metrikaCounters(w http.ResponseWriter, r *http.Request) {
+	user, accountID, ok := h.userAndAccount(w, r)
+	if !ok {
+		return
+	}
+	list, err := h.svc.MetrikaCounters(r.Context(), user.ID, accountID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	out := make([]metrikaCounterResponse, 0, len(list))
+	for _, c := range list {
+		out = append(out, metrikaCounterResponse(c))
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, map[string][]metrikaCounterResponse{"counters": out})
+}
+
+// goalsRequest — чьим аккаунтом заводить цели. Форма и её счётчик в теле не
+// нужны: форма в адресе, счётчик у формы.
+type goalsRequest struct {
+	AccountID string `json:"accountId"`
+}
+
+// goalsResponse — сколько целей завели и сколько уже было. Второе число не
+// формальность: «уже было три» — это ответ «всё на месте», а не «ничего не
+// произошло».
+type goalsResponse struct {
+	Created  int `json:"created"`
+	Existing int `json:"existing"`
+}
+
+func (h *Handler) metrikaGoals(w http.ResponseWriter, r *http.Request) {
+	user, formID, ok := h.userAndForm(w, r)
+	if !ok {
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req goalsRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	accountID, err := uuid.Parse(req.AccountID)
+	if err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: не выбран аккаунт Яндекса", domain.ErrValidation))
+		return
+	}
+	res, err := h.svc.EnsureMetrikaGoals(r.Context(), user.ID, formID, accountID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, goalsResponse(res))
 }

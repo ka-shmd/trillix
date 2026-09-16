@@ -75,6 +75,8 @@ type integrationsService interface {
 	DeleteWebhook(ctx context.Context, userID, formID, webhookID uuid.UUID) error
 	SetCounter(ctx context.Context, userID, formID uuid.UUID, kind string, in CounterInput) (Counter, error)
 	DeleteCounter(ctx context.Context, userID, formID uuid.UUID, kind string) error
+	MetrikaCounters(ctx context.Context, userID, accountID uuid.UUID) ([]MetrikaCounter, error)
+	EnsureMetrikaGoals(ctx context.Context, userID, formID, accountID uuid.UUID) (GoalsResult, error)
 }
 
 // RateLimiter — лимитер проверки вебхука. Реализация — ratelimit.TokenBucket; в
@@ -187,6 +189,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.setMetrika))))
 	mux.Handle("DELETE /api/v1/forms/{id}/counters/yandex-metrika",
 		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.deleteMetrika))))
+	// Заведение целей — у ФОРМЫ, а не у аккаунта: цели заводятся тому счётчику,
+	// который стоит на её странице, и право спрашивается на форму.
+	mux.Handle("POST /api/v1/forms/{id}/counters/yandex-metrika/goals",
+		h.requireAuth(h.requireCSRF(http.HandlerFunc(h.metrikaGoals))))
 
 	// Один адрес на «подключить ещё один» и «переподключить»: возврат у них
 	// общий, а различает их необязательный accountId — почта названного аккаунта
@@ -222,6 +228,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/integrations/yandex/callback", h.callback(ProviderYandex))
 	mux.Handle("DELETE /api/v1/integrations/yandex/accounts/{accountId}",
 		h.requireAuth(h.requireCSRF(h.disconnect(ProviderYandex))))
+	// Счётчики аккаунта — из чего выбирают номер. Это СВОЙ аккаунт спрашивающего,
+	// поэтому прав пространства здесь нет, как и у списка таблиц Google.
+	mux.Handle("GET /api/v1/integrations/yandex/accounts/{accountId}/counters",
+		h.requireAuth(http.HandlerFunc(h.metrikaCounters)))
 }
 
 // accountResponse — подключения СПРАШИВАЮЩЕГО: то, из чего он выбирает в окне

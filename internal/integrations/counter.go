@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"regexp"
+	"strconv"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -114,4 +117,94 @@ func (s *Service) formCounter(ctx context.Context, formID uuid.UUID, kind string
 		return nil, err
 	}
 	return &c, nil
+}
+
+// Счётчики и цели через подключённый аккаунт Яндекса (спека §13.3–13.4). Номер
+// счётчика по-прежнему основа: сюда приходят, чтобы взять его из списка вместо
+// переписывания из чужой вкладки и завести цели, — сохраняется он тем же
+// SetCounter.
+
+// MetrikaCounters — счётчики аккаунта Яндекса, цели которых он вправе заводить.
+//
+// Прав пространства не спрашивает, как и список таблиц Google: аккаунт свой, и
+// раскрывать в нём человеку нечего.
+func (s *Service) MetrikaCounters(ctx context.Context, userID, accountID uuid.UUID) ([]MetrikaCounter, error) {
+	if s.yandex == nil {
+		return nil, domain.ErrNotFound
+	}
+	conn, err := s.accountOfProvider(ctx, ProviderYandex, userID, accountID)
+	if err != nil {
+		return nil, err
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return nil, metrikaRefusal(ctx, err)
+	}
+	list, err := s.yandex.ListCounters(ctx, token)
+	if err != nil {
+		return nil, metrikaRefusal(ctx, err)
+	}
+	return list, nil
+}
+
+// EnsureMetrikaGoals заводит в счётчике формы недостающие цели продукта.
+//
+// Порядок проверок обязателен: право на форму — ПЕРВЫМ, до похода в Яндекс.
+// Иначе посторонний по id чужой формы получал бы отказ Яндекса вместо 404, то
+// есть узнавал бы и о существовании формы, и о том, что у неё есть счётчик.
+//
+// Счётчик берётся у формы, а не из тела запроса: цели заводятся тому номеру,
+// который реально стоит на странице, — иначе они уехали бы в счётчик, который
+// формы не видит.
+func (s *Service) EnsureMetrikaGoals(ctx context.Context, userID, formID, accountID uuid.UUID) (GoalsResult, error) {
+	if s.counters == nil || s.yandex == nil {
+		return GoalsResult{}, domain.ErrNotFound
+	}
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return GoalsResult{}, err
+	}
+	c, err := s.formCounter(ctx, formID, CounterYandexMetrika)
+	if err != nil {
+		return GoalsResult{}, fmt.Errorf("form counter: %w", err)
+	}
+	if c == nil {
+		return GoalsResult{}, fmt.Errorf("%w: у формы нет счётчика — сначала подключите его", domain.ErrValidation)
+	}
+	// Номер в базе прошёл counterNumberRe (до 12 цифр), поэтому в int64 влезает.
+	number, err := strconv.ParseInt(c.Number, 10, 64)
+	if err != nil {
+		return GoalsResult{}, fmt.Errorf("counter number %q: %w", c.Number, err)
+	}
+	conn, err := s.accountOfProvider(ctx, ProviderYandex, userID, accountID)
+	if err != nil {
+		return GoalsResult{}, err
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return GoalsResult{}, metrikaRefusal(ctx, err)
+	}
+	res, err := s.yandex.EnsureGoals(ctx, token, number, metrikaGoals)
+	if err != nil {
+		return GoalsResult{}, metrikaRefusal(ctx, err)
+	}
+	return res, nil
+}
+
+// metrikaRefusal переводит окончательный отказ Яндекса в текст для человека.
+//
+// Сам текст Яндекса до экрана не доезжает: он английский, а на экране человеку
+// нужно действие, а не «Access is denied». В лог он уходит целиком — отладка
+// иначе свелась бы к трёхзначному числу.
+//
+// Всё, кроме окончательного отказа (сеть, пятисотка Яндекса), едет как есть:
+// это «повторите», а не «почините доступ».
+func metrikaRefusal(ctx context.Context, err error) error {
+	if !errors.Is(err, ErrPermanent) {
+		return err
+	}
+	httpserver.LoggerFrom(ctx).Warn("metrika refused", slog.String("error", err.Error()))
+	if errors.Is(err, ErrAccessLost) {
+		return fmt.Errorf("%w: доступ к аккаунту Яндекса отозван — подключите аккаунт заново", domain.ErrValidation)
+	}
+	return fmt.Errorf("%w: Яндекс не дал доступа к счётчику — проверьте, что аккаунт вправе его править", domain.ErrValidation)
 }

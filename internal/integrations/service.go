@@ -109,6 +109,16 @@ type Provider interface {
 	ClearSheet(ctx context.Context, accessToken string, s Spreadsheet) error
 }
 
+// MetrikaProvider — Яндекс: аккаунт плюс API управления Метрики (фаза 29). Цели
+// и счётчики отдельным интерфейсом поверх аккаунтной части, а не в
+// AccountProvider: у Google их нет и не будет.
+type MetrikaProvider interface {
+	AccountProvider
+
+	ListCounters(ctx context.Context, accessToken string) ([]MetrikaCounter, error)
+	EnsureGoals(ctx context.Context, accessToken string, counterID int64, goals []MetrikaGoal) (GoalsResult, error)
+}
+
 // Transactor открывает транзакцию (postgres.TxRunner). Нужен ровно в одном
 // месте — при подключении связки, где три записи обязаны лечь вместе.
 type Transactor interface {
@@ -143,7 +153,7 @@ type Service struct {
 	google    Provider
 	// yandex — аккаунт Яндекса для счётчика Метрики (WithYandex); nil — приложение
 	// не настроено на контуре, счётчик вписывается номером вручную.
-	yandex AccountProvider
+	yandex MetrikaProvider
 	// key — общий секрет приложения (FORM_TOKEN_SECRET). Из него HKDF выводит
 	// ключ шифрования refresh-токенов; сам он здесь не используется ни для чего
 	// другого и наружу не отдаётся.
@@ -165,7 +175,7 @@ func (s *Service) WithPicker(apiKey string) *Service {
 // WithYandex включает подключение аккаунта Яндекса (фаза 29, design/yandex-metrika.md
 // §13). Звать только с настоящим провайдером: типизированный nil в интерфейсе
 // сервис счёл бы настроенным.
-func (s *Service) WithYandex(p AccountProvider) *Service {
+func (s *Service) WithYandex(p MetrikaProvider) *Service {
 	s.yandex = p
 	return s
 }
