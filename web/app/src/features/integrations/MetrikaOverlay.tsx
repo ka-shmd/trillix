@@ -1,6 +1,6 @@
 import { useQuery } from '@tanstack/react-query'
 import { useEffect, useRef, useState } from 'react'
-import { AlertCircle, Hash, Loader2, Plus, Target, Unplug, UserRound } from 'lucide-react'
+import { AlertCircle, Hash, Loader2, Plus, RefreshCw, Target, UserRound } from 'lucide-react'
 
 import type {
   ConnectedAccount,
@@ -11,7 +11,6 @@ import { CompactAction } from './CompactAction'
 import { yandexStartUrl } from './api'
 import {
   metrikaCountersQueryOptions,
-  useDisconnectYandex,
   useEnsureMetrikaGoals,
   useRefreshIntegrations,
   useSetMetrika,
@@ -20,16 +19,6 @@ import { MetrikaIcon } from './ServiceIcon'
 import { humanError } from '../../shared/api/errors'
 import { useOAuthPopup, type OAuthOutcome } from '../../shared/oauthPopup'
 import { RAISED_INPUT, RAISED_SELECT } from '../../shared/raisedField'
-import {
-  AlertDialog,
-  AlertDialogAction,
-  AlertDialogCancel,
-  AlertDialogContent,
-  AlertDialogDescription,
-  AlertDialogFooter,
-  AlertDialogHeader,
-  AlertDialogTitle,
-} from '@/components/ui/alert-dialog'
 import { Button } from '@/components/ui/button'
 import { Dialog, DialogContent, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -213,7 +202,6 @@ export function MetrikaOverlay({
                 />
               ) : (
                 <AccountFields
-                  formId={formId}
                   accounts={accounts}
                   accountId={accountId}
                   setAccountId={setAccountId}
@@ -365,7 +353,6 @@ function ConsentStep({
 // AccountFields — счётчик выбирается из аккаунта: поле аккаунта и поле счётчика.
 // Строки с идентификаторами целей здесь нет — их заводит продукт.
 function AccountFields({
-  formId,
   accounts,
   accountId,
   setAccountId,
@@ -379,7 +366,6 @@ function AccountFields({
   onGoals,
   goalsPending,
 }: {
-  formId: string
   accounts: ConnectedAccount[]
   accountId: string
   setAccountId: (value: string) => void
@@ -417,14 +403,31 @@ function AccountFields({
           </SelectContent>
         </Select>
         {/* Действия прижаты вправо: это обслуживание уже выбранного, а не
-            следующий вопрос анкеты. */}
+            следующий вопрос анкеты.
+
+            «Переподключить» стоит ПОСТОЯННО, а не по признаку поломки (решение
+            владельца 2026-09-10 на том же месте у Google): знание о смерти
+            согласия всегда запаздывает — отзыв в Яндекс ID виден нам только в
+            момент похода к Метрике, — и кнопка «когда есть что чинить» не
+            появлялась бы ровно тогда, когда нужна. Адрес у обеих кнопок один;
+            разницу делает почта выбранного аккаунта, уезжающая подсказкой.
+
+            Отключения аккаунта здесь нет (решение владельца 2026-09-16): оно про
+            аккаунт целиком, а окно — про счётчик одной формы. Ручка на бэке есть
+            (API.md), её место — будущий экран аккаунта. */}
         <div className="flex justify-end">
           <CompactAction
             icon={Plus}
             label="Подключить другой аккаунт"
             onClick={() => onConsent({ account: null })}
           />
-          {chosen && <DisconnectAction formId={formId} account={chosen} />}
+          {chosen && (
+            <CompactAction
+              icon={RefreshCw}
+              label="Переподключить"
+              onClick={() => onConsent({ account: chosen })}
+            />
+          )}
         </div>
       </div>
 
@@ -507,40 +510,6 @@ function ManualField({
         </div>
       )}
     </div>
-  )
-}
-
-// DisconnectAction — отключение аккаунта Яндекса с подтверждением.
-//
-// В окне Таблиц такого действия нет намеренно: там отключение каскадом уносит
-// связки всех форм и пространств. Здесь уносить нечего — номер счётчика живёт у
-// формы, а аккаунт нужен лишь для выбора счётчика и заведения целей.
-function DisconnectAction({ formId, account }: { formId: string; account: ConnectedAccount }) {
-  const [confirming, setConfirming] = useState(false)
-  const disconnect = useDisconnectYandex(formId)
-
-  return (
-    <>
-      <CompactAction icon={Unplug} label="Отключить аккаунт" onClick={() => setConfirming(true)} />
-      <AlertDialog open={confirming} onOpenChange={setConfirming}>
-        <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Отключить аккаунт {account.email}?</AlertDialogTitle>
-            <AlertDialogDescription>
-              Счётчик формы и заведённые цели останутся на месте — отключение убирает только
-              возможность выбирать счётчики и заводить цели из кабинета. Сам доступ приложения
-              снимается в настройках Яндекс ID: отозвать его за вас Яндекс не позволяет.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
-          <AlertDialogFooter>
-            <AlertDialogCancel>Отмена</AlertDialogCancel>
-            <AlertDialogAction onClick={() => disconnect.mutate(account.id)}>
-              Отключить
-            </AlertDialogAction>
-          </AlertDialogFooter>
-        </AlertDialogContent>
-      </AlertDialog>
-    </>
   )
 }
 

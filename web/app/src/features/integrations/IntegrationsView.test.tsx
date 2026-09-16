@@ -1992,26 +1992,23 @@ describe('Метрика через аккаунт Яндекса', () => {
     expect(screen.getByRole('option', { name: 'Текущий счётчик 12345678' })).toBeTruthy()
   })
 
-  it('отключение аккаунта спрашивает и говорит, где снимается доступ', async () => {
-    const calls = mockYandexCalls(state({ yandex: YANDEX_ON }))
+  // «Переподключить» стоит ПОСТОЯННО, а не по признаку поломки: отзыв согласия в
+  // Яндекс ID виден нам только в момент похода к Метрике, и кнопка «когда есть
+  // что чинить» не появлялась бы ровно тогда, когда нужна. Отличает её от
+  // «подключить другой» подсказка с почтой выбранного аккаунта — адрес у обеих
+  // кнопок один.
+  it('переподключение уводит на согласие с подсказкой, какой аккаунт открывать', () => {
     renderView(state({ yandex: YANDEX_ON }), { counters: COUNTERS })
     openMetrika()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Отключить аккаунт' }))
-    expect(screen.getByText(/Счётчик формы и заведённые цели останутся на месте/)).toBeTruthy()
-    expect(screen.getByText(/в настройках Яндекс ID/)).toBeTruthy()
-    expect(calls).toEqual([])
+    // Отключения аккаунта в окне счётчика нет: оно про аккаунт целиком.
+    expect(screen.queryByRole('button', { name: /Отключить аккаунт/ })).toBeNull()
 
-    fireEvent.click(screen.getByRole('button', { name: 'Отключить' }))
-    await waitFor(() =>
-      expect(calls).toEqual([
-        {
-          method: 'DELETE',
-          url: expect.stringContaining('/integrations/yandex/accounts/' + YA_ACCOUNT_ID),
-          body: undefined,
-        },
-      ]),
-    )
+    fireEvent.click(screen.getByRole('button', { name: 'Переподключить' }))
+
+    expect(screen.getByText(/Войдите в/).textContent).toContain('author@yandex.ru')
+    const link = screen.getByRole('link', { name: 'Подключить заново' }) as HTMLAnchorElement
+    expect(link.getAttribute('href')).toContain('accountId=' + YA_ACCOUNT_ID)
   })
 
   // Аккаунт подключается в соседнем окне: вернувшись с согласием, окно обязано

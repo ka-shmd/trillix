@@ -264,11 +264,9 @@ export function ensureMetrikaGoals(formId: string, accountId: string): Promise<M
   })
 }
 
-// Отключить свой аккаунт Яндекса. Счётчик формы при этом остаётся: номер живёт у
-// формы, а аккаунт нужен лишь для выбора счётчика и заведения целей.
-export function disconnectYandex(accountId: string): Promise<void> {
-  return apiRequest(`/integrations/yandex/accounts/${accountId}`, { method: 'DELETE' })
-}
+// Отключения аккаунта Яндекса здесь нет (решение владельца 2026-09-16), как и у
+// Google: оно про аккаунт целиком, а окно счётчика — про одну форму. Ручка на
+// бэке есть (API.md), её место — будущий экран аккаунта.
 
 // yandexStartUrl — НАВИГАЦИЯ к экрану согласия Яндекса, а не вызов API: бэк
 // отвечает редиректом и ставит cookie похода. reconnect — id переподключаемого
