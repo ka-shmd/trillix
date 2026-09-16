@@ -148,6 +148,13 @@ export const metrikaGoalsSchema = z.object({
   existing: z.number().int().default(0),
 })
 
+// Ответ на создание счётчика: его номер и итог по целям.
+export const metrikaCreatedSchema = z.object({
+  counter: z.string(),
+  created: z.number().int().default(0),
+  existing: z.number().int().default(0),
+})
+
 export const formIntegrationsSchema = z.object({
   workspaceId: z.string(),
   account: integrationAccountSchema,
@@ -231,6 +238,7 @@ export type FormIntegrations = z.infer<typeof formIntegrationsSchema>
 export type MetrikaCounter = z.infer<typeof metrikaCounterSchema>
 export type MetrikaCounterRef = z.infer<typeof metrikaCounterRefSchema>
 export type MetrikaGoals = z.infer<typeof metrikaGoalsSchema>
+export type MetrikaCreated = z.infer<typeof metrikaCreatedSchema>
 export type Delivery = z.infer<typeof deliverySchema>
 export type DeliveryOutcome = z.infer<typeof deliveryOutcomeSchema>
 export type DeliveryPage = z.infer<typeof deliveryPageSchema>

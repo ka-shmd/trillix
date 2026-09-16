@@ -5,13 +5,16 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"net/url"
 	"regexp"
 	"strconv"
+	"strings"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
@@ -56,9 +59,82 @@ var _ CounterStore = Repo{}
 
 // WithCounters подключает счётчики аналитики. nil — сборка без счётчиков: ручки
 // отвечают 404, в состоянии таба счётчика нет.
-func (s *Service) WithCounters(store CounterStore) *Service {
+//
+// formBaseURL — адрес публичного рендерера: из его хоста берётся «сайт» счётчика,
+// который продукт заводит в Метрике. Пусто — создание счётчика недоступно, всё
+// остальное работает.
+func (s *Service) WithCounters(store CounterStore, formBaseURL string) *Service {
 	s.counters = store
+	s.formBase = formBaseURL
 	return s
+}
+
+// metrikaCounterName — имя счётчика, который заводит продукт. Название формы в
+// нём обязательно: счётчиков у автора десяток, и «Trillix» без уточнения через
+// месяц не отличить от «Trillix» соседней формы.
+func metrikaCounterName(form forms.Form) string {
+	name := form.Title
+	if form.Name != nil && *form.Name != "" {
+		name = *form.Name
+	}
+	if strings.TrimSpace(name) == "" {
+		name = "Форма"
+	}
+	return "Trillix: " + name
+}
+
+// CreateMetrikaCounter заводит в аккаунте новый счётчик, ставит его форме и
+// создаёт цели — одним действием.
+//
+// Действие одно, потому что по отдельности его половинки бессмысленны: счётчик
+// без номера у формы не работает, а номер без целей не отмечает ничего. Права и
+// порядок проверок те же, что у заведения целей: форма — раньше похода в Яндекс.
+func (s *Service) CreateMetrikaCounter(ctx context.Context, userID, formID, accountID uuid.UUID) (Counter, GoalsResult, error) {
+	if s.counters == nil || s.yandex == nil || s.formBase == "" {
+		return Counter{}, GoalsResult{}, domain.ErrNotFound
+	}
+	if err := s.canEditForm(ctx, userID, formID); err != nil {
+		return Counter{}, GoalsResult{}, err
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return Counter{}, GoalsResult{}, err
+	}
+	conn, err := s.accountOfProvider(ctx, ProviderYandex, userID, accountID)
+	if err != nil {
+		return Counter{}, GoalsResult{}, err
+	}
+	token, err := s.accessToken(ctx, conn)
+	if err != nil {
+		return Counter{}, GoalsResult{}, metrikaRefusal(ctx, err)
+	}
+	created, err := s.yandex.CreateCounter(ctx, token, metrikaCounterName(form), formSite(s.formBase))
+	if err != nil {
+		return Counter{}, GoalsResult{}, metrikaRefusal(ctx, err)
+	}
+	number := strconv.FormatInt(created.ID, 10)
+	// Номер сохраняется РАНЬШЕ целей: счётчик в Метрике уже существует, и потеряв
+	// его номер, человек получит бесхозный счётчик и никакого способа связать его
+	// с формой, кроме как завести ещё один.
+	if err := s.counters.UpsertCounter(ctx, s.db, domain.NewID(), formID, CounterYandexMetrika, number, true); err != nil {
+		return Counter{}, GoalsResult{}, fmt.Errorf("set counter: %w", err)
+	}
+	counter := Counter{Kind: CounterYandexMetrika, Number: number, Enabled: true}
+	res, err := s.yandex.EnsureGoals(ctx, token, created.ID, metrikaGoals)
+	if err != nil {
+		return counter, GoalsResult{}, metrikaRefusal(ctx, err)
+	}
+	return counter, res, nil
+}
+
+// formSite — «сайт» заводимого счётчика: хост страниц форм без порта. Порт
+// Метрика в сайте не ждёт, а на dev он есть.
+func formSite(base string) string {
+	u, err := url.Parse(base)
+	if err != nil || u.Hostname() == "" {
+		return base
+	}
+	return u.Hostname()
 }
 
 // SetCounter подключает к форме счётчик вида kind или правит номер и тумблер

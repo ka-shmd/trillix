@@ -11,6 +11,7 @@ import {
   createSheet,
   createWebhook,
   deleteMetrika,
+  createMetrikaCounter,
   deleteWebhook,
   ensureMetrikaGoals,
   disableWebhookSignature,
@@ -311,5 +312,19 @@ export function useRetryWebhookDelivery(formId: string, webhookId: string) {
       void qc.invalidateQueries({ queryKey: integrationKeys.form(formId) })
       void qc.invalidateQueries({ queryKey: integrationKeys.webhookDeliveries(formId, webhookId) })
     },
+  })
+}
+
+// Новый счётчик меняет и состояние формы (появился номер), и список счётчиков
+// аккаунта (в нём появился ещё один) — инвалидируются оба: ключ формы накрывает
+// список, потому что тот лежит под ним.
+export function useCreateMetrikaCounter(formId: string) {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: (accountId: string) => createMetrikaCounter(formId, accountId),
+    // onSettled, а не onSuccess: счётчик мог создаться, а цели — нет, и тогда
+    // номер у формы уже стоит. Экран обязан увидеть его и в этом случае, иначе
+    // повтор завёл бы ВТОРОЙ счётчик.
+    onSettled: () => qc.invalidateQueries({ queryKey: integrationKeys.form(formId) }),
   })
 }
