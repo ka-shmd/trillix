@@ -127,17 +127,6 @@
         "groupId": "g_blk_consultation_13",
         "type": "long_text",
         "settings": {}
-      },
-      {
-        "id": "blk_consultation_14",
-        "groupId": "g_blk_consultation_14",
-        "type": "consent",
-        "text": [
-          {
-            "t": "Согласен на обработку персональных данных"
-          }
-        ],
-        "required": true
       }
     ]
   }
