@@ -250,7 +250,14 @@ export function useDeleteMetrika(formId: string) {
 export function metrikaCountersQueryOptions(formId: string, accountId: string) {
   return queryOptions({
     queryKey: integrationKeys.metrikaCounters(formId, accountId),
-    queryFn: () => listMetrikaCounters(accountId),
+    // signal — брошенный запрос обрывается вместе с окном: за списком стоит поход
+    // к Метрике на секунды, и оставленный висеть он держит одно из шести
+    // соединений браузера к origin.
+    queryFn: ({ signal }) => listMetrikaCounters(accountId, signal),
+    // Один повтор, а не три по умолчанию: поход сюда долгий (обновление токена
+    // плюс запрос к Метрике), и четыре попытки подряд — минуты ожидания вместо
+    // честного «не загрузилось».
+    retry: 1,
     staleTime: 30_000,
   })
 }

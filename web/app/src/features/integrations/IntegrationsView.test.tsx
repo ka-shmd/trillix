@@ -29,7 +29,7 @@ const popup = vi.hoisted(() => ({
 // fetch нельзя: в happy-dom он падает на ECONNREFUSED за миллисекунды, и тест
 // проверял бы, кто успел первым. Мок трогает только один вызов; остальные тесты
 // сеют список в кэш и до него не доходят (staleTime 30 с).
-const hangingList = vi.hoisted(() => ({ enabled: false }))
+const hangingList = vi.hoisted(() => ({ enabled: false, signal: null as AbortSignal | null }))
 
 vi.mock('./api', async (importOriginal) => {
   const actual = await importOriginal<typeof import('./api')>()
@@ -37,6 +37,12 @@ vi.mock('./api', async (importOriginal) => {
     ...actual,
     listSpreadsheets: (accountId: string) =>
       hangingList.enabled ? new Promise<never>(() => {}) : actual.listSpreadsheets(accountId),
+    listMetrikaCounters: (accountId: string, signal?: AbortSignal) => {
+      hangingList.signal = signal ?? null
+      return hangingList.enabled
+        ? new Promise<never>(() => {})
+        : actual.listMetrikaCounters(accountId, signal)
+    },
   }
 })
 
@@ -2009,6 +2015,78 @@ describe('Метрика через аккаунт Яндекса', () => {
     expect(screen.getByText(/Войдите в/).textContent).toContain('author@yandex.ru')
     const link = screen.getByRole('link', { name: 'Подключить заново' }) as HTMLAnchorElement
     expect(link.getAttribute('href')).toContain('accountId=' + YA_ACCOUNT_ID)
+  })
+
+  // Список счётчиков ОКНО НЕ ЗАПИРАЕТ: от него зависит одно поле из трёх, а слой
+  // поверх окна отнял бы и ручной ввод — единственный путь, которым в этот момент
+  // можно закончить настройку. Поймано владельцем: изредка список не приезжал
+  // вовсе, и окно оставалось мёртвым до перезагрузки страницы.
+  it('счётчики ещё едут — поле ждёт, а окно остаётся живым', async () => {
+    hangingList.enabled = true
+    try {
+      renderView(state({ yandex: YANDEX_ON }))
+      openMetrika()
+
+      await waitFor(() =>
+        expect(screen.getByLabelText('Счётчик').textContent).toContain('Загружаем счётчики…'),
+      )
+      // Ни слоя занятости, ни inert на колонке: ручной ввод доступен.
+      expect(screen.queryByText(/Ждём подтверждения в окне Яндекса/)).toBeNull()
+      expect(screen.getByLabelText('Аккаунт Яндекса').closest('[inert]')).toBeNull()
+
+      fireEvent.click(screen.getByRole('button', { name: /Ввести номер вручную/ }))
+      expect(screen.getByLabelText('Номер счётчика')).toBeTruthy()
+    } finally {
+      hangingList.enabled = false
+    }
+  })
+
+  // Закрытое окно обрывает поход за списком: за ним стоит запрос к Метрике на
+  // секунды, и брошенный он держит одно из шести соединений браузера к origin —
+  // а накопившись, они и дают «вечную загрузку», которая лечится перезагрузкой
+  // страницы.
+  it('окно закрыли — запрос за счётчиками обрывается', async () => {
+    hangingList.enabled = true
+    hangingList.signal = null
+    try {
+      renderView(state({ yandex: YANDEX_ON }))
+      openMetrika()
+      await waitFor(() => expect(hangingList.signal).not.toBeNull())
+      expect(hangingList.signal!.aborted).toBe(false)
+
+      fireEvent.click(screen.getByRole('button', { name: 'Close' }))
+
+      await waitFor(() => expect(hangingList.signal!.aborted).toBe(true))
+    } finally {
+      hangingList.enabled = false
+    }
+  })
+
+  it('счётчики не загрузились — поле говорит об этом и даёт повтор', async () => {
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('/counters')) return new Response(null, { status: 500 })
+      return new Response(JSON.stringify(state({ yandex: YANDEX_ON })), {
+        status: 200,
+        headers: { 'content-type': 'application/json' },
+      })
+    })
+    vi.stubGlobal('fetch', fetchMock as unknown as typeof fetch)
+    renderView(state({ yandex: YANDEX_ON }))
+    openMetrika()
+
+    // Ждём дольше обычного: у запроса есть один повтор с паузой (queries.ts), и
+    // это ровно то, ради чего повтор один, а не три.
+    await waitFor(
+      () => expect(screen.getByLabelText('Счётчик').textContent).toContain('Счётчики не загрузились'),
+      { timeout: 4000 },
+    )
+    const before = fetchMock.mock.calls.filter(([u]) => String(u).includes('/counters')).length
+    fireEvent.click(screen.getByRole('button', { name: 'Повторить' }))
+    await waitFor(() =>
+      expect(
+        fetchMock.mock.calls.filter(([u]) => String(u).includes('/counters')).length,
+      ).toBeGreaterThan(before),
+    )
   })
 
   // Аккаунт подключается в соседнем окне: вернувшись с согласием, окно обязано
