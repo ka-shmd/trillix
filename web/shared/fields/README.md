@@ -103,8 +103,8 @@ font-size: calc(var(--rf-font-size) * var(--rf-ratio-label));
 | `--rf-ratio-title` | ×2.5 | 40 / 800 / 48px | заголовок формы (`rf-title`) — замер |
 | `--rf-ratio-heading` | ×1.5 | 24 / 700 / 28px | заголовок раздела, уровень 1 (`rf-heading`) |
 | `--rf-ratio-label` | ×1.25 | 20 / 600 / 28px | вопрос (`rf-label`); заголовок раздела, уровень 2 (`rf-heading--2`, вес 700) |
-| — (сама база) | ×1 | 16 / 400 / 24px | **всё тело формы**: `rf-text`, `rf-input`, `rf-option`, `rf-consent`, `rf-scale-mark`, `rf-label--sm`; заголовок раздела, уровень 3 (`rf-heading--3`, вес 700) |
-| `--rf-ratio-small` | ×0.875 | 14 / 400 / 1.5 | служебное: `rf-desc`, `rf-empty`, `rf-error`, `.form-note` |
+| — (сама база) | ×1 | 16 / 400 / 24px | **всё тело формы**: `rf-text`, `rf-input`, `rf-option`, `rf-scale-mark`, `rf-label--sm`; заголовок раздела, уровень 3 (`rf-heading--3`, вес 700) |
+| `--rf-ratio-small` | ×0.875 | 14 / 400 / 1.5 | служебное: `rf-desc`, `rf-empty`, `rf-error`, `rf-consent`, `.form-note` |
 | `--rf-ratio-badge` | ×0.75 | 12 / 900 | буквенный бейдж варианта (`rf-option-key`) |
 
 **Вес в трёх верхних строках таблицы — НЕ свойство поверхности, а марка `b` на тексте**
