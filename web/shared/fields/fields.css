@@ -26,13 +26,13 @@
      ×1.5  = 24px / 700 / 28px  — заголовок раздела 1 (rf-heading)
      ×1.25 = 20px / 600 / 28px  — вопрос (rf-label), уровень H3; заголовок раздела 2
                                   (rf-heading--2) тем же кеглем, весом 700
-     ×1    = 16px / 400 / 24px  — ВСЁ тело формы: абзац, поле ввода, вариант, согласие,
-                                  шкала (rf-text, rf-input, rf-option, rf-consent,
+     ×1    = 16px / 400 / 24px  — ВСЁ тело формы: абзац, поле ввода, вариант,
+                                  шкала (rf-text, rf-input, rf-option,
                                   rf-scale-mark, rf-label--sm) и заголовок раздела 3
                                   (rf-heading--3, вес 700)
      ×0.875 = 14px / 400 / 1.5  — служебное: описание вопроса, заметки, ошибка, кнопка
-                                  отправки и «Назад» (rf-desc, rf-empty, rf-error,
-                                  rf-submit, rf-back)
+                                  отправки и «Назад», согласие под кнопкой (rf-desc,
+                                  rf-empty, rf-error, rf-submit, rf-back, rf-consent)
      ×0.75  = 12px / 900        — буквенный бейдж варианта (rf-option-key)
 
    Седьмого размера тут быть не должно. Новому элементу полотна размер НЕ подбирается
@@ -1429,24 +1429,36 @@ textarea.rf-input {
    design/privacy-consent.md) — галочка с фразой и строка политики. Настройка формы, а
    не блок полотна: рисуют её рендерер и превью билдера (ConsentCheck), на последней
    странице.
-   Размер — тело формы, а не служебный ярус: юридическая строка обязана читаться, и
-   тот же кегль держит сторож после CSS автора (customCss.ts). rf-consent — текст обеих
-   строк (span фразы и p политики), не flex-метка: сторож возвращает ему display
-   браузера.
-   ⚠ display контейнеров ниже зеркалит CONSENT_GUARD в customCss.ts. */
+   Служебный ярус шкалы, приглушённым цветом, ссылки — цветом своей строки, а не
+   акцентом (решение владельца 2026-09-17): синие подчёркнутые куски посреди фразы
+   читались как выделенный текст и спорили с вопросами формы.
+   rf-consent — текст обеих строк (span фразы и p политики), не flex-метка: сторож после
+   CSS автора (customCss.ts) возвращает ему display браузера.
+   ⚠ display контейнеров и кегль rf-consent зеркалит CONSENT_GUARD в customCss.ts. */
 .rf-consent {
   margin: 0;
-  font-size: var(--rf-font-size);
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
   font-weight: 400;
-  line-height: 1.5rem;
+  line-height: 1.25rem;
+  color: var(--rf-muted);
+}
+
+.rf-consent .rf-link {
+  color: inherit;
+  text-decoration-color: color-mix(in srgb, currentColor 45%, transparent);
+  text-underline-offset: 3px;
+}
+
+.rf-consent .rf-link:hover {
   color: var(--rf-text);
+  text-decoration-color: currentColor;
 }
 
 .rf-consent-box {
   display: flex;
   flex-direction: column;
   align-items: var(--rf-align-items);
-  gap: 0.5rem;
+  gap: 0.25rem;
 }
 
 .rf-consent-check {
@@ -1456,9 +1468,23 @@ textarea.rf-input {
   cursor: pointer;
 }
 
-/* Глиф 20px на строке 24px: центр первой строки, а не верх многострочной фразы. */
+/* Глиф 16px на строке 20px — по центру первой строки, а не у верха многострочной фразы. */
 .rf-consent-check .rf-mark {
+  width: 1rem;
+  height: 1rem;
   margin-top: 0.125rem;
+  border-radius: 3px;
+}
+
+.rf-consent-check .rf-mark--check:checked {
+  background-size: 12px;
+}
+
+/* Строка политики и ошибка стоят под ТЕКСТОМ фразы, а не под галочкой: отступ — глиф
+   16px плюс зазор 8px. От края галочки они читались отдельным от согласия блоком. */
+.rf-consent-box > .rf-consent,
+.rf-consent-box > .rf-error {
+  padding-left: 1.5rem;
 }
 
 /* Шкала: ряд кнопок-делений. Переносится (flex-wrap) — на узком экране 0–10 в одну

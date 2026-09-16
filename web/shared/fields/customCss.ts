@@ -36,10 +36,10 @@
 // Строки текста (`.rf-consent` — фраза и политика) возвращаются к умолчанию браузера,
 // контейнеры — к СВОЕМУ значению display: `revert` превратил бы flex-коробку в блок,
 // и у любой формы со своим CSS галочка съехала бы с фразы.
-// ⚠ Значения display зеркалят .rf-consent-box, .rf-consent-check и .rf-mark в
-// fields.css — правятся вместе.
+// ⚠ Значения display и кегль .rf-consent зеркалят .rf-consent, .rf-consent-box,
+// .rf-consent-check и .rf-mark в fields.css — правятся вместе.
 export const CONSENT_GUARD =
-  `.rf-consent{display:revert !important;visibility:visible !important;opacity:1 !important;font-size:var(--rf-font-size) !important}` +
+  `.rf-consent{display:revert !important;visibility:visible !important;opacity:1 !important;font-size:calc(var(--rf-font-size) * var(--rf-ratio-small)) !important}` +
   `.rf-consent-box{display:flex !important;visibility:visible !important;opacity:1 !important}` +
   `.rf-consent-check{display:inline-flex !important;visibility:visible !important;opacity:1 !important}` +
   `.rf-consent-check .rf-mark{display:inline-block !important;visibility:visible !important;opacity:1 !important}`
