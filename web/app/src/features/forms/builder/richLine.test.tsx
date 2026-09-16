@@ -589,6 +589,25 @@ describe('панель форматирования', () => {
     expect(store.getState().blocks[0]!.text?.[1]).toEqual({ t: 'бв', color: '#1dd8d8' })
   })
 
+  // Браузерная заливка выделения перекрывает цвет: без этого автор перебирал бы образцы
+  // вслепую. Подложка гаснет ровно на покрашенном диапазоне и возвращается на другом.
+  it('после смены цвета подложка выделения гаснет, на другом диапазоне возвращается', () => {
+    reactiveRow('абвгд')
+    selectText(1, 3)
+    expect(line().hasAttribute('data-painted')).toBe(false)
+    openPicker('bg')
+    fireEvent.click(document.querySelector('[data-color-popover="bg"] [aria-label="#fef08a"]')!)
+    expect(line().hasAttribute('data-painted')).toBe(true)
+    // Жирный после цвета подложку не возвращает — выделение то же.
+    fireEvent.click(barBtn('Жирный'))
+    expect(line().hasAttribute('data-painted')).toBe(true)
+
+    selectText(0, 2)
+    expect(line().hasAttribute('data-painted')).toBe(false)
+    selectText(1, 3)
+    expect(line().hasAttribute('data-painted')).toBe(false)
+  })
+
   it('«Убрать» снимает цвет и возвращает документ к одному куску', () => {
     const { store } = reactiveRow('абвгд')
     selectText(1, 3)

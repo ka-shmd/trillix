@@ -156,6 +156,10 @@ export function RichLine({
   // нужен снимок, а не живой DOM.
   const [sel, setSel] = useState<Sel | null>(null)
   const [linkOpen, setLinkOpen] = useState(false)
+  // Диапазон, которому меняли цвет текста или фона. Пока выделение
+  // стоит ровно на нём, подложка выделения погашена (`data-painted`, richLine.css):
+  // браузерная заливка перекрывает цвет, и автор перебирал бы образцы вслепую.
+  const [painted, setPainted] = useState<{ from: number; to: number } | null>(null)
   // Инлайн-«@» (mentions.md §7) — та же машинерия, что у слеш-меню в BlockRow: `at`
   // это null (закрыто) либо {start, query}, где start — индекс «@» в ПЛОСКОМ тексте, а
   // query — набранное после него до каретки. Живёт здесь, а не в строке полотна,
@@ -192,6 +196,12 @@ export function RichLine({
       setLinkOpen(false)
       return
     }
+    // Другой диапазон — другая работа: подложка возвращается. Сбрасывает только НЕПУСТОЕ
+    // другое выделение — ни схлопывание, ни закрытие панели: команда форматирования
+    // перепечатывает строку, выделение на миг схлопывается, и подложка вернулась бы поверх
+    // только что выбранного цвета; то же при клике мимо поповера, который восстанавливает
+    // то же выделение.
+    setPainted((p) => (p && (p.from !== range.from || p.to !== range.to) ? null : p))
     const style = activeStyle(el, range.from, range.to)
     const next = {
       ...range,
@@ -511,6 +521,9 @@ export function RichLine({
       }}
       data-rich-line=""
       data-ph={placeholder}
+      data-painted={
+        sel && painted && painted.from === sel.from && painted.to === sel.to ? '' : undefined
+      }
       // Метка «эта строка набирается жирным» — для вида ПОДСКАЗКИ (richLine.css). Из тех
       // же defaultMarks, что и досев: подсказка обязана показывать текст таким, каким он
       // родится, иначе она обещает обычный вес, а автор получает жирный.
@@ -596,8 +609,14 @@ export function RichLine({
             setSelection(el, sel.from, sel.to)
           }}
           onToggleMark={(m) => apply((s, from, to) => toggleMark(s, from, to, m))}
-          onColor={(c) => apply((s, from, to) => setColor(s, from, to, c))}
-          onBg={(c) => apply((s, from, to) => setBg(s, from, to, c))}
+          onColor={(c) => {
+            setPainted({ from: sel.from, to: sel.to })
+            apply((s, from, to) => setColor(s, from, to, c))
+          }}
+          onBg={(c) => {
+            setPainted({ from: sel.from, to: sel.to })
+            apply((s, from, to) => setBg(s, from, to, c))
+          }}
           onLink={(href) => apply((s, from, to) => setHref(s, from, to, href))}
         />
       )}
