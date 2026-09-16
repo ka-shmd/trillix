@@ -51,6 +51,12 @@ const publicFormSchema = z.object({
   // подключил, тумблер включён и тариф разрешает. Дефолт null — тело прошлой версии
   // из кеша счётчик не запускает.
   metrika: z.string().nullable().default(null),
+  // consentRevision — ревизия включённого согласия на обработку персональных данных
+  // (0069): галочка под кнопкой отправки и ссылки на документы. null — галочки нет.
+  // Id уезжает обратно с ответом: сервер записывает ревизию, текст которой человек
+  // видел. Дефолт null — тело прошлой версии из кеша галочку не рисует, а отказ
+  // сервера на такой отправке человек увидит текстом.
+  consentRevision: z.string().nullable().default(null),
 })
 export type PublicForm = z.infer<typeof publicFormSchema>
 
@@ -146,6 +152,8 @@ export interface SubmitBody {
   answers: Answers
   /** Визит, из которого пришёл ответ (фаза 8.5 шаг 6) — отсюда точная конверсия. */
   visitId: string
+  /** Ревизия согласия, при которой отмечена галочка; пусто — галочки нет (0069). */
+  consentRevision: string
 }
 
 export async function submitAnswers(slug: string, body: SubmitBody): Promise<SubmitOutcome> {
@@ -158,6 +166,7 @@ export async function submitAnswers(slug: string, body: SubmitBody): Promise<Sub
       answers: body.answers,
       website: '', // honeypot: у настоящего респондента всегда пусто
       visit_id: body.visitId,
+      consent_revision: body.consentRevision,
     }),
   })
   if (res.status === 201) return { status: 'ok' }

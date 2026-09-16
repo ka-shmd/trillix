@@ -1,0 +1,33 @@
+/* Страница документа согласия. Стили едут вместе со своим чанком; токены — общие --rf-*,
+   страница часть продукта, а не отдельный виджет. */
+
+.doc {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  max-width: var(--rf-column);
+  margin: 0 auto;
+  padding: 3rem 1.5rem 4rem;
+  color: var(--rf-text);
+}
+
+.doc-title {
+  margin: 0 0 0.5rem;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-heading));
+  font-weight: 700;
+  line-height: 1.2;
+}
+
+.doc-text {
+  margin: 0;
+  font-size: var(--rf-font-size);
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.doc-note {
+  margin: 0;
+  font-size: calc(var(--rf-font-size) * var(--rf-ratio-small));
+  color: var(--rf-muted);
+}

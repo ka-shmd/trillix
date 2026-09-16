@@ -104,11 +104,13 @@ export default defineConfig({
         chunkFileNames: (chunk) => {
           if (chunk.facadeModuleId?.includes('/fields/slots/')) return 'slots/[name]-[hash].js'
           if (chunk.facadeModuleId?.includes('/features/cancel/')) return 'cancel/[name]-[hash].js'
+          if (chunk.facadeModuleId?.includes('/features/document/')) return 'document/[name]-[hash].js'
           return 'assets/[name]-[hash].js'
         },
         assetFileNames: (asset) => {
           if (asset.names?.some((n) => n.startsWith('SlotPicker'))) return 'slots/[name]-[hash][extname]'
           if (asset.names?.some((n) => n.startsWith('CancelScreen'))) return 'cancel/[name]-[hash][extname]'
+          if (asset.names?.some((n) => n.startsWith('DocumentScreen'))) return 'document/[name]-[hash][extname]'
           return 'assets/[name]-[hash][extname]'
         },
       },
