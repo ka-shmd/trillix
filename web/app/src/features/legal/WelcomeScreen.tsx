@@ -36,8 +36,8 @@ import { cn } from '@/lib/utils'
 // только отмечено соглашение: анкета необязательна, уйти с экрана без согласия нельзя.
 //
 // Экран — страница, а не окно: сверху название сервиса и шаг, заголовок вне карточки, в
-// карточке два раздела с пометкой «необязательно» и «обязательно», под ними подвал с
-// кнопкой и подсказкой, чего не хватает. История вида — JOURNAL, «Принятие условий при
+// карточке разделы «О вас» и «Условия использования», под ними подвал с кнопкой и
+// подсказкой, чего не хватает. История вида — JOURNAL, «Принятие условий при
 // регистрации, слайс G».
 
 interface Props {
@@ -125,10 +125,10 @@ function SignupForm({
     <Shell
       step="Регистрация · последний шаг"
       title="Поделитесь парой деталей"
-      description="Так мы подстроим Trillix под ваши задачи. Чтобы завершить регистрацию, примите условия использования."
+      description="Помогите нам сделать Trillix лучше — расскажите о себе."
     >
       <Card className="gap-0 overflow-hidden py-0">
-        <FormSection title="О вас" note="Необязательно">
+        <FormSection title="О вас">
           <div className="flex flex-col gap-5 sm:gap-4">
             <KindRow value={draft.kind} onChange={(kind) => set('kind', kind)} />
 
@@ -195,7 +195,7 @@ function SignupForm({
           </div>
         </FormSection>
 
-        <FormSection title="Условия использования" note="Обязательно" className="border-t">
+        <FormSection title="Условия использования" className="border-t">
           <ConsentChecks>
             <ConsentCheck
               id="welcome-terms"
@@ -298,25 +298,19 @@ function Shell({
   )
 }
 
-// FormSection — раздел карточки. Пометка справа говорит, что здесь можно пропустить, а без
-// чего дальше не пройти.
+// FormSection — раздел карточки: заголовок и содержимое.
 function FormSection({
   title,
-  note,
   className,
   children,
 }: {
   title: string
-  note?: string
   className?: string
   children: React.ReactNode
 }) {
   return (
     <section className={cn('px-6 py-6 sm:px-8 sm:py-7', className)}>
-      <div className="flex items-baseline justify-between gap-3">
-        <h2 className="text-xl font-bold tracking-tight">{title}</h2>
-        {note && <span className="text-sm text-muted-foreground">{note}</span>}
-      </div>
+      <h2 className="text-xl font-bold tracking-tight">{title}</h2>
       <div className="mt-5">{children}</div>
     </section>
   )
