@@ -22,7 +22,7 @@ include .env
 export
 endif
 
-.PHONY: help check-docs check-comments dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web prod-local prod-local-down prod-local-trust
+.PHONY: help check-docs check-comments check-legal-release dev dev-all dev-stop db-up db-down migrate-up migrate-down seed sqlc test test-go test-unit test-web lint lint-go lint-web prod-local prod-local-down prod-local-trust
 
 help: ## Показать список целей
 	@grep -E '^[a-zA-Z_-]+:.*?## .*$$' $(MAKEFILE_LIST) | \
@@ -118,6 +118,9 @@ check-docs: ## Расхождения документов с кодом и ст
 
 check-comments: ## Регистр комментариев: история в коде + доля токенов
 	./scripts/check-comments.sh
+
+check-legal-release: ## Гейт тега: в реестре документов сервиса нет черновых редакций
+	go test -tags=release -count=1 -run TestRegistryHasNoDrafts ./internal/legal/
 
 lint-go: ## Go: golangci-lint (govet, errcheck, staticcheck, gofumpt)
 	golangci-lint run $(GO_PKGS)

@@ -42,7 +42,7 @@
 | Любой PR / push в `main` | `ci.yml`: `check-docs` + `check-comments` | Документы сходятся с кодом (дерево модулей, миграции, env, ссылки на техдолг, единая точка лимитов тарифа, токены и шкала кеглей `fields.css`); в комментариях нет рассказов о прошлом без ссылки на журнал | секунды |
 | Изменение **тронуло код** | `ci-code.yml`: `go` + `web` (матрица app/renderer) | Код собирается, линт чист, юниты и интеграционные зелёные, бандл рендерера в бюджете | ~3 мин |
 | Ночью 03:00 UTC, и по кнопке | `e2e.yml` | Продукт работает **в прод-сборке** целиком: три сценария + выкатка без 502 | ~4 мин |
-| Пуш тега `v*` | `release.yml`: `image` + `static` → `deploy` | Собран релизный комплект и **выкачен на прод** | ~2,5 мин |
+| Пуш тега `v*` | `release.yml`: `legal-documents` → `image` + `static` → `deploy` | В реестре документов сервиса нет черновиков; собран релизный комплект и **выкачен на прод** | ~3 мин |
 
 Ключевое: **тяжёлые проверки не запускаются на изменениях, тронувших только
 документацию/прозу.** `ci-code.yml` несёт `paths-ignore: [docs/**, **/*.md]`, выстроенный
@@ -129,13 +129,23 @@ cd e2e && npm test         # три сценария
 ```
 git tag v0.9.6 && git push origin v0.9.6
         │
-        ├── job image  → сборка Dockerfile          → ghcr.io/ka-shmd/trillix-api:v0.9.6
+        ├── job legal-documents → make check-legal-release (черновых редакций нет)
+        │
+        ├── job image  (needs: legal-documents)
+        │                 сборка Dockerfile          → ghcr.io/ka-shmd/trillix-api:v0.9.6
         │                 сборка Dockerfile.printer  → ghcr.io/ka-shmd/trillix-printer:v0.9.6
-        ├── job static → vite build обоих фронтов → tar.gz в GitHub Release
+        ├── job static (needs: legal-documents) → vite build обоих фронтов → tar.gz в GitHub Release
         │
         └── job deploy (needs: image, static)
               ssh deploy@<host> "TAG=v0.9.6 bash -s" < deploy/remote-update.sh
 ```
+
+**Гейт документов сервиса.** Редакция соглашения, политики или согласия на рассылки с флагом
+`draft` — текст с заглушками вместо реквизитов ([`design/signup-consent.md`](design/signup-consent.md)
+§3.4). На проде он стал бы офертой без стороны, поэтому job `legal-documents` гоняет
+`TestRegistryHasNoDrafts` (тег сборки `release`) до сборок: при черновике не появляется ни
+образа в GHCR, ни статики в Release. Под своим тегом, а не в `ci-code.yml`: на ветке с
+черновиками PR-CI остаётся зелёным. Проверено мутацией: с черновиками красный, без них зелёный.
 
 **Слои кешируются между релизами** (`cache-from`/`cache-to: type=gha`, у каждого образа своя область). Без кеша каждая сборка идёт с нуля, слой `apt install` пересоздаётся с новыми метаданными, digest получается другой — и прод тянет его целиком на каждый тег: у образа печати это ~800 МБ. С кешем неизменившийся слой переиспользуется, и выкатка везёт только бинарь.
 
