@@ -42,9 +42,5 @@ function WelcomePage() {
     void navigate({ href: safeRedirect(target) })
   }, [qc, navigate, target])
 
-  return (
-    <main className="flex min-h-svh items-center justify-center bg-muted/40 p-6">
-      <WelcomeScreen defaultFullName={defaultFullName} onDone={onDone} />
-    </main>
-  )
+  return <WelcomeScreen defaultFullName={defaultFullName} onDone={onDone} />
 }
