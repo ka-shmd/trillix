@@ -194,7 +194,8 @@ describe('экран «Поделитесь парой деталей»', () => 
     expect(terms.getAttribute('href')).toBe('/legal/terms?version=2026-09-17')
     expect(terms.target).toBe('_blank')
     expect(screen.getByRole('link', { name: 'согласие' }).getAttribute('href')).toBe('/legal/marketing?version=2026-09-17')
-    expect(screen.getByRole('link', { name: 'Политика обработки персональных данных' }).getAttribute('href')).toBe('/legal/privacy')
+    // Строки «Как мы обрабатываем данные» на экране нет (решение владельца 2026-09-17).
+    expect(screen.queryByRole('link', { name: 'Политика обработки персональных данных' })).toBeNull()
   })
 
   it('отказ сервера показан по-русски, анкета не уходит, в кабинет не пускает', async () => {

@@ -347,17 +347,9 @@ function Footer({
   )
 }
 
-// ConsentChecks — галочки согласий и строка политики под ними.
+// ConsentChecks — галочки согласий столбцом.
 function ConsentChecks({ children }: { children: React.ReactNode }) {
-  return (
-    <div className="flex flex-col gap-4">
-      {children}
-      <p className="text-sm text-muted-foreground">
-        Как мы обрабатываем данные —{' '}
-        <DocLink href={legalDocumentPath('privacy')}>Политика обработки персональных данных</DocLink>
-      </p>
-    </div>
-  )
+  return <div className="flex flex-col gap-4">{children}</div>
 }
 
 // Row — строка анкеты: подпись слева, поле справа, как на образце; колонки одной ширины у всех
