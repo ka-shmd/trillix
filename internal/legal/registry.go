@@ -11,6 +11,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // Kind — вид документа. Значения совпадают с CHECK legal_documents (0071) и с путём
@@ -34,6 +36,8 @@ func ParseKind(s string) (Kind, bool) {
 
 // Edition — редакция документа.
 type Edition struct {
+	// ID — строка legal_documents; uuid.Nil у редакции из реестра, ещё не прочитанной из базы.
+	ID   uuid.UUID
 	Kind Kind
 	// Version — дата редакции (YYYY-MM-DD): имя файла и значение ?version=.
 	Version string

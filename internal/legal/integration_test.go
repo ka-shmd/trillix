@@ -17,8 +17,10 @@ import (
 
 	"github.com/jackc/pgx/v5/pgxpool"
 
+	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/legal"
 	"github.com/ka-shmd/trillix/internal/pgtest"
+	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
 var testPool *pgxpool.Pool
@@ -37,7 +39,7 @@ func TestMain(m *testing.M) {
 
 func resetDB(t *testing.T) {
 	t.Helper()
-	if _, err := testPool.Exec(context.Background(), `TRUNCATE legal_documents CASCADE`); err != nil {
+	if _, err := testPool.Exec(context.Background(), `TRUNCATE users, legal_documents CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
 	}
 }
@@ -59,7 +61,11 @@ func edition(kind legal.Kind, version, body string, effective time.Time, draft b
 func day(y int, m time.Month, d int) time.Time { return time.Date(y, m, d, 0, 0, 0, 0, msk) }
 
 func newService(eds ...legal.Edition) *legal.Service {
-	return legal.NewService(testPool, legal.Repo{}, eds, fixedNow)
+	return legal.NewService(testPool, postgres.TxRunner{Pool: testPool}, legal.Repo{}, newAuthService(), eds, fixedNow)
+}
+
+func newAuthService() *auth.Service {
+	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
 }
 
 func TestSync(t *testing.T) {
@@ -145,7 +151,7 @@ func TestSync(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		svc := legal.NewService(testPool, legal.Repo{}, eds, time.Now)
+		svc := legal.NewService(testPool, postgres.TxRunner{Pool: testPool}, legal.Repo{}, newAuthService(), eds, time.Now)
 		if _, err := svc.Sync(ctx); err != nil {
 			t.Fatal(err)
 		}
@@ -169,6 +175,12 @@ type documentDTO struct {
 		Version     string    `json:"version"`
 		EffectiveAt time.Time `json:"effectiveAt"`
 	} `json:"versions"`
+}
+
+// noSession — заглушка middleware для стека публичных ручек: ручки согласий в нём не
+// вызываются, их проверяет consent_integration_test.go с настоящей сессией.
+func noSession(http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusTeapot) })
 }
 
 func get(t *testing.T, srv *httptest.Server, path string, out any) int {
@@ -200,7 +212,7 @@ func TestPublicDocuments(t *testing.T) {
 		t.Fatal(err)
 	}
 	mux := http.NewServeMux()
-	legal.NewHandler(svc).Routes(mux)
+	legal.NewHandler(svc, noSession, noSession).Routes(mux)
 	srv := httptest.NewServer(mux)
 	t.Cleanup(srv.Close)
 

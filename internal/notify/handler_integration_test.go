@@ -32,6 +32,7 @@ func feedStack(t *testing.T) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{},
 		pgtest.MailService(testPool), time.Hour, "")
+	pgtest.Consents(t, testPool, authSvc)
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), "http://localhost:5173")
@@ -62,6 +63,7 @@ func registered(t *testing.T, srv *httptest.Server, email string) (*http.Client,
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: статус %d, ожидалось 201", resp.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	var body struct {
 		ID string `json:"id"`
 	}

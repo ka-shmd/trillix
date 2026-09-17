@@ -36,6 +36,7 @@ import (
 func fullStack(t *testing.T) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
+	pgtest.Consents(t, testPool, authSvc)
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
@@ -75,6 +76,7 @@ func authedClient(t *testing.T, srv *httptest.Server, email string) (*http.Clien
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: статус %d, ожидалось 201", resp.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	var body struct {
 		ID string `json:"id"`
 	}

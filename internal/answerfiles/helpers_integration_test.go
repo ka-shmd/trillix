@@ -83,6 +83,7 @@ func newStack(t *testing.T) (*httptest.Server, *answerfiles.Service) {
 	t.Helper()
 	entSvc := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
+	pgtest.Consents(t, testPool, authSvc)
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
@@ -145,6 +146,7 @@ func registerUser(t *testing.T, srv *httptest.Server, email string) *http.Client
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("register %s: статус %d, ожидался 201", email, r.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	_ = r.Body.Close()
 	return c
 }

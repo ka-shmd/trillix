@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
@@ -22,20 +23,39 @@ type Store interface {
 	GetCurrent(ctx context.Context, db postgres.DBTX, kind Kind, now time.Time) (Edition, error)
 	GetEffective(ctx context.Context, db postgres.DBTX, kind Kind, version string, now time.Time) (Edition, error)
 	ListVersions(ctx context.Context, db postgres.DBTX, kind Kind, now time.Time) ([]VersionRef, error)
+	TermsAcceptanceMissing(ctx context.Context, db postgres.DBTX, userID uuid.UUID, now time.Time) (bool, error)
+	InsertEvent(ctx context.Context, db postgres.DBTX, e ConsentEvent) error
+	LatestEvents(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]LatestEvent, error)
+	History(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]HistoryItem, error)
+}
+
+// Transactor — транзакции сервис-слоя (реализация — postgres.TxRunner).
+type Transactor interface {
+	WithTx(ctx context.Context, fn func(pgx.Tx) error) error
+}
+
+// Accounts — аккаунты глазами legal. Отметка о завершении регистрации живёт в users, то
+// есть в зоне auth, и ставится той же транзакцией, что и первое принятие соглашения:
+// иначе сбой между ними оставил бы событие у «незавершённой» регистрации, и очистка
+// упёрлась бы в RESTRICT журнала.
+type Accounts interface {
+	MarkSignupCompleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 }
 
 var _ Store = Repo{}
 
 type Service struct {
 	db       postgres.DBTX
+	tx       Transactor
 	repo     Store
+	accounts Accounts
 	editions []Edition
 	now      func() time.Time
 }
 
 // NewService принимает редакции реестра (Editions) — тесты подставляют свои.
-func NewService(db postgres.DBTX, repo Store, editions []Edition, now func() time.Time) *Service {
-	return &Service{db: db, repo: repo, editions: editions, now: now}
+func NewService(db postgres.DBTX, tx Transactor, repo Store, accounts Accounts, editions []Edition, now func() time.Time) *Service {
+	return &Service{db: db, tx: tx, repo: repo, accounts: accounts, editions: editions, now: now}
 }
 
 // SyncResult — что сделала сверка при старте.

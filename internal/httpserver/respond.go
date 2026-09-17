@@ -143,6 +143,8 @@ func statusForError(err error) (int, string) {
 		return http.StatusUnauthorized, "invalid_credentials"
 	case errors.Is(err, domain.ErrUnauthorized):
 		return http.StatusUnauthorized, "unauthorized"
+	case errors.Is(err, domain.ErrConsentRequired):
+		return http.StatusForbidden, "consent_required"
 	case errors.Is(err, domain.ErrForbidden):
 		return http.StatusForbidden, "forbidden"
 	case errors.Is(err, domain.ErrNotFound):

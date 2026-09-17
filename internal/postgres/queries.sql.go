@@ -1201,6 +1201,24 @@ func (q *Queries) CreateWorkspaceMember(ctx context.Context, arg CreateWorkspace
 	return err
 }
 
+const deleteAbandonedSignups = `-- name: DeleteAbandonedSignups :execrows
+DELETE FROM users
+WHERE signup_completed_at IS NULL AND created_at < $1
+`
+
+// Незавершённые регистрации старше срока — удалением строки, а не пометкой deleted_at:
+// users.email уникален, и пометка держала бы адрес занятым навсегда. Каскад уносит личное
+// пространство, подписку, привязки и сессии. consent_events ссылается на users с RESTRICT:
+// событие у незавершённой регистрации — нарушение инварианта «первое принятие ставит
+// отметку», и тогда запрос падает, а не удаляет доказательство.
+func (q *Queries) DeleteAbandonedSignups(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAbandonedSignups, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteAllNotifications = `-- name: DeleteAllNotifications :execrows
 DELETE FROM notifications WHERE user_id = $1::uuid
 `
@@ -4357,6 +4375,36 @@ func (q *Queries) HoldSlot(ctx context.Context, arg HoldSlotParams) (uuid.UUID, 
 	return id, err
 }
 
+const insertConsentEvent = `-- name: InsertConsentEvent :exec
+INSERT INTO consent_events (id, user_id, document_id, action, source, checkbox_text, email, user_agent)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type InsertConsentEventParams struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	DocumentID   uuid.UUID
+	Action       string
+	Source       string
+	CheckboxText string
+	Email        string
+	UserAgent    string
+}
+
+func (q *Queries) InsertConsentEvent(ctx context.Context, arg InsertConsentEventParams) error {
+	_, err := q.db.Exec(ctx, insertConsentEvent,
+		arg.ID,
+		arg.UserID,
+		arg.DocumentID,
+		arg.Action,
+		arg.Source,
+		arg.CheckboxText,
+		arg.Email,
+		arg.UserAgent,
+	)
+	return err
+}
+
 const insertConsentRevision = `-- name: InsertConsentRevision :one
 INSERT INTO form_consent_revisions (id, form_id, enabled, settings, template, created_by)
 VALUES ($1, $2, $3, $4, $5, $6)
@@ -4836,6 +4884,50 @@ func (q *Queries) IsUserAdmin(ctx context.Context, id uuid.UUID) (bool, error) {
 	return is_admin, err
 }
 
+const latestConsentEvents = `-- name: LatestConsentEvents :many
+SELECT DISTINCT ON (d.kind) d.kind, e.document_id, d.version, e.action, e.created_at
+FROM consent_events e
+JOIN legal_documents d ON d.id = e.document_id
+WHERE e.user_id = $1
+ORDER BY d.kind, e.created_at DESC, e.id DESC
+`
+
+type LatestConsentEventsRow struct {
+	Kind       string
+	DocumentID uuid.UUID
+	Version    string
+	Action     string
+	CreatedAt  pgtype.Timestamptz
+}
+
+// Последнее событие по каждому виду документа — текущее состояние согласий. id (UUIDv7)
+// разводит события с одинаковым created_at.
+func (q *Queries) LatestConsentEvents(ctx context.Context, userID uuid.UUID) ([]LatestConsentEventsRow, error) {
+	rows, err := q.db.Query(ctx, latestConsentEvents, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LatestConsentEventsRow
+	for rows.Next() {
+		var i LatestConsentEventsRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.DocumentID,
+			&i.Version,
+			&i.Action,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const linkIDsByAccount = `-- name: LinkIDsByAccount :many
 SELECT id FROM form_integrations WHERE account_id = $1
 `
@@ -4855,6 +4947,54 @@ func (q *Queries) LinkIDsByAccount(ctx context.Context, accountID uuid.UUID) ([]
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsentHistory = `-- name: ListConsentHistory :many
+SELECT e.id, d.kind, d.version, d.title, e.action, e.source, e.created_at
+FROM consent_events e
+JOIN legal_documents d ON d.id = e.document_id
+WHERE e.user_id = $1
+ORDER BY e.created_at DESC, e.id DESC
+LIMIT 200
+`
+
+type ListConsentHistoryRow struct {
+	ID        uuid.UUID
+	Kind      string
+	Version   string
+	Title     string
+	Action    string
+	Source    string
+	CreatedAt pgtype.Timestamptz
+}
+
+// История согласий для «Правовой информации», свежие первыми.
+func (q *Queries) ListConsentHistory(ctx context.Context, userID uuid.UUID) ([]ListConsentHistoryRow, error) {
+	rows, err := q.db.Query(ctx, listConsentHistory, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsentHistoryRow
+	for rows.Next() {
+		var i ListConsentHistoryRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Version,
+			&i.Title,
+			&i.Action,
+			&i.Source,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -7021,6 +7161,18 @@ func (q *Queries) MarkOutboxSent(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const markSignupCompleted = `-- name: MarkSignupCompleted :exec
+UPDATE users SET signup_completed_at = now()
+WHERE id = $1 AND signup_completed_at IS NULL
+`
+
+// Отметка о завершении регистрации (0071). Ставится той же транзакцией, что и первое
+// принятие соглашения (internal/legal); уже стоящую не двигает.
+func (q *Queries) MarkSignupCompleted(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markSignupCompleted, id)
+	return err
+}
+
 const markUserDeleted = `-- name: MarkUserDeleted :execrows
 UPDATE users SET deleted_at = now()
 WHERE id = $1 AND deleted_at IS NULL
@@ -7999,6 +8151,39 @@ func (q *Queries) TakenSeatsInRange(ctx context.Context, arg TakenSeatsInRangePa
 		return nil, err
 	}
 	return items, nil
+}
+
+const termsAcceptanceMissing = `-- name: TermsAcceptanceMissing :one
+SELECT (
+    EXISTS (SELECT 1 FROM legal_documents t WHERE t.kind = 'terms' AND t.effective_at <= $1)
+    AND NOT EXISTS (
+        SELECT 1
+        FROM consent_events e
+        JOIN legal_documents d ON d.id = e.document_id
+        WHERE e.user_id = $2
+          AND d.kind = 'terms'
+          AND e.action = 'accepted'
+          AND d.effective_at >= COALESCE(
+              (SELECT max(r.effective_at) FROM legal_documents r
+               WHERE r.kind = 'terms' AND r.requires_reacceptance AND r.effective_at <= $1),
+              '-infinity'::timestamptz)
+    )
+)::boolean AS missing
+`
+
+type TermsAcceptanceMissingParams struct {
+	Now    pgtype.Timestamptz
+	UserID uuid.UUID
+}
+
+// Гейт кабинета (спека §3.2): у человека нет принятия редакции соглашения не старше
+// последней существенной (requires_reacceptance). Существенной ещё не было — годится
+// принятие любой. Ни одна редакция не вступила в силу — гейта нет: принять было бы нечего.
+func (q *Queries) TermsAcceptanceMissing(ctx context.Context, arg TermsAcceptanceMissingParams) (bool, error) {
+	row := q.db.QueryRow(ctx, termsAcceptanceMissing, arg.Now, arg.UserID)
+	var missing bool
+	err := row.Scan(&missing)
+	return missing, err
 }
 
 const touchKnownDevice = `-- name: TouchKnownDevice :execrows
@@ -9235,6 +9420,31 @@ func (q *Queries) UpsertPartialSubmission(ctx context.Context, arg UpsertPartial
 		arg.FormVersionID,
 		arg.Answers,
 		arg.LastBlockID,
+	)
+	return err
+}
+
+const upsertSignupProfile = `-- name: UpsertSignupProfile :exec
+INSERT INTO signup_profiles (user_id, kind, purpose, referral)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (user_id) DO UPDATE
+SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral, updated_at = now()
+`
+
+type UpsertSignupProfileParams struct {
+	UserID   uuid.UUID
+	Kind     pgtype.Text
+	Purpose  pgtype.Text
+	Referral pgtype.Text
+}
+
+// Анкета регистрации: повторная отправка перезаписывает ответы целиком.
+func (q *Queries) UpsertSignupProfile(ctx context.Context, arg UpsertSignupProfileParams) error {
+	_, err := q.db.Exec(ctx, upsertSignupProfile,
+		arg.UserID,
+		arg.Kind,
+		arg.Purpose,
+		arg.Referral,
 	)
 	return err
 }

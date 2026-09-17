@@ -23,6 +23,9 @@ func (fakeTx) WithTx(ctx context.Context, fn func(pgx.Tx) error) error { return 
 
 // fakeStore — управляемая реализация Store для юнитов сервиса.
 type fakeStore struct {
+	// signupProfile — анкета, дошедшая до репозитория; nil — не сохранялась.
+	signupProfile *SignupProfile
+
 	user       User
 	userExists bool
 	// isAdmin — ответ на вопрос о правах администратора сервиса (0059).
@@ -314,6 +317,19 @@ func (f *fakeStore) DeleteSession(_ context.Context, _ postgres.DBTX, _ []byte) 
 
 func (f *fakeStore) DeleteExpiredSessions(_ context.Context, _ postgres.DBTX) (int64, error) {
 	return f.deleteExpiredN, f.deleteExpiredErr
+}
+
+func (f *fakeStore) MarkSignupCompleted(_ context.Context, _ postgres.DBTX, _ uuid.UUID) error {
+	return nil
+}
+
+func (f *fakeStore) UpsertSignupProfile(_ context.Context, _ postgres.DBTX, _ uuid.UUID, p SignupProfile) error {
+	f.signupProfile = &p
+	return nil
+}
+
+func (f *fakeStore) DeleteAbandonedSignups(_ context.Context, _ postgres.DBTX, _ time.Time) (int64, error) {
+	return 0, nil
 }
 
 func (f *fakeStore) UpdateProfile(_ context.Context, _ postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error) {

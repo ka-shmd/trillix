@@ -443,6 +443,23 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// FORM_TOKEN_SECRET (своей env-переменной нет сознательно — спека §6).
 	authSvc := auth.NewService(pool, postgres.TxRunner{Pool: pool}, auth.Repo{}, mailSvc, auth.DefaultSessionTTL, cfg.AppOrigin).
 		WithLoginCodeKey(cfg.FormTokenSecret)
+
+	// Документы сервиса и гейт согласия (docs/design/signup-consent.md). Сверка с базой —
+	// до приёма запросов: опубликованная редакция, разошедшаяся с файлом, останавливает
+	// старт. Гейт подключается к auth сеттером: legal отмечает завершение регистрации
+	// через auth, а auth спрашивает у legal, принято ли соглашение.
+	legalEditions, err := legal.Editions()
+	if err != nil {
+		return err
+	}
+	legalSvc := legal.NewService(pool, postgres.TxRunner{Pool: pool}, legal.Repo{}, authSvc, legalEditions, time.Now)
+	synced, err := legalSvc.Sync(context.Background())
+	if err != nil {
+		return err
+	}
+	log.Info("legal documents synced",
+		slog.Int("inserted", synced.Inserted), slog.Int("rewritten", synced.Rewritten))
+	authSvc = authSvc.WithConsents(legalSvc)
 	loginLimiter := ratelimit.NewTokenBucket(loginRatePerSec, loginBurst)
 	registerLimiter := ratelimit.NewTokenBucket(registerRatePerSec, registerBurst)
 	// Именованной переменной, а не выражением в вызове: ведро ключуется id
@@ -539,21 +556,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	workspacesSvc = workspacesSvc.WithNotifications(notifySvc)
 	templatesSvc := templates.NewService(pool, templates.Repo{}, workspacesSvc, formsSvc, authSvc)
 	templatesHandler := templates.NewHandler(templatesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
-
-	// Документы сервиса (docs/design/signup-consent.md §3.4). Сверка с базой — до приёма
-	// запросов: опубликованная редакция, разошедшаяся с файлом, останавливает старт.
-	legalEditions, err := legal.Editions()
-	if err != nil {
-		return err
-	}
-	legalSvc := legal.NewService(pool, legal.Repo{}, legalEditions, time.Now)
-	synced, err := legalSvc.Sync(context.Background())
-	if err != nil {
-		return err
-	}
-	log.Info("legal documents synced",
-		slog.Int("inserted", synced.Inserted), slog.Int("rewritten", synced.Rewritten))
-	legalHandler := legal.NewHandler(legalSvc)
+	legalHandler := legal.NewHandler(legalSvc, authHandler.RequireSession, authHandler.RequireCSRF)
 
 	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
 	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис
@@ -788,6 +791,22 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 
 	// Фоновые периодические задачи живут, пока не отменён ctx (SIGINT/SIGTERM).
 	tasks := periodic.NewRunner(log)
+	// Регистрации, не принявшие условия за срок из соглашения, удаляются
+	// (docs/design/signup-consent.md §3.6).
+	tasks.Start(ctx, periodic.Task{
+		Name:     "abandoned-signup-cleanup",
+		Interval: sessionCleanupInterval,
+		Run: func(ctx context.Context) error {
+			n, err := authSvc.DeleteAbandonedSignups(ctx)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("abandoned signups deleted", slog.Int64("count", n))
+			}
+			return nil
+		},
+	})
 	tasks.Start(ctx, periodic.Task{
 		Name:     "session-cleanup",
 		Interval: sessionCleanupInterval,
