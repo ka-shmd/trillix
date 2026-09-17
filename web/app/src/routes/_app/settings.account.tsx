@@ -7,6 +7,7 @@ import { ProfileSection } from '../../features/auth/account/ProfileSection'
 import { SignInSection } from '../../features/auth/account/SignInSection'
 import { DevicesSection, TwoFactorSection } from '../../features/auth/account/TwoFactorSection'
 import { meQueryOptions } from '../../features/auth/queries'
+import { SignupProfileSection } from '../../features/legal/SignupProfileSection'
 import { PageCrumbs } from '../../shared/page/headerPortals'
 import { PageContainer } from '../../shared/page/PageContainer'
 import { PageHeader } from '../../shared/page/PageHeader'
@@ -56,6 +57,9 @@ function AccountPage() {
             эффекта запрещён линтом (react-hooks/set-state-in-effect) и даёт
             каскадный ререндер. */}
         <ProfileSection key={user.id} user={user} />
+        {/* Анкета регистрации живёт в фиче legal, а собирает страницу маршрут: импорт одной
+            фичи из другой запрещён (web/CLAUDE.md). */}
+        <SignupProfileSection />
         <SignInSection
           user={user}
           link={link}

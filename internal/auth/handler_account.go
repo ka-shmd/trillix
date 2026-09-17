@@ -62,6 +62,7 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/account/delete", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.deleteAccount))))
 	// Анкета регистрации — за обычным гейтом: экран отправляет её после принятия
 	// соглашения (docs/design/signup-consent.md §3.5).
+	mux.Handle("GET /api/v1/account/signup-profile", h.RequireAuth(http.HandlerFunc(h.signupProfile)))
 	mux.Handle("PUT /api/v1/account/signup-profile", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.saveSignupProfile))))
 }
 
@@ -75,6 +76,20 @@ type signupProfileRequest struct {
 	CompanyName *string `json:"companyName"`
 	Industry    *string `json:"industry"`
 	JobPosition *string `json:"jobPosition"`
+}
+
+func (h *Handler) signupProfile(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	p, err := h.svc.SignupProfileOf(r.Context(), user.ID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, signupProfileRequest(p))
 }
 
 func (h *Handler) saveSignupProfile(w http.ResponseWriter, r *http.Request) {

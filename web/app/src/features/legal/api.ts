@@ -3,6 +3,7 @@ import {
   consentsSchema,
   documentsSchema,
   legalDocumentSchema,
+  signupProfileSchema,
   type ConsentChange,
   type ConsentKind,
   type Consents,
@@ -17,6 +18,10 @@ export function getConsents(): Promise<Consents> {
 
 export function applyConsents(body: ConsentChange): Promise<Consents> {
   return apiRequest('/account/consents', { method: 'POST', body, schema: consentsSchema })
+}
+
+export function getSignupProfile(): Promise<SignupProfile> {
+  return apiRequest('/account/signup-profile', { schema: signupProfileSchema })
 }
 
 // Анкета уходит ПОСЛЕ принятия соглашения: ручка стоит за гейтом согласия.

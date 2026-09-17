@@ -100,6 +100,10 @@ func (f *fakeAuthService) ConsentRequired(_ context.Context, userID uuid.UUID) (
 	return f.consentRequired, f.consentErr
 }
 
+func (f *fakeAuthService) SignupProfileOf(_ context.Context, _ uuid.UUID) (SignupProfile, error) {
+	return f.signupProfile, nil
+}
+
 func (f *fakeAuthService) SaveSignupProfile(_ context.Context, userID uuid.UUID, p SignupProfile) error {
 	f.signupProfileUser = userID
 	f.signupProfile = p
