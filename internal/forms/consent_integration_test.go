@@ -319,3 +319,55 @@ func getPublicConsent(t *testing.T, base, slug string) (*string, string) {
 	closeBody(t, r)
 	return pub.ConsentRevision, etag
 }
+
+// Страница документа против настоящего Postgres (ревью ветки согласия, 2026-09-17): ревизия
+// чужой формы не открывается, форма под паролем без токена не отдаёт документ, перечень
+// вопросов — только текущей опубликованной версии, название — то же, что на самой форме.
+func TestForms_ConsentDocumentVisibility(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-consent-doc@example.com")
+
+	form := createForm(t, alice, srv, "Запись")
+	oldSchema := `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Номер паспорта"}]},{"id":"b1","groupId":"g_b1","type":"short_text","settings":{}}]}`
+	patchDraftSchema(t, alice, srv, form.ID, oldSchema, form.UpdatedAt, http.StatusOK)
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+	rev := putConsent(t, alice, srv.URL+"/api/v1/forms/"+form.ID+"/consent", consentBody, http.StatusOK)
+	docURL := srv.URL + "/public/v1/forms/" + form.Slug + "/documents/consent?revision=" + *rev.RevisionID
+
+	// Автор снял вопрос и перепубликовал форму.
+	newSchema := `{"blocks":[{"id":"t_b2","groupId":"g_b2","type":"title","text":[{"t":"Телефон"}]},{"id":"b2","groupId":"g_b2","type":"phone","settings":{}}]}`
+	patchDraftSchema(t, alice, srv, form.ID, newSchema, getFormDetail(t, alice, srv, form.ID, http.StatusOK).UpdatedAt, http.StatusOK)
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+
+	for name, target := range map[string]string{"без версии": docURL, "с номером снятой версии": docURL + "&version=1"} {
+		doc := getConsentDocument(t, target, http.StatusOK)
+		if strings.Contains(doc.Text, "Номер паспорта") || !strings.Contains(doc.Text, "«Телефон»") {
+			t.Errorf("%s: перечень не по текущей версии:\n%s", name, doc.Text)
+		}
+		// В схеме нет блока заголовка — название из колонки, как у самой формы.
+		if !strings.Contains(doc.Text, "форму «Запись»") {
+			t.Errorf("%s: название формы не то, что видит респондент:\n%s", name, doc.Text)
+		}
+	}
+
+	// Ревизия другой формы того же автора под этой формой не открывается.
+	other := createForm(t, alice, srv, "Другая")
+	patchDraftSchema(t, alice, srv, other.ID, newSchema, other.UpdatedAt, http.StatusOK)
+	publishForm(t, alice, srv, other.ID, http.StatusOK)
+	otherRev := putConsent(t, alice, srv.URL+"/api/v1/forms/"+other.ID+"/consent",
+		strings.Replace(consentBody, "Казань", "Самара", 1), http.StatusOK)
+	getConsentDocument(t, srv.URL+"/public/v1/forms/"+form.Slug+"/documents/consent?revision="+*otherRev.RevisionID, http.StatusNotFound)
+
+	// Под паролем: без токена 401, с токеном документ отдаётся.
+	const password = "пароль для документа"
+	patchPassword(t, alice, srv, form.ID, `"`+password+`"`, http.StatusOK)
+	getConsentDocument(t, docURL, http.StatusUnauthorized)
+	anon := newClient(t)
+	tok := unlockForm(t, anon, srv, form.Slug, password)
+	r := doWithHeader(t, anon, http.MethodGet, docURL, "X-Form-Unlock", tok)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("документ с токеном: статус %d; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+}

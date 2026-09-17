@@ -46,7 +46,7 @@ import {
 } from './api'
 import { ConsentCheck } from '@fields/ConsentCheck'
 import { missingRequired } from '@fields/required'
-import { documentHref } from './consent'
+import { consentToSend, documentHref } from './consent'
 import { Badge } from '@fields/Badge'
 import { applyPrefill, type EmbedOptions, type HostBridge, readPrefill } from './embed'
 import {
@@ -637,7 +637,7 @@ export function FormView({
         // Сервер повторит вычистку сам — здесь она ради честного тела запроса.
         answers: stripHiddenAnswers(blocks, answers),
         visitId: visit.current?.id ?? '',
-        consentRevision: form.consentRevision !== null && consentChecked ? form.consentRevision : '',
+        consentRevision: consentToSend(form.consentRevision, consentChecked),
       })
     } catch {
       if (!active.current) return
@@ -855,8 +855,8 @@ export function FormView({
           {form.consentRevision !== null && page === lastPage && !plan.blocked && (
             <ConsentCheck
               hrefs={{
-                consent: documentHref(slug, 'consent', form.consentRevision, form.version),
-                policy: documentHref(slug, 'policy', form.consentRevision, form.version),
+                consent: documentHref(slug, 'consent', form.consentRevision),
+                policy: documentHref(slug, 'policy', form.consentRevision),
               }}
               checked={consentChecked}
               onChange={setConsentChecked}

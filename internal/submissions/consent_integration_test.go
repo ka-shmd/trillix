@@ -86,11 +86,28 @@ func TestSubmit_Consent_EndToEnd(t *testing.T) {
 		t.Fatalf("записана ревизия %s, ожидалась та, что видел человек, %s", stored, *first.RevisionID)
 	}
 
+	// Ревизия другой формы того же автора согласием на эту форму не считается: id
+	// приезжает от респондента и правом не является.
+	other, err := formsSvc.Create(ctx, user.ID, "Другая", nil)
+	if err != nil {
+		t.Fatalf("create other form: %v", err)
+	}
+	foreign, err := formsSvc.SaveConsent(ctx, user.ID, other.ID, true, settings)
+	if err != nil {
+		t.Fatalf("save consent (другая форма): %v", err)
+	}
+	if resp, _ := submit(foreign.RevisionID.String()); resp.StatusCode != http.StatusUnprocessableEntity {
+		t.Fatalf("с ревизией чужой формы: статус %d, ожидалось 422", resp.StatusCode)
+	}
+	if n := countSubmissions(t); n != 1 {
+		t.Fatalf("ответ с ревизией чужой формы записан: всего %d", n)
+	}
+
 	if _, err := testPool.Exec(ctx, `DELETE FROM forms WHERE id = $1`, form.ID); err != nil {
 		t.Fatalf("удаление формы с ответами по ревизии: %v", err)
 	}
 	var revisions int
-	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM form_consent_revisions`).Scan(&revisions); err != nil || revisions != 0 {
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM form_consent_revisions WHERE form_id = $1`, form.ID).Scan(&revisions); err != nil || revisions != 0 {
 		t.Fatalf("после удаления формы ревизий: %d (%v)", revisions, err)
 	}
 }

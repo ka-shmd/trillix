@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -57,11 +59,16 @@ func TestValidateConsentSettings(t *testing.T) {
 		"пустая своя политика": {true, func(s *ConsentSettings) {
 			s.Documents, s.ConsentText, s.PolicyText = ConsentDocCustom, "Согласие", ""
 		}},
-		"чужой источник документов":    {false, func(s *ConsentSettings) { s.Documents = "link" }},
-		"ИНН из девяти цифр":           {false, func(s *ConsentSettings) { s.Operator.INN = "123456789" }},
-		"ИНН с буквой":                 {false, func(s *ConsentSettings) { s.Operator.INN = "77000000O0" }},
-		"email с именем":               {false, func(s *ConsentSettings) { s.Operator.Email = "Ромашка <pd@romashka.ru>" }},
-		"текст длиннее потолка":        {false, func(s *ConsentSettings) { s.PolicyText = strings.Repeat("я", MaxConsentDocTextLen+1) }},
+		"чужой источник документов": {false, func(s *ConsentSettings) { s.Documents = "link" }},
+		"ИНН из девяти цифр":        {false, func(s *ConsentSettings) { s.Operator.INN = "123456789" }},
+		"ИНН с буквой":              {false, func(s *ConsentSettings) { s.Operator.INN = "77000000O0" }},
+		"email с именем":            {false, func(s *ConsentSettings) { s.Operator.Email = "Ромашка <pd@romashka.ru>" }},
+		"текст длиннее потолка":     {false, func(s *ConsentSettings) { s.PolicyText = strings.Repeat("я", MaxConsentDocTextLen+1) }},
+		// Потолок ИНН держит и свои документы, где формат не проверяется: ревизии не удаляются.
+		"длинный ИНН при своих документах": {false, func(s *ConsentSettings) {
+			s.Documents, s.ConsentText, s.PolicyText = ConsentDocCustom, "Согласие", "Политика"
+			s.Operator.INN = strings.Repeat("1", MaxConsentOperatorINNLen+1)
+		}},
 		"цель длиннее потолка в рунах": {false, func(s *ConsentSettings) { s.Purpose = strings.Repeat("ц", MaxConsentPurposeLen+1) }},
 	}
 	for name, c := range cases {
@@ -138,5 +145,43 @@ func TestRenderConsentDocument_CustomAndUnknown(t *testing.T) {
 	}
 	if _, err := RenderConsentDocument("offer", s, ConsentTemplateVersion, ConsentDocInput{}); !errors.Is(err, ErrValidation) {
 		t.Fatalf("неизвестный документ: err = %v", err)
+	}
+}
+
+// Отпечаток текста версии 1 шаблона. Страница документа восстанавливает по версии текст,
+// с которым соглашался человек, поэтому формулировка версии на месте не правится — ни
+// опечатка, ни пробел. Тест упал из-за правки текста — нужна новая версия шаблона
+// (ConsentTemplateVersion + 1), а отпечаток версии 1 не меняется.
+func TestConsentTemplateV1_Frozen(t *testing.T) {
+	full := sampleConsentWith(func(s *ConsentSettings) {
+		s.Purpose, s.Retention = "запись на приём", "один год"
+	})
+	bare := sampleConsentWith(func(s *ConsentSettings) { s.Operator.INN = "" })
+	in := ConsentDocInput{FormTitle: "Запись", DataItems: []string{"Имя", "Телефон"}}
+	want := map[string]string{
+		"consent/full": "ccde8700f621ce186a5bc828dabdb4417b08e5d115a106c60cad8ca171b9e902",
+		"policy/full":  "a193bf8cc051a9bfc64a7b8730c44741c487da540150880f3228d20d289e037a",
+		"consent/bare": "86967dfb962a15898a25947b3fd78d7e68e8bac6e6f4cac82090d1e3bbd6c0db",
+		"policy/bare":  "9d5949ca0b27d79eea9fa6b2672cb21a61e08e604c25ae8ad7b53757a544afde",
+	}
+	for _, c := range []struct {
+		name string
+		kind ConsentDocKind
+		s    ConsentSettings
+		in   ConsentDocInput
+	}{
+		{"consent/full", ConsentDocConsent, full, in},
+		{"policy/full", ConsentDocPolicy, full, in},
+		{"consent/bare", ConsentDocConsent, bare, ConsentDocInput{}},
+		{"policy/bare", ConsentDocPolicy, bare, ConsentDocInput{}},
+	} {
+		doc, err := RenderConsentDocument(c.kind, c.s, 1, c.in)
+		if err != nil {
+			t.Fatalf("%s: %v", c.name, err)
+		}
+		sum := sha256.Sum256([]byte(doc.Title + "\n" + doc.Text))
+		if got := hex.EncodeToString(sum[:]); got != want[c.name] {
+			t.Errorf("%s: текст версии 1 изменился (отпечаток %s)", c.name, got)
+		}
 	}
 }

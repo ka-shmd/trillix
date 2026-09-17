@@ -3225,26 +3225,6 @@ func (q *Queries) GetFormTemplate(ctx context.Context, id uuid.UUID) (FormTempla
 	return i, err
 }
 
-const getFormVersionSchema = `-- name: GetFormVersionSchema :one
-SELECT schema
-FROM form_versions
-WHERE form_id = $1 AND version = $2
-`
-
-type GetFormVersionSchemaParams struct {
-	FormID  uuid.UUID
-	Version int32
-}
-
-// Снапшот одной версии по номеру — странице документа согласия: перечень данных в
-// типовом тексте берётся из той версии, по которой человек отправлял ответ.
-func (q *Queries) GetFormVersionSchema(ctx context.Context, arg GetFormVersionSchemaParams) ([]byte, error) {
-	row := q.db.QueryRow(ctx, getFormVersionSchema, arg.FormID, arg.Version)
-	var schema []byte
-	err := row.Scan(&schema)
-	return schema, err
-}
-
 const getFormWebhook = `-- name: GetFormWebhook :one
 SELECT w.id, w.form_id, w.name, w.url, w.secret, w.headers, w.set_by, w.enabled, w.status,
        w.last_error, w.last_delivered_at, w.created_at,

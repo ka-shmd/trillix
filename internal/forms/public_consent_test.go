@@ -56,7 +56,8 @@ func TestPublicConsentDocument_Route(t *testing.T) {
 	svc.pf.ConsentRevisionID = &rev
 	base := "/public/v1/forms/abc/documents/policy?revision=" + rev.String()
 
-	rec := getConsentDoc(t, svc, base+"&version=3", "")
+	// version из прежних ссылок не мешает: документ собирается по текущей версии.
+	rec := getConsentDoc(t, svc, base+"&version=x", "")
 	if rec.Code != http.StatusOK {
 		t.Fatalf("статус %d, тело %s", rec.Code, rec.Body)
 	}
@@ -64,8 +65,8 @@ func TestPublicConsentDocument_Route(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
 		t.Fatalf("тело не парсится: %v", err)
 	}
-	if body.Title != "policy" || body.Text != "версия 3" {
-		t.Fatalf("вид документа или версия не доехали до сервиса: %+v", body)
+	if body.Title != "policy" || body.Text != "документ" {
+		t.Fatalf("вид документа не доехал до сервиса: %+v", body)
 	}
 	if got := rec.Header().Get("Cache-Control"); got != "no-store" {
 		t.Errorf("Cache-Control = %q, ожидался no-store", got)
@@ -74,8 +75,6 @@ func TestPublicConsentDocument_Route(t *testing.T) {
 	for name, target := range map[string]string{
 		"битая ревизия":        "/public/v1/forms/abc/documents/policy?revision=nope",
 		"чужая ревизия":        "/public/v1/forms/abc/documents/policy?revision=" + domain.NewID().String(),
-		"версия не числом":     base + "&version=x",
-		"версия ноль":          base + "&version=0",
 		"без ревизии в адресе": "/public/v1/forms/abc/documents/consent",
 	} {
 		if rec := getConsentDoc(t, svc, target, ""); rec.Code != http.StatusNotFound {

@@ -1491,12 +1491,3 @@ func (Repo) DeleteConsentOperator(ctx context.Context, db postgres.DBTX, id, wor
 	}
 	return n, nil
 }
-
-// GetFormVersionSchema — снапшот версии формы по номеру. pgx.ErrNoRows — такой нет.
-func (Repo) GetFormVersionSchema(ctx context.Context, db postgres.DBTX, formID uuid.UUID, version int32) (json.RawMessage, error) {
-	schema, err := postgres.New(db).GetFormVersionSchema(ctx, postgres.GetFormVersionSchemaParams{FormID: formID, Version: version})
-	if err != nil {
-		return nil, fmt.Errorf("get form version schema: %w", err)
-	}
-	return json.RawMessage(schema), nil
-}

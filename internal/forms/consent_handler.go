@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"strconv"
 	"time"
 
 	"github.com/google/uuid"
@@ -189,31 +188,22 @@ func (h *Handler) deleteConsentOperator(w http.ResponseWriter, r *http.Request) 
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// consentDocument — GET /public/v1/forms/{slug}/documents/{kind}?revision=…&version=…:
-// документ согласия или политики для страницы на домене форм. Неразбираемые
-// параметры — 404, как у несуществующего документа: гадать по коду ответа нечего.
+// consentDocument — GET /public/v1/forms/{slug}/documents/{kind}?revision=…:
+// документ согласия или политики для страницы на домене форм. Неразбираемая ревизия —
+// 404, как у несуществующего документа: гадать по коду ответа нечего. Параметр
+// version из прежних ссылок игнорируется: документ собирается по текущей версии.
 //
 // Кэша нет вовсе: у формы под паролем ответ зависит от заголовка разблокировки,
 // которого нет в ключе общего кэша, а страница документа открывается редко.
 func (h *PublicHandler) consentDocument(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
-	q := r.URL.Query()
-	revisionID, err := uuid.Parse(q.Get("revision"))
+	revisionID, err := uuid.Parse(r.URL.Query().Get("revision"))
 	if err != nil {
 		httpserver.WriteError(w, r, domain.ErrNotFound)
 		return
 	}
-	var version int32
-	if raw := q.Get("version"); raw != "" {
-		n, err := strconv.ParseInt(raw, 10, 32)
-		if err != nil || n < 1 {
-			httpserver.WriteError(w, r, domain.ErrNotFound)
-			return
-		}
-		version = int32(n)
-	}
 	doc, err := h.svc.PublicConsentDocument(r.Context(), r.PathValue("slug"),
-		domain.ConsentDocKind(r.PathValue("kind")), revisionID, version, r.Header.Get(UnlockHeader))
+		domain.ConsentDocKind(r.PathValue("kind")), revisionID, r.Header.Get(UnlockHeader))
 	if err != nil {
 		if !errors.Is(err, domain.ErrNotFound) && !errors.Is(err, domain.ErrFormLocked) {
 			err = fmt.Errorf("consent document %s: %w", r.PathValue("slug"), err)

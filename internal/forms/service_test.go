@@ -65,7 +65,6 @@ type fakeStore struct {
 	consentInserted int
 	// consentRemembered — наборы, положенные в список реквизитов пространства.
 	consentRemembered []domain.ConsentOperator
-	versionSchemas    map[int32]json.RawMessage
 
 	// Управление путём автосейва схемы.
 	schemaSaved     bool
@@ -297,14 +296,6 @@ func (f *fakeStore) NextFormVersion(_ context.Context, _ postgres.DBTX, _ uuid.U
 
 func (f *fakeStore) ListFormVersions(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Version, error) {
 	return f.versions, nil
-}
-
-func (f *fakeStore) GetFormVersionSchema(_ context.Context, _ postgres.DBTX, _ uuid.UUID, version int32) (json.RawMessage, error) {
-	raw, ok := f.versionSchemas[version]
-	if !ok {
-		return nil, pgx.ErrNoRows
-	}
-	return raw, nil
 }
 
 func (f *fakeStore) GetFormConsent(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (ConsentRevision, error) {

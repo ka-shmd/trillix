@@ -6,6 +6,7 @@ import {
   MAX_CONSENT_DOC_TEXT_LEN,
   MAX_CONSENT_EMAIL_LEN,
   MAX_CONSENT_OPERATOR_ADDRESS_LEN,
+  MAX_CONSENT_OPERATOR_INN_LEN,
   MAX_CONSENT_OPERATOR_NAME_LEN,
   MAX_CONSENT_PURPOSE_LEN,
   MAX_CONSENT_RETENTION_LEN,
@@ -146,7 +147,7 @@ function TemplateFields({
             placeholder="Необязательно"
             aria-invalid={invalid.inn}
             value={draft.inn}
-            maxLength={12}
+            maxLength={MAX_CONSENT_OPERATOR_INN_LEN}
             onChange={(e) => set('inn', e.target.value)}
           />
           {invalid.inn && (
