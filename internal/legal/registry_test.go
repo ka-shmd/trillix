@@ -79,3 +79,18 @@ func TestBuildEditions(t *testing.T) {
 		}
 	})
 }
+
+func TestDraftEditions(t *testing.T) {
+	eds := []Edition{
+		{Kind: KindTerms, Version: "2026-09-17", Draft: true},
+		{Kind: KindPrivacy, Version: "2026-09-17"},
+		{Kind: KindMarketing, Version: "2026-10-01", Draft: true},
+	}
+	got := DraftEditions(eds)
+	if len(got) != 2 || got[0] != "terms/2026-09-17" || got[1] != "marketing/2026-10-01" {
+		t.Fatalf("DraftEditions = %v", got)
+	}
+	if got := DraftEditions(eds[1:2]); len(got) != 0 {
+		t.Fatalf("без черновиков: %v", got)
+	}
+}

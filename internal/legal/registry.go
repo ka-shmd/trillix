@@ -100,6 +100,19 @@ func Editions() ([]Edition, error) {
 	return buildEditions(registry, documentsFS)
 }
 
+// DraftEditions — черновые редакции реестра строками «вид/версия». Гейт тега: черновик
+// с заглушками вместо реквизитов не выкатывается (release_test.go, job legal-documents в
+// .github/workflows/release.yml).
+func DraftEditions(eds []Edition) []string {
+	var out []string
+	for _, e := range eds {
+		if e.Draft {
+			out = append(out, string(e.Kind)+"/"+e.Version)
+		}
+	}
+	return out
+}
+
 var datePattern = regexp.MustCompile(`^[0-9]{4}-[0-9]{2}-[0-9]{2}$`)
 
 // moscow — пояс, в котором редакция вступает в силу с начала дня. Фиксированное смещение,
