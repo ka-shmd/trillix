@@ -162,33 +162,6 @@ func TestValidateAnswers_Invalid(t *testing.T) {
 	}
 }
 
-// Согласие: «yes» или пусто. Обязательность — обычный флаг required (решение
-// владельца), а не правило типа: необязательное согласие это маркетинг-opt-in.
-func TestValidateAnswers_Consent(t *testing.T) {
-	req := FormSchema{Blocks: []Block{field("c", BlockConsent, true)}}
-	opt := FormSchema{Blocks: []Block{field("c", BlockConsent, false)}}
-
-	if err := ValidateAnswers(req, raws(map[string]string{"c": `"yes"`})); err != nil {
-		t.Fatalf("отмеченное обязательное согласие валидно: %v", err)
-	}
-	// Ключевой кейс: неотмеченное обязательное согласие обязано падать. Именно ради
-	// него ответ хранится строкой — пустое значение ловится общим required.
-	if err := ValidateAnswers(req, raws(map[string]string{"c": `""`})); err == nil {
-		t.Fatal("неотмеченное обязательное согласие принято")
-	}
-	if err := ValidateAnswers(req, raws(map[string]string{})); err == nil {
-		t.Fatal("пропущенное обязательное согласие принято")
-	}
-	// Необязательное согласие можно не отмечать (opt-in).
-	if err := ValidateAnswers(opt, raws(map[string]string{"c": `""`})); err != nil {
-		t.Fatalf("неотмеченное необязательное согласие валидно: %v", err)
-	}
-	// Чужое значение — не согласие.
-	if err := ValidateAnswers(opt, raws(map[string]string{"c": `"no"`})); err == nil {
-		t.Fatal("произвольное значение согласия принято")
-	}
-}
-
 // Шкала: ответ — строка с целым числом в диапазоне ТОЙ версии схемы, против
 // которой валидируется (смена диапазона не делает старые ответы невалидными).
 func TestValidateAnswers_Scale(t *testing.T) {

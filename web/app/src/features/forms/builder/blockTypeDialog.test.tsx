@@ -44,10 +44,6 @@ describe('окно выбора типа блока', () => {
     pick(editorKind('short_text').label)
     expect(document.querySelector('.rf-label')?.textContent).toContain('Ваш вопрос')
     expect(document.querySelector('.rf-required')).toBeNull()
-    // Согласие рисует звёздочку своим контролом, по required блока.
-    pick(editorKind('consent').label)
-    expect(document.querySelector('.rf-consent')).not.toBeNull()
-    expect(document.querySelector('.rf-required')).toBeNull()
   })
 
   it('голое поле типа, которому нужна подпись, показывается с подписью', () => {

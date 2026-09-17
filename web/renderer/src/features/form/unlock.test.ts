@@ -113,7 +113,7 @@ describe('токен едет со всеми запросами формы', ()
   it('отправка ответа предъявляет токен заголовком', async () => {
     rememberUnlock('abc', 'tok')
     const init = stubFetch(new Response(null, { status: 201 }))
-    await submitAnswers('abc', { submissionId: 's', token: 't', answers: {}, visitId: 'v' })
+    await submitAnswers('abc', { submissionId: 's', token: 't', answers: {}, visitId: 'v', consentRevision: '' })
     expect((init().headers as Record<string, string>)['X-Form-Unlock']).toBe('tok')
   })
 
@@ -130,7 +130,7 @@ describe('токен едет со всеми запросами формы', ()
   // «принято» и не пятисоткой.
   it('401 у отправки → осмысленный отказ', async () => {
     stubFetch(new Response(null, { status: 401 }))
-    const r = await submitAnswers('abc', { submissionId: 's', token: 't', answers: {}, visitId: 'v' })
+    const r = await submitAnswers('abc', { submissionId: 's', token: 't', answers: {}, visitId: 'v', consentRevision: '' })
     expect(r.status).toBe('rejected')
   })
 })

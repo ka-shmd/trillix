@@ -160,11 +160,6 @@ describe('derivedQuestionName — вывод имени (зеркало domain.q
     expect(derivedQuestionName(blocks, blocks[1]!)).toBe('Ваш город')
   })
 
-  it('собственный текст блока — у согласия', () => {
-    const blocks = [blk({ id: 'c', type: 'consent', text: textFromString('Соглашаюсь') })]
-    expect(derivedQuestionName(blocks, blocks[0]!)).toBe('Соглашаюсь')
-  })
-
   it('плейсхолдер, когда подписи нет', () => {
     const blocks = [blk({ id: 'b', type: 'email', settings: { placeholder: 'you@ex.com' } })]
     expect(derivedQuestionName(blocks, blocks[0]!)).toBe('you@ex.com')

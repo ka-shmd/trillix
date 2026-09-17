@@ -131,9 +131,6 @@ func validateAnswer(b Block, raw json.RawMessage, required bool) string {
 	if b.Type.isScaleLike() {
 		return validateScaleAnswer(b, raw, required)
 	}
-	if b.Type == BlockConsent {
-		return validateConsentAnswer(b, raw, required)
-	}
 	if b.Type == BlockFile {
 		return validateFileAnswer(b, raw, required)
 	}
@@ -235,38 +232,6 @@ func validateFileAnswer(b Block, raw json.RawMessage, required bool) string {
 			return "повторяющийся файл"
 		}
 		seen[id] = struct{}{}
-	}
-	return ""
-}
-
-// ConsentYes — значение отмеченного согласия. Ответ хранится строкой, а не булевым
-// (решение владельца): это конвенция проекта (number/date тоже строки), и пустая
-// строка = «не отмечено» даёт обязательность даром — без спецслучая в required.
-const ConsentYes = "yes"
-
-// validateConsentAnswer — согласие: либо ConsentYes, либо пусто. Обязательность —
-// обычный флаг required (решение владельца): необязательное согласие это реальный
-// случай (подписка на рассылку, маркетинг-opt-in), поэтому спецслучая «consent
-// всегда обязателен» в валидаторе нет. Текст согласия — label блока.
-func validateConsentAnswer(b Block, raw json.RawMessage, required bool) string {
-	if len(raw) == 0 {
-		if required {
-			return msgRequired
-		}
-		return ""
-	}
-	var v string
-	if err := json.Unmarshal(raw, &v); err != nil {
-		return "ожидалась строка"
-	}
-	if v == "" {
-		if required {
-			return msgRequired
-		}
-		return ""
-	}
-	if v != ConsentYes {
-		return "недопустимое значение согласия"
 	}
 	return ""
 }

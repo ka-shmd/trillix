@@ -1,4 +1,4 @@
-import { CONSENT_YES, type Block, isMultiChoiceType, isSingleChoiceType } from '@entities/formSchema'
+import { type Block, isMultiChoiceType, isSingleChoiceType } from '@entities/formSchema'
 import { type AnswerFile, type AnswerValue } from '../../entities/submission'
 import { LOCALE } from '../../shared/format'
 
@@ -20,11 +20,6 @@ export function formatAnswer(
   if (block && isMultiChoiceType(block.type)) {
     const ids = Array.isArray(value) ? value : [value]
     return ids.map((id) => optionLabel(block, id)).join(', ')
-  }
-  // Согласие: «yes»/пусто — внутренняя кодировка, владельцу нужен человеческий
-  // текст (зеркалит ветку BlockConsent в csv.go).
-  if (block?.type === 'consent') {
-    return value === CONSENT_YES ? 'Да' : 'Нет'
   }
   // Файлы: в текстовом виде — имена, как в CSV. Ссылками их рисует панель ответа
   // (formatAnswer возвращает строку и знать про разметку не должен).

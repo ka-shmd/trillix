@@ -28,4 +28,11 @@ export const formKeys = {
   // detailAll() — префикс всех деталей: нужен там, где на руках только UUID формы,
   // а её slug ещё неизвестен (оптимистичный патч rename — см. queries.ts).
   detailAll: () => ['forms', 'detail'] as const,
+  // consent — раздел «Персональные данные» формы. Ключуется UUID: страница настроек
+  // получает его из детали, а ручка раздела адресуется им же.
+  consent: (id: string) => ['forms', 'consent', id] as const,
+  // consentOperators — список реквизитов пространства; all() — префикс для
+  // инвалидации после сохранения раздела, у которого на руках только форма.
+  consentOperatorsAll: () => ['forms', 'consent-operators'] as const,
+  consentOperators: (workspaceId: string) => ['forms', 'consent-operators', workspaceId] as const,
 }

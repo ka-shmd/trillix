@@ -111,14 +111,12 @@ var blockTypeNames = map[BlockType]string{
 	BlockMultiChoice:  "Несколько из списка",
 	BlockMultiSelect:  "Теги",
 	BlockDate:         "Дата",
-	BlockConsent:      "Согласие",
 	BlockFile:         "Файл",
 	BlockSlot:         "Онлайн-запись",
 }
 
 // questionLabel — подпись вопроса по убыванию приоритета: ЯВНОЕ ИМЯ → подпись группы
-// (title/label) → собственный текст блока (у consent — текст согласия) →
-// плейсхолдер → «Тип N». Пустая колонка/шаг в отчёте хуже сгенерированного имени,
+// (title/label) → плейсхолдер → «Тип N». Пустая колонка/шаг в отчёте хуже сгенерированного имени,
 // поэтому безымянного вопроса на экране не бывает. ordinal — 0-based позиция
 // вопроса в порядке показа (для «Тип N» человекочитаемо +1).
 //
@@ -138,11 +136,6 @@ func questionLabel(blk Block, groupCaption string, ordinal int) string {
 	}
 	if strings.TrimSpace(groupCaption) != "" {
 		return groupCaption
-	}
-	// Собственный текст блока (у consent — текст согласия) тоже уходит в данные —
-	// значит плоским (фаза 14).
-	if own := PlainText(blk.Text); strings.TrimSpace(own) != "" {
-		return own
 	}
 	if strings.TrimSpace(blk.Settings.Placeholder) != "" {
 		return blk.Settings.Placeholder

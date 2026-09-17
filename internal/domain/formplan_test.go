@@ -210,7 +210,6 @@ func TestExpandPlanProducesValidSchema(t *testing.T) {
 			{Type: BlockScale, Text: "Насколько удобно записываться"},
 			{Type: BlockPageBreak, Text: "второй шаг"},
 			{Type: BlockDate, Text: "Дата визита", Required: true},
-			{Type: BlockConsent, Text: "Согласен на обработку данных", Required: true},
 		},
 	}
 
@@ -235,9 +234,9 @@ func TestExpandPlanProducesValidSchema(t *testing.T) {
 		t.Fatalf("первый блок = %+v, ожидался заголовок формы", parsed.Blocks[0])
 	}
 
-	// Заголовок формы + 6 вопросов с подписью (по два блока) + пояснение + разрыв +
-	// согласие (по одному).
-	if got, want := len(parsed.Blocks), 1+6*2+3; got != want {
+	// Заголовок формы + 6 вопросов с подписью (по два блока) + пояснение и разрыв (по
+	// одному).
+	if got, want := len(parsed.Blocks), 1+6*2+2; got != want {
 		t.Fatalf("блоков = %d, ожидалось %d", got, want)
 	}
 
@@ -266,15 +265,6 @@ func TestExpandPlanProducesValidSchema(t *testing.T) {
 	}
 	if name.GroupID != "g_"+name.ID {
 		t.Errorf("якорь группы = %q, ожидался id поля", name.GroupID)
-	}
-
-	// Согласие несёт свой текст само — отдельной подписи у него нет.
-	consent := findByType(parsed.Blocks, BlockConsent)
-	if PlainText(consent.Text) != "Согласен на обработку данных" || !consent.Required {
-		t.Errorf("согласие = %+v", consent)
-	}
-	if n := countInGroup(parsed.Blocks, consent.GroupID); n != 1 {
-		t.Errorf("в группе согласия %d блоков, ожидался один", n)
 	}
 
 	// Разрыв страницы текста не несёт (иначе ValidateSchema его и не пропустил бы).
@@ -436,7 +426,6 @@ func TestExpandPlanBoldsHeadings(t *testing.T) {
 		{Type: BlockShortText, Text: "Ваше имя"},
 		{Type: BlockHeading, Text: "Контакты"},
 		{Type: BlockText, Text: "Заполните форму до пятницы"},
-		{Type: BlockConsent, Text: "Согласен на обработку данных"},
 	}})
 	if err != nil {
 		t.Fatalf("ExpandPlan() вернул ошибку: %v", err)
@@ -455,11 +444,8 @@ func TestExpandPlanBoldsHeadings(t *testing.T) {
 			t.Errorf("%s создан обычным весом, ожидался жирный", bt)
 		}
 	}
-	// Пояснение и текст согласия заголовками не являются: они живут в самом блоке и
-	// набраны обычным текстом формы.
-	for _, bt := range []BlockType{BlockText, BlockConsent} {
-		if bold[bt] {
-			t.Errorf("%s создан жирным, а это не заголовок", bt)
-		}
+	// Пояснение заголовком не является: оно набрано обычным текстом формы.
+	if bold[BlockText] {
+		t.Errorf("%s создан жирным, а это не заголовок", BlockText)
 	}
 }

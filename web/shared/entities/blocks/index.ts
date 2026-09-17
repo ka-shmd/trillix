@@ -1,5 +1,4 @@
 import { type BlockKindContract, type BlockType } from './contract'
-import { consent } from './consent'
 import { date } from './date'
 import { dropdown } from './dropdown'
 import { email } from './email'
@@ -45,7 +44,6 @@ export const BLOCK_KINDS: Record<BlockType, BlockKindContract> = {
   multi_choice: multiChoice,
   multi_select: multiSelect,
   date,
-  consent,
   file,
   slot,
   title,
@@ -78,10 +76,10 @@ export const isCaptionType = (t: BlockType): boolean => blockKind(t).family === 
 // исключены из ValidateAnswers, CSV, сводки и воронки.
 export const isContentType = (t: BlockType): boolean => blockKind(t).family !== 'answer'
 
-// Блок собирает ответ (все отвечаемые типы, включая consent).
+// Блок собирает ответ.
 export const isAnswerableType = (t: BlockType): boolean => blockKind(t).family === 'answer'
 
-// Тип несёт собственное поле text (подписи, контент, consent, заголовок формы).
+// Тип несёт собственное поле text (подписи, контент, заголовок формы).
 export const carriesText = (t: BlockType): boolean => blockKind(t).carriesText
 
 // Настройки типа несут список опций. dropdown отличается от single_choice ТОЛЬКО

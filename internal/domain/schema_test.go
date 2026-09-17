@@ -23,8 +23,7 @@ func TestValidateSchema_Valid(t *testing.T) {
 				{"id":"blk_10","groupId":"g7","type":"dropdown","settings":{"options":[{"id":"o1","label":"Мск"}]}},
 				{"id":"blk_5","groupId":"g8","type":"date","settings":{}},
 				{"id":"blk_6","groupId":"g9","type":"single_choice","settings":{"options":[{"id":"o1","label":"Друзья"},{"id":"o2","label":"Поиск"}]}},
-				{"id":"blk_7","groupId":"g10","type":"multi_choice","settings":{"options":[{"id":"o1","label":"Go"}]}},
-				{"id":"blk_11","groupId":"g11","type":"consent","text":[{"t":"Соглашаюсь"}],"required":true,"settings":{}}
+				{"id":"blk_7","groupId":"g10","type":"multi_choice","settings":{"options":[{"id":"o1","label":"Go"}]}}
 			]
 		}`,
 		"неотвечаемый text-блок":            `{"blocks":[{"id":"b","groupId":"g1","type":"text","text":[{"t":"Раздел А"}],"settings":{}}]}`,
@@ -75,9 +74,8 @@ func TestValidateSchema_Valid(t *testing.T) {
 		"имя ровно в лимит":          `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","name":"` + strings.Repeat("я", MaxQuestionNameLen) + `","settings":{}}]}`,
 		"пустое имя = имя не задано": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"title","text":[{"t":"Вопрос"}],"name":""}]}`,
 		// v2: вопрос как группа блоков (фаза 8.7).
-		"группа title+поле":       `{"schemaVersion":1,"blocks":[{"id":"t1","groupId":"g1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g1","type":"short_text","settings":{}}]}`,
-		"голое поле без подписи":  `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"email","settings":{"placeholder":"you@ex.com"}}]}`,
-		"consent несёт свой text": `{"schemaVersion":1,"blocks":[{"id":"c1","groupId":"g1","type":"consent","text":[{"t":"Соглашаюсь"}],"required":true,"settings":{}}]}`,
+		"группа title+поле":      `{"schemaVersion":1,"blocks":[{"id":"t1","groupId":"g1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g1","type":"short_text","settings":{}}]}`,
+		"голое поле без подписи": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"email","settings":{"placeholder":"you@ex.com"}}]}`,
 		"контент между подписью и полем": `{"schemaVersion":1,"blocks":[
 			{"id":"l1","groupId":"g1","type":"label","text":[{"t":"Логотип"}]},
 			{"id":"im","groupId":"g1","type":"image","settings":{"imageKey":"ws/x.png"}},
@@ -221,9 +219,12 @@ func TestValidateSchema_Invalid(t *testing.T) {
 		"слишком много опций":           tooManyOpts,
 		"слишком длинный текст подписи": longLabel,
 		// v2: правила групп и собственного текста (фаза 8.7).
-		"text у отвечаемого не-consent": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","text":[{"t":"нельзя"}],"settings":{}}]}`,
-		"text у image":   `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"image","text":[{"t":"нельзя"}],"settings":{}}]}`,
-		"пустой groupId": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"","type":"short_text","settings":{}}]}`,
+		// Согласие перестало быть типом блока (design/privacy-consent.md): теперь это
+		// настройка формы, и документ с таким блоком отвергается как любой чужой тип.
+		"тип consent":        `{"schemaVersion":1,"blocks":[{"id":"c1","groupId":"g1","type":"consent","text":[{"t":"Соглашаюсь"}],"required":true,"settings":{}}]}`,
+		"text у отвечаемого": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","text":[{"t":"нельзя"}],"settings":{}}]}`,
+		"text у image":       `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"image","text":[{"t":"нельзя"}],"settings":{}}]}`,
+		"пустой groupId":     `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"","type":"short_text","settings":{}}]}`,
 		"группа разорвана чужим блоком":              `{"schemaVersion":1,"blocks":[{"id":"a","groupId":"g1","type":"title","text":[{"t":"A"}]},{"id":"b","groupId":"g2","type":"short_text","settings":{}},{"id":"c","groupId":"g1","type":"email","settings":{}}]}`,
 		"два отвечаемых в одной группе":              `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{}},{"id":"b2","groupId":"g1","type":"email","settings":{}}]}`,
 		"column строкой (формат до номеров колонок)": `{"schemaVersion":1,"blocks":[{"id":"b1","groupId":"g1","type":"short_text","settings":{"column":"right"}}]}`,

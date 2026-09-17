@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { CalendarIcon, Copy, Eye, EyeOff, TriangleAlert } from 'lucide-react'
 import { useBlocker } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { toast } from 'sonner'
 
 import { MAX_REDIRECT_URL_LEN } from '@entities/formSchema'
@@ -16,10 +17,13 @@ import {
 import { ApiError } from '../../../shared/api/errors'
 import { PageFooter } from '../../../shared/page/PageFooter'
 import { Section } from '../../../shared/page/Section'
+import { ErrorState, LoadingRows } from '../../../shared/page/states'
 import { ProTag } from '../../../shared/ProTag'
 import { PlanUpsell } from '../../plan/PlanUpsell'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import {
+  formConsentQueryOptions,
+  useSaveFormConsent,
   useReopenForm,
   useUnpublishForm,
   useUpdateAfterSubmit,
@@ -79,6 +83,16 @@ import {
 } from '@/components/ui/select'
 import { sourceLabel } from '../builder/logic/model'
 import { MailLine } from './MailLine'
+import { ConsentFields } from './ConsentFields'
+import {
+  anyConsentInvalid,
+  consentDraftFrom,
+  consentValue,
+  sameConsent,
+  validateConsent,
+  type ConsentDraft,
+} from './consentDraft'
+import { Row } from './Row'
 
 // Настройки формы — то, чего на полотне не видно: что делать после отправки, как
 // выглядит форма у респондента поверх документа, когда прекратить приём.
@@ -130,6 +144,30 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
   const updateNotifyRespondent = useUpdateNotifyRespondent()
   const updateRespondentEmail = useUpdateRespondentEmail()
   const updatePassword = useUpdateFormPassword()
+  const saveConsent = useSaveFormConsent()
+
+  // Раздел «Персональные данные» (0069) приезжает своей ручкой, но сохраняется той же
+  // кнопкой подвала: у страницы одно «есть несохранённое» и один уход с правками.
+  // Догоняет сервер тем же приёмом, что черновик страницы, — сверкой в рендере; правка
+  // автора, сделанная поверх прежнего серверного состояния, не затирается.
+  const consentQuery = useQuery(formConsentQueryOptions(form.id))
+  const consentSaved = consentQuery.data ? consentDraftFrom(consentQuery.data) : null
+  const [consentDraft, setConsentDraft] = useState<ConsentDraft | null>(consentSaved)
+  const [consentSynced, setConsentSynced] = useState<ConsentDraft | null>(consentSaved)
+  if (consentSaved && (consentSynced === null || !sameConsent(consentSynced, consentSaved))) {
+    const untouched =
+      consentDraft === null || (consentSynced !== null && sameConsent(consentDraft, consentSynced))
+    if (untouched) setConsentDraft(consentSaved)
+    setConsentSynced(consentSaved)
+  }
+  const consentInvalid = consentDraft ? validateConsent(consentDraft) : null
+  const consentDirty =
+    consentDraft !== null && consentSaved !== null && !sameConsent(consentDraft, consentSaved)
+
+  function setConsent<K extends keyof ConsentDraft>(key: K, value: ConsentDraft[K]) {
+    setConsentDraft((d) => (d ? { ...d, [key]: value } : d))
+    if (failed) setFailed(false)
+  }
 
   // Гейты тарифа. Оба спрашиваются у снимка плана пространства, и оба ДЕРЖАТ САМ
   // КОНТРОЛ, а не отказывают после нажатия (тот же приём, что у бейджа на экране
@@ -164,8 +202,9 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
     invalid.respondentSubjectLong ||
     invalid.respondentBodyLong ||
     invalid.passwordMissing ||
-    invalid.passwordLong
-  const dirty = isDirty(saved, draft)
+    invalid.passwordLong ||
+    (consentInvalid !== null && anyConsentInvalid(consentInvalid))
+  const dirty = isDirty(saved, draft) || consentDirty
 
   // Уход с несохранёнными правками — осознанный. Блокируется НАВИГАЦИЯ роутера
   // (табы, крошки, «Назад» браузера) плюс закрытие вкладки: страница живёт внутри
@@ -198,6 +237,16 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
           thankYouText: draft.thankYouText,
           redirectUrl: redirectValue(draft),
         })
+      } catch {
+        broke = true
+      }
+    }
+
+    // Согласие не двигает updatedAt формы, поэтому место в очереди ему безразлично;
+    // стоит вторым, рядом со схемой, — оба про то, что видит респондент.
+    if (consentDirty && consentDraft) {
+      try {
+        await saveConsent.mutateAsync({ id: form.id, value: consentValue(consentDraft) })
       } catch {
         broke = true
       }
@@ -605,6 +654,37 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
         </div>
       </Section>
 
+      <Section title="Персональные данные">
+        {consentDraft === null || consentInvalid === null ? (
+          consentQuery.isError ? (
+            <ErrorState
+              title="Не удалось загрузить настройки согласия."
+              onRetry={() => void consentQuery.refetch()}
+            />
+          ) : (
+            <LoadingRows rows={2} />
+          )
+        ) : (
+          <div className="flex flex-col divide-y border-t">
+            <SettingRow
+              id="consent"
+              label="Согласие на обработку персональных данных"
+              description="Под кнопкой отправки появится галочка согласия и ссылка на политику обработки данных. Без галочки форма не отправится."
+              checked={consentDraft.enabled}
+              onChange={(v) => setConsent('enabled', v)}
+            >
+              <ConsentFields
+                formId={form.id}
+                workspaceId={form.workspaceId}
+                draft={consentDraft}
+                set={setConsent}
+                invalid={consentInvalid}
+              />
+            </SettingRow>
+          </div>
+        )}
+      </Section>
+
       <Section title="Поведение">
         <div className="flex flex-col divide-y border-t">
           <SettingRow
@@ -648,7 +728,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
               относится к полю, в которое человек ещё не печатал, и краснеть ему не за
               что — кнопка и так не даётся. */}
           <span
-            className={`text-sm ${failed || invalid.url || invalid.limit || invalid.replyTo || invalid.passwordLong || invalid.notifySubjectLong || invalid.notifyBodyLong ? 'text-destructive' : 'text-muted-foreground'}`}
+            className={`text-sm ${failed || invalid.url || invalid.limit || invalid.replyTo || invalid.passwordLong || invalid.notifySubjectLong || invalid.notifyBodyLong || consentInvalid?.inn || consentInvalid?.email ? 'text-destructive' : 'text-muted-foreground'}`}
             role="status"
           >
             {invalid.url
@@ -665,11 +745,18 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
                         ? 'Пароль длиннее допустимого'
                         : invalid.notifySubjectLong || invalid.notifyBodyLong
                           ? 'Письмо длиннее допустимого'
-                          : failed
-                            ? 'Не удалось сохранить'
-                            : dirty
-                              ? 'Есть несохранённые изменения'
-                              : 'Всё сохранено'}
+                          : consentInvalid?.inn || consentInvalid?.email
+                            ? 'Проверьте реквизиты оператора'
+                            : consentInvalid?.operatorMissing
+                              ? 'Заполните реквизиты оператора'
+                              : consentInvalid?.consentTextMissing ||
+                                  consentInvalid?.policyTextMissing
+                                ? 'Вставьте текст документа'
+                                : failed
+                                  ? 'Не удалось сохранить'
+                                  : dirty
+                                    ? 'Есть несохранённые изменения'
+                                    : 'Всё сохранено'}
           </span>
           <Button onClick={() => void save()} disabled={!dirty || anyInvalid || saving}>
             {saving ? 'Сохраняем…' : 'Сохранить'}
@@ -1163,18 +1250,6 @@ function RespondentEmailFields({
       </div>
       {/* Подвал письма («Вы получили это письмо, потому что…») в бланке не показан:
           он не настраивается и дописывается к любому письму — mail.Render. */}
-    </div>
-  )
-}
-
-// Строка бланка: подпись и сразу за ней значение, как в шапке письма («Тема: …»).
-// Подпись не колонка: значение начинается вплотную к ней, поэтому строка читается
-// фразой, а поле не отъезжает от своего названия на полэкрана.
-function Row({ label, children }: { label: string; children: React.ReactNode }) {
-  return (
-    <div className="flex min-h-10 items-center gap-2 border-b px-3 last:border-b-0">
-      <span className="shrink-0 text-sm text-muted-foreground">{label}:</span>
-      {children}
     </div>
   )
 }

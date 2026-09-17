@@ -14,8 +14,7 @@ import (
 // копятся только счётчики — O(вариантов), не O(ответов).
 //
 // Считает Go, а не SQL (решение владельца, DEV-PLAN фаза 8.5 шаг 3): семантика
-// ответа («yes» — отмеченное согласие, массив — множественный выбор, «4» — деление
-// шкалы) живёт в типах блока, то есть здесь. Тот же диспатч по типам, что в CSV;
+// ответа (массив — множественный выбор, «4» — деление шкалы) живёт в типах блока, то есть здесь. Тот же диспатч по типам, что в CSV;
 // выражать его ещё и на SQL значило бы завести третью копию правил после Go и Zod —
 // а забытая ветка в такой копии не падает, а молча врёт (см. «три грабли» в
 // web/shared/fields/README.md).
@@ -29,7 +28,7 @@ import (
 type SummaryKind string
 
 const (
-	// SummaryDistribution — распределение по вариантам: choice-типы, шкала, согласие.
+	// SummaryDistribution — распределение по вариантам: choice-типы и шкала.
 	SummaryDistribution SummaryKind = "distribution"
 	// SummaryNumber — среднее/мин/макс: тип number.
 	SummaryNumber SummaryKind = "number"
@@ -44,7 +43,7 @@ const (
 // бы «заполнили N» вместо распределения.
 func (t BlockType) summaryKind() SummaryKind {
 	switch {
-	case t.isChoice(), t.isScaleLike(), t == BlockConsent:
+	case t.isChoice(), t.isScaleLike():
 		return SummaryDistribution
 	case t == BlockNumber:
 		return SummaryNumber
@@ -53,8 +52,7 @@ func (t BlockType) summaryKind() SummaryKind {
 	}
 }
 
-// SummaryBucket — одно деление распределения: вариант выбора, отметка шкалы или
-// «Да»/«Нет» согласия. Key — внутреннее значение (id опции, число шкалы), Label —
+// SummaryBucket — одно деление распределения: вариант выбора или отметка шкалы. Key — внутреннее значение (id опции, число шкалы), Label —
 // то, что видит владелец.
 type SummaryBucket struct {
 	Key   string
@@ -127,7 +125,7 @@ type summaryAcc struct {
 	typ      BlockType // тип из свежайшей версии — им определяется вид сводки
 	optOrder []string  // id опций: порядок и состав — объединение по версиям
 	optLabel map[string]string
-	counts   map[string]int // id опции / число шкалы / ConsentYes → сколько раз
+	counts   map[string]int // id опции / число шкалы → сколько раз
 	asked    int
 	answered int
 	// Диапазон шкалы из свежайшей версии: деления с нулём ответов обязаны быть в
@@ -302,16 +300,6 @@ func (a *summaryAcc) add(typ BlockType, raw json.RawMessage) {
 		for _, id := range ids {
 			a.counts[id]++
 		}
-	case typ == BlockConsent:
-		// Отмеченное согласие — единственное непустое значение (ValidateAnswers
-		// другого не пропустит). «Нет» не копится счётчиком, а считается в Result
-		// как asked - answered: неотмеченный чекбокс приходит пустым либо не
-		// приходит вовсе, и обе формы обязаны попасть в «Нет» одинаково.
-		if _, ok := decodeString(raw); !ok {
-			return
-		}
-		a.answered++
-		a.counts[ConsentYes]++
 	case typ.isScaleLike():
 		v, ok := decodeString(raw)
 		if !ok {
@@ -435,12 +423,6 @@ func sampleText(typ BlockType, raw json.RawMessage, optLabel map[string]string) 
 			labels = append(labels, optionLabel(optLabel, id))
 		}
 		return strings.Join(labels, ", ")
-	case typ == BlockConsent:
-		v, ok := decodeString(raw)
-		if !ok || v != ConsentYes {
-			return ""
-		}
-		return "Да"
 	default:
 		v, _ := decodeString(raw)
 		return strings.TrimSpace(v)
@@ -450,14 +432,6 @@ func sampleText(typ BlockType, raw json.RawMessage, optLabel map[string]string) 
 // buckets — деления распределения по типу вопроса.
 func (a *summaryAcc) buckets() []SummaryBucket {
 	switch a.typ {
-	case BlockConsent:
-		// Согласие — не «сколько отметили из ответивших», а «сколько согласились из
-		// тех, кого спросили»: неотмеченный чекбокс это осмысленное «нет», а не
-		// пропуск (см. add).
-		return []SummaryBucket{
-			{Key: ConsentYes, Label: "Да", Count: a.answered},
-			{Key: "", Label: "Нет", Count: a.asked - a.answered},
-		}
 	case BlockScale, BlockRating:
 		return a.scaleBuckets()
 	default:

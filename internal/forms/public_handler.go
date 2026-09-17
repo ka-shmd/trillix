@@ -44,6 +44,8 @@ type publicFormService interface {
 	VerifyUnlock(formID uuid.UUID, sealed []byte, tok string) error
 	// Unlock сверяет названный пароль и выдаёт токен разблокировки со сроком.
 	Unlock(ctx context.Context, slug, password string) (string, time.Time, error)
+	// PublicConsentDocument — документ согласия или политики ревизии (0069).
+	PublicConsentDocument(ctx context.Context, slug string, kind domain.ConsentDocKind, revisionID uuid.UUID, unlock string) (domain.ConsentDocument, error)
 }
 
 // UnlockHeader — заголовок, которым рендерер предъявляет токен разблокировки.
@@ -156,6 +158,7 @@ func (h *PublicHandler) WithUnlockLimiter(l UnlockLimiter, byIP httpserver.RateL
 // формы с OG-мета (/r/{slug}). В dev /r отдаёт vite-dev, поэтому Go его не регит.
 func (h *PublicHandler) Routes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /public/v1/forms/{slug}", h.get)
+	mux.HandleFunc("GET /public/v1/forms/{slug}/documents/{kind}", h.consentDocument)
 	limited := httpserver.RateLimitByIP(h.tokenLimiter, h.trustedProxy, "слишком много запросов")
 	mux.Handle("GET /public/v1/form-token", limited(http.HandlerFunc(h.formToken)))
 	if h.unlockLimiter != nil {
@@ -224,6 +227,10 @@ type publicFormResponse struct {
 	// как ShowBadge: подключён, включён и тариф разрешает (MetrikaFor). Номер, а не
 	// объект с тумблером: рендереру нужно одно — «есть номер, запускай счётчик».
 	Metrika *string `json:"metrika"`
+	// ConsentRevision — текущая ревизия согласия, если согласие включено (0069); null —
+	// галочки под кнопкой нет. Id едет обратно с ответом: сервер записывает ту ревизию,
+	// с текстом которой человек соглашался, а не ту, что стала текущей к отправке.
+	ConsentRevision *string `json:"consentRevision"`
 }
 
 // bookingFacts — то, что рендерер знает о расписании формы, не зная самого расписания.
@@ -413,7 +420,7 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	// кому угодно, а сама выдача зависит от заголовка запроса, которого нет в ключе
 	// кэша. Минута кэша разблокированной формы того не стоит.
 	if len(pf.PasswordSealed) == 0 {
-		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally, pf.AllowBack, metrika) + `"`
+		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally, pf.AllowBack, metrika, pf.ConsentRevisionID) + `"`
 		w.Header().Set("Cache-Control", "public, max-age=60")
 		w.Header().Set("ETag", etag)
 		if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -443,18 +450,27 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 	}
 
 	httpserver.WriteJSON(w, r, http.StatusOK, publicFormResponse{
-		Title:          pf.Title,
-		Version:        pf.Version,
-		Schema:         schema,
-		ShowBadge:      showBadge,
-		CollectPartial: h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
-		Progress:       pf.Progress,
-		AutoJump:       pf.AutoJump,
-		SaveLocally:    pf.SaveLocally,
-		AllowBack:      pf.AllowBack,
-		Booking:        h.bookingFacts(r, pf.ScheduleID),
-		Metrika:        metrika,
+		Title:           pf.Title,
+		Version:         pf.Version,
+		Schema:          schema,
+		ShowBadge:       showBadge,
+		CollectPartial:  h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
+		Progress:        pf.Progress,
+		AutoJump:        pf.AutoJump,
+		SaveLocally:     pf.SaveLocally,
+		AllowBack:       pf.AllowBack,
+		Booking:         h.bookingFacts(r, pf.ScheduleID),
+		Metrika:         metrika,
+		ConsentRevision: consentRevisionString(pf.ConsentRevisionID),
 	})
+}
+
+func consentRevisionString(id *uuid.UUID) *string {
+	if id == nil {
+		return nil
+	}
+	s := id.String()
+	return &s
 }
 
 // bookingFacts — факты расписания формы для рендерера. nil, если записи нет.
@@ -519,7 +535,7 @@ func (h *PublicHandler) showBadge(r *http.Request, workspaceID uuid.UUID, intent
 //
 // МИНА: забытый здесь признак означает 304 с прежним телом до самой перепубликации —
 // автор переключил тумблер, а все, кто форму уже открывал, видят старое.
-func viewETagSuffix(showBadge, progress, autoJump, saveLocally, allowBack bool, metrika *string) string {
+func viewETagSuffix(showBadge, progress, autoJump, saveLocally, allowBack bool, metrika *string, consent *uuid.UUID) string {
 	suffix := ""
 	if showBadge {
 		suffix += "+b"
@@ -540,6 +556,11 @@ func viewETagSuffix(showBadge, progress, autoJump, saveLocally, allowBack bool, 
 	// только цифры (CHECK миграции 0067), кавычку ETag он не порвёт.
 	if metrika != nil {
 		suffix += "+m" + *metrika
+	}
+	// Id ревизии, а не признак «согласие есть»: новая ревизия меняет id в теле ответа, и
+	// без него рендерер отправлял бы ответ с прежней ревизией.
+	if consent != nil {
+		suffix += "+c" + consent.String()
 	}
 	return suffix
 }

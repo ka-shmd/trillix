@@ -485,6 +485,10 @@ SELECT f.id AS form_id, f.workspace_id, f.title,
     -- и тумблер включён; NULL — счётчика нет. Право тарифа поверх номера спрашивает
     -- сервис (MetrikaFor): счётчик, как и бейдж, свойство выдачи, а не документа.
     fc.counter AS metrika_counter,
+    -- consent_revision_id/consent_enabled: текущая ревизия согласия (0069) и её
+    -- тумблер. Живая настройка, как счётчик: включённое согласие обязано доезжать до
+    -- респондента без перепубликации, а приём ответа без галочки — отказывать.
+    f.consent_revision_id, cr.enabled AS consent_enabled,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -499,6 +503,8 @@ JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'own
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
 -- LEFT JOIN по UNIQUE (form_id, kind): не больше одной строки, форму не размножает.
 LEFT JOIN form_counters fc ON fc.form_id = f.id AND fc.kind = 'yandex_metrika' AND fc.enabled
+-- LEFT JOIN по первичному ключу ревизии: не больше одной строки.
+LEFT JOIN form_consent_revisions cr ON cr.id = f.consent_revision_id
 WHERE f.slug = $1;
 
 -- name: GetPublicFormRefBySlug :one
@@ -525,6 +531,7 @@ SELECT f.id AS form_id, f.workspace_id, coalesce(f.name, f.title) AS cabinet_nam
     f.notify_on_submission, f.notify_respondent, f.collect_partial, f.link_preview,
     f.branding, f.progress, f.auto_jump, f.save_locally, f.allow_back,
     f.password, f.schedule_id, fc.counter AS metrika_counter,
+    f.consent_revision_id, cr.enabled AS consent_enabled,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -533,6 +540,7 @@ JOIN form_versions fv ON fv.id = f.published_version_id
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
 LEFT JOIN form_counters fc ON fc.form_id = f.id AND fc.kind = 'yandex_metrika' AND fc.enabled
+LEFT JOIN form_consent_revisions cr ON cr.id = f.consent_revision_id
 WHERE f.slug = $1;
 
 -- name: ListFormVersions :many
@@ -602,3 +610,58 @@ RETURNING id, workspace_id, name, title, slug, status, published_version_id, cre
 -- Есть ли такое расписание в этом пространстве. Вопрос задаёт привязка формы к
 -- расписанию: id приезжает телом запроса и правом доступа не является (инвариант 1).
 SELECT EXISTS (SELECT 1 FROM schedules WHERE id = $1 AND workspace_id = $2);
+
+-- name: GetFormConsent :one
+-- Текущая ревизия согласия формы (0069). Ноль строк — раздел ни разу не сохраняли.
+SELECT r.id, r.enabled, r.settings, r.template, r.created_at
+FROM forms f
+JOIN form_consent_revisions r ON r.id = f.consent_revision_id
+WHERE f.id = $1;
+
+-- name: GetConsentRevision :one
+-- Ревизия согласия ИМЕННО ЭТОЙ формы. form_id в условии обязателен: id ревизии
+-- приезжает от респондента, и без него ответ одной формы мог бы сослаться на
+-- согласие другой.
+SELECT id, enabled, settings, template, created_at
+FROM form_consent_revisions
+WHERE id = $1 AND form_id = $2;
+
+-- name: InsertConsentRevision :one
+-- Новая ревизия. Строки не меняются и не удаляются по отдельности: по ним
+-- восстанавливается текст, с которым соглашались (спека §3.1).
+INSERT INTO form_consent_revisions (id, form_id, enabled, settings, template, created_by)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING created_at;
+
+-- name: SetFormConsentRevision :execrows
+-- Ставит текущую ревизию.
+--
+-- ⚠ updated_at формы НЕ трогается, в отличие от прочих живых настроек: им сверяется
+-- автосохранение черновика, а раздел согласия сохраняется той же кнопкой страницы
+-- настроек, что экран «Спасибо» (запись черновика). Сдвиг метки посреди пачки
+-- запросов отдал бы черновику 409 на правке, которой никто не конфликтовал.
+UPDATE forms
+SET consent_revision_id = $3
+WHERE id = $1 AND workspace_id = $2;
+
+-- name: RememberConsentOperator :exec
+-- Кладёт реквизиты в список пространства (0070). Тот же набор не дублируется, а
+-- поднимается наверх подсказки.
+INSERT INTO consent_operators (id, workspace_id, name, inn, address, email)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (workspace_id, fingerprint) DO UPDATE SET used_at = now();
+
+-- name: ListConsentOperators :many
+-- Свежие наборы пространства для подсказки.
+SELECT id, name, inn, address, email
+FROM consent_operators
+WHERE workspace_id = $1
+ORDER BY used_at DESC, id DESC
+LIMIT $2;
+
+-- name: GetConsentOperatorWorkspace :one
+-- Пространство строки списка — для проверки права перед удалением.
+SELECT workspace_id FROM consent_operators WHERE id = $1;
+
+-- name: DeleteConsentOperator :execrows
+DELETE FROM consent_operators WHERE id = $1 AND workspace_id = $2;

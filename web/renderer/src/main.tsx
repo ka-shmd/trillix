@@ -1,6 +1,7 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import { App } from './App.tsx'
+import { documentFromPath } from './features/form/consent.ts'
 import { createHostBridge, readEmbed, type HostBridge } from './features/form/embed.ts'
 import './index.css'
 // Общие стили полей формы (rf-*) — единый источник с кабинетом, см. web/shared/fields/fields.css.
@@ -44,8 +45,21 @@ const cancelToken = window.location.pathname.startsWith(CANCEL_PATH)
   ? window.location.pathname.slice(CANCEL_PATH.length)
   : ''
 
+// Страница документа согласия (0069) — тоже не форма и тоже своим чанком (document/):
+// её открывает только тот, кто решил прочитать документ. Импорт обязан остаться
+// динамическим — по той же причине, что у страницы отмены.
+const documentPage = documentFromPath(window.location.pathname)
+
 const root = createRoot(document.getElementById('root')!)
-if (cancelToken !== '') {
+if (documentPage !== null) {
+  void import('./features/document/DocumentScreen.tsx').then(({ default: DocumentScreen }) => {
+    root.render(
+      <StrictMode>
+        <DocumentScreen slug={documentPage.slug} kind={documentPage.kind} search={window.location.search} />
+      </StrictMode>,
+    )
+  })
+} else if (cancelToken !== '') {
   void import('./features/cancel/CancelScreen.tsx').then(({ default: CancelScreen }) => {
     root.render(
       <StrictMode>

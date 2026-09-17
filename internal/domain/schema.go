@@ -19,8 +19,7 @@ import (
 //
 // Модель v2 (фаза 8.7): вопрос — не один блок, а ГРУППА блоков с общим groupId
 // (подпись title/label + отвечаемое поле + контент между ними). Подпись живёт
-// отдельным блоком, поэтому у поля своего текста нет — кроме consent, у которого
-// текст согласия интринсик контрола (рендерится рядом с галочкой).
+// отдельным блоком, поэтому у поля своего текста нет.
 
 // SchemaVersion — версия формата, ЗАМОРОЖЕННАЯ на единице до релиза (решение
 // владельца 2026-08-10).
@@ -39,7 +38,7 @@ const (
 	MaxBlocks  = 200
 	MaxOptions = 100
 	// MaxTextLen — суммарная длина текста блока по всем спанам (title/label/heading/
-	// text/consent). Число то же, что было у строки в v2: текст не стал длиннее от
+	// text). Число то же, что было у строки в v2: текст не стал длиннее от
 	// того, что его покрасили.
 	MaxTextLen = 2000
 	// MaxSpans — число кусков в тексте одного блока. Второй лимит обязателен: без
@@ -74,7 +73,7 @@ const (
 	DefaultScaleMin = 1
 	DefaultScaleMax = 5
 	// Число звёзд рейтинга. Зеркалят RATING_STARS_* и DEFAULT_RATING_STARS. Низ — 3:
-	// две звезды читаются как «да/нет», для этого есть согласие и выбор. Верх — 10, как
+	// две звезды читаются как «да/нет», для этого есть выбор. Верх — 10, как
 	// у шкалы: ряд кнопок, на телефоне больше в строку не помещается. Ноль в
 	// настройках — «не задано», читается как DefaultRatingStars.
 	RatingStarsMin     = 3
@@ -125,7 +124,7 @@ const ColumnWidthTotal = 100
 // BlockType — тип блока формы. Три семьи: отвечаемые поля (собирают ответ),
 // подписи (title/label — текст вопроса в группе) и контент (heading/heading_2/
 // heading_3/text/image — оформление). Подписи и контент неотвечаемы (isContent): исключены из
-// ValidateAnswers и CSV. consent — отвечаемый, но несёт собственный текст.
+// ValidateAnswers и CSV.
 type BlockType string
 
 const (
@@ -146,7 +145,6 @@ const (
 	// multi_choice отличается ТОЛЬКО контролом: те же опции, тот же ответ-массив id.
 	BlockMultiSelect BlockType = "multi_select"
 	BlockDate        BlockType = "date"
-	BlockConsent     BlockType = "consent"
 	// BlockFile — файл в ответе (фаза 24, design/answer-files.md). Ответ — массив
 	// id загрузок, выданных сервером; ни имени, ни размера, ни MIME в ответе нет:
 	// всё это утверждения клиента, а правда о файле лежит в submission_files и
@@ -208,7 +206,7 @@ var blockTypes = []BlockType{
 	// отвечаемые
 	BlockShortText, BlockLongText, BlockEmail, BlockPhone, BlockNumber, BlockScale,
 	BlockRating, BlockSingleChoice, BlockDropdown, BlockMultiChoice, BlockMultiSelect, BlockDate,
-	BlockConsent, BlockFile, BlockSlot,
+	BlockFile, BlockSlot,
 	// подписи
 	BlockTitle, BlockLabel,
 	// контент, разрыв страницы, условная логика и заголовок формы
@@ -260,15 +258,14 @@ func (t BlockType) isHeading() bool {
 	return t == BlockHeading || t == BlockHeading2 || t == BlockHeading3
 }
 
-// isAnswerable — блок собирает ответ (все отвечаемые типы, включая consent).
+// isAnswerable — блок собирает ответ.
 func (t BlockType) isAnswerable() bool { return !t.isContent() }
 
 // carriesText — тип несёт собственное поле text: подписи, контентные абзацы/
-// заголовки, заголовок формы и consent (текст согласия рядом с галочкой). У прочих
-// отвечаемых (и у image) поле text обязано быть пустым.
+// заголовки и заголовок формы. У отвечаемых (и у image) поле text обязано быть пустым.
 func (t BlockType) carriesText() bool {
 	return t == BlockTitle || t == BlockLabel || t.isHeading() || t == BlockText ||
-		t == BlockConsent || t == BlockFormTitle
+		t == BlockFormTitle
 }
 
 // showsPlaceholder — поле показывает подсказку внутри себя (`settings.placeholder`).
@@ -396,7 +393,7 @@ type BlockSettings struct {
 // Block — один блок формы. GroupID связывает блоки одного вопроса (ARCHITECTURE
 // 3.4): вопрос — группа блоков подряд с общим groupId, в которой не более одного
 // отвечаемого блока. Text несут только carriesText-типы; у отвечаемых полей
-// (кроме consent) он пуст — подпись живёт в блоке title/label той же группы.
+// он пуст — подпись живёт в блоке title/label той же группы.
 //
 // Text — богатый текст (v3): плоский массив спанов, см. spans.go. Плоскую строку для
 // данных даёт PlainText.
@@ -756,7 +753,7 @@ func validateBlock(i int, b Block, seenIDs map[string]struct{}) error {
 	if err := validateSpans(b.Text); err != nil {
 		return schemaErr("%s: %s", at, err)
 	}
-	// Собственный text — только у carriesText-типов (подписи, контент, consent);
+	// Собственный text — только у carriesText-типов (подписи, контент);
 	// у прочих подпись живёт отдельным блоком.
 	if !b.Type.carriesText() && len(b.Text) > 0 {
 		return schemaErr("%s: тип %q не несёт собственного текста", at, b.Type)

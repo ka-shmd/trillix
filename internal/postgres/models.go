@@ -31,6 +31,17 @@ type Booking struct {
 	Revision        int32
 }
 
+type ConsentOperator struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Name        string
+	Inn         string
+	Address     string
+	Email       string
+	Fingerprint pgtype.Text
+	UsedAt      pgtype.Timestamptz
+}
+
 type EmailVerificationToken struct {
 	TokenHash []byte
 	UserID    uuid.UUID
@@ -67,6 +78,17 @@ type Form struct {
 	Password           []byte
 	ScheduleID         pgtype.UUID
 	AllowBack          bool
+	ConsentRevisionID  pgtype.UUID
+}
+
+type FormConsentRevision struct {
+	ID        uuid.UUID
+	FormID    uuid.UUID
+	Enabled   bool
+	Settings  []byte
+	Template  int16
+	CreatedBy pgtype.UUID
+	CreatedAt pgtype.Timestamptz
 }
 
 type FormCounter struct {
@@ -290,13 +312,14 @@ type SheetQueue struct {
 }
 
 type Submission struct {
-	ID            uuid.UUID
-	FormID        uuid.UUID
-	FormVersionID uuid.UUID
-	Answers       []byte
-	Meta          []byte
-	CreatedAt     pgtype.Timestamptz
-	OverQuota     bool
+	ID                uuid.UUID
+	FormID            uuid.UUID
+	FormVersionID     uuid.UUID
+	Answers           []byte
+	Meta              []byte
+	CreatedAt         pgtype.Timestamptz
+	OverQuota         bool
+	ConsentRevisionID pgtype.UUID
 }
 
 type SubmissionFile struct {

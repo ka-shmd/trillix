@@ -17,11 +17,12 @@
 // CONSENT_GUARD — правило-сторож, которое печатается ПОСЛЕ авторского CSS.
 //
 // Что оно защищает и от чего. Спрятанная кнопка отправки или форма, накрытая
-// `position: fixed`, — самострел автора на своей форме. Спрятанный ТЕКСТ СОГЛАСИЯ —
-// другое дело: это юридический риск, и не автора, а площадки, потому что согласие
-// собирается от имени сервиса.
+// `position: fixed`, — самострел автора на своей форме. Спрятанное СОГЛАСИЕ под кнопкой
+// отправки (design/privacy-consent.md) — другое дело: форма собирает персональные
+// данные без видимой галочки и документов, и это юридический риск площадки, через
+// которую они собираются.
 //
-// ЧЕСТНО ПРО ГРАНИЦУ: это не стена, а порог. Правило снимает четыре самых дешёвых
+// ЧЕСТНО ПРО ГРАНИЦУ: это не стена, а порог. Правила снимают четыре самых дешёвых
 // способа спрятать текст (`display: none`, `visibility`, `opacity`, нулевой кегль);
 // автор, который целенаправленно уводит согласие за экран `position: absolute; left:
 // -9999px` или красит в цвет фона, обойдёт его — и разбором CSS в Go это не чинится
@@ -31,7 +32,17 @@
 // `!important` обязателен: без него правило проигрывает любому авторскому с равной
 // специфичностью просто потому, что тот может стоять в более специфичном селекторе.
 // Автор с `!important` и более длинным селектором победит и так — см. выше про порог.
-export const CONSENT_GUARD = `.rf-consent{display:revert !important;visibility:visible !important;opacity:1 !important;font-size:var(--rf-font-size) !important}`
+//
+// Строки текста (`.rf-consent` — фраза и политика) возвращаются к умолчанию браузера,
+// контейнеры — к СВОЕМУ значению display: `revert` превратил бы flex-коробку в блок,
+// и у любой формы со своим CSS галочка съехала бы с фразы.
+// ⚠ Значения display и кегль .rf-consent зеркалят .rf-consent, .rf-consent-box,
+// .rf-consent-check и .rf-mark в fields.css — правятся вместе.
+export const CONSENT_GUARD =
+  `.rf-consent{display:revert !important;visibility:visible !important;opacity:1 !important;font-size:calc(var(--rf-font-size) * var(--rf-ratio-small)) !important}` +
+  `.rf-consent-box{display:flex !important;visibility:visible !important;opacity:1 !important}` +
+  `.rf-consent-check{display:inline-flex !important;visibility:visible !important;opacity:1 !important}` +
+  `.rf-consent-check .rf-mark{display:inline-block !important;visibility:visible !important;opacity:1 !important}`
 
 // customStyleSheet — итоговое содержимое <style> формы: CSS автора, следом сторож.
 // Пусто, если автор ничего не писал: печатать пустой <style> с одним сторожем незачем

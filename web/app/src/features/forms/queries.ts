@@ -10,7 +10,11 @@ import {
   deleteForm,
   duplicateForm,
   getFormBySlug,
+  deleteConsentOperator,
+  getFormConsent,
+  listConsentOperators,
   listForms,
+  saveFormConsent,
   searchForms,
   publishForm,
   unpublishForm,
@@ -28,6 +32,7 @@ import {
   updateFormPassword,
   updateNotifyOnSubmission,
 } from './api'
+import { type ConsentOperatorItem, type ConsentSettings } from '../../entities/consent'
 import { discardDraft, saveDraftSchema } from './builder/api'
 import {
   type CloseSettingsInput,
@@ -107,6 +112,52 @@ export function formDetailQueryOptions(slug: string) {
   return queryOptions({
     queryKey: formKeys.detail(slug),
     queryFn: () => getFormBySlug(slug),
+  })
+}
+
+// Раздел «Персональные данные» (0069) — своя ручка: у раздела ревизии, и он не входит
+// в деталь формы (тексты документов тяжёлые, а деталь читают все экраны формы).
+export function formConsentQueryOptions(id: string) {
+  return queryOptions({
+    queryKey: formKeys.consent(id),
+    queryFn: () => getFormConsent(id),
+  })
+}
+
+// Сохранение раздела кладёт ответ в кэш раздела целиком: сервер возвращает то, что
+// записал (нормализованные поля, ревизию), и страница сверяется с ним же.
+export function useSaveFormConsent() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: ({ id, value }: { id: string; value: ConsentSettings & { enabled: boolean } }) =>
+      saveFormConsent(id, value),
+    onSuccess: (state, { id }) => {
+      qc.setQueryData(formKeys.consent(id), state)
+      // Сохранение включённого типового согласия пополняет список пространства.
+      void qc.invalidateQueries({ queryKey: formKeys.consentOperatorsAll() })
+    },
+  })
+}
+
+export function consentOperatorsQueryOptions(workspaceId: string) {
+  return queryOptions({
+    queryKey: formKeys.consentOperators(workspaceId),
+    queryFn: () => listConsentOperators(workspaceId),
+    enabled: workspaceId !== '',
+  })
+}
+
+// Убрать набор из списка. Строка пропадает из кэша сразу: подсказка открыта, и
+// ждать ответа, глядя на убранное, незачем. Отказ возвращает список перечитыванием.
+export function useDeleteConsentOperator(workspaceId: string) {
+  const qc = useQueryClient()
+  const key = formKeys.consentOperators(workspaceId)
+  return useMutation({
+    mutationFn: (id: string) => deleteConsentOperator(id),
+    onMutate: (id) => {
+      qc.setQueryData<ConsentOperatorItem[]>(key, (items) => items?.filter((it) => it.id !== id))
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: key }),
   })
 }
 

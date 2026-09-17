@@ -1,7 +1,6 @@
 import { createContext, useContext } from 'react'
 
 import {
-  CONSENT_YES,
   type Block,
   isAnswerableType,
   isMultiChoiceType,
@@ -22,10 +21,9 @@ import { type Answers, type FormPlan } from './logic'
 
 // answerText — ответ в виде текста, который встанет в строку.
 //
-// Это НЕ formatAnswer кабинета (features/submissions): тот показывает ответ в таблице,
-// и там у согласия осмысленно печатать «Нет». Здесь незаполненное согласие обязано
-// давать ПУСТО — пустая подстановка и есть отсутствие ответа (§4 спеки), а «Нет»
-// посреди подписи вопроса было бы утверждением, которого респондент не делал.
+// Это НЕ formatAnswer кабинета (features/submissions): тот показывает ответ в таблице.
+// Здесь пустой ответ обязан давать ПУСТО — пустая подстановка и есть отсутствие ответа
+// (§4 спеки).
 export function answerText(block: Block, value: Answer | undefined): string {
   if (value === undefined) return ''
   // Выбор отдаёт ПОДПИСЬ варианта, а не его id: id — внутренняя кодировка, и в тексте
@@ -36,7 +34,6 @@ export function answerText(block: Block, value: Answer | undefined): string {
     const ids = Array.isArray(value) ? value : [value]
     return ids.map((id) => optionLabel(block, id)).join(', ')
   }
-  if (block.type === 'consent') return value === CONSENT_YES ? 'Да' : ''
   return Array.isArray(value) ? value.join(', ') : value
 }
 

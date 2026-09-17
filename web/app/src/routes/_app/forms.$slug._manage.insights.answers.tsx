@@ -150,20 +150,14 @@ function BlockCard({
   )
 }
 
-// База процента: обычно доля от ответивших («52 % ответивших выбрали Рекламу»). У
-// множественного выбора сумма долей поэтому больше 100 % — так и надо: человек
-// выбирает несколько вариантов, и доля считается от людей, а не от галочек.
-// Исключение — согласие: его «Нет» это те, кого спросили и кто не отметил, поэтому
-// база — asked, и «Да» + «Нет» дают ровно 100 %.
-function barBase(block: BlockSummary): number {
-  return block.type === 'consent' ? block.asked : block.answered
-}
-
 function Distribution({ block }: { block: BlockSummary }) {
   if (block.buckets.length === 0) {
     return <p className="text-sm text-muted-foreground">В этом вопросе нет вариантов.</p>
   }
-  const base = barBase(block)
+  // База процента — ответившие («52 % ответивших выбрали Рекламу»). У множественного
+  // выбора сумма долей поэтому больше 100 % — так и надо: человек выбирает несколько
+  // вариантов, и доля считается от людей, а не от галочек.
+  const base = block.answered
   const rows: BarRow[] = block.buckets.map((b) => ({
     key: b.key,
     label: b.label,

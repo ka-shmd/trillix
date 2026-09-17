@@ -51,15 +51,6 @@ describe('answerText — чем подставляется ответ', () => {
     })
     expect(answerText(block, ['o1', 'o2'])).toBe('Чай, Кофе')
   })
-
-  // Незаполненное согласие даёт ПУСТО, а не «Нет» (в отличие от таблицы ответов
-  // кабинета): «Нет» посреди подписи вопроса было бы утверждением, которого респондент
-  // не делал.
-  it('согласие: отмеченное — «Да», неотмеченное — пусто', () => {
-    const block = answerBlock('b', { type: 'consent' })
-    expect(answerText(block, 'yes')).toBe('Да')
-    expect(answerText(block, '')).toBe('')
-  })
 })
 
 describe('mentionResolver — когда ссылка разрешима', () => {

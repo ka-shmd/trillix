@@ -146,10 +146,6 @@ func projectUnit(group []Block, ordinal int) ChatItem {
 			if b.Settings.ScaleMin != nil && b.Settings.ScaleMax != nil {
 				item.ScaleMin, item.ScaleMax = *b.Settings.ScaleMin, *b.Settings.ScaleMax
 			}
-			if b.Type.carriesText() {
-				caption = PlainText(b.Text)
-				item.Bold, item.Color, item.BG = styleOf(b.Text)
-			}
 		}
 	}
 	if item.Type == "" {
@@ -466,16 +462,6 @@ func rebuildUnit(old []Block, item PlanItem) []Block {
 		updated.Settings.RatingStars = 0
 	}
 
-	// Текст согласия живёт в САМОМ блоке, поэтому отдельная подпись ему не нужна и
-	// снимается: две строки об одном — это не вопрос с заголовком, а дубль.
-	if item.Type.carriesText() {
-		updated.Text = restyledText(updated.Text, item)
-		out[fieldIdx] = updated
-		if capIdx == -1 {
-			return out
-		}
-		return append(out[:capIdx:capIdx], out[capIdx+1:]...)
-	}
 	updated.Text = nil
 	out[fieldIdx] = updated
 

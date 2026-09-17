@@ -116,17 +116,6 @@
         "groupId": "g_blk_order_11",
         "type": "date",
         "settings": {}
-      },
-      {
-        "id": "blk_order_12",
-        "groupId": "g_blk_order_12",
-        "type": "consent",
-        "text": [
-          {
-            "t": "Согласен на обработку персональных данных"
-          }
-        ],
-        "required": true
       }
     ]
   }

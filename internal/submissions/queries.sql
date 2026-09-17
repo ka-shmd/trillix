@@ -16,8 +16,8 @@
 -- advisory-lock): на границе возможен ±1 ответ, и цена advisory-lock на всём
 -- приёме ради точности «101-го против 100-го» не окупается ничем (ADR §10).
 WITH ins AS (
-    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota, consent_revision_id)
+    VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(consent_revision_id))
     ON CONFLICT (id) DO NOTHING
     RETURNING 1 AS one
 ), counted AS (

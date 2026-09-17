@@ -38,11 +38,15 @@ import { StepBar } from '@fields/stepBar'
 
 import {
   type PublicForm,
+  type SubmitBody,
   type SubmitOutcome,
   savePartial,
   savePartialOnLeave,
   submitAnswers,
 } from './api'
+import { ConsentCheck } from '@fields/ConsentCheck'
+import { missingRequired } from '@fields/required'
+import { consentToSend, documentHref } from './consent'
 import { Badge } from '@fields/Badge'
 import { applyPrefill, type EmbedOptions, type HostBridge, readPrefill } from './embed'
 import {
@@ -107,7 +111,7 @@ const retryBackoffMs = [400, 1200, 3000]
 // Ответ сервера (в т.ч. 4xx/5xx) — это не обрыв: возвращается сразу, ретраить нечего.
 async function submitWithRetry(
   slug: string,
-  body: { submissionId: string; token: string; answers: Record<string, Answer>; visitId: string },
+  body: SubmitBody,
 ): Promise<SubmitOutcome> {
   for (let attempt = 0; ; attempt++) {
     try {
@@ -238,6 +242,9 @@ export function FormView({
   const [phase, setPhase] = useState<'editing' | 'submitting' | 'done'>('editing')
   // notice — отказ отправки, не привязанный к полю (антиспам, закрытая форма, сеть).
   const [notice, setNotice] = useState<string | null>(null)
+  // Галочка согласия (0069). Не в черновике: после перезагрузки согласие даётся заново,
+  // отметкой человека, а не восстановленным состоянием.
+  const [consentChecked, setConsentChecked] = useState(false)
 
   // Защита от setState после размонтирования во время долгого ретрая. Флаг ставится
   // в true при монтировании и в false при размонтировании — под StrictMode (dev
@@ -387,6 +394,12 @@ export function FormView({
   // обход кладёт его в план рядом со страницами, здесь остаётся дефолт на пустое.
   const nextLabel = plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL
   const locked = phase !== 'editing'
+  // Кнопка отправки неактивна, пока у видимых вопросов есть пустое обязательное или не
+  // отмечено согласие (решение владельца 2026-09-17; согласие обязательно всегда, когда
+  // включено). Формат ответа (email, число) кнопку не держит — его покажет нажатие.
+  const canSubmit =
+    !missingRequired(pages.flat(), answers, plan.required) &&
+    (form.consentRevision === null || consentChecked)
 
   // Визит: «открыли» на монтировании, «дошёл до вопроса» на уходе со страницы.
   // Трекер создаётся лениво в ref, а не в эффекте: под StrictMode (dev делает
@@ -591,6 +604,9 @@ export function FormView({
       if (target !== null) goToPage(target)
       return // сеть не трогаем, пока форма невалидна
     }
+    // Кнопка без согласия неактивна (canSubmit), но нажатие приходит и мимо неё — Enter
+    // в поле, скрипт. Сервер отказал бы тем же.
+    if (!canSubmit) return
 
     // ПРЕДПРОСМОТР ОСТАНАВЛИВАЕТСЯ РОВНО ЗДЕСЬ — после валидации, до сети. Всё, что
     // делает форма, автор увидит (обязательные поля, переход к странице с ошибкой,
@@ -621,6 +637,7 @@ export function FormView({
         // Сервер повторит вычистку сам — здесь она ради честного тела запроса.
         answers: stripHiddenAnswers(blocks, answers),
         visitId: visit.current?.id ?? '',
+        consentRevision: consentToSend(form.consentRevision, consentChecked),
       })
     } catch {
       if (!active.current) return
@@ -822,7 +839,7 @@ export function FormView({
                   className="rf-submit"
                   type="button"
                   onClick={() => void onSubmit()}
-                  disabled={phase === 'submitting'}
+                  disabled={phase === 'submitting' || !canSubmit}
                 >
                   {phase === 'submitting' ? 'Отправка…' : submitLabel}
                 </button>
@@ -833,6 +850,19 @@ export function FormView({
               бейдж переносится под неё — переносом ряда, а не своей веткой. */}
             {form.showBadge && <Badge />}
           </div>
+          {/* Согласие — под кнопкой отправки и только там, где она есть: на промежуточных
+            шагах отправлять нечего, а на тупике (кнопку скрыла логика) — нельзя. */}
+          {form.consentRevision !== null && page === lastPage && !plan.blocked && (
+            <ConsentCheck
+              hrefs={{
+                consent: documentHref(slug, 'consent', form.consentRevision),
+                policy: documentHref(slug, 'policy', form.consentRevision),
+              }}
+              checked={consentChecked}
+              onChange={setConsentChecked}
+              disabled={locked}
+            />
+          )}
           {/* Линии шагов — ПОД кнопками, у нижнего края страницы (решение владельца
             2026-08-05). Разметка общая с превью (@fields).
 

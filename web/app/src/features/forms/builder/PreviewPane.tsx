@@ -16,6 +16,8 @@ import { planForm, withVisibleOptions } from '@fields/logic'
 import { SlotStubProvider } from '@fields/booking'
 import { MentionContext, mentionResolver } from '@fields/mention'
 import { Badge } from '@fields/Badge'
+import { ConsentCheck } from '@fields/ConsentCheck'
+import { missingRequired } from '@fields/required'
 import { customStyleSheet } from '@fields/customCss'
 import { designClasses, designToVars } from '@fields/design'
 import { CoverBand, LogoMark, pageClass } from '@fields/pageChrome'
@@ -38,11 +40,16 @@ export function PreviewPane({
   // Ход назад (`allowBack`, миграция 0055) — тоже живое свойство и тоже пропом. Дефолт
   // «нельзя»: превью обязано листаться ровно так же, как форма у респондента.
   allowBack = false,
+  // Согласие на обработку персональных данных (0069) — тоже живое свойство формы, не
+  // документ: включено оно в настройках, и превью показывает галочку так же, как её
+  // увидит респондент. Дефолт «нет» — тот же, что у формы без сохранённого раздела.
+  consent = false,
 }: {
   title: string
   badge: boolean
   progress?: boolean
   allowBack?: boolean
+  consent?: boolean
 }) {
   const allBlocks = useBuilderStore((s) => s.blocks)
   const submitLabel = useBuilderStore((s) => s.submitLabel)
@@ -99,6 +106,8 @@ export function PreviewPane({
   // показывать есть что: формы без такой страницы получают экран-заглушку, а он живёт в
   // рендерере (свой .status), и второй его экземпляр здесь разъехался бы с первым.
   const [done, setDone] = useState(false)
+  // Галочка согласия — состояние просмотра, как ответы.
+  const [consentChecked, setConsentChecked] = useState(false)
   const page = Math.min(rawPage, lastPage)
   // Хром (обложка, логотип, заголовок) — только на первой странице, как у респондента
   // (решение владельца 2026-08-05). Расхождение здесь и означало бы, что превью врёт.
@@ -108,6 +117,10 @@ export function PreviewPane({
   const rows = packRows(groupBlocks(done ? (thankYou ?? []) : (pages[page] ?? [])))
   // Есть ли в форме условия вообще — от этого зависит, чем объяснять пустой экран.
   const hasRules = blocks.some((b) => b.type === 'logic')
+  // Кнопка отправки неактивна по тому же правилу, что у респондента (FormView): пустое
+  // обязательное у видимых вопросов или неотмеченное согласие.
+  const canSubmit =
+    !missingRequired(pages.flat(), answers, plan.required) && (!consent || consentChecked)
   const onChange = (blockId: string, value: Answer) =>
     setAnswers((prev) => ({ ...prev, [blockId]: value }))
 
@@ -259,12 +272,16 @@ export function PreviewPane({
                       {plan.nextLabels[page]?.trim() || DEFAULT_NEXT_LABEL}
                     </button>
                   ) : (
-                    // Кнопка отправки ведёт на экран после отправки ВСЕГДА, в том числе у
-                    // формы без страницы «Спасибо»: обработчик не условный. Контрол,
-                    // который выглядит живым и не делает по нажатию ничего, читается как
-                    // поломка продукта, а не как «этой страницы у вас нет». Что показать
-                    // форме без страницы — выше, в ветке `done`.
-                    <button type="button" className="rf-submit" onClick={() => setDone(true)}>
+                    // Активная кнопка отправки ведёт на экран после отправки ВСЕГДА, в том
+                    // числе у формы без страницы «Спасибо»: контрол, который выглядит живым
+                    // и не делает по нажатию ничего, читается как поломка продукта. Что
+                    // показать форме без страницы — выше, в ветке `done`.
+                    <button
+                      type="button"
+                      className="rf-submit"
+                      disabled={!canSubmit}
+                      onClick={() => setDone(true)}
+                    >
                       {label}
                     </button>
                   )}
@@ -273,6 +290,16 @@ export function PreviewPane({
                 отправки, поэтому на экране «Спасибо» бейдж стоит ниже сам по себе. */}
                 {badge && <Badge />}
               </div>
+            )}
+            {/* Согласие — под кнопкой отправки и только там, где она есть, как у
+            респондента (FormView). Ссылки в превью не ведут никуда: документы
+            собираются из сохранённого раздела и смотрятся в настройках формы. */}
+            {!done && consent && page === lastPage && !plan.blocked && (
+              <ConsentCheck
+                checked={consentChecked}
+                onChange={setConsentChecked}
+                disabled={false}
+              />
             )}
             {/* Линии шагов — тот же компонент и то же место, что у респондента, и
             кликабельны они ровно тогда же (`allowBack`): вид обязан совпадать. На экране

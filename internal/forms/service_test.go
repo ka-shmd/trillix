@@ -59,6 +59,13 @@ type fakeStore struct {
 	// Управление чтением версий (CSV-экспорт).
 	versions []Version
 
+	// Согласие (0069): ревизии формы по id, текущая и число вставок.
+	consentRevs     map[uuid.UUID]ConsentRevision
+	consentCurrent  *uuid.UUID
+	consentInserted int
+	// consentRemembered — наборы, положенные в список реквизитов пространства.
+	consentRemembered []domain.ConsentOperator
+
 	// Управление путём автосейва схемы.
 	schemaSaved     bool
 	schemaErr       error // если задана — UpdateFormDraftSchema вернёт её (напр. pgx.ErrNoRows)
@@ -289,6 +296,53 @@ func (f *fakeStore) NextFormVersion(_ context.Context, _ postgres.DBTX, _ uuid.U
 
 func (f *fakeStore) ListFormVersions(_ context.Context, _ postgres.DBTX, _ uuid.UUID) ([]Version, error) {
 	return f.versions, nil
+}
+
+func (f *fakeStore) GetFormConsent(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (ConsentRevision, error) {
+	if f.consentCurrent == nil {
+		return ConsentRevision{}, pgx.ErrNoRows
+	}
+	return f.consentRevs[*f.consentCurrent], nil
+}
+
+func (f *fakeStore) GetConsentRevision(_ context.Context, _ postgres.DBTX, _, revisionID uuid.UUID) (ConsentRevision, error) {
+	rev, ok := f.consentRevs[revisionID]
+	if !ok {
+		return ConsentRevision{}, pgx.ErrNoRows
+	}
+	return rev, nil
+}
+
+func (f *fakeStore) InsertConsentRevision(_ context.Context, _ postgres.DBTX, in NewConsentRevision) (ConsentRevision, error) {
+	if f.consentRevs == nil {
+		f.consentRevs = map[uuid.UUID]ConsentRevision{}
+	}
+	rev := ConsentRevision{ID: in.ID, Enabled: in.Enabled, Settings: in.Settings, Template: in.Template, CreatedAt: time.Now()}
+	f.consentRevs[in.ID] = rev
+	f.consentInserted++
+	return rev, nil
+}
+
+func (f *fakeStore) SetFormConsentRevision(_ context.Context, _ postgres.DBTX, _, _, revisionID uuid.UUID) (int64, error) {
+	f.consentCurrent = &revisionID
+	return 1, nil
+}
+
+func (f *fakeStore) RememberConsentOperator(_ context.Context, _ postgres.DBTX, _ uuid.UUID, o domain.ConsentOperator) error {
+	f.consentRemembered = append(f.consentRemembered, o)
+	return nil
+}
+
+func (f *fakeStore) ListConsentOperators(context.Context, postgres.DBTX, uuid.UUID, int32) ([]ConsentOperatorItem, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetConsentOperatorWorkspace(context.Context, postgres.DBTX, uuid.UUID) (uuid.UUID, error) {
+	return uuid.Nil, pgx.ErrNoRows
+}
+
+func (f *fakeStore) DeleteConsentOperator(context.Context, postgres.DBTX, uuid.UUID, uuid.UUID) (int64, error) {
+	return 0, nil
 }
 
 func (f *fakeStore) InsertFormVersion(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error) {

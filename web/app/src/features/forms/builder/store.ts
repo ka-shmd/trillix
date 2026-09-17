@@ -1249,13 +1249,12 @@ export function rowPosition(blocks: Block[], id: string): RowPosition {
 }
 
 // needsCaptionFor — строке ответа не хватает заголовка (§4.4 спеки фазы 15): она
-// отвечаемая, своего текста не несёт (у consent текст и есть строка вопроса), и
-// подписи в её группе нет. Один предикат на два места, которые обязаны совпадать:
+// отвечаемая, и подписи в её группе нет. Один предикат на два места, которые обязаны совпадать:
 // полотно решает им, показывать ли чип «дать заголовок», а шпаргалка — обещать ли
 // Mod+Alt+T. Разъедься они — карта соврала бы, а это баг (демо-критерий 13.5).
 export function needsCaptionFor(blocks: Block[], id: string): boolean {
   const b = blocks.find((x) => x.id === id)
-  if (!b || !isAnswerableType(b.type) || carriesText(b.type)) return false
+  if (!b || !isAnswerableType(b.type)) return false
   return !blocks.some((x) => x.groupId === b.groupId && isCaptionType(x.type))
 }
 
@@ -1702,7 +1701,7 @@ export function createBuilderStore(): StoreApi<BuilderStore> {
         // сделало (тот же закон, что у границы moveBlock).
         const s0 = get()
         const src = s0.blocks.find((b) => b.id === id)
-        if (!src || !isAnswerableType(src.type) || carriesText(src.type)) return null
+        if (!src || !isAnswerableType(src.type)) return null
         // Второго заголовка у вопроса не бывает (решение владельца 2026-07-26):
         // подпись в группе уже есть — добавлять нечего.
         if (s0.blocks.some((b) => b.groupId === src.groupId && isCaptionType(b.type))) return null

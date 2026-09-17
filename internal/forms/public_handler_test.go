@@ -66,6 +66,16 @@ func (f fakePublicSvc) VerifyUnlock(_ uuid.UUID, sealed []byte, tok string) erro
 	return domain.ErrFormLocked
 }
 
+func (f fakePublicSvc) PublicConsentDocument(_ context.Context, _ string, kind domain.ConsentDocKind, revisionID uuid.UUID, unlock string) (domain.ConsentDocument, error) {
+	if f.pf.ConsentRevisionID == nil || *f.pf.ConsentRevisionID != revisionID {
+		return domain.ConsentDocument{}, domain.ErrNotFound
+	}
+	if err := f.VerifyUnlock(f.pf.FormID, f.pf.PasswordSealed, unlock); err != nil {
+		return domain.ConsentDocument{}, err
+	}
+	return domain.ConsentDocument{Title: string(kind), Text: "документ"}, nil
+}
+
 func (f fakePublicSvc) Unlock(_ context.Context, _, password string) (string, time.Time, error) {
 	if f.password == "" || password != f.password {
 		return "", time.Time{}, domain.ErrFormLocked

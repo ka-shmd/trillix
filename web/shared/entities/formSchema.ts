@@ -128,8 +128,7 @@ export const isHttpUrl = (raw: string): boolean => {
 //
 // Три семьи: отвечаемые поля (собирают ответ), подписи ('title'/'label' — текст вопроса
 // в группе) и контент ('heading'/'text'/'image' — оформление). Подписи и контент
-// неотвечаемы (исключены из ValidateAnswers/CSV/таблицы). 'consent' — отвечаемый, но
-// несёт собственный текст согласия рядом с галочкой. Семью объявляет файл типа, а
+// неотвечаемы (исключены из ValidateAnswers/CSV/таблицы). Семью объявляет файл типа, а
 // предикаты (isCaptionType/isContentType/carriesText/isChoiceType/…) ВЫВОДЯТСЯ из
 // реестра: до фазы 16 это были семь независимых наборов, и тип, забытый в наборе, молча
 // трактовался как соседний.
@@ -153,13 +152,6 @@ export const isValidPhone = (raw: string): boolean => {
   const digits = raw.replace(/\D/g, '').length
   return digits >= MIN_PHONE_DIGITS && digits <= MAX_PHONE_DIGITS
 }
-
-// Значение отмеченного согласия. Ответ хранится строкой, а не булевым: это
-// конвенция проекта (number и date тоже строки), и главное — пустая строка = «не
-// отмечено» бесплатно ложится на isEmpty в validation.ts, поэтому обязательность
-// работает без спецслучая. Булев false туда не попадал бы (false !== ''), и
-// required у согласия молча перестал бы работать.
-export const CONSENT_YES = 'yes'
 
 
 
@@ -306,7 +298,7 @@ export const blockSchema = z
     class: z.string().regex(BLOCK_CLASS_RE, 'строчные латинские буквы, цифры и дефис').optional(),
   })
   .superRefine((b, ctx) => {
-    // Собственный text — только у carriesText-типов (подписи, контент, consent).
+    // Собственный text — только у carriesText-типов (подписи, контент).
     if (b.text?.length && !carriesText(b.type)) {
       ctx.addIssue({
         code: 'custom',

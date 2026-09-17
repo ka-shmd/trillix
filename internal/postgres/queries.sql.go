@@ -1215,6 +1215,23 @@ func (q *Queries) DeleteAllNotifications(ctx context.Context, userID uuid.UUID) 
 	return result.RowsAffected(), nil
 }
 
+const deleteConsentOperator = `-- name: DeleteConsentOperator :execrows
+DELETE FROM consent_operators WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteConsentOperatorParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+func (q *Queries) DeleteConsentOperator(ctx context.Context, arg DeleteConsentOperatorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteConsentOperator, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDeliveredOutboxByTemplate = `-- name: DeleteDeliveredOutboxByTemplate :execrows
 DELETE FROM outbox
 WHERE payload->>'template' = $1::text AND sent_at IS NOT NULL AND sent_at <= $2
@@ -2431,6 +2448,53 @@ func (q *Queries) GetBookingForConfirm(ctx context.Context, arg GetBookingForCon
 	return i, err
 }
 
+const getConsentOperatorWorkspace = `-- name: GetConsentOperatorWorkspace :one
+SELECT workspace_id FROM consent_operators WHERE id = $1
+`
+
+// Пространство строки списка — для проверки права перед удалением.
+func (q *Queries) GetConsentOperatorWorkspace(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getConsentOperatorWorkspace, id)
+	var workspace_id uuid.UUID
+	err := row.Scan(&workspace_id)
+	return workspace_id, err
+}
+
+const getConsentRevision = `-- name: GetConsentRevision :one
+SELECT id, enabled, settings, template, created_at
+FROM form_consent_revisions
+WHERE id = $1 AND form_id = $2
+`
+
+type GetConsentRevisionParams struct {
+	ID     uuid.UUID
+	FormID uuid.UUID
+}
+
+type GetConsentRevisionRow struct {
+	ID        uuid.UUID
+	Enabled   bool
+	Settings  []byte
+	Template  int16
+	CreatedAt pgtype.Timestamptz
+}
+
+// Ревизия согласия ИМЕННО ЭТОЙ формы. form_id в условии обязателен: id ревизии
+// приезжает от респондента, и без него ответ одной формы мог бы сослаться на
+// согласие другой.
+func (q *Queries) GetConsentRevision(ctx context.Context, arg GetConsentRevisionParams) (GetConsentRevisionRow, error) {
+	row := q.db.QueryRow(ctx, getConsentRevision, arg.ID, arg.FormID)
+	var i GetConsentRevisionRow
+	err := row.Scan(
+		&i.ID,
+		&i.Enabled,
+		&i.Settings,
+		&i.Template,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getEmailByUserID = `-- name: GetEmailByUserID :one
 SELECT email FROM users WHERE id = $1
 `
@@ -2979,6 +3043,35 @@ func (q *Queries) GetFormBySlug(ctx context.Context, slug string) (GetFormBySlug
 	return i, err
 }
 
+const getFormConsent = `-- name: GetFormConsent :one
+SELECT r.id, r.enabled, r.settings, r.template, r.created_at
+FROM forms f
+JOIN form_consent_revisions r ON r.id = f.consent_revision_id
+WHERE f.id = $1
+`
+
+type GetFormConsentRow struct {
+	ID        uuid.UUID
+	Enabled   bool
+	Settings  []byte
+	Template  int16
+	CreatedAt pgtype.Timestamptz
+}
+
+// Текущая ревизия согласия формы (0069). Ноль строк — раздел ни разу не сохраняли.
+func (q *Queries) GetFormConsent(ctx context.Context, id uuid.UUID) (GetFormConsentRow, error) {
+	row := q.db.QueryRow(ctx, getFormConsent, id)
+	var i GetFormConsentRow
+	err := row.Scan(
+		&i.ID,
+		&i.Enabled,
+		&i.Settings,
+		&i.Template,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getFormCounter = `-- name: GetFormCounter :one
 SELECT kind, counter, enabled FROM form_counters WHERE form_id = $1 AND kind = $2
 `
@@ -3433,6 +3526,10 @@ SELECT f.id AS form_id, f.workspace_id, f.title,
     -- и тумблер включён; NULL — счётчика нет. Право тарифа поверх номера спрашивает
     -- сервис (MetrikaFor): счётчик, как и бейдж, свойство выдачи, а не документа.
     fc.counter AS metrika_counter,
+    -- consent_revision_id/consent_enabled: текущая ревизия согласия (0069) и её
+    -- тумблер. Живая настройка, как счётчик: включённое согласие обязано доезжать до
+    -- респондента без перепубликации, а приём ответа без галочки — отказывать.
+    f.consent_revision_id, cr.enabled AS consent_enabled,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -3441,6 +3538,7 @@ JOIN form_versions fv ON fv.id = f.published_version_id
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
 LEFT JOIN form_counters fc ON fc.form_id = f.id AND fc.kind = 'yandex_metrika' AND fc.enabled
+LEFT JOIN form_consent_revisions cr ON cr.id = f.consent_revision_id
 WHERE f.slug = $1
 `
 
@@ -3469,6 +3567,8 @@ type GetPublicFormBySlugRow struct {
 	Password           []byte
 	ScheduleID         pgtype.UUID
 	MetrikaCounter     pgtype.Text
+	ConsentRevisionID  pgtype.UUID
+	ConsentEnabled     pgtype.Bool
 	SubmissionCount    int64
 }
 
@@ -3493,6 +3593,7 @@ type GetPublicFormBySlugRow struct {
 // трогается. Джойн INNER и по этой же причине отправляет в 404 формы
 // осиротевшего пространства (без владельца) — они и так недостижимы (TD-53).
 // LEFT JOIN по UNIQUE (form_id, kind): не больше одной строки, форму не размножает.
+// LEFT JOIN по первичному ключу ревизии: не больше одной строки.
 func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPublicFormBySlugRow, error) {
 	row := q.db.QueryRow(ctx, getPublicFormBySlug, slug)
 	var i GetPublicFormBySlugRow
@@ -3521,6 +3622,8 @@ func (q *Queries) GetPublicFormBySlug(ctx context.Context, slug string) (GetPubl
 		&i.Password,
 		&i.ScheduleID,
 		&i.MetrikaCounter,
+		&i.ConsentRevisionID,
+		&i.ConsentEnabled,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -3533,6 +3636,7 @@ SELECT f.id AS form_id, f.workspace_id, coalesce(f.name, f.title) AS cabinet_nam
     f.notify_on_submission, f.notify_respondent, f.collect_partial, f.link_preview,
     f.branding, f.progress, f.auto_jump, f.save_locally, f.allow_back,
     f.password, f.schedule_id, fc.counter AS metrika_counter,
+    f.consent_revision_id, cr.enabled AS consent_enabled,
     CASE WHEN f.response_limit IS NOT NULL
          THEN (SELECT count(*) FROM submissions s WHERE s.form_id = f.id)
          ELSE 0 END::bigint AS submission_count
@@ -3541,6 +3645,7 @@ JOIN form_versions fv ON fv.id = f.published_version_id
 JOIN workspace_members wm ON wm.workspace_id = f.workspace_id AND wm.role = 'owner'
 JOIN users u ON u.id = wm.user_id AND u.deleted_at IS NULL
 LEFT JOIN form_counters fc ON fc.form_id = f.id AND fc.kind = 'yandex_metrika' AND fc.enabled
+LEFT JOIN form_consent_revisions cr ON cr.id = f.consent_revision_id
 WHERE f.slug = $1
 `
 
@@ -3567,6 +3672,8 @@ type GetPublicFormRefBySlugRow struct {
 	Password           []byte
 	ScheduleID         pgtype.UUID
 	MetrikaCounter     pgtype.Text
+	ConsentRevisionID  pgtype.UUID
+	ConsentEnabled     pgtype.Bool
 	SubmissionCount    int64
 }
 
@@ -3613,6 +3720,8 @@ func (q *Queries) GetPublicFormRefBySlug(ctx context.Context, slug string) (GetP
 		&i.Password,
 		&i.ScheduleID,
 		&i.MetrikaCounter,
+		&i.ConsentRevisionID,
+		&i.ConsentEnabled,
 		&i.SubmissionCount,
 	)
 	return i, err
@@ -4151,6 +4260,37 @@ func (q *Queries) HoldSlot(ctx context.Context, arg HoldSlotParams) (uuid.UUID, 
 	return id, err
 }
 
+const insertConsentRevision = `-- name: InsertConsentRevision :one
+INSERT INTO form_consent_revisions (id, form_id, enabled, settings, template, created_by)
+VALUES ($1, $2, $3, $4, $5, $6)
+RETURNING created_at
+`
+
+type InsertConsentRevisionParams struct {
+	ID        uuid.UUID
+	FormID    uuid.UUID
+	Enabled   bool
+	Settings  []byte
+	Template  int16
+	CreatedBy pgtype.UUID
+}
+
+// Новая ревизия. Строки не меняются и не удаляются по отдельности: по ним
+// восстанавливается текст, с которым соглашались (спека §3.1).
+func (q *Queries) InsertConsentRevision(ctx context.Context, arg InsertConsentRevisionParams) (pgtype.Timestamptz, error) {
+	row := q.db.QueryRow(ctx, insertConsentRevision,
+		arg.ID,
+		arg.FormID,
+		arg.Enabled,
+		arg.Settings,
+		arg.Template,
+		arg.CreatedBy,
+	)
+	var created_at pgtype.Timestamptz
+	err := row.Scan(&created_at)
+	return created_at, err
+}
+
 const insertFormIntegration = `-- name: InsertFormIntegration :exec
 INSERT INTO form_integrations (
     id, form_id, account_id, name, spreadsheet_id, spreadsheet_url, sheet_id, sheet_title, columns, status
@@ -4379,13 +4519,13 @@ func (q *Queries) InsertSheetQueued(ctx context.Context, arg InsertSheetQueuedPa
 const insertSubmission = `-- name: InsertSubmission :execrows
 
 WITH ins AS (
-    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota)
-    VALUES ($1, $2, $3, $4, $5, $6)
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota, consent_revision_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7)
     ON CONFLICT (id) DO NOTHING
     RETURNING 1 AS one
 ), counted AS (
     INSERT INTO workspace_usage (workspace_id, period, submissions)
-    SELECT $7::uuid, $8::date, 1 FROM ins
+    SELECT $8::uuid, $9::date, 1 FROM ins
     ON CONFLICT (workspace_id, period)
     DO UPDATE SET submissions = workspace_usage.submissions + 1
     RETURNING 1 AS one
@@ -4417,14 +4557,15 @@ SELECT one FROM ins
 `
 
 type InsertSubmissionParams struct {
-	ID            uuid.UUID
-	FormID        uuid.UUID
-	FormVersionID uuid.UUID
-	Answers       []byte
-	Meta          []byte
-	OverQuota     bool
-	WorkspaceID   uuid.UUID
-	Period        pgtype.Date
+	ID                uuid.UUID
+	FormID            uuid.UUID
+	FormVersionID     uuid.UUID
+	Answers           []byte
+	Meta              []byte
+	OverQuota         bool
+	ConsentRevisionID pgtype.UUID
+	WorkspaceID       uuid.UUID
+	Period            pgtype.Date
 }
 
 // Запросы модуля submissions. Схема — migrations/0004_submissions. Генерация:
@@ -4450,6 +4591,7 @@ func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionPara
 		arg.Answers,
 		arg.Meta,
 		arg.OverQuota,
+		arg.ConsentRevisionID,
 		arg.WorkspaceID,
 		arg.Period,
 	)
@@ -4575,6 +4717,54 @@ func (q *Queries) LinkIDsByAccount(ctx context.Context, accountID uuid.UUID) ([]
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsentOperators = `-- name: ListConsentOperators :many
+SELECT id, name, inn, address, email
+FROM consent_operators
+WHERE workspace_id = $1
+ORDER BY used_at DESC, id DESC
+LIMIT $2
+`
+
+type ListConsentOperatorsParams struct {
+	WorkspaceID uuid.UUID
+	Limit       int32
+}
+
+type ListConsentOperatorsRow struct {
+	ID      uuid.UUID
+	Name    string
+	Inn     string
+	Address string
+	Email   string
+}
+
+// Свежие наборы пространства для подсказки.
+func (q *Queries) ListConsentOperators(ctx context.Context, arg ListConsentOperatorsParams) ([]ListConsentOperatorsRow, error) {
+	rows, err := q.db.Query(ctx, listConsentOperators, arg.WorkspaceID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsentOperatorsRow
+	for rows.Next() {
+		var i ListConsentOperatorsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Inn,
+			&i.Address,
+			&i.Email,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -6898,6 +7088,35 @@ func (q *Queries) PurgeNotifications(ctx context.Context, arg PurgeNotifications
 	return result.RowsAffected(), nil
 }
 
+const rememberConsentOperator = `-- name: RememberConsentOperator :exec
+INSERT INTO consent_operators (id, workspace_id, name, inn, address, email)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (workspace_id, fingerprint) DO UPDATE SET used_at = now()
+`
+
+type RememberConsentOperatorParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Name        string
+	Inn         string
+	Address     string
+	Email       string
+}
+
+// Кладёт реквизиты в список пространства (0070). Тот же набор не дублируется, а
+// поднимается наверх подсказки.
+func (q *Queries) RememberConsentOperator(ctx context.Context, arg RememberConsentOperatorParams) error {
+	_, err := q.db.Exec(ctx, rememberConsentOperator,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.Inn,
+		arg.Address,
+		arg.Email,
+	)
+	return err
+}
+
 const renameWorkspace = `-- name: RenameWorkspace :one
 UPDATE workspaces
 SET name = $2
@@ -7179,6 +7398,32 @@ func (q *Queries) SetFormClosed(ctx context.Context, arg SetFormClosedParams) (S
 		&i.UpdatedAt,
 	)
 	return i, err
+}
+
+const setFormConsentRevision = `-- name: SetFormConsentRevision :execrows
+UPDATE forms
+SET consent_revision_id = $3
+WHERE id = $1 AND workspace_id = $2
+`
+
+type SetFormConsentRevisionParams struct {
+	ID                uuid.UUID
+	WorkspaceID       uuid.UUID
+	ConsentRevisionID pgtype.UUID
+}
+
+// Ставит текущую ревизию.
+//
+// ⚠ updated_at формы НЕ трогается, в отличие от прочих живых настроек: им сверяется
+// автосохранение черновика, а раздел согласия сохраняется той же кнопкой страницы
+// настроек, что экран «Спасибо» (запись черновика). Сдвиг метки посреди пачки
+// запросов отдал бы черновику 409 на правке, которой никто не конфликтовал.
+func (q *Queries) SetFormConsentRevision(ctx context.Context, arg SetFormConsentRevisionParams) (int64, error) {
+	result, err := q.db.Exec(ctx, setFormConsentRevision, arg.ID, arg.WorkspaceID, arg.ConsentRevisionID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const setFormPublished = `-- name: SetFormPublished :one

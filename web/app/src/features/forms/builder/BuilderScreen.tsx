@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from '@tanstack/react-router'
+import { useQuery } from '@tanstack/react-query'
 import { useStore } from 'zustand'
 import { Link2, Plug, Redo2, Settings, Undo2 } from 'lucide-react'
 
@@ -8,6 +9,7 @@ import { showFormBadge } from '@fields/design'
 import { displayFormName, type FormDetail } from '../../../entities/form'
 import { useFeatureAllowed } from '../../plan/useFeature'
 import { useWorkspaceCrumb } from '../../workspaces/crumb'
+import { formConsentQueryOptions } from '../queries'
 import { PageActions, PageCrumbs } from '../../../shared/page/headerPortals'
 import { ChordChips } from './ChordChips'
 import { DiscardChanges } from './DiscardChanges'
@@ -104,6 +106,10 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
   // вставки, и перепубликации оно не ждёт (ADR §10).
   const canRemoveBadge = useFeatureAllowed('form_branding')
   const badge = showFormBadge(detail.branding, canRemoveBadge)
+  // Согласие на обработку персональных данных (0069) — по той же причине здесь, а не в
+  // превью: живое свойство формы, раздел настроек, своя ручка. У формы, которой ещё нет
+  // на сервере (detail.id пуст), раздела нет и спрашивать некого.
+  const consent = useQuery({ ...formConsentQueryOptions(detail.id), enabled: detail.id !== '' })
   const [store] = useState(() => {
     const s = createBuilderStore()
     s.getState().hydrate(detail.draftSchema)
@@ -349,6 +355,7 @@ export function BuilderScreen({ detail, draft }: { detail: FormDetail; draft?: D
         badge={badge}
         progress={detail.progress}
         allowBack={detail.allowBack}
+        consent={consent.data?.enabled ?? false}
       />
       {/* Шторка остаётся смонтированной и в закрытом виде — иначе Radix не успевает
           проиграть закрытие, панель исчезает мгновенно, а оболочка едет назад 300 мс,
