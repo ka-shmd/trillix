@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { WelcomeScreen } from './WelcomeScreen'
+import { legalKeys } from './keys'
 import type { Consents } from '../../entities/legal'
 
 // Экран согласия (docs/design/signup-consent.md §1, пп. 1, 3–5; §3.3): единственное действие
@@ -61,8 +62,9 @@ function stubApi(initial: Consents, post: () => Response = () => json(consents(n
   return calls
 }
 
-function renderScreen(defaultFullName = '') {
+function renderScreen(defaultFullName = '', cached?: Consents) {
   const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
+  if (cached) qc.setQueryData(legalKeys.consents(), cached)
   const onDone = vi.fn()
   render(
     <QueryClientProvider client={qc}>
@@ -194,8 +196,7 @@ describe('экран «Поделитесь парой деталей»', () => 
     expect(terms.getAttribute('href')).toBe('/legal/terms?version=2026-09-17')
     expect(terms.target).toBe('_blank')
     expect(screen.getByRole('link', { name: 'согласие' }).getAttribute('href')).toBe('/legal/marketing?version=2026-09-17')
-    // Строки «Как мы обрабатываем данные» на экране нет (решение владельца 2026-09-17).
-    expect(screen.queryByRole('link', { name: 'Политика обработки персональных данных' })).toBeNull()
+    expect(screen.getByRole('link', { name: 'Политика обработки персональных данных' }).getAttribute('href')).toBe('/legal/privacy')
   })
 
   it('отказ сервера показан по-русски, анкета не уходит, в кабинет не пускает', async () => {
@@ -236,4 +237,15 @@ it('согласие уже дано — экран сразу возвраща�
   stubApi(consents(null))
   const { onDone } = renderScreen()
   await waitFor(() => expect(onDone).toHaveBeenCalled())
+})
+
+// РЕГРЕССИЯ (ревью ветки). Кэш согласий держит баннер новой редакции на каждой странице
+// кабинета. По устаревшему «принимать нечего» экран уводил человека в кабинет, гард возвращал
+// его сюда — и так по кругу, пока не приедет ответ сервера.
+it('устаревший кэш согласий не выбрасывает с экрана до ответа сервера', async () => {
+  stubApi(consents('update'))
+  const { onDone } = renderScreen('', consents(null))
+  expect(onDone).not.toHaveBeenCalled()
+  expect(await screen.findByText('Условия использования обновились')).toBeTruthy()
+  expect(onDone).not.toHaveBeenCalled()
 })

@@ -16,7 +16,17 @@ const documents = {
   ],
 }
 
-function consents(over: { granted?: boolean; accepted?: string; current?: string; screen?: Consents['screen'] } = {}): Consents {
+function consents(
+  over: {
+    granted?: boolean
+    accepted?: string
+    current?: string
+    screen?: Consents['screen']
+    // marketingVersion — действующая редакция согласия на рассылки; принятая остаётся
+    // прежней (grantedVersion).
+    marketingVersion?: string
+  } = {},
+): Consents {
   const current = over.current ?? '2026-09-17'
   return {
     screen: over.screen ?? null,
@@ -30,7 +40,7 @@ function consents(over: { granted?: boolean; accepted?: string; current?: string
       acceptedAt: '2026-09-17T10:00:00+03:00',
     },
     marketing: {
-      version: '2026-09-17',
+      version: over.marketingVersion ?? '2026-09-17',
       effectiveAt: '2026-09-17T00:00:00+03:00',
       title: 'Согласие на получение рекламных и информационных рассылок',
       label: 'Даю согласие на получение новостей и предложений Trillix',
@@ -92,6 +102,22 @@ describe('LegalSettings', () => {
     const privacy = await screen.findByRole('link', { name: 'Политика обработки персональных данных' })
     expect(privacy.getAttribute('href')).toBe('/legal/privacy')
     expect(privacy.getAttribute('target')).toBe('_blank')
+  })
+
+  // РЕГРЕССИЯ (ревью ветки): ссылка вела на действующую редакцию, а человек соглашался с
+  // прежней — экран отсылал к тексту, которого он не принимал.
+  it('у включённого согласия ссылка ведёт на принятую редакцию, а не на действующую', async () => {
+    stub(consents({ granted: true, marketingVersion: '2027-01-15' }))
+    renderWith(<LegalSettings />)
+    const link = await screen.findByRole('link', { name: 'согласию на рассылки' })
+    expect(link.getAttribute('href')).toBe('/legal/marketing?version=2026-09-17')
+  })
+
+  it('без согласия ссылка ведёт на действующую редакцию', async () => {
+    stub(consents({ granted: false, marketingVersion: '2027-01-15' }))
+    renderWith(<LegalSettings />)
+    const link = await screen.findByRole('link', { name: 'согласию на рассылки' })
+    expect(link.getAttribute('href')).toBe('/legal/marketing?version=2027-01-15')
   })
 
   it('тумблер рассылок: включение принимает действующую редакцию, выключение отзывает', async () => {
