@@ -791,8 +791,8 @@
 }
 
 /* Неактивная кнопка — пока у формы не заполнено обязательное или не отмечено согласие
-   (FormView, PreviewPane), и пока идёт отправка. Правило стоит после :hover и перебивает
-   его: наведение на неактивную кнопку не должно обещать нажатие. */
+   (FormView, PreviewPane), и пока идёт отправка. Пара с :hover обязательна: без неё
+   наведение меняет вид неактивной кнопки. Значение прозрачности одно на обе строки. */
 .rf-submit:disabled,
 .rf-submit:disabled:hover {
   opacity: 0.45;
@@ -802,11 +802,6 @@
 .rf-submit:focus-visible {
   outline: 2px solid var(--rf-text);
   outline-offset: 2px;
-}
-
-.rf-submit:disabled {
-  opacity: 0.5;
-  cursor: default;
 }
 
 /* Кнопка «Назад» — за настройкой формы `allowBack` (0055). Вторичная по виду: контур
