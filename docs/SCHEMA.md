@@ -1200,17 +1200,25 @@ SHA-256: утечка дампа не даёт рабочих ссылок. Зд
 
 **Индексы:** `idx_consent_events_user (user_id, created_at DESC)` — гейт и история.
 
-## `signup_profiles` (0071)
+## `signup_profiles` (0071, поля вкладок — 0072)
 
-Анкета при завершении регистрации ([`design/signup-consent.md`](design/signup-consent.md) §3.3). Строка на аккаунт, каждый ответ необязателен.
+Анкета экрана «Поделитесь парой деталей» ([`design/signup-consent.md`](design/signup-consent.md) §3.3): вкладки «Частное лицо» и «Компания или ИП». Строка на аккаунт, каждый ответ необязателен.
 
 | Колонка | Тип | Ограничения |
 |---|---|---|
 | `user_id` | `UUID` | PK, FK → `users(id)` `ON DELETE CASCADE` |
-| `kind` | `TEXT` | nullable, `CHECK IN ('person', 'company')` — частное лицо или компания/ИП |
+| `kind` | `TEXT` | nullable, `CHECK IN ('person', 'company')` — вкладка |
+| `full_name` | `TEXT` | nullable, 1–200 символов — ФИО одной строкой; с профилем `users.first_name/last_name` не связано (отчества там нет) |
+| `occupation` | `TEXT` | nullable, `CHECK IN ('study', 'employed', 'freelance', 'teaching', 'science', 'other')` — только `person` |
+| `profession` | `TEXT` | nullable, 1–100 символов — только `person` |
+| `company_name` | `TEXT` | nullable, 1–300 символов — только `company` |
+| `industry` | `TEXT` | nullable, `CHECK IN ('education', 'it', 'marketing', 'healthcare', 'retail', 'services', 'manufacturing', 'finance', 'public', 'hr', 'events', 'other')` — только `company` |
+| `job_position` | `TEXT` | nullable, `CHECK IN ('owner', 'marketing', 'hr', 'product', 'analytics', 'teaching', 'development', 'other')` — только `company` |
 | `purpose` | `TEXT` | nullable, `CHECK IN ('research', 'leads', 'events', 'booking', 'feedback', 'quizzes', 'other')` |
 | `referral` | `TEXT` | nullable, `CHECK IN ('search', 'ads', 'social', 'recommendation', 'article', 'other')` |
 | `created_at`, `updated_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+
+**Ограничения:** `signup_profiles_person_fields` — `occupation` и `profession` только у `kind = 'person'`; `signup_profiles_company_fields` — `company_name`, `industry`, `job_position` только у `kind = 'company'`.
 
 ## `schedules` (0050)
 

@@ -102,20 +102,33 @@ func TestSignupProfile(t *testing.T) {
 	if code := put(`{"kind":"robot"}`); code != http.StatusUnprocessableEntity {
 		t.Fatalf("чужой вариант: %d, ожидалось 422", code)
 	}
-	if code := put(`{"kind":"company","purpose":"leads","referral":null}`); code != http.StatusNoContent {
-		t.Fatalf("анкета: %d", code)
+	if code := put(`{"kind":"company","purpose":"leads","fullName":"Иванов Иван","companyName":"ООО «Ромашка»","industry":"it","jobPosition":"owner"}`); code != http.StatusNoContent {
+		t.Fatalf("анкета компании: %d", code)
 	}
-	if code := put(`{"kind":"person","purpose":null,"referral":"search"}`); code != http.StatusNoContent {
+	var fullName, company, industry, occupation, profession, purpose, referral *string
+	var kind string
+	read := func() {
+		t.Helper()
+		err := testPool.QueryRow(context.Background(), `
+			SELECT p.kind, p.full_name, p.company_name, p.industry, p.occupation, p.profession, p.purpose, p.referral
+			FROM signup_profiles p JOIN users u ON u.id = p.user_id WHERE u.email = $1`, email).
+			Scan(&kind, &fullName, &company, &industry, &occupation, &profession, &purpose, &referral)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	read()
+	if kind != "company" || fullName == nil || *fullName != "Иванов Иван" || company == nil || *company != "ООО «Ромашка»" ||
+		industry == nil || *industry != "it" || purpose == nil || *purpose != "leads" {
+		t.Fatalf("анкета компании в базе: %s %v %v %v %v", kind, fullName, company, industry, purpose)
+	}
+	// Повторная отправка частным лицом перезаписывает анкету целиком, поля компании уходят.
+	if code := put(`{"kind":"person","purpose":null,"referral":"search","fullName":"Иванов Иван","occupation":"freelance","profession":"дизайнер","companyName":"ООО «Ромашка»"}`); code != http.StatusNoContent {
 		t.Fatalf("повторная анкета: %d", code)
 	}
-	var kind, purpose, referral *string
-	err := testPool.QueryRow(context.Background(), `
-		SELECT p.kind, p.purpose, p.referral FROM signup_profiles p
-		JOIN users u ON u.id = p.user_id WHERE u.email = $1`, email).Scan(&kind, &purpose, &referral)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if kind == nil || *kind != "person" || purpose != nil || referral == nil || *referral != "search" {
-		t.Fatalf("анкета в базе: %v %v %v", kind, purpose, referral)
+	read()
+	if kind != "person" || company != nil || industry != nil || occupation == nil || *occupation != "freelance" ||
+		profession == nil || *profession != "дизайнер" || purpose != nil || referral == nil || *referral != "search" {
+		t.Fatalf("анкета частного лица в базе: %s %v %v %v %v %v %v", kind, company, industry, occupation, profession, purpose, referral)
 	}
 }

@@ -4,10 +4,10 @@ import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react'
 
 import { WelcomeScreen } from './WelcomeScreen'
-import { profileOf, type Consents } from '../../entities/legal'
+import type { Consents } from '../../entities/legal'
 
-// Экран согласия (docs/design/signup-consent.md §1, пп. 1, 3–5): что нельзя нажать до
-// галочки соглашения и что уходит на сервер с каждой кнопкой.
+// Экран согласия (docs/design/signup-consent.md §1, пп. 1, 3–5; §3.3): единственное действие
+// доступно, как только отмечено соглашение; анкета уходит по выбранной вкладке.
 
 const offer = { version: '2026-09-17', effectiveAt: '2026-09-17T00:00:00+03:00' }
 
@@ -42,6 +42,10 @@ interface Call {
   body: unknown
 }
 
+function json(body: unknown, status = 200): Response {
+  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
+}
+
 function stubApi(initial: Consents, post: () => Response = () => json(consents(null))) {
   const calls: Call[] = []
   vi.stubGlobal(
@@ -57,49 +61,130 @@ function stubApi(initial: Consents, post: () => Response = () => json(consents(n
   return calls
 }
 
-function json(body: unknown, status = 200): Response {
-  return new Response(JSON.stringify(body), { status, headers: { 'Content-Type': 'application/json' } })
-}
-
-function renderScreen() {
+function renderScreen(defaultFullName = '') {
   const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
   const onDone = vi.fn()
-  const onLogout = vi.fn()
   render(
     <QueryClientProvider client={qc}>
-      <WelcomeScreen email="new@example.com" onDone={onDone} onLogout={onLogout} logoutPending={false} />
+      <WelcomeScreen defaultFullName={defaultFullName} onDone={onDone} />
     </QueryClientProvider>,
   )
-  return { onDone, onLogout }
+  return { onDone }
 }
 
 const button = (name: string) => screen.getByRole('button', { name }) as HTMLButtonElement
+const input = (name: string) => screen.getByLabelText(name) as HTMLInputElement
+const checkTerms = () => fireEvent.click(screen.getByRole('checkbox', { name: /Принимаю/ }))
+// Радиксовая вкладка переключается нажатием кнопки мыши, а не щелчком.
+const openTab = (name: string) => fireEvent.mouseDown(screen.getByRole('tab', { name }), { button: 0 })
 
 afterEach(() => {
   cleanup()
   vi.unstubAllGlobals()
 })
 
-describe('экран «Завершение регистрации»', () => {
-  it('без галочки соглашения кнопки в кабинет неактивны, «Выйти» — нет', async () => {
+describe('экран «Поделитесь парой деталей»', () => {
+  it('одна кнопка, и она доступна только с галочкой соглашения', async () => {
     stubApi(consents('signup'))
-    const { onLogout } = renderScreen()
-    await screen.findByText('Завершение регистрации')
+    renderScreen()
+    await screen.findByText('Поделитесь парой деталей')
 
-    expect((screen.getByLabelText('Email') as HTMLInputElement).readOnly).toBe(true)
-    expect((screen.getByLabelText('Email') as HTMLInputElement).value).toBe('new@example.com')
-    expect(button('Пропустить').disabled).toBe(true)
+    expect(screen.getAllByRole('button').map((b) => b.textContent)).not.toContain('Пропустить')
+    expect(screen.queryByRole('button', { name: 'Выйти' })).toBeNull()
     expect(button('Завершить регистрацию').disabled).toBe(true)
 
     fireEvent.click(screen.getByRole('checkbox', { name: /Даю согласие/ }))
-    expect(button('Пропустить').disabled).toBe(true)
+    expect(button('Завершить регистрацию').disabled).toBe(true)
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /Принимаю/ }))
-    expect(button('Пропустить').disabled).toBe(false)
+    checkTerms()
     expect(button('Завершить регистрацию').disabled).toBe(false)
+  })
 
-    fireEvent.click(button('Выйти'))
-    expect(onLogout).toHaveBeenCalled()
+  it('частное лицо: ФИО подставлено из профиля, вопросы вкладки и общие', async () => {
+    stubApi(consents('signup'))
+    renderScreen('Петров Иван')
+    await screen.findByText('Поделитесь парой деталей')
+
+    expect(screen.getByRole('tab', { name: 'Частное лицо' }).getAttribute('aria-selected')).toBe('true')
+    expect(input('Ваше полное имя').value).toBe('Петров Иван')
+    for (const label of ['Чем вы занимаетесь?', 'Ваша профессия', 'Как вы о нас узнали?', 'Для чего вы будете использовать Trillix?']) {
+      expect(screen.getByLabelText(label)).toBeTruthy()
+    }
+    expect(screen.queryByLabelText('Название организации или ИП')).toBeNull()
+  })
+
+  it('«Завершить регистрацию»: сначала согласия, потом анкета частного лица', async () => {
+    const calls = stubApi(consents('signup'))
+    const { onDone } = renderScreen('Петров Иван')
+    await screen.findByText('Поделитесь парой деталей')
+    fireEvent.change(input('Ваше полное имя'), { target: { value: 'Петров Иван Сергеевич ' } })
+    fireEvent.change(input('Ваша профессия'), { target: { value: 'дизайнер' } })
+    checkTerms()
+    fireEvent.click(screen.getByRole('checkbox', { name: /Даю согласие/ }))
+    fireEvent.click(button('Завершить регистрацию'))
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled())
+    expect(calls.filter((c) => c.method !== 'GET').map((c) => `${c.method} ${c.url}`)).toEqual([
+      'POST /api/v1/account/consents',
+      'PUT /api/v1/account/signup-profile',
+    ])
+    expect(calls.find((c) => c.method === 'POST')?.body).toEqual({
+      accept: [
+        { kind: 'terms', version: '2026-09-17' },
+        { kind: 'marketing', version: '2026-09-17' },
+      ],
+    })
+    expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
+      kind: 'person',
+      fullName: 'Петров Иван Сергеевич',
+      occupation: null,
+      profession: 'дизайнер',
+      companyName: null,
+      industry: null,
+      jobPosition: null,
+      purpose: null,
+      referral: null,
+    })
+  })
+
+  it('компания или ИП: свои вопросы, поля частного лица не уходят', async () => {
+    const calls = stubApi(consents('signup'))
+    const { onDone } = renderScreen()
+    await screen.findByText('Поделитесь парой деталей')
+    fireEvent.change(input('Ваша профессия'), { target: { value: 'дизайнер' } })
+
+    openTab('Компания или ИП')
+    expect(await screen.findByLabelText('Название организации или ИП')).toBeTruthy()
+    expect(screen.getByLabelText('Сфера деятельности')).toBeTruthy()
+    expect(screen.getByLabelText('Ваша должность')).toBeTruthy()
+    expect(screen.queryByLabelText('Ваша профессия')).toBeNull()
+
+    fireEvent.change(input('Ваше полное имя'), { target: { value: 'Иванов Иван' } })
+    fireEvent.change(input('Название организации или ИП'), { target: { value: 'ООО «Ромашка»' } })
+    checkTerms()
+    fireEvent.click(button('Завершить регистрацию'))
+
+    await waitFor(() => expect(onDone).toHaveBeenCalled())
+    // Галочка рассылок не отмечена — принимается только соглашение.
+    expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ accept: [{ kind: 'terms', version: '2026-09-17' }] })
+    expect(calls.find((c) => c.method === 'PUT')?.body).toMatchObject({
+      kind: 'company',
+      fullName: 'Иванов Иван',
+      companyName: 'ООО «Ромашка»',
+      profession: null,
+      occupation: null,
+    })
+  })
+
+  it('переключение вкладки не стирает набранное', async () => {
+    stubApi(consents('signup'))
+    renderScreen()
+    await screen.findByText('Поделитесь парой деталей')
+    openTab('Компания или ИП')
+    fireEvent.change(await screen.findByLabelText('Название организации или ИП'), { target: { value: 'ООО «Ромашка»' } })
+    openTab('Частное лицо')
+    openTab('Компания или ИП')
+    expect(((await screen.findByLabelText('Название организации или ИП')) as HTMLInputElement).value).toBe('ООО «Ромашка»')
   })
 
   it('ссылки ведут на те самые редакции документов в новой вкладке', async () => {
@@ -112,67 +197,37 @@ describe('экран «Завершение регистрации»', () => {
     expect(screen.getByRole('link', { name: 'Политика обработки персональных данных' }).getAttribute('href')).toBe('/legal/privacy')
   })
 
-  it('«Пропустить» принимает отмеченное и не шлёт анкету', async () => {
-    const calls = stubApi(consents('signup'))
-    const { onDone } = renderScreen()
-    await screen.findByText('Завершение регистрации')
-    fireEvent.click(screen.getByRole('checkbox', { name: /Принимаю/ }))
-    fireEvent.click(screen.getByRole('checkbox', { name: /Даю согласие/ }))
-    fireEvent.click(button('Пропустить'))
-
-    await waitFor(() => expect(onDone).toHaveBeenCalled())
-    const post = calls.find((c) => c.method === 'POST')
-    expect(post?.url).toBe('/api/v1/account/consents')
-    expect(post?.body).toEqual({
-      accept: [
-        { kind: 'terms', version: '2026-09-17' },
-        { kind: 'marketing', version: '2026-09-17' },
-      ],
-    })
-    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
-  })
-
-  it('«Завершить регистрацию» без ответов анкету не шлёт, без галочки рассылок — только соглашение', async () => {
-    const calls = stubApi(consents('signup'))
-    const { onDone } = renderScreen()
-    await screen.findByText('Завершение регистрации')
-    fireEvent.click(screen.getByRole('checkbox', { name: /Принимаю/ }))
-    fireEvent.click(button('Завершить регистрацию'))
-
-    await waitFor(() => expect(onDone).toHaveBeenCalled())
-    expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ accept: [{ kind: 'terms', version: '2026-09-17' }] })
-    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
-  })
-
-  it('отказ сервера показан по-русски, в кабинет не пускает', async () => {
-    stubApi(consents('signup'), () =>
+  it('отказ сервера показан по-русски, анкета не уходит, в кабинет не пускает', async () => {
+    const calls = stubApi(consents('signup'), () =>
       json({ error: { code: 'validation_failed', message: 'редакция документа обновилась — обновите страницу' } }, 422),
     )
     const { onDone } = renderScreen()
-    await screen.findByText('Завершение регистрации')
-    fireEvent.click(screen.getByRole('checkbox', { name: /Принимаю/ }))
-    fireEvent.click(button('Пропустить'))
+    await screen.findByText('Поделитесь парой деталей')
+    checkTerms()
+    fireEvent.click(button('Завершить регистрацию'))
 
     expect(await screen.findByRole('alert')).toHaveProperty('textContent', 'редакция документа обновилась — обновите страницу')
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
     expect(onDone).not.toHaveBeenCalled()
   })
 })
 
 describe('экран «Условия использования обновились»', () => {
-  it('одна галочка соглашения, без рассылок и анкеты; «Принять» шлёт только соглашение', async () => {
+  it('одна галочка соглашения, без анкеты и рассылок; «Принять и продолжить» шлёт только соглашение', async () => {
     const calls = stubApi(consents('update'))
-    const { onDone } = renderScreen()
+    const { onDone } = renderScreen('Петров Иван')
     await screen.findByText('Условия использования обновились')
 
+    expect(screen.queryByRole('tab')).toBeNull()
     expect(screen.queryByRole('checkbox', { name: /Даю согласие/ })).toBeNull()
-    expect(screen.queryByText('Расскажите о себе')).toBeNull()
-    expect(screen.queryByLabelText('Email')).toBeNull()
-    expect(button('Принять').disabled).toBe(true)
+    expect(screen.queryByRole('button', { name: 'Выйти' })).toBeNull()
+    expect(button('Принять и продолжить').disabled).toBe(true)
 
-    fireEvent.click(screen.getByRole('checkbox', { name: /Принимаю/ }))
-    fireEvent.click(button('Принять'))
+    checkTerms()
+    fireEvent.click(button('Принять и продолжить'))
     await waitFor(() => expect(onDone).toHaveBeenCalled())
     expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ accept: [{ kind: 'terms', version: '2026-09-17' }] })
+    expect(calls.some((c) => c.method === 'PUT')).toBe(false)
   })
 })
 
@@ -180,17 +235,4 @@ it('согласие уже дано — экран сразу возвраща�
   stubApi(consents(null))
   const { onDone } = renderScreen()
   await waitFor(() => expect(onDone).toHaveBeenCalled())
-})
-
-describe('profileOf', () => {
-  it('без единого ответа анкеты нет', () => {
-    expect(profileOf({ kind: null, purpose: null, referral: null })).toBeNull()
-  })
-  it('частичная анкета уходит как есть', () => {
-    expect(profileOf({ kind: 'company', purpose: null, referral: null })).toEqual({
-      kind: 'company',
-      purpose: null,
-      referral: null,
-    })
-  })
 })

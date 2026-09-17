@@ -9425,17 +9425,26 @@ func (q *Queries) UpsertPartialSubmission(ctx context.Context, arg UpsertPartial
 }
 
 const upsertSignupProfile = `-- name: UpsertSignupProfile :exec
-INSERT INTO signup_profiles (user_id, kind, purpose, referral)
-VALUES ($1, $2, $3, $4)
+INSERT INTO signup_profiles (user_id, kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (user_id) DO UPDATE
-SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral, updated_at = now()
+SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral,
+    full_name = EXCLUDED.full_name, occupation = EXCLUDED.occupation, profession = EXCLUDED.profession,
+    company_name = EXCLUDED.company_name, industry = EXCLUDED.industry, job_position = EXCLUDED.job_position,
+    updated_at = now()
 `
 
 type UpsertSignupProfileParams struct {
-	UserID   uuid.UUID
-	Kind     pgtype.Text
-	Purpose  pgtype.Text
-	Referral pgtype.Text
+	UserID      uuid.UUID
+	Kind        pgtype.Text
+	Purpose     pgtype.Text
+	Referral    pgtype.Text
+	FullName    pgtype.Text
+	Occupation  pgtype.Text
+	Profession  pgtype.Text
+	CompanyName pgtype.Text
+	Industry    pgtype.Text
+	JobPosition pgtype.Text
 }
 
 // Анкета регистрации: повторная отправка перезаписывает ответы целиком.
@@ -9445,6 +9454,12 @@ func (q *Queries) UpsertSignupProfile(ctx context.Context, arg UpsertSignupProfi
 		arg.Kind,
 		arg.Purpose,
 		arg.Referral,
+		arg.FullName,
+		arg.Occupation,
+		arg.Profession,
+		arg.CompanyName,
+		arg.Industry,
+		arg.JobPosition,
 	)
 	return err
 }

@@ -66,9 +66,15 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 }
 
 type signupProfileRequest struct {
-	Kind     *string `json:"kind"`
-	Purpose  *string `json:"purpose"`
-	Referral *string `json:"referral"`
+	Kind        *string `json:"kind"`
+	Purpose     *string `json:"purpose"`
+	Referral    *string `json:"referral"`
+	FullName    *string `json:"fullName"`
+	Occupation  *string `json:"occupation"`
+	Profession  *string `json:"profession"`
+	CompanyName *string `json:"companyName"`
+	Industry    *string `json:"industry"`
+	JobPosition *string `json:"jobPosition"`
 }
 
 func (h *Handler) saveSignupProfile(w http.ResponseWriter, r *http.Request) {

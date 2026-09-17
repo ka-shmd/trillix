@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { consentSourceLabel, docBlocks, editionIso } from './legal'
+import { consentSourceLabel, docBlocks, editionIso, emptySignupDraft, signupProfileOf } from './legal'
 import { formatDate } from '../shared/format'
 
 describe('docBlocks', () => {
@@ -58,5 +58,48 @@ describe('consentSourceLabel', () => {
     ['seed', 'Автоматически'],
   ])('%s → %s', (source, label) => {
     expect(consentSourceLabel(source)).toBe(label)
+  })
+})
+
+describe('signupProfileOf', () => {
+  it('частное лицо: пробелы обрезаны, пустое — пропущено, поля компании не уходят', () => {
+    const draft = {
+      ...emptySignupDraft('  Петров Иван  '),
+      profession: '   ',
+      occupation: 'study' as const,
+      companyName: 'ООО «Ромашка»',
+      industry: 'it' as const,
+      jobPosition: 'owner' as const,
+      purpose: 'leads' as const,
+    }
+    expect(signupProfileOf(draft)).toEqual({
+      kind: 'person',
+      fullName: 'Петров Иван',
+      occupation: 'study',
+      profession: null,
+      companyName: null,
+      industry: null,
+      jobPosition: null,
+      purpose: 'leads',
+      referral: null,
+    })
+  })
+
+  it('компания: поля частного лица не уходят', () => {
+    const draft = {
+      ...emptySignupDraft('Иванов Иван'),
+      kind: 'company' as const,
+      occupation: 'study' as const,
+      profession: 'дизайнер',
+      companyName: ' ИП Иванов И. И. ',
+      industry: 'services' as const,
+    }
+    expect(signupProfileOf(draft)).toMatchObject({
+      kind: 'company',
+      companyName: 'ИП Иванов И. И.',
+      industry: 'services',
+      occupation: null,
+      profession: null,
+    })
   })
 })

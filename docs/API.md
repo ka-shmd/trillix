@@ -256,9 +256,23 @@
 - **Ошибки:** `401`, `403` (провал CSRF), `413 payload_too_large` (больше 4 КБ), `422 validation_failed` — пустое тело, чужой вид документа, документ назван дважды, версия не совпадает с действующей редакцией («обновите страницу»), `marketing` без принятого или принимаемого соглашения.
 
 ### `PUT /account/signup-profile`
-Анкета экрана «Завершение регистрации». Требует сессии, CSRF и принятого соглашения — отправляется после `POST /account/consents`.
-- **Тело:** `{"kind": "person" | "company" | null, "purpose": "research" | "leads" | "events" | "booking" | "feedback" | "quizzes" | "other" | null, "referral": "search" | "ads" | "social" | "recommendation" | "article" | "other" | null}`. Отправка перезаписывает анкету целиком.
-- **204.** **Ошибки:** `401`, `403 consent_required`, `403` (провал CSRF), `422 validation_failed` (варианта нет).
+Анкета экрана «Поделитесь парой деталей». Требует сессии, CSRF и принятого соглашения — отправляется после `POST /account/consents`.
+- **Тело** (любое поле — `null`, если вопрос пропущен):
+  ```json
+  {
+    "kind": "person",            // person | company — вкладка
+    "fullName": "Иванов Иван",   // ≤ 200 символов
+    "occupation": "freelance",   // только person: study | employed | freelance | teaching | science | other
+    "profession": "дизайнер",    // только person, ≤ 100 символов
+    "companyName": null,         // только company, ≤ 300 символов
+    "industry": null,            // только company: education | it | marketing | healthcare | retail | services | manufacturing | finance | public | hr | events | other
+    "jobPosition": null,         // только company: owner | marketing | hr | product | analytics | teaching | development | other
+    "purpose": "leads",          // research | leads | events | booking | feedback | quizzes | other
+    "referral": "search"         // search | ads | social | recommendation | article | other
+  }
+  ```
+  Отправка перезаписывает анкету целиком. Строки обрезаются по краям, пустая — «пропущено». Поля чужой вкладки сервер отбрасывает, а не отвергает: человек мог заполнить их и переключиться.
+- **204.** **Ошибки:** `401`, `403 consent_required`, `403` (провал CSRF), `422 validation_failed` (варианта нет, ответ длиннее потолка).
 
 ---
 

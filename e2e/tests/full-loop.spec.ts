@@ -57,10 +57,10 @@ test('регистрация → форма → публикация → отв�
   await page.getByRole('button', { name: 'Создать аккаунт' }).click()
   await page.waitForURL('**/welcome**')
 
-  // 1а. Принимаем соглашение, анкету пропускаем — и приложение уводит на дашборд.
-  await expect(page.getByRole('button', { name: 'Пропустить' })).toBeDisabled()
+  // 1а. Принимаем соглашение, анкету не заполняем — и приложение уводит на дашборд.
+  await expect(page.getByRole('button', { name: 'Завершить регистрацию' })).toBeDisabled()
   await page.getByRole('checkbox', { name: /Принимаю Пользовательское соглашение/ }).click()
-  await page.getByRole('button', { name: 'Пропустить' }).click()
+  await page.getByRole('button', { name: 'Завершить регистрацию' }).click()
   await page.waitForURL('**/forms')
 
   // 2. Новая форма → редактор (кнопок «Новая форма» на дашборде две — в шапке и в

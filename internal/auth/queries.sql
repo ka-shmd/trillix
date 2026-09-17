@@ -307,10 +307,13 @@ WHERE id = $1 AND signup_completed_at IS NULL;
 
 -- name: UpsertSignupProfile :exec
 -- Анкета регистрации: повторная отправка перезаписывает ответы целиком.
-INSERT INTO signup_profiles (user_id, kind, purpose, referral)
-VALUES ($1, $2, $3, $4)
+INSERT INTO signup_profiles (user_id, kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 ON CONFLICT (user_id) DO UPDATE
-SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral, updated_at = now();
+SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral,
+    full_name = EXCLUDED.full_name, occupation = EXCLUDED.occupation, profession = EXCLUDED.profession,
+    company_name = EXCLUDED.company_name, industry = EXCLUDED.industry, job_position = EXCLUDED.job_position,
+    updated_at = now();
 
 -- name: DeleteAbandonedSignups :execrows
 -- Незавершённые регистрации старше срока — удалением строки, а не пометкой deleted_at:
