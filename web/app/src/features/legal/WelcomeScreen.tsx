@@ -54,9 +54,13 @@ export function WelcomeScreen({ defaultFullName, onDone }: Props) {
 
   // Согласие уже дано (в соседней вкладке или экран открыт по устаревшему кэшу me) —
   // держать человека здесь незачем.
+  //
+  // Мина: только по СВЕЖЕМУ ответу. Кэш согласий держит баннер новой редакции на каждой
+  // странице кабинета, и на отданном из него `screen: null` экран увёл бы человека обратно в
+  // кабинет, откуда гард вернул бы его сюда, — и так по кругу, пока не приедет ответ сервера.
   useEffect(() => {
-    if (consents.data && screen === null) onDone()
-  }, [consents.data, screen, onDone])
+    if (consents.data && screen === null && !consents.isFetching) onDone()
+  }, [consents.data, screen, consents.isFetching, onDone])
 
   if (consents.isPending) {
     return (
@@ -347,9 +351,18 @@ function Footer({
   )
 }
 
-// ConsentChecks — галочки согласий столбцом.
+// ConsentChecks — галочки согласий и ссылка на политику под ними: политика обязана быть
+// доступна там, где собираются данные (ч. 2 ст. 18.1 152-ФЗ), а анкета собирает ФИО и
+// организацию.
 function ConsentChecks({ children }: { children: React.ReactNode }) {
-  return <div className="flex flex-col gap-4">{children}</div>
+  return (
+    <div className="flex flex-col gap-4">
+      {children}
+      <p className="text-sm">
+        <DocLink href={legalDocumentPath('privacy')}>Политика обработки персональных данных</DocLink>
+      </p>
+    </div>
+  )
 }
 
 // Row — строка анкеты: подпись слева, поле справа, как на образце; колонки одной ширины у всех

@@ -65,7 +65,15 @@ export function LegalSettings() {
                   ? `Включены с ${formatDate(consents.data.marketing.changedAt)}.`
                   : 'Выключены.'}{' '}
                 Письма о новых функциях, тарифах и предложениях по{' '}
-                <DocLink href={legalDocumentPath('marketing', consents.data.marketing.version)}>
+                {/* Ссылка ведёт на ту редакцию, на которую согласие ДАНО, а действующую
+                    показывает, только пока согласия нет: иначе после выхода новой редакции
+                    экран отсылал бы к тексту, которого человек не принимал. */}
+                <DocLink
+                  href={legalDocumentPath(
+                    'marketing',
+                    consents.data.marketing.grantedVersion ?? consents.data.marketing.version,
+                  )}
+                >
                   согласию на рассылки
                 </DocLink>
                 . Коды входа и уведомления об ответах приходят в любом случае.
