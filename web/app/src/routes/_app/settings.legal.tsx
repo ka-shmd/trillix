@@ -17,6 +17,7 @@ function LegalSettingsPage() {
     <PageContainer>
       <PageCrumbs items={['Правовая информация']} />
       <PageHeader
+        wrapTitle
         title="Правовая информация"
         description="Документы Trillix, рассылки и то, с чем вы соглашались."
       />

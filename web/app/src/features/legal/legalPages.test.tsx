@@ -61,6 +61,15 @@ describe('LegalDocumentPage', () => {
     expect(past.getAttribute('href')).toBe('/legal/terms?version=2026-09-17')
   })
 
+  // РЕГРЕССИЯ (найдено владельцем): заголовок страницы обрезался многоточием — название
+  // документа «Согласие на получение рекламных и информационных рассылок» не влезает в строку
+  // ни на одной ширине, и прочитать его было нельзя.
+  it('название документа переносится, а не обрезается', async () => {
+    renderPage('', json(doc('2026-10-01')))
+    const h1 = await screen.findByRole('heading', { level: 1, name: 'Пользовательское соглашение' })
+    expect(h1.className).not.toContain('truncate')
+  })
+
   it('прежняя редакция помечена и ведёт к действующей', async () => {
     renderPage('2026-09-17', json(doc('2026-09-17')))
     expect(await screen.findByText('Это прежняя редакция.', { exact: false })).toBeTruthy()
