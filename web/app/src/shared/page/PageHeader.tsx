@@ -14,6 +14,7 @@ export function PageHeader({
   description,
   meta,
   actions,
+  wrapTitle,
   className,
 }: {
   title: React.ReactNode
@@ -30,6 +31,11 @@ export function PageHeader({
   // действия над ОТКРЫТОЙ сущностью, и акцентная кнопка создания спорила бы там с
   // крошками за внимание.
   actions?: React.ReactNode
+  // wrapTitle — заголовок переносится на вторую строку вместо многоточия. Для страниц, где
+  // заголовок — НАЗВАНИЕ ДОКУМЕНТА, а не имя сущности из списка: «Согласие на получение
+  // рекламных и информационных рассылок» в одну строку не влезает ни на одной ширине, и
+  // обрезанное название документа прочитать нельзя.
+  wrapTitle?: boolean
   className?: string
 }) {
   return (
@@ -47,7 +53,16 @@ export function PageHeader({
     >
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-1.5">
-          <h1 className="truncate text-3xl font-extrabold tracking-tight">{title}</h1>
+          <h1
+            className={cn(
+              'text-3xl font-extrabold tracking-tight',
+              // Умолчание — одна строка с многоточием: имя формы или пространства бывает
+              // любой длины, и перенос ломал бы высоту шапки на каждом длинном названии.
+              wrapTitle ? 'text-balance' : 'truncate',
+            )}
+          >
+            {title}
+          </h1>
           {titleAction}
         </div>
         {description && <p className="mt-1 text-base text-muted-foreground">{description}</p>}

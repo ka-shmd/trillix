@@ -40,7 +40,11 @@ export function LegalIndexPage() {
 
   return (
     <LegalShell>
-      <PageHeader title="Правовая информация" description="Документы сервиса Trillix и кому писать." />
+      <PageHeader
+        title="Правовая информация"
+        description="Документы сервиса Trillix и кому писать."
+        wrapTitle
+      />
       <div className="mt-12 flex flex-col gap-12">
         <Section title="Документы">
           {docs.isPending && <LoadingRows rows={3} />}
@@ -128,6 +132,7 @@ export function LegalDocumentPage({ kind, version }: { kind: ConsentKind; versio
   return (
     <LegalShell>
       <PageHeader
+        wrapTitle
         title={d.title}
         description={
           isCurrent
