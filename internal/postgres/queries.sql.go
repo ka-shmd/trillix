@@ -1215,6 +1215,23 @@ func (q *Queries) DeleteAllNotifications(ctx context.Context, userID uuid.UUID) 
 	return result.RowsAffected(), nil
 }
 
+const deleteConsentOperator = `-- name: DeleteConsentOperator :execrows
+DELETE FROM consent_operators WHERE id = $1 AND workspace_id = $2
+`
+
+type DeleteConsentOperatorParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+}
+
+func (q *Queries) DeleteConsentOperator(ctx context.Context, arg DeleteConsentOperatorParams) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteConsentOperator, arg.ID, arg.WorkspaceID)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const deleteDeliveredOutboxByTemplate = `-- name: DeleteDeliveredOutboxByTemplate :execrows
 DELETE FROM outbox
 WHERE payload->>'template' = $1::text AND sent_at IS NOT NULL AND sent_at <= $2
@@ -2429,6 +2446,18 @@ func (q *Queries) GetBookingForConfirm(ctx context.Context, arg GetBookingForCon
 		&i.Timezone,
 	)
 	return i, err
+}
+
+const getConsentOperatorWorkspace = `-- name: GetConsentOperatorWorkspace :one
+SELECT workspace_id FROM consent_operators WHERE id = $1
+`
+
+// Пространство строки списка — для проверки права перед удалением.
+func (q *Queries) GetConsentOperatorWorkspace(ctx context.Context, id uuid.UUID) (uuid.UUID, error) {
+	row := q.db.QueryRow(ctx, getConsentOperatorWorkspace, id)
+	var workspace_id uuid.UUID
+	err := row.Scan(&workspace_id)
+	return workspace_id, err
 }
 
 const getConsentRevision = `-- name: GetConsentRevision :one
@@ -4708,6 +4737,54 @@ func (q *Queries) LinkIDsByAccount(ctx context.Context, accountID uuid.UUID) ([]
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsentOperators = `-- name: ListConsentOperators :many
+SELECT id, name, inn, address, email
+FROM consent_operators
+WHERE workspace_id = $1
+ORDER BY used_at DESC, id DESC
+LIMIT $2
+`
+
+type ListConsentOperatorsParams struct {
+	WorkspaceID uuid.UUID
+	Limit       int32
+}
+
+type ListConsentOperatorsRow struct {
+	ID      uuid.UUID
+	Name    string
+	Inn     string
+	Address string
+	Email   string
+}
+
+// Свежие наборы пространства для подсказки.
+func (q *Queries) ListConsentOperators(ctx context.Context, arg ListConsentOperatorsParams) ([]ListConsentOperatorsRow, error) {
+	rows, err := q.db.Query(ctx, listConsentOperators, arg.WorkspaceID, arg.Limit)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsentOperatorsRow
+	for rows.Next() {
+		var i ListConsentOperatorsRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Name,
+			&i.Inn,
+			&i.Address,
+			&i.Email,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -7029,6 +7106,35 @@ func (q *Queries) PurgeNotifications(ctx context.Context, arg PurgeNotifications
 		return 0, err
 	}
 	return result.RowsAffected(), nil
+}
+
+const rememberConsentOperator = `-- name: RememberConsentOperator :exec
+INSERT INTO consent_operators (id, workspace_id, name, inn, address, email)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (workspace_id, fingerprint) DO UPDATE SET used_at = now()
+`
+
+type RememberConsentOperatorParams struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Name        string
+	Inn         string
+	Address     string
+	Email       string
+}
+
+// Кладёт реквизиты в список пространства (0070). Тот же набор не дублируется, а
+// поднимается наверх подсказки.
+func (q *Queries) RememberConsentOperator(ctx context.Context, arg RememberConsentOperatorParams) error {
+	_, err := q.db.Exec(ctx, rememberConsentOperator,
+		arg.ID,
+		arg.WorkspaceID,
+		arg.Name,
+		arg.Inn,
+		arg.Address,
+		arg.Email,
+	)
+	return err
 }
 
 const renameWorkspace = `-- name: RenameWorkspace :one

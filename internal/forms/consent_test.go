@@ -53,6 +53,35 @@ func TestSaveConsent_WritesRevisionOnlyOnChange(t *testing.T) {
 	}
 }
 
+// Список реквизитов пространства пополняется только набором, который попал в типовой
+// текст включённого согласия (спека §3.6).
+func TestSaveConsent_RemembersOperator(t *testing.T) {
+	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
+	svc := newTestService(store)
+	ctx, user, form := context.Background(), domain.NewID(), domain.NewID()
+
+	custom := filledConsent()
+	custom.Documents, custom.ConsentText, custom.PolicyText = domain.ConsentDocCustom, "Согласие", "Политика"
+	for name, save := range map[string]func() error{
+		"выключенное":    func() error { _, err := svc.SaveConsent(ctx, user, form, false, filledConsent()); return err },
+		"свои документы": func() error { _, err := svc.SaveConsent(ctx, user, form, true, custom); return err },
+	} {
+		if err := save(); err != nil {
+			t.Fatalf("%s: %v", name, err)
+		}
+		if len(store.consentRemembered) != 0 {
+			t.Fatalf("%s: реквизиты попали в список: %+v", name, store.consentRemembered)
+		}
+	}
+
+	if _, err := svc.SaveConsent(ctx, user, form, true, filledConsent()); err != nil {
+		t.Fatalf("SaveConsent: %v", err)
+	}
+	if len(store.consentRemembered) != 1 || store.consentRemembered[0].Name != "ИП Иванов И. И." {
+		t.Fatalf("в списке %+v, ожидался нормализованный набор", store.consentRemembered)
+	}
+}
+
 func TestSaveConsent_RejectsBeforeStore(t *testing.T) {
 	store := &fakeStore{form: Form{WorkspaceID: domain.NewID()}}
 

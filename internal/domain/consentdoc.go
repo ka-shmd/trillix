@@ -46,21 +46,20 @@ type ConsentDocument struct {
 	Text  string
 }
 
-// RenderConsentDocument собирает документ ревизии. У своего текста шаблон не
+// RenderConsentDocument собирает документ ревизии. У своих документов шаблон не
 // участвует: документ — вставленный автором текст как есть.
 func RenderConsentDocument(kind ConsentDocKind, s ConsentSettings, template int, in ConsentDocInput) (ConsentDocument, error) {
-	var doc ConsentDoc
-	var title string
+	var custom, title string
 	switch kind {
 	case ConsentDocConsent:
-		doc, title = s.Consent, "Согласие на обработку персональных данных"
+		custom, title = s.ConsentText, "Согласие на обработку персональных данных"
 	case ConsentDocPolicy:
-		doc, title = s.Policy, "Политика обработки персональных данных"
+		custom, title = s.PolicyText, "Политика обработки персональных данных"
 	default:
 		return ConsentDocument{}, fmt.Errorf("%w: неизвестный документ %q", ErrValidation, kind)
 	}
-	if doc.Mode == ConsentDocCustom {
-		return ConsentDocument{Title: title, Text: doc.Text}, nil
+	if s.Documents == ConsentDocCustom {
+		return ConsentDocument{Title: title, Text: custom}, nil
 	}
 	text, err := renderConsentTemplate(kind, s, template, in)
 	if err != nil {

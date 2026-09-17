@@ -17,8 +17,10 @@ import {
   type RespondentEmail,
 } from '../../entities/form'
 import {
+  consentOperatorListSchema,
   consentPreviewSchema,
   consentStateSchema,
+  type ConsentOperatorItem,
   type ConsentPreview,
   type ConsentSettings,
   type ConsentState,
@@ -268,4 +270,16 @@ export function previewFormConsent(id: string, body: ConsentSettings): Promise<C
     body,
     schema: consentPreviewSchema,
   })
+}
+
+// Список реквизитов пространства (0070): им подсказывается поле «Оператор».
+export async function listConsentOperators(workspaceId: string): Promise<ConsentOperatorItem[]> {
+  const res = await apiRequest(`/workspaces/${workspaceId}/consent-operators`, {
+    schema: consentOperatorListSchema,
+  })
+  return res.items
+}
+
+export function deleteConsentOperator(id: string): Promise<void> {
+  return apiRequest(`/consent-operators/${id}`, { method: 'DELETE' })
 }
