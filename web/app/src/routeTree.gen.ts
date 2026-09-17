@@ -13,8 +13,10 @@ import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as AppRouteImport } from './routes/_app'
+import { Route as LegalIndexRouteImport } from './routes/legal.index'
 import { Route as AppIndexRouteImport } from './routes/_app/index'
 import { Route as OauthDoneRouteImport } from './routes/oauth.done'
+import { Route as LegalKindRouteImport } from './routes/legal.$kind'
 import { Route as JoinTokenRouteImport } from './routes/join.$token'
 import { Route as AuthTwoFactorRouteImport } from './routes/_auth/two-factor'
 import { Route as AuthResetPasswordRouteImport } from './routes/_auth/reset-password'
@@ -26,6 +28,7 @@ import { Route as AppTemplatesRouteImport } from './routes/_app/templates'
 import { Route as AppWorkspacesIndexRouteImport } from './routes/_app/workspaces.index'
 import { Route as AppFormsIndexRouteImport } from './routes/_app/forms.index'
 import { Route as AppSettingsPlanRouteImport } from './routes/_app/settings.plan'
+import { Route as AppSettingsLegalRouteImport } from './routes/_app/settings.legal'
 import { Route as AppSettingsAccountRouteImport } from './routes/_app/settings.account'
 import { Route as AppWorkspacesWorkspaceSlugIndexRouteImport } from './routes/_app/workspaces.$workspaceSlug.index'
 import { Route as AppWWorkspaceSlugTemplatesRouteImport } from './routes/_app/w.$workspaceSlug.templates'
@@ -73,6 +76,11 @@ const AppRoute = AppRouteImport.update({
   id: '/_app',
   getParentRoute: () => rootRouteImport,
 } as any)
+const LegalIndexRoute = LegalIndexRouteImport.update({
+  id: '/legal/',
+  path: '/legal/',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AppIndexRoute = AppIndexRouteImport.update({
   id: '/',
   path: '/',
@@ -81,6 +89,11 @@ const AppIndexRoute = AppIndexRouteImport.update({
 const OauthDoneRoute = OauthDoneRouteImport.update({
   id: '/oauth/done',
   path: '/oauth/done',
+  getParentRoute: () => rootRouteImport,
+} as any)
+const LegalKindRoute = LegalKindRouteImport.update({
+  id: '/legal/$kind',
+  path: '/legal/$kind',
   getParentRoute: () => rootRouteImport,
 } as any)
 const JoinTokenRoute = JoinTokenRouteImport.update({
@@ -136,6 +149,11 @@ const AppFormsIndexRoute = AppFormsIndexRouteImport.update({
 const AppSettingsPlanRoute = AppSettingsPlanRouteImport.update({
   id: '/settings/plan',
   path: '/settings/plan',
+  getParentRoute: () => AppRoute,
+} as any)
+const AppSettingsLegalRoute = AppSettingsLegalRouteImport.update({
+  id: '/settings/legal',
+  path: '/settings/legal',
   getParentRoute: () => AppRoute,
 } as any)
 const AppSettingsAccountRoute = AppSettingsAccountRouteImport.update({
@@ -313,8 +331,11 @@ export interface FileRoutesByFullPath {
   '/reset-password': typeof AuthResetPasswordRoute
   '/two-factor': typeof AuthTwoFactorRoute
   '/join/$token': typeof JoinTokenRoute
+  '/legal/$kind': typeof LegalKindRoute
   '/oauth/done': typeof OauthDoneRoute
+  '/legal/': typeof LegalIndexRoute
   '/settings/account': typeof AppSettingsAccountRoute
+  '/settings/legal': typeof AppSettingsLegalRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/forms/': typeof AppFormsIndexRoute
   '/workspaces/': typeof AppWorkspacesIndexRoute
@@ -358,8 +379,11 @@ export interface FileRoutesByTo {
   '/reset-password': typeof AuthResetPasswordRoute
   '/two-factor': typeof AuthTwoFactorRoute
   '/join/$token': typeof JoinTokenRoute
+  '/legal/$kind': typeof LegalKindRoute
   '/oauth/done': typeof OauthDoneRoute
+  '/legal': typeof LegalIndexRoute
   '/settings/account': typeof AppSettingsAccountRoute
+  '/settings/legal': typeof AppSettingsLegalRoute
   '/settings/plan': typeof AppSettingsPlanRoute
   '/forms': typeof AppFormsIndexRoute
   '/workspaces': typeof AppWorkspacesIndexRoute
@@ -403,9 +427,12 @@ export interface FileRoutesById {
   '/_auth/reset-password': typeof AuthResetPasswordRoute
   '/_auth/two-factor': typeof AuthTwoFactorRoute
   '/join/$token': typeof JoinTokenRoute
+  '/legal/$kind': typeof LegalKindRoute
   '/oauth/done': typeof OauthDoneRoute
   '/_app/': typeof AppIndexRoute
+  '/legal/': typeof LegalIndexRoute
   '/_app/settings/account': typeof AppSettingsAccountRoute
+  '/_app/settings/legal': typeof AppSettingsLegalRoute
   '/_app/settings/plan': typeof AppSettingsPlanRoute
   '/_app/forms/': typeof AppFormsIndexRoute
   '/_app/workspaces/': typeof AppWorkspacesIndexRoute
@@ -451,8 +478,11 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/two-factor'
     | '/join/$token'
+    | '/legal/$kind'
     | '/oauth/done'
+    | '/legal/'
     | '/settings/account'
+    | '/settings/legal'
     | '/settings/plan'
     | '/forms/'
     | '/workspaces/'
@@ -496,8 +526,11 @@ export interface FileRouteTypes {
     | '/reset-password'
     | '/two-factor'
     | '/join/$token'
+    | '/legal/$kind'
     | '/oauth/done'
+    | '/legal'
     | '/settings/account'
+    | '/settings/legal'
     | '/settings/plan'
     | '/forms'
     | '/workspaces'
@@ -540,9 +573,12 @@ export interface FileRouteTypes {
     | '/_auth/reset-password'
     | '/_auth/two-factor'
     | '/join/$token'
+    | '/legal/$kind'
     | '/oauth/done'
     | '/_app/'
+    | '/legal/'
     | '/_app/settings/account'
+    | '/_app/settings/legal'
     | '/_app/settings/plan'
     | '/_app/forms/'
     | '/_app/workspaces/'
@@ -581,7 +617,9 @@ export interface RootRouteChildren {
   VerifyEmailRoute: typeof VerifyEmailRoute
   WelcomeRoute: typeof WelcomeRoute
   JoinTokenRoute: typeof JoinTokenRoute
+  LegalKindRoute: typeof LegalKindRoute
   OauthDoneRoute: typeof OauthDoneRoute
+  LegalIndexRoute: typeof LegalIndexRoute
 }
 
 declare module '@tanstack/react-router' {
@@ -614,6 +652,13 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof AppRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/legal/': {
+      id: '/legal/'
+      path: '/legal'
+      fullPath: '/legal/'
+      preLoaderRoute: typeof LegalIndexRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/_app/': {
       id: '/_app/'
       path: '/'
@@ -626,6 +671,13 @@ declare module '@tanstack/react-router' {
       path: '/oauth/done'
       fullPath: '/oauth/done'
       preLoaderRoute: typeof OauthDoneRouteImport
+      parentRoute: typeof rootRouteImport
+    }
+    '/legal/$kind': {
+      id: '/legal/$kind'
+      path: '/legal/$kind'
+      fullPath: '/legal/$kind'
+      preLoaderRoute: typeof LegalKindRouteImport
       parentRoute: typeof rootRouteImport
     }
     '/join/$token': {
@@ -703,6 +755,13 @@ declare module '@tanstack/react-router' {
       path: '/settings/plan'
       fullPath: '/settings/plan'
       preLoaderRoute: typeof AppSettingsPlanRouteImport
+      parentRoute: typeof AppRoute
+    }
+    '/_app/settings/legal': {
+      id: '/_app/settings/legal'
+      path: '/settings/legal'
+      fullPath: '/settings/legal'
+      preLoaderRoute: typeof AppSettingsLegalRouteImport
       parentRoute: typeof AppRoute
     }
     '/_app/settings/account': {
@@ -981,6 +1040,7 @@ interface AppRouteChildren {
   AppTemplatesRoute: typeof AppTemplatesRoute
   AppIndexRoute: typeof AppIndexRoute
   AppSettingsAccountRoute: typeof AppSettingsAccountRoute
+  AppSettingsLegalRoute: typeof AppSettingsLegalRoute
   AppSettingsPlanRoute: typeof AppSettingsPlanRoute
   AppFormsIndexRoute: typeof AppFormsIndexRoute
   AppWorkspacesIndexRoute: typeof AppWorkspacesIndexRoute
@@ -1001,6 +1061,7 @@ const AppRouteChildren: AppRouteChildren = {
   AppTemplatesRoute: AppTemplatesRoute,
   AppIndexRoute: AppIndexRoute,
   AppSettingsAccountRoute: AppSettingsAccountRoute,
+  AppSettingsLegalRoute: AppSettingsLegalRoute,
   AppSettingsPlanRoute: AppSettingsPlanRoute,
   AppFormsIndexRoute: AppFormsIndexRoute,
   AppWorkspacesIndexRoute: AppWorkspacesIndexRoute,
@@ -1046,7 +1107,9 @@ const rootRouteChildren: RootRouteChildren = {
   VerifyEmailRoute: VerifyEmailRoute,
   WelcomeRoute: WelcomeRoute,
   JoinTokenRoute: JoinTokenRoute,
+  LegalKindRoute: LegalKindRoute,
   OauthDoneRoute: OauthDoneRoute,
+  LegalIndexRoute: LegalIndexRoute,
 }
 export const routeTree = rootRouteImport
   ._addFileChildren(rootRouteChildren)

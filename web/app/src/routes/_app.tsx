@@ -10,6 +10,7 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { HeaderSidebarTrigger } from '../features/app-shell/HeaderSidebarTrigger'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
+import { TermsUpdateBanner } from '../features/legal/TermsUpdateBanner'
 import { NotificationsBell } from '../features/notifications/NotificationsBell'
 import { AppChromeContext } from '../shared/appChrome'
 import { WorkspaceAddressProvider } from '../shared/workspaceContext'
@@ -95,6 +96,7 @@ function AppLayout() {
             ответам — обычные поля. */}
           <main className="flex-1 overflow-auto">
             {!user.emailVerified && <VerifyEmailBanner />}
+            <TermsUpdateBanner />
             <AppChromeContext.Provider value={chromeSlots}>
               <Outlet />
             </AppChromeContext.Provider>

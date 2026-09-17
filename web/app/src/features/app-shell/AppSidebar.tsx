@@ -1,5 +1,5 @@
 import { Link, useRouterState } from '@tanstack/react-router'
-import { CreditCard, LogOut, Settings } from 'lucide-react'
+import { CreditCard, LogOut, Scale, Settings } from 'lucide-react'
 
 import {
   Sidebar,
@@ -123,9 +123,9 @@ export function AppSidebar({
                 </SidebarMenuButton>
               </SidebarMenuItem>
 
-              {/* Тариф живёт по адресу настроек, но пунктом стоит своим, поэтому
-                  «Аккаунт» подсвечивается всем разделом КРОМЕ него: иначе на
-                  странице тарифа горели бы обе строки сразу.
+              {/* Тариф и правовая информация живут по адресу настроек, но пунктами
+                  стоят своими, поэтому «Аккаунт» подсвечивается всем разделом КРОМЕ них:
+                  иначе на их страницах горели бы две строки сразу.
 
                   ПУНКТ НАЗВАН «Аккаунт», как названы страница и её крошка. Пока он
                   звался «Настройки», одна страница имела три разных имени, а слово
@@ -134,13 +134,30 @@ export function AppSidebar({
                 <SidebarMenuButton
                   asChild
                   isActive={
-                    pathname.startsWith('/settings') && !pathname.startsWith('/settings/plan')
+                    pathname.startsWith('/settings') &&
+                    !pathname.startsWith('/settings/plan') &&
+                    !pathname.startsWith('/settings/legal')
                   }
                   tooltip="Аккаунт"
                 >
                   <Link to="/settings/account">
                     <Settings className="size-4" />
                     <span>Аккаунт</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+
+              {/* Правовая информация — личный ярус: согласия даёт аккаунт, а не
+                  пространство (docs/design/signup-consent.md §3.7). */}
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  isActive={pathname.startsWith('/settings/legal')}
+                  tooltip="Правовая информация"
+                >
+                  <Link to="/settings/legal">
+                    <Scale className="size-4" />
+                    <span>Правовая информация</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
