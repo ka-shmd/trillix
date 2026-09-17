@@ -46,7 +46,79 @@ export const consentsSchema = z.object({
 
 export type Consents = z.infer<typeof consentsSchema>
 
-export type ConsentKind = 'terms' | 'privacy' | 'marketing'
+export const consentKindSchema = z.enum(['terms', 'privacy', 'marketing'])
+
+export type ConsentKind = z.infer<typeof consentKindSchema>
+
+// Документы сервиса — публичные GET /legal/documents и /legal/documents/{kind}
+// (docs/design/signup-consent.md §3.4).
+export const documentSummarySchema = z.object({
+  kind: consentKindSchema,
+  title: z.string(),
+  version: z.string(),
+  effectiveAt: z.string(),
+})
+
+export type DocumentSummary = z.infer<typeof documentSummarySchema>
+
+export const documentsSchema = z.object({ items: z.array(documentSummarySchema) })
+
+export const legalDocumentSchema = documentSummarySchema.extend({
+  // Абзацы через пустую строку; рендерится текстом (инвариант 4).
+  text: z.string(),
+  versions: z.array(z.object({ version: z.string(), effectiveAt: z.string() })),
+})
+
+export type LegalDocument = z.infer<typeof legalDocumentSchema>
+
+export type DocBlock = { kind: 'heading' | 'paragraph'; text: string }
+
+// docBlocks раскладывает текст документа на заголовки и абзацы. Заголовок — короткий
+// абзац в одну строку вида «3. Аккаунт» или «Приложение № 1. …» без точки в конце; пункт
+// «3.1. …» и пункт-фраза «8. Поручение действует…» заголовками не становятся. Разметки в
+// тексте нет: документ пишется простым текстом (internal/legal/documents).
+export function docBlocks(text: string): DocBlock[] {
+  return text
+    .split(/\n{2,}/)
+    .map((p) => p.trim())
+    .filter((p) => p !== '')
+    .map((p) => ({ kind: isHeading(p) ? 'heading' : 'paragraph', text: p }))
+}
+
+function isHeading(p: string): boolean {
+  if (p.includes('\n') || p.length > 90 || /[.;:,]$/.test(p)) return false
+  return /^\d+\.\s\S/.test(p) || /^Приложение\s/.test(p)
+}
+
+// editionIso — дата редакции (YYYY-MM-DD) как момент по местному времени: formatDate от
+// голой даты прочёл бы её полночью UTC и к западу от Гринвича показал бы вчерашний день.
+export function editionIso(version: string): string {
+  return `${version}T00:00:00`
+}
+
+// Реквизиты и адрес для обращений. До юриста и юрлица — заглушки в квадратных скобках,
+// как и в текстах документов (docs/design/signup-consent.md §3.4); меняются вместе с ними.
+export const SERVICE_OPERATOR = {
+  name: '[ИП Фамилия Имя Отчество]',
+  details: ['ИНН [000000000000]', 'ОГРНИП [000000000000000]', 'Адрес: [почтовый адрес]'],
+  privacyEmail: '[privacy@trillix.ru]',
+  legalEmail: '[legal@trillix.ru]',
+} as const
+
+// Где человек дал или отозвал согласие — подписи источников журнала (consent_events.source).
+export function consentSourceLabel(source: string): string {
+  switch (source) {
+    case 'signup_password':
+    case 'signup_yandex':
+      return 'При регистрации'
+    case 'update_screen':
+      return 'Новая редакция условий'
+    case 'settings':
+      return 'В правовой информации'
+    default:
+      return 'Автоматически'
+  }
+}
 
 export interface ConsentChange {
   accept?: { kind: 'terms' | 'marketing'; version: string }[]
