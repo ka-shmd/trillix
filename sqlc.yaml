@@ -17,6 +17,7 @@ sql:
       - "internal/booking/queries.sql"
       - "internal/templates/queries.sql"
       - "internal/notify/queries.sql"
+      - "internal/legal/queries.sql"
     gen:
       go:
         # Сгенерированный код централизован в internal/postgres (ARCHITECTURE §4.2).

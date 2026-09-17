@@ -31,6 +31,18 @@ type Booking struct {
 	Revision        int32
 }
 
+type ConsentEvent struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	DocumentID   uuid.UUID
+	Action       string
+	Source       string
+	CheckboxText string
+	Email        string
+	UserAgent    string
+	CreatedAt    pgtype.Timestamptz
+}
+
 type ConsentOperator struct {
 	ID          uuid.UUID
 	WorkspaceID uuid.UUID
@@ -210,6 +222,19 @@ type KnownDevice struct {
 	ExpiresAt  pgtype.Timestamptz
 }
 
+type LegalDocument struct {
+	ID                   uuid.UUID
+	Kind                 string
+	Version              string
+	Title                string
+	Body                 string
+	Sha256               string
+	EffectiveAt          pgtype.Timestamptz
+	RequiresReacceptance bool
+	Draft                bool
+	CreatedAt            pgtype.Timestamptz
+}
+
 type LoginCode struct {
 	UserID    uuid.UUID
 	CodeHash  []byte
@@ -311,6 +336,15 @@ type SheetQueue struct {
 	EnqueuedAt   pgtype.Timestamptz
 }
 
+type SignupProfile struct {
+	UserID    uuid.UUID
+	Kind      pgtype.Text
+	Purpose   pgtype.Text
+	Referral  pgtype.Text
+	CreatedAt pgtype.Timestamptz
+	UpdatedAt pgtype.Timestamptz
+}
+
 type Submission struct {
 	ID                uuid.UUID
 	FormID            uuid.UUID
@@ -346,17 +380,18 @@ type Subscription struct {
 }
 
 type User struct {
-	ID               uuid.UUID
-	Email            string
-	PasswordHash     pgtype.Text
-	CreatedAt        pgtype.Timestamptz
-	EmailVerifiedAt  pgtype.Timestamptz
-	FirstName        pgtype.Text
-	LastName         pgtype.Text
-	DeletedAt        pgtype.Timestamptz
-	AvatarKey        pgtype.Text
-	TwoFactorEnabled bool
-	IsAdmin          bool
+	ID                uuid.UUID
+	Email             string
+	PasswordHash      pgtype.Text
+	CreatedAt         pgtype.Timestamptz
+	EmailVerifiedAt   pgtype.Timestamptz
+	FirstName         pgtype.Text
+	LastName          pgtype.Text
+	DeletedAt         pgtype.Timestamptz
+	AvatarKey         pgtype.Text
+	TwoFactorEnabled  bool
+	IsAdmin           bool
+	SignupCompletedAt pgtype.Timestamptz
 }
 
 type UserIdentity struct {
