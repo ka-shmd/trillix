@@ -108,6 +108,9 @@ describe('раздел согласия', () => {
   it('«Свои» прячет реквизиты и показывает два текста, выбор один на оба документа', () => {
     renderFields()
     expect(screen.getByLabelText('Оператор')).toBeTruthy()
+    // Цель и срок видны сразу, не за «Изменить» (решение владельца 2026-09-17).
+    expect(screen.getByLabelText('Цель обработки')).toBeTruthy()
+    expect(screen.getByLabelText('Срок обработки')).toBeTruthy()
 
     // Радиксовые вкладки переключаются нажатием мыши, а не click.
     fireEvent.mouseDown(screen.getByRole('tab', { name: 'Свои' }))
