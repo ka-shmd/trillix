@@ -157,10 +157,17 @@ func TestSaveSignupProfile_Validation(t *testing.T) {
 		ok   bool
 	}{
 		{"всё пропущено", SignupProfile{}, true},
-		{"все ответы", SignupProfile{Kind: str("company"), Purpose: str("leads"), Referral: str("article")}, true},
+		{"частное лицо целиком", SignupProfile{Kind: str("person"), FullName: str("Иванов Иван"), Occupation: str("freelance"), Profession: str("дизайнер"), Purpose: str("leads"), Referral: str("article")}, true},
+		{"компания целиком", SignupProfile{Kind: str("company"), FullName: str("Иванов Иван"), CompanyName: str("ООО «Ромашка»"), Industry: str("it"), JobPosition: str("owner")}, true},
 		{"чужой вид", SignupProfile{Kind: str("robot")}, false},
 		{"чужая цель", SignupProfile{Purpose: str("")}, false},
 		{"чужой источник", SignupProfile{Referral: str("tv")}, false},
+		{"чужое занятие", SignupProfile{Kind: str("person"), Occupation: str("pilot")}, false},
+		{"чужая сфера", SignupProfile{Kind: str("company"), Industry: str("space")}, false},
+		{"чужая должность", SignupProfile{Kind: str("company"), JobPosition: str("ceo")}, false},
+		{"ФИО длиннее 200", SignupProfile{FullName: str(strings.Repeat("я", 201))}, false},
+		{"профессия длиннее 100", SignupProfile{Kind: str("person"), Profession: str(strings.Repeat("я", 101))}, false},
+		{"название длиннее 300", SignupProfile{Kind: str("company"), CompanyName: str(strings.Repeat("я", 301))}, false},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -176,6 +183,29 @@ func TestSaveSignupProfile_Validation(t *testing.T) {
 	}
 }
 
+func TestSaveSignupProfile_Normalizes(t *testing.T) {
+	str := func(s string) *string { return &s }
+	store := &fakeStore{}
+	// Человек заполнил вкладку компании, переключился на частное лицо и отправил.
+	err := newService(store).SaveSignupProfile(context.Background(), domain.NewID(), SignupProfile{
+		Kind: str("person"), FullName: str("  Иванов Иван  "), Profession: str("   "),
+		CompanyName: str("ООО «Ромашка»"), Industry: str("it"), JobPosition: str("owner"), Occupation: str("study"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := store.signupProfile
+	if p.FullName == nil || *p.FullName != "Иванов Иван" {
+		t.Fatalf("ФИО не обрезано: %v", p.FullName)
+	}
+	if p.Profession != nil {
+		t.Fatalf("пустая профессия сохранена: %q", *p.Profession)
+	}
+	if p.Occupation == nil || p.CompanyName != nil || p.Industry != nil || p.JobPosition != nil {
+		t.Fatalf("поля чужой вкладки не отброшены: %+v", p)
+	}
+}
+
 func TestSaveSignupProfile_Handler(t *testing.T) {
 	user := User{ID: domain.NewID()}
 	svc := &fakeAuthService{user: user}
@@ -187,7 +217,8 @@ func TestSaveSignupProfile_Handler(t *testing.T) {
 	mux := http.NewServeMux()
 	h.AccountRoutes(mux)
 
-	req := sessionRequest(http.MethodPut, "/api/v1/account/signup-profile", `{"kind":"person","purpose":null,"referral":"search"}`)
+	req := sessionRequest(http.MethodPut, "/api/v1/account/signup-profile",
+		`{"kind":"person","purpose":null,"referral":"search","fullName":"Иванов Иван","occupation":"study","profession":"дизайнер","companyName":null,"industry":null,"jobPosition":null}`)
 	req.AddCookie(&http.Cookie{Name: csrfCookieName, Value: "tok"})
 	req.Header.Set(csrfHeaderName, "tok")
 	rec := httptest.NewRecorder()
@@ -196,7 +227,8 @@ func TestSaveSignupProfile_Handler(t *testing.T) {
 		t.Fatalf("статус = %d; тело = %s", rec.Code, rec.Body)
 	}
 	p := svc.signupProfile
-	if svc.signupProfileUser != user.ID || p.Kind == nil || *p.Kind != "person" || p.Purpose != nil || p.Referral == nil || *p.Referral != "search" {
+	if svc.signupProfileUser != user.ID || p.Kind == nil || *p.Kind != "person" || p.Purpose != nil || p.Referral == nil || *p.Referral != "search" ||
+		p.FullName == nil || *p.FullName != "Иванов Иван" || p.Profession == nil || *p.Profession != "дизайнер" {
 		t.Fatalf("до сервиса дошло %s %+v", svc.signupProfileUser, p)
 	}
 }

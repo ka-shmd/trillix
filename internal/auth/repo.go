@@ -609,10 +609,16 @@ func (Repo) MarkSignupCompleted(ctx context.Context, db postgres.DBTX, userID uu
 
 func (Repo) UpsertSignupProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, p SignupProfile) error {
 	err := postgres.New(db).UpsertSignupProfile(ctx, postgres.UpsertSignupProfileParams{
-		UserID:   userID,
-		Kind:     pgText(p.Kind),
-		Purpose:  pgText(p.Purpose),
-		Referral: pgText(p.Referral),
+		UserID:      userID,
+		Kind:        pgText(p.Kind),
+		Purpose:     pgText(p.Purpose),
+		Referral:    pgText(p.Referral),
+		FullName:    pgText(p.FullName),
+		Occupation:  pgText(p.Occupation),
+		Profession:  pgText(p.Profession),
+		CompanyName: pgText(p.CompanyName),
+		Industry:    pgText(p.Industry),
+		JobPosition: pgText(p.JobPosition),
 	})
 	if err != nil {
 		return fmt.Errorf("upsert signup profile %s: %w", userID, err)

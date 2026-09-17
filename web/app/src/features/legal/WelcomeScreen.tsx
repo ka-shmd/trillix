@@ -1,16 +1,20 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useId, useState } from 'react'
 import { useQuery } from '@tanstack/react-query'
 
 import { consentsQueryOptions, useCompleteConsent } from './queries'
 import {
+  emptySignupDraft,
   legalDocumentPath,
-  SIGNUP_KINDS,
+  SIGNUP_INDUSTRIES,
+  SIGNUP_OCCUPATIONS,
+  SIGNUP_POSITIONS,
   SIGNUP_PURPOSES,
   SIGNUP_REFERRALS,
-  profileOf,
-  type Consents,
+  signupProfileOf,
   type ConsentChange,
-  type SignupProfile,
+  type Consents,
+  type SignupDraft,
+  type SignupKind,
 } from '../../entities/legal'
 import { humanError } from '../../shared/api/errors'
 import { formatDate } from '../../shared/format'
@@ -20,23 +24,24 @@ import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
-import { Separator } from '@/components/ui/separator'
 import { Skeleton } from '@/components/ui/skeleton'
+import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
 // Экран согласия (docs/design/signup-consent.md §3.3). Два варианта по ответу сервера:
-// «Завершение регистрации» — соглашение, согласие на рассылки и анкета; «Условия
-// использования обновились» — только соглашение. Пока галочка соглашения не отмечена,
-// ни одна кнопка, которая ведёт в кабинет, не нажимается.
+// «Поделитесь парой деталей» — анкета по вкладкам «Частное лицо» и «Компания или ИП»
+// (по образцу WebAsk, решение владельца 2026-09-17) и согласия; «Условия использования
+// обновились» — только соглашение. Единственное действие — завершить, и оно доступно, как
+// только отмечено соглашение: анкета необязательна, уйти с экрана без согласия нельзя.
 
 interface Props {
-  email: string
+  // defaultFullName — ФИО, известное из профиля (имя и фамилия от Яндекса), подставленное в
+  // анкету заранее.
+  defaultFullName: string
   // onDone — согласие принято: маршрут возвращает человека туда, куда он шёл.
   onDone: () => void
-  onLogout: () => void
-  logoutPending: boolean
 }
 
-export function WelcomeScreen({ email, onDone, onLogout, logoutPending }: Props) {
+export function WelcomeScreen({ defaultFullName, onDone }: Props) {
   const consents = useQuery(consentsQueryOptions)
   const screen = consents.data?.screen
 
@@ -48,14 +53,15 @@ export function WelcomeScreen({ email, onDone, onLogout, logoutPending }: Props)
 
   if (consents.isPending) {
     return (
-      <Card className="w-full max-w-md">
+      <Card className="w-full max-w-2xl">
         <CardHeader>
           <Skeleton className="h-6 w-56" />
+          <Skeleton className="h-4 w-80" />
         </CardHeader>
         <CardContent className="flex flex-col gap-3">
           <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-5 w-full" />
-          <Skeleton className="h-5 w-3/4" />
+          <Skeleton className="h-8 w-full" />
+          <Skeleton className="h-8 w-full" />
         </CardContent>
       </Card>
     )
@@ -69,10 +75,7 @@ export function WelcomeScreen({ email, onDone, onLogout, logoutPending }: Props)
           <CardTitle className="text-xl">Не удалось загрузить условия</CardTitle>
           <CardDescription>{humanError(consents.error)}</CardDescription>
         </CardHeader>
-        <CardFooter className="flex justify-between gap-2">
-          <Button variant="ghost" onClick={onLogout} disabled={logoutPending}>
-            Выйти
-          </Button>
+        <CardFooter className="justify-end">
           <Button onClick={() => void consents.refetch()}>Попробовать ещё раз</Button>
         </CardFooter>
       </Card>
@@ -82,71 +85,120 @@ export function WelcomeScreen({ email, onDone, onLogout, logoutPending }: Props)
   const { terms } = data
   if (data.screen === null || !terms) return null
 
-  return (
-    <ConsentForm
-      consents={data}
-      terms={terms}
-      variant={data.screen}
-      email={email}
-      onDone={onDone}
-      onLogout={onLogout}
-      logoutPending={logoutPending}
-    />
+  return data.screen === 'signup' ? (
+    <SignupForm consents={data} terms={terms} defaultFullName={defaultFullName} onDone={onDone} />
+  ) : (
+    <UpdateForm terms={terms} onDone={onDone} />
   )
 }
 
-function ConsentForm({
+type Terms = NonNullable<Consents['terms']>
+
+function SignupForm({
   consents,
   terms,
-  variant,
-  email,
+  defaultFullName,
   onDone,
-  onLogout,
-  logoutPending,
-}: Omit<Props, 'email'> & {
+}: {
   consents: Consents
-  terms: NonNullable<Consents['terms']>
-  variant: 'signup' | 'update'
-  email: string
+  terms: Terms
+  defaultFullName: string
+  onDone: () => void
 }) {
+  const [draft, setDraft] = useState<SignupDraft>(() => emptySignupDraft(defaultFullName))
   const [acceptTerms, setAcceptTerms] = useState(false)
   const [acceptMarketing, setAcceptMarketing] = useState(false)
-  const [answers, setAnswers] = useState<SignupProfile>({ kind: null, purpose: null, referral: null })
   const complete = useCompleteConsent()
-  const marketing = variant === 'signup' ? consents.marketing : null
+  const set = <K extends keyof SignupDraft>(key: K, value: SignupDraft[K]) =>
+    setDraft((d) => ({ ...d, [key]: value }))
+  const { marketing } = consents
 
-  const submit = (withProfile: boolean) => {
+  const submit = () => {
     const change: ConsentChange = { accept: [{ kind: 'terms', version: terms.version }] }
     if (marketing && acceptMarketing) change.accept?.push({ kind: 'marketing', version: marketing.version })
-    complete.mutate(
-      { change, profile: withProfile ? profileOf(answers) : null },
-      { onSuccess: () => onDone() },
-    )
+    complete.mutate({ change, profile: signupProfileOf(draft) }, { onSuccess: () => onDone() })
   }
-  const blocked = !acceptTerms || complete.isPending
 
   return (
-    <Card className="w-full max-w-md">
+    <Card className="w-full max-w-2xl">
       <CardHeader>
-        <CardTitle className="text-xl">
-          {variant === 'signup' ? 'Завершение регистрации' : 'Условия использования обновились'}
-        </CardTitle>
+        <CardTitle className="text-xl">Поделитесь парой деталей</CardTitle>
         <CardDescription>
-          {variant === 'signup'
-            ? 'Остался последний шаг — примите условия использования Trillix.'
-            : `Новая редакция Пользовательского соглашения действует с ${formatDate(terms.effectiveAt)}. Чтобы продолжить работу, примите её.`}
+          Так мы подстроим Trillix под ваши задачи. Чтобы завершить регистрацию, примите условия
+          использования.
         </CardDescription>
       </CardHeader>
 
-      <CardContent className="flex flex-col gap-4">
-        {variant === 'signup' && (
-          <div className="flex flex-col gap-2">
-            <Label htmlFor="welcome-email">Email</Label>
-            <Input id="welcome-email" value={email} readOnly />
-          </div>
-        )}
+      <CardContent className="flex flex-col gap-6">
+        {/* Подпись слева, поле справа — как на образце: вопросы читаются столбцом, и анкета
+            не превращается в простыню из подписей над полями. На узком экране подпись
+            уходит над полем. */}
+        <div className="grid items-center gap-x-6 gap-y-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
+          <KindRow value={draft.kind} onChange={(kind) => set('kind', kind)} />
 
-        <div className="flex flex-col gap-3">
+          <TextRow
+            label="Ваше полное имя"
+            placeholder="Например, Иванов Иван Иванович"
+            value={draft.fullName}
+            onChange={(v) => set('fullName', v)}
+            maxLength={200}
+          />
+
+          {draft.kind === 'person' ? (
+            <>
+              <SelectRow
+                label="Чем вы занимаетесь?"
+                options={SIGNUP_OCCUPATIONS}
+                value={draft.occupation}
+                onChange={(v) => set('occupation', v)}
+              />
+              <TextRow
+                label="Ваша профессия"
+                placeholder="Например, дизайнер"
+                value={draft.profession}
+                onChange={(v) => set('profession', v)}
+                maxLength={100}
+              />
+            </>
+          ) : (
+            <>
+              <TextRow
+                label="Название организации или ИП"
+                placeholder="Например, ООО «Ромашка»"
+                value={draft.companyName}
+                onChange={(v) => set('companyName', v)}
+                maxLength={300}
+              />
+              <SelectRow
+                label="Сфера деятельности"
+                options={SIGNUP_INDUSTRIES}
+                value={draft.industry}
+                onChange={(v) => set('industry', v)}
+              />
+              <SelectRow
+                label="Ваша должность"
+                options={SIGNUP_POSITIONS}
+                value={draft.jobPosition}
+                onChange={(v) => set('jobPosition', v)}
+              />
+            </>
+          )}
+
+          <SelectRow
+            label="Как вы о нас узнали?"
+            options={SIGNUP_REFERRALS}
+            value={draft.referral}
+            onChange={(v) => set('referral', v)}
+          />
+          <SelectRow
+            label="Для чего вы будете использовать Trillix?"
+            options={SIGNUP_PURPOSES}
+            value={draft.purpose}
+            onChange={(v) => set('purpose', v)}
+          />
+        </div>
+
+        <ConsentPanel>
           <ConsentCheck
             id="welcome-terms"
             checked={acceptTerms}
@@ -165,46 +217,7 @@ function ConsentForm({
               href={legalDocumentPath('marketing', marketing.version)}
             />
           )}
-          <p className="text-sm text-muted-foreground">
-            Как мы обрабатываем данные —{' '}
-            <DocLink href={legalDocumentPath('privacy')}>Политика обработки персональных данных</DocLink>
-          </p>
-        </div>
-
-        {variant === 'signup' && (
-          <>
-            <Separator />
-            <div className="flex flex-col gap-3">
-              <div>
-                <p className="text-sm font-semibold">Расскажите о себе</p>
-                <p className="text-sm text-muted-foreground">
-                  Необязательно — так мы поймём, что улучшать в первую очередь.
-                </p>
-              </div>
-              <Question
-                id="welcome-kind"
-                label="Кто вы?"
-                options={SIGNUP_KINDS}
-                value={answers.kind}
-                onChange={(kind) => setAnswers((a) => ({ ...a, kind }))}
-              />
-              <Question
-                id="welcome-purpose"
-                label="Для чего будете использовать Trillix?"
-                options={SIGNUP_PURPOSES}
-                value={answers.purpose}
-                onChange={(purpose) => setAnswers((a) => ({ ...a, purpose }))}
-              />
-              <Question
-                id="welcome-referral"
-                label="Как вы о нас узнали?"
-                options={SIGNUP_REFERRALS}
-                value={answers.referral}
-                onChange={(referral) => setAnswers((a) => ({ ...a, referral }))}
-              />
-            </div>
-          </>
-        )}
+        </ConsentPanel>
 
         {complete.isError && (
           <p role="alert" className="text-sm text-destructive">
@@ -213,26 +226,149 @@ function ConsentForm({
         )}
       </CardContent>
 
-      <CardFooter className="flex flex-wrap justify-between gap-2">
-        <Button variant="ghost" onClick={onLogout} disabled={logoutPending}>
-          Выйти
+      <CardFooter className="justify-end">
+        <Button disabled={!acceptTerms || complete.isPending} onClick={submit}>
+          Завершить регистрацию
         </Button>
-        {variant === 'signup' ? (
-          <div className="flex flex-wrap gap-2">
-            <Button variant="outline" disabled={blocked} onClick={() => submit(false)}>
-              Пропустить
-            </Button>
-            <Button disabled={blocked} onClick={() => submit(true)}>
-              Завершить регистрацию
-            </Button>
-          </div>
-        ) : (
-          <Button disabled={blocked} onClick={() => submit(false)}>
-            Принять
-          </Button>
-        )}
       </CardFooter>
     </Card>
+  )
+}
+
+function UpdateForm({ terms, onDone }: { terms: Terms; onDone: () => void }) {
+  const [acceptTerms, setAcceptTerms] = useState(false)
+  const complete = useCompleteConsent()
+
+  return (
+    <Card className="w-full max-w-md">
+      <CardHeader>
+        <CardTitle className="text-xl">Условия использования обновились</CardTitle>
+        <CardDescription>
+          С {formatDate(terms.effectiveAt)} действует новая редакция Пользовательского соглашения.
+          Чтобы продолжить работу, примите её.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="flex flex-col gap-4">
+        <ConsentPanel>
+          <ConsentCheck
+            id="welcome-terms"
+            checked={acceptTerms}
+            onChange={setAcceptTerms}
+            label={terms.label}
+            link={terms.link}
+            href={legalDocumentPath('terms', terms.version)}
+          />
+        </ConsentPanel>
+        {complete.isError && (
+          <p role="alert" className="text-sm text-destructive">
+            {humanError(complete.error)}
+          </p>
+        )}
+      </CardContent>
+      <CardFooter className="justify-end">
+        <Button
+          disabled={!acceptTerms || complete.isPending}
+          onClick={() =>
+            complete.mutate(
+              { change: { accept: [{ kind: 'terms', version: terms.version }] }, profile: null },
+              { onSuccess: () => onDone() },
+            )
+          }
+        >
+          Принять и продолжить
+        </Button>
+      </CardFooter>
+    </Card>
+  )
+}
+
+// ConsentPanel — согласия отдельной плоскостью под анкетой: это не вопрос о человеке, а
+// условие входа, и в ряду вопросов оно терялось. Политика — строкой внизу панели.
+function ConsentPanel({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-3 rounded-lg bg-muted/60 p-4">
+      {children}
+      <p className="text-sm text-muted-foreground">
+        Как мы обрабатываем данные —{' '}
+        <DocLink href={legalDocumentPath('privacy')}>Политика обработки персональных данных</DocLink>
+      </p>
+    </div>
+  )
+}
+
+function KindRow({ value, onChange }: { value: SignupKind; onChange: (v: SignupKind) => void }) {
+  const labelId = useId()
+  return (
+    <>
+      <span id={labelId} className="text-sm font-semibold">
+        Кто вы на нашем сервисе?
+      </span>
+      <Tabs value={value} onValueChange={(v) => onChange(v === 'company' ? 'company' : 'person')}>
+        <TabsList aria-labelledby={labelId} className="grid w-full grid-cols-2">
+          <TabsTrigger value="person">Частное лицо</TabsTrigger>
+          <TabsTrigger value="company">Компания или ИП</TabsTrigger>
+        </TabsList>
+      </Tabs>
+    </>
+  )
+}
+
+function TextRow({
+  label,
+  placeholder,
+  value,
+  onChange,
+  maxLength,
+}: {
+  label: string
+  placeholder: string
+  value: string
+  onChange: (v: string) => void
+  maxLength: number
+}) {
+  const id = useId()
+  return (
+    <>
+      <Label htmlFor={id}>{label}</Label>
+      <Input
+        id={id}
+        value={value}
+        placeholder={placeholder}
+        maxLength={maxLength}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </>
+  )
+}
+
+function SelectRow<T extends string>({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string
+  options: readonly { value: T; label: string }[]
+  value: T | null
+  onChange: (v: T | null) => void
+}) {
+  const id = useId()
+  return (
+    <>
+      <Label htmlFor={id}>{label}</Label>
+      <Select value={value ?? ''} onValueChange={(v) => onChange(options.find((o) => o.value === v)?.value ?? null)}>
+        <SelectTrigger id={id} className="w-full">
+          <SelectValue placeholder="Выберите из списка" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.value} value={o.value}>
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </>
   )
 }
 
@@ -280,41 +416,6 @@ function ConsentCheck({
           </span>
         )}
       </Label>
-    </div>
-  )
-}
-
-function Question<T extends string>({
-  id,
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  id: string
-  label: string
-  options: readonly { value: T; label: string }[]
-  value: T | null
-  onChange: (v: T | null) => void
-}) {
-  return (
-    <div className="flex flex-col gap-2">
-      <Label htmlFor={id}>{label}</Label>
-      <Select
-        value={value ?? ''}
-        onValueChange={(v) => onChange((options.find((o) => o.value === v)?.value ?? null) as T | null)}
-      >
-        <SelectTrigger id={id} className="w-full">
-          <SelectValue placeholder="Выберите из списка" />
-        </SelectTrigger>
-        <SelectContent>
-          {options.map((o) => (
-            <SelectItem key={o.value} value={o.value}>
-              {o.label}
-            </SelectItem>
-          ))}
-        </SelectContent>
-      </Select>
     </div>
   )
 }

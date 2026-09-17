@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/google/uuid"
 
@@ -54,27 +56,75 @@ func (s *Service) MarkSignupCompleted(ctx context.Context, db postgres.DBTX, use
 	return s.repo.MarkSignupCompleted(ctx, db, userID)
 }
 
-// SignupProfile — анкета при завершении регистрации. nil — вопрос пропущен.
+// SignupProfile — анкета при завершении регистрации: общие вопросы и поля вкладок «Частное
+// лицо» (Occupation, Profession) и «Компания или ИП» (CompanyName, Industry, JobPosition).
+// nil — вопрос пропущен.
 type SignupProfile struct {
-	Kind     *string
-	Purpose  *string
-	Referral *string
+	Kind        *string
+	Purpose     *string
+	Referral    *string
+	FullName    *string
+	Occupation  *string
+	Profession  *string
+	CompanyName *string
+	Industry    *string
+	JobPosition *string
 }
 
-// Варианты ответов анкеты. Зеркалит CHECK signup_profiles (0071) и список на экране
-// «Завершение регистрации» в кабинете.
+// Варианты ответов анкеты. Зеркалит CHECK signup_profiles (0071, 0072) и списки экрана
+// «Завершение регистрации» (web/app/src/entities/legal.ts).
 var (
-	signupKinds     = []string{"person", "company"}
-	signupPurposes  = []string{"research", "leads", "events", "booking", "feedback", "quizzes", "other"}
-	signupReferrals = []string{"search", "ads", "social", "recommendation", "article", "other"}
+	signupKinds       = []string{"person", "company"}
+	signupPurposes    = []string{"research", "leads", "events", "booking", "feedback", "quizzes", "other"}
+	signupReferrals   = []string{"search", "ads", "social", "recommendation", "article", "other"}
+	signupOccupations = []string{"study", "employed", "freelance", "teaching", "science", "other"}
+	signupIndustries  = []string{
+		"education", "it", "marketing", "healthcare", "retail", "services",
+		"manufacturing", "finance", "public", "hr", "events", "other",
+	}
+	signupPositions = []string{"owner", "marketing", "hr", "product", "analytics", "teaching", "development", "other"}
 )
 
-// SaveSignupProfile сохраняет анкету целиком: повторная отправка перезаписывает ответы.
+// Потолки свободных полей анкеты в рунах. Зеркалит CHECK signup_profiles (0072).
+const (
+	maxSignupFullName    = 200
+	maxSignupProfession  = 100
+	maxSignupCompanyName = 300
+)
+
+// SaveSignupProfile сохраняет анкету целиком: повторная отправка перезаписывает ответы. Поля
+// чужой вкладки отбрасываются — человек мог заполнить их и переключиться.
 func (s *Service) SaveSignupProfile(ctx context.Context, userID uuid.UUID, p SignupProfile) error {
-	if !oneOf(p.Kind, signupKinds) || !oneOf(p.Purpose, signupPurposes) || !oneOf(p.Referral, signupReferrals) {
+	p.FullName, p.Profession, p.CompanyName = trimmedOrNil(p.FullName), trimmedOrNil(p.Profession), trimmedOrNil(p.CompanyName)
+	if !oneOf(p.Kind, signupKinds) || !oneOf(p.Purpose, signupPurposes) || !oneOf(p.Referral, signupReferrals) ||
+		!oneOf(p.Occupation, signupOccupations) || !oneOf(p.Industry, signupIndustries) || !oneOf(p.JobPosition, signupPositions) {
 		return fmt.Errorf("%w: такого варианта ответа нет", domain.ErrValidation)
 	}
+	if tooLong(p.FullName, maxSignupFullName) || tooLong(p.Profession, maxSignupProfession) || tooLong(p.CompanyName, maxSignupCompanyName) {
+		return fmt.Errorf("%w: слишком длинный ответ", domain.ErrValidation)
+	}
+	if p.Kind == nil || *p.Kind != "person" {
+		p.Occupation, p.Profession = nil, nil
+	}
+	if p.Kind == nil || *p.Kind != "company" {
+		p.CompanyName, p.Industry, p.JobPosition = nil, nil, nil
+	}
 	return s.repo.UpsertSignupProfile(ctx, s.db, userID, p)
+}
+
+func trimmedOrNil(v *string) *string {
+	if v == nil {
+		return nil
+	}
+	t := strings.TrimSpace(*v)
+	if t == "" {
+		return nil
+	}
+	return &t
+}
+
+func tooLong(v *string, maxRunes int) bool {
+	return v != nil && utf8.RuneCountInString(*v) > maxRunes
 }
 
 func oneOf(v *string, allowed []string) bool {

@@ -125,11 +125,47 @@ export interface ConsentChange {
   withdraw?: 'marketing'[]
 }
 
-// Анкета регистрации. Коды зеркалят CHECK signup_profiles (0071) и signupKinds/
-// signupPurposes/signupReferrals в internal/auth/signup.go.
+// Анкета регистрации по вкладкам «Частное лицо» и «Компания или ИП» — по образцу WebAsk
+// (решение владельца 2026-09-17, docs/design/signup-consent.md §3.3). Коды зеркалят CHECK
+// signup_profiles (0071, 0072) и списки в internal/auth/signup.go.
 export const SIGNUP_KINDS = [
   { value: 'person', label: 'Частное лицо' },
   { value: 'company', label: 'Компания или ИП' },
+] as const
+
+export const SIGNUP_OCCUPATIONS = [
+  { value: 'study', label: 'Учусь' },
+  { value: 'employed', label: 'Работаю в найме' },
+  { value: 'freelance', label: 'Фриланс или самозанятость' },
+  { value: 'teaching', label: 'Преподаю' },
+  { value: 'science', label: 'Наука и исследования' },
+  { value: 'other', label: 'Другое' },
+] as const
+
+export const SIGNUP_INDUSTRIES = [
+  { value: 'education', label: 'Образование' },
+  { value: 'it', label: 'ИТ и разработка' },
+  { value: 'marketing', label: 'Маркетинг и реклама' },
+  { value: 'healthcare', label: 'Медицина и здоровье' },
+  { value: 'retail', label: 'Торговля и интернет-магазины' },
+  { value: 'services', label: 'Услуги' },
+  { value: 'manufacturing', label: 'Производство' },
+  { value: 'finance', label: 'Финансы и страхование' },
+  { value: 'public', label: 'Госсектор и некоммерческие организации' },
+  { value: 'hr', label: 'Подбор персонала' },
+  { value: 'events', label: 'Мероприятия' },
+  { value: 'other', label: 'Другое' },
+] as const
+
+export const SIGNUP_POSITIONS = [
+  { value: 'owner', label: 'Руководитель или собственник' },
+  { value: 'marketing', label: 'Маркетинг' },
+  { value: 'hr', label: 'Кадры и подбор персонала' },
+  { value: 'product', label: 'Управление продуктом или проектами' },
+  { value: 'analytics', label: 'Аналитика и исследования' },
+  { value: 'teaching', label: 'Преподавание и обучение' },
+  { value: 'development', label: 'Разработка' },
+  { value: 'other', label: 'Другое' },
 ] as const
 
 export const SIGNUP_PURPOSES = [
@@ -151,17 +187,62 @@ export const SIGNUP_REFERRALS = [
   { value: 'other', label: 'Другое' },
 ] as const
 
-export interface SignupProfile {
-  kind: (typeof SIGNUP_KINDS)[number]['value'] | null
-  purpose: (typeof SIGNUP_PURPOSES)[number]['value'] | null
-  referral: (typeof SIGNUP_REFERRALS)[number]['value'] | null
+type Code<T extends readonly { value: string }[]> = T[number]['value']
+
+export type SignupKind = Code<typeof SIGNUP_KINDS>
+
+// SignupDraft — анкета, как её держит экран: поля обеих вкладок живут вместе, чтобы
+// переключение вкладки не стирало набранное.
+export interface SignupDraft {
+  kind: SignupKind
+  fullName: string
+  occupation: Code<typeof SIGNUP_OCCUPATIONS> | null
+  profession: string
+  companyName: string
+  industry: Code<typeof SIGNUP_INDUSTRIES> | null
+  jobPosition: Code<typeof SIGNUP_POSITIONS> | null
+  purpose: Code<typeof SIGNUP_PURPOSES> | null
+  referral: Code<typeof SIGNUP_REFERRALS> | null
 }
 
-// profileOf — анкета к отправке; null, если человек не ответил ни на один вопрос: пустую
-// строку анкеты заводить незачем.
-export function profileOf(a: SignupProfile): SignupProfile | null {
-  if (a.kind === null && a.purpose === null && a.referral === null) return null
-  return a
+// SignupProfile — тело PUT /account/signup-profile. null — вопрос пропущен.
+export type SignupProfile = Omit<SignupDraft, 'fullName' | 'profession' | 'companyName'> & {
+  fullName: string | null
+  profession: string | null
+  companyName: string | null
+}
+
+export function emptySignupDraft(fullName = ''): SignupDraft {
+  return {
+    kind: 'person',
+    fullName,
+    occupation: null,
+    profession: '',
+    companyName: '',
+    industry: null,
+    jobPosition: null,
+    purpose: null,
+    referral: null,
+  }
+}
+
+// signupProfileOf — анкета к отправке: пустые строки становятся «пропущено», поля чужой
+// вкладки не уходят. Сервер отбрасывает их и сам, но отправлять то, что человек видит
+// скрытым, незачем.
+export function signupProfileOf(d: SignupDraft): SignupProfile {
+  const text = (v: string) => (v.trim() === '' ? null : v.trim())
+  const person = d.kind === 'person'
+  return {
+    kind: d.kind,
+    fullName: text(d.fullName),
+    occupation: person ? d.occupation : null,
+    profession: person ? text(d.profession) : null,
+    companyName: person ? null : text(d.companyName),
+    industry: person ? null : d.industry,
+    jobPosition: person ? null : d.jobPosition,
+    purpose: d.purpose,
+    referral: d.referral,
+  }
 }
 
 // legalDocumentPath — адрес публичной страницы документа; с версией — той самой

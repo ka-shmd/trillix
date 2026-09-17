@@ -337,12 +337,18 @@ type SheetQueue struct {
 }
 
 type SignupProfile struct {
-	UserID    uuid.UUID
-	Kind      pgtype.Text
-	Purpose   pgtype.Text
-	Referral  pgtype.Text
-	CreatedAt pgtype.Timestamptz
-	UpdatedAt pgtype.Timestamptz
+	UserID      uuid.UUID
+	Kind        pgtype.Text
+	Purpose     pgtype.Text
+	Referral    pgtype.Text
+	CreatedAt   pgtype.Timestamptz
+	UpdatedAt   pgtype.Timestamptz
+	FullName    pgtype.Text
+	Occupation  pgtype.Text
+	Profession  pgtype.Text
+	CompanyName pgtype.Text
+	Industry    pgtype.Text
+	JobPosition pgtype.Text
 }
 
 type Submission struct {

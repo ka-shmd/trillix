@@ -3,7 +3,7 @@ import { createFileRoute, redirect, useNavigate } from '@tanstack/react-router'
 import { useQuery, useQueryClient } from '@tanstack/react-query'
 import { z } from 'zod'
 
-import { meQueryOptions, useLogout } from '../features/auth/queries'
+import { meQueryOptions } from '../features/auth/queries'
 import { authKeys } from '../features/auth/keys'
 import { WelcomeScreen } from '../features/legal/WelcomeScreen'
 import { safeRedirect } from '../shared/api/consentGate'
@@ -32,7 +32,9 @@ function WelcomePage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const { data: me } = useQuery(meQueryOptions)
-  const logout = useLogout()
+  // ФИО в порядке «Фамилия Имя»: так его пишут в анкете, а профиль от Яндекса отчества не
+  // знает — человек допишет его сам.
+  const defaultFullName = [me?.lastName, me?.firstName].filter(Boolean).join(' ')
 
   // me сносится, а не патчится: гард _app перечитает его и сам решит, открыт ли кабинет.
   const onDone = useCallback(() => {
@@ -42,12 +44,7 @@ function WelcomePage() {
 
   return (
     <main className="flex min-h-svh items-center justify-center bg-muted/40 p-6">
-      <WelcomeScreen
-        email={me?.email ?? ''}
-        onDone={onDone}
-        onLogout={() => logout.mutate(undefined, { onSuccess: () => void navigate({ to: '/login' }) })}
-        logoutPending={logout.isPending}
-      />
+      <WelcomeScreen defaultFullName={defaultFullName} onDone={onDone} />
     </main>
   )
 }
