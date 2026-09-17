@@ -23,6 +23,7 @@ func TestConsentLimitsParityWithCabinet(t *testing.T) {
 	}
 	want := map[string]int{
 		"MAX_CONSENT_OPERATOR_NAME_LEN":    MaxConsentOperatorNameLen,
+		"MAX_CONSENT_OPERATOR_INN_LEN":     MaxConsentOperatorINNLen,
 		"MAX_CONSENT_OPERATOR_ADDRESS_LEN": MaxConsentOperatorAddressLen,
 		"MAX_CONSENT_EMAIL_LEN":            MaxConsentEmailLen,
 		"MAX_CONSENT_PURPOSE_LEN":          MaxConsentPurposeLen,

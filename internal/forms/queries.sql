@@ -553,13 +553,6 @@ FROM form_versions
 WHERE form_id = $1
 ORDER BY version;
 
--- name: GetFormVersionSchema :one
--- Снапшот одной версии по номеру — странице документа согласия: перечень данных в
--- типовом тексте берётся из той версии, по которой человек отправлял ответ.
-SELECT schema
-FROM form_versions
-WHERE form_id = $1 AND version = $2;
-
 -- name: NextFormVersion :one
 -- Следующий номер версии формы: max+1 (1 для первой публикации). Уникальность
 -- (form_id, version) в схеме страхует от гонки двух параллельных публикаций —

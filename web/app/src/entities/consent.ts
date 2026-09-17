@@ -6,6 +6,7 @@ import { z } from 'zod'
 // Потолки полей в символах. Зеркалят Max* в internal/domain/consent.go — сверяет
 // consent_parity_test.go.
 export const MAX_CONSENT_OPERATOR_NAME_LEN = 300
+export const MAX_CONSENT_OPERATOR_INN_LEN = 12
 export const MAX_CONSENT_OPERATOR_ADDRESS_LEN = 500
 export const MAX_CONSENT_EMAIL_LEN = 254
 export const MAX_CONSENT_PURPOSE_LEN = 1000

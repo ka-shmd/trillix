@@ -173,35 +173,27 @@ func (s *Service) ConsentRevisionEnabled(ctx context.Context, formID, revisionID
 	return rev.Enabled, nil
 }
 
-// PublicConsentDocument — документ ревизии для страницы на домене форм. version — номер
-// версии формы, по которой собирается перечень данных; 0 — текущая опубликованная.
+// PublicConsentDocument — документ ревизии для страницы на домене форм. Перечень данных и
+// название формы — всегда по ТЕКУЩЕЙ опубликованной версии: номер старой версии публично
+// не принимается, иначе по нему открывались бы вопросы, которые автор с формы снял
+// (решение владельца 2026-09-17). Реквизиты и текст — по ревизии, какой бы старой она ни была.
 //
 // Видимость — как у отдачи формы: черновик и форма удалённого владельца → 404, пароль
 // без токена → ErrFormLocked. Выключенная ревизия галочки не показывала и документа не
 // имеет → 404.
-func (s *Service) PublicConsentDocument(ctx context.Context, slug string, kind domain.ConsentDocKind, revisionID uuid.UUID, version int32, unlock string) (domain.ConsentDocument, error) {
+func (s *Service) PublicConsentDocument(ctx context.Context, slug string, kind domain.ConsentDocKind, revisionID uuid.UUID, unlock string) (domain.ConsentDocument, error) {
 	if kind != domain.ConsentDocConsent && kind != domain.ConsentDocPolicy {
 		return domain.ConsentDocument{}, domain.ErrNotFound
 	}
-	ref, err := s.PublicFormRef(ctx, slug)
+	pf, err := s.PublicForm(ctx, slug)
 	if err != nil {
 		return domain.ConsentDocument{}, err
 	}
-	if err := s.VerifyUnlock(ref.FormID, ref.PasswordSealed, unlock); err != nil {
+	if err := s.VerifyUnlock(pf.FormID, pf.PasswordSealed, unlock); err != nil {
 		return domain.ConsentDocument{}, err
 	}
-	rev, err := s.repo.GetConsentRevision(ctx, s.db, ref.FormID, revisionID)
+	rev, err := s.repo.GetConsentRevision(ctx, s.db, pf.FormID, revisionID)
 	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !rev.Enabled) {
-		return domain.ConsentDocument{}, domain.ErrNotFound
-	}
-	if err != nil {
-		return domain.ConsentDocument{}, err
-	}
-	if version == 0 {
-		version = ref.Version
-	}
-	raw, err := s.repo.GetFormVersionSchema(ctx, s.db, ref.FormID, version)
-	if errors.Is(err, pgx.ErrNoRows) {
 		return domain.ConsentDocument{}, domain.ErrNotFound
 	}
 	if err != nil {
@@ -209,11 +201,11 @@ func (s *Service) PublicConsentDocument(ctx context.Context, slug string, kind d
 	}
 	// %v, а не %w: ошибка разбора несёт ErrValidation, и 422 с внутренним текстом ушёл
 	// бы наружу. Снапшот версии валиден по построению, сбой здесь — 500.
-	parsed, err := domain.ValidateSchema(raw)
-	if err != nil {
-		return domain.ConsentDocument{}, fmt.Errorf("parse version %d schema for %s: %v", version, slug, err)
+	if pf.ParseErr != nil {
+		return domain.ConsentDocument{}, fmt.Errorf("parse published schema of %s: %v", slug, pf.ParseErr)
 	}
-	return domain.RenderConsentDocument(kind, rev.Settings, rev.Template, consentDocInput(parsed, ""))
+	// pf.Title уже разрешён так же, как заголовок на самой форме: блок заголовка, иначе колонка.
+	return domain.RenderConsentDocument(kind, rev.Settings, rev.Template, consentDocInput(pf.Parsed, pf.Title))
 }
 
 // consentOperatorsLimit — сколько наборов реквизитов отдаёт подсказка.

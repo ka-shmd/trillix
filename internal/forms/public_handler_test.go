@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -67,14 +66,14 @@ func (f fakePublicSvc) VerifyUnlock(_ uuid.UUID, sealed []byte, tok string) erro
 	return domain.ErrFormLocked
 }
 
-func (f fakePublicSvc) PublicConsentDocument(_ context.Context, _ string, kind domain.ConsentDocKind, revisionID uuid.UUID, version int32, unlock string) (domain.ConsentDocument, error) {
+func (f fakePublicSvc) PublicConsentDocument(_ context.Context, _ string, kind domain.ConsentDocKind, revisionID uuid.UUID, unlock string) (domain.ConsentDocument, error) {
 	if f.pf.ConsentRevisionID == nil || *f.pf.ConsentRevisionID != revisionID {
 		return domain.ConsentDocument{}, domain.ErrNotFound
 	}
 	if err := f.VerifyUnlock(f.pf.FormID, f.pf.PasswordSealed, unlock); err != nil {
 		return domain.ConsentDocument{}, err
 	}
-	return domain.ConsentDocument{Title: string(kind), Text: fmt.Sprintf("версия %d", version)}, nil
+	return domain.ConsentDocument{Title: string(kind), Text: "документ"}, nil
 }
 
 func (f fakePublicSvc) Unlock(_ context.Context, _, password string) (string, time.Time, error) {

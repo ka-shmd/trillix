@@ -19,7 +19,8 @@ import (
 // ⚠ МИНА: ТЕКСТ ВЕРСИИ ШАБЛОНА НЕ ПРАВИТСЯ НА МЕСТЕ. Ревизия запоминает версию, которой
 // собирались её документы, и по ней страница документа восстанавливает текст, с которым
 // соглашался человек. Исправление формулировки — новая версия (новая ветка в
-// renderConsentTemplate и ConsentTemplateVersion += 1), старые остаются как есть.
+// renderConsentTemplate и ConsentTemplateVersion += 1), старые остаются как есть. Сторож —
+// TestConsentTemplateV1_Frozen (отпечаток текста версии 1).
 
 // ConsentTemplateVersion — версия шаблона, которой собираются новые ревизии.
 const ConsentTemplateVersion = 1

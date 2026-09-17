@@ -40,6 +40,7 @@ const (
 // Потолки полей в рунах. Зеркалят web/app/src/entities/consent.ts.
 const (
 	MaxConsentOperatorNameLen    = 300
+	MaxConsentOperatorINNLen     = 12
 	MaxConsentOperatorAddressLen = 500
 	MaxConsentEmailLen           = 254
 	MaxConsentPurposeLen         = 1000
@@ -104,6 +105,7 @@ func ValidateConsentSettings(enabled bool, s ConsentSettings) error {
 		max  int
 	}{
 		{"наименование оператора", s.Operator.Name, MaxConsentOperatorNameLen},
+		{"ИНН оператора", s.Operator.INN, MaxConsentOperatorINNLen},
 		{"адрес оператора", s.Operator.Address, MaxConsentOperatorAddressLen},
 		{"email для отзыва согласия", s.Operator.Email, MaxConsentEmailLen},
 		{"цель обработки", s.Purpose, MaxConsentPurposeLen},

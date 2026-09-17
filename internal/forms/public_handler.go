@@ -45,7 +45,7 @@ type publicFormService interface {
 	// Unlock сверяет названный пароль и выдаёт токен разблокировки со сроком.
 	Unlock(ctx context.Context, slug, password string) (string, time.Time, error)
 	// PublicConsentDocument — документ согласия или политики ревизии (0069).
-	PublicConsentDocument(ctx context.Context, slug string, kind domain.ConsentDocKind, revisionID uuid.UUID, version int32, unlock string) (domain.ConsentDocument, error)
+	PublicConsentDocument(ctx context.Context, slug string, kind domain.ConsentDocKind, revisionID uuid.UUID, unlock string) (domain.ConsentDocument, error)
 }
 
 // UnlockHeader — заголовок, которым рендерер предъявляет токен разблокировки.

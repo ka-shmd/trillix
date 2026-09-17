@@ -108,7 +108,6 @@ type Store interface {
 	GetPublicFormBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicForm, error)
 	GetPublicFormRefBySlug(ctx context.Context, db postgres.DBTX, slug string) (PublicFormRef, error)
 	ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) ([]Version, error)
-	GetFormVersionSchema(ctx context.Context, db postgres.DBTX, formID uuid.UUID, version int32) (json.RawMessage, error)
 	// Согласие на обработку персональных данных (0069): ревизии раздела настроек.
 	GetFormConsent(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (ConsentRevision, error)
 	GetConsentRevision(ctx context.Context, db postgres.DBTX, formID, revisionID uuid.UUID) (ConsentRevision, error)

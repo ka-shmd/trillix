@@ -135,43 +135,38 @@ func TestPublicConsentDocument(t *testing.T) {
 	formID := domain.NewID()
 	enabled, disabled := domain.NewID(), domain.NewID()
 	settings := domain.NormalizeConsentSettings(filledConsent())
+	current := `{"blocks":[{"id":"b2","groupId":"g_b2","type":"phone","settings":{"placeholder":"Телефон"}}]}`
 	store := &fakeStore{
-		publicForm: PublicForm{PublicFormRef: PublicFormRef{FormID: formID, Version: 2}},
+		publicForm: WithDocument(PublicForm{
+			PublicFormRef: PublicFormRef{FormID: formID, Version: 2},
+			Title:         "Колонка",
+			Schema:        json.RawMessage(current),
+		}),
 		consentRevs: map[uuid.UUID]ConsentRevision{
 			enabled:  {ID: enabled, Enabled: true, Settings: settings, Template: domain.ConsentTemplateVersion},
 			disabled: {ID: disabled, Enabled: false, Settings: settings, Template: domain.ConsentTemplateVersion},
-		},
-		versionSchemas: map[int32]json.RawMessage{
-			1: json.RawMessage(`{"blocks":[{"id":"b1","groupId":"g_b1","type":"email","settings":{"placeholder":"Почта"}}]}`),
-			2: json.RawMessage(`{"blocks":[{"id":"b2","groupId":"g_b2","type":"phone","settings":{"placeholder":"Телефон"}}]}`),
 		},
 	}
 	svc := newTestService(store)
 	ctx := context.Background()
 
-	cur, err := svc.PublicConsentDocument(ctx, "slug", domain.ConsentDocConsent, enabled, 0, "")
+	doc, err := svc.PublicConsentDocument(ctx, "slug", domain.ConsentDocConsent, enabled, "")
 	if err != nil {
-		t.Fatalf("документ текущей версии: %v", err)
+		t.Fatalf("документ: %v", err)
 	}
-	if !strings.Contains(cur.Text, "«Телефон»") {
-		t.Errorf("версия 0 обязана значить текущую опубликованную (2):\n%s", cur.Text)
-	}
-	old, err := svc.PublicConsentDocument(ctx, "slug", domain.ConsentDocConsent, enabled, 1, "")
-	if err != nil || !strings.Contains(old.Text, "«Почта»") || strings.Contains(old.Text, "«Телефон»") {
-		t.Fatalf("документ версии 1 собран не по ней: %v\n%s", err, old.Text)
+	if !strings.Contains(doc.Text, "«Телефон»") || !strings.Contains(doc.Text, "«Колонка»") {
+		t.Errorf("документ не по опубликованной версии и её заголовку:\n%s", doc.Text)
 	}
 
 	for name, c := range map[string]struct {
-		kind    domain.ConsentDocKind
-		rev     uuid.UUID
-		version int32
+		kind domain.ConsentDocKind
+		rev  uuid.UUID
 	}{
-		"выключенная ревизия":  {domain.ConsentDocConsent, disabled, 0},
-		"чужая ревизия":        {domain.ConsentDocPolicy, domain.NewID(), 0},
-		"нет такой версии":     {domain.ConsentDocPolicy, enabled, 9},
-		"нет такого документа": {"offer", enabled, 0},
+		"выключенная ревизия":  {domain.ConsentDocConsent, disabled},
+		"чужая ревизия":        {domain.ConsentDocPolicy, domain.NewID()},
+		"нет такого документа": {"offer", enabled},
 	} {
-		if _, err := svc.PublicConsentDocument(ctx, "slug", c.kind, c.rev, c.version, ""); !errors.Is(err, domain.ErrNotFound) {
+		if _, err := svc.PublicConsentDocument(ctx, "slug", c.kind, c.rev, ""); !errors.Is(err, domain.ErrNotFound) {
 			t.Errorf("%s: err = %v, ожидалась ErrNotFound", name, err)
 		}
 	}
