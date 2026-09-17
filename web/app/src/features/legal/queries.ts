@@ -1,5 +1,5 @@
 import { queryOptions, useMutation, useQueryClient } from '@tanstack/react-query'
-import { applyConsents, getConsents, getDocument, getDocuments, saveSignupProfile } from './api'
+import { applyConsents, getConsents, getDocument, getDocuments, getSignupProfile, saveSignupProfile } from './api'
 import { legalKeys } from './keys'
 import type { ConsentChange, ConsentKind, SignupProfile } from '../../entities/legal'
 
@@ -37,6 +37,23 @@ export function useCompleteConsent() {
       return consents
     },
     onSuccess: (consents) => qc.setQueryData(legalKeys.consents(), consents),
+  })
+}
+
+// Анкета аккаунта: её показывает и правит страница «Аккаунт».
+export const signupProfileQueryOptions = queryOptions({
+  queryKey: legalKeys.signupProfile(),
+  queryFn: getSignupProfile,
+  retry: false,
+})
+
+// Сохранение анкеты со страницы аккаунта. Ответ без тела — кэш инвалидируется, иначе раздел
+// продолжил бы показывать прежние ответы.
+export function useSaveSignupProfile() {
+  const qc = useQueryClient()
+  return useMutation({
+    mutationFn: saveSignupProfile,
+    onSuccess: () => qc.invalidateQueries({ queryKey: legalKeys.signupProfile() }),
   })
 }
 

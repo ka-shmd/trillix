@@ -6,6 +6,7 @@ package auth_test
 
 import (
 	"context"
+	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -80,6 +81,16 @@ func TestSignupProfile(t *testing.T) {
 		`{"email":"`+email+`","password":"supersecret1"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("регистрация: %d", r.StatusCode)
 	}
+	readProfile := func() (int, string) {
+		t.Helper()
+		resp := get(t, c, srv.URL+"/api/v1/account/signup-profile")
+		defer func() { _ = resp.Body.Close() }()
+		raw, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp.StatusCode, string(raw)
+	}
 	put := func(body string) int {
 		t.Helper()
 		req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/account/signup-profile", strings.NewReader(body))
@@ -99,6 +110,10 @@ func TestSignupProfile(t *testing.T) {
 		t.Fatalf("анкета до согласия: %d, ожидалось 403", code)
 	}
 	pgtest.CompleteSignup(t, testPool, email)
+	// Незаполненная анкета — пустая, а не «не найдено»: экран рисует те же поля.
+	if code, body := readProfile(); code != http.StatusOK || !strings.Contains(body, `"kind":null`) {
+		t.Fatalf("пустая анкета: %d %s", code, body)
+	}
 	if code := put(`{"kind":"robot"}`); code != http.StatusUnprocessableEntity {
 		t.Fatalf("чужой вариант: %d, ожидалось 422", code)
 	}
@@ -127,6 +142,12 @@ func TestSignupProfile(t *testing.T) {
 		t.Fatalf("повторная анкета: %d", code)
 	}
 	read()
+	// То же самое читает страница аккаунта: там анкету правят и очищают.
+	code, body := readProfile()
+	if code != http.StatusOK || !strings.Contains(body, `"fullName":"Иванов Иван"`) ||
+		!strings.Contains(body, `"occupation":"freelance"`) || !strings.Contains(body, `"companyName":null`) {
+		t.Fatalf("анкета через ручку: %d %s", code, body)
+	}
 	if kind != "person" || company != nil || industry != nil || occupation == nil || *occupation != "freelance" ||
 		profession == nil || *profession != "дизайнер" || purpose != nil || referral == nil || *referral != "search" {
 		t.Fatalf("анкета частного лица в базе: %s %v %v %v %v %v %v", kind, company, industry, occupation, profession, purpose, referral)

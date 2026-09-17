@@ -607,6 +607,25 @@ func (Repo) MarkSignupCompleted(ctx context.Context, db postgres.DBTX, userID uu
 	return nil
 }
 
+// GetSignupProfile отдаёт анкету аккаунта; pgx.ErrNoRows — её не заполняли.
+func (Repo) GetSignupProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (SignupProfile, error) {
+	row, err := postgres.New(db).GetSignupProfile(ctx, userID)
+	if err != nil {
+		return SignupProfile{}, err
+	}
+	return SignupProfile{
+		Kind:        ptrStr(row.Kind),
+		Purpose:     ptrStr(row.Purpose),
+		Referral:    ptrStr(row.Referral),
+		FullName:    ptrStr(row.FullName),
+		Occupation:  ptrStr(row.Occupation),
+		Profession:  ptrStr(row.Profession),
+		CompanyName: ptrStr(row.CompanyName),
+		Industry:    ptrStr(row.Industry),
+		JobPosition: ptrStr(row.JobPosition),
+	}, nil
+}
+
 func (Repo) UpsertSignupProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, p SignupProfile) error {
 	err := postgres.New(db).UpsertSignupProfile(ctx, postgres.UpsertSignupProfileParams{
 		UserID:      userID,

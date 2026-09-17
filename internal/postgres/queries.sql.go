@@ -3911,6 +3911,43 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 	return i, err
 }
 
+const getSignupProfile = `-- name: GetSignupProfile :one
+SELECT kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position
+FROM signup_profiles
+WHERE user_id = $1
+`
+
+type GetSignupProfileRow struct {
+	Kind        pgtype.Text
+	Purpose     pgtype.Text
+	Referral    pgtype.Text
+	FullName    pgtype.Text
+	Occupation  pgtype.Text
+	Profession  pgtype.Text
+	CompanyName pgtype.Text
+	Industry    pgtype.Text
+	JobPosition pgtype.Text
+}
+
+// Анкета аккаунта для страницы «Аккаунт»: человек правит и очищает то, что указал при
+// регистрации (ст. 14 152-ФЗ — право на уточнение своих данных).
+func (q *Queries) GetSignupProfile(ctx context.Context, userID uuid.UUID) (GetSignupProfileRow, error) {
+	row := q.db.QueryRow(ctx, getSignupProfile, userID)
+	var i GetSignupProfileRow
+	err := row.Scan(
+		&i.Kind,
+		&i.Purpose,
+		&i.Referral,
+		&i.FullName,
+		&i.Occupation,
+		&i.Profession,
+		&i.CompanyName,
+		&i.Industry,
+		&i.JobPosition,
+	)
+	return i, err
+}
+
 const getSubmissionFile = `-- name: GetSubmissionFile :one
 SELECT id, workspace_id, form_id, submission_id, object_key, original_name, content_type
 FROM submission_files

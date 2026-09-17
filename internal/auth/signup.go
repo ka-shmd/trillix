@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/postgres"
@@ -91,6 +92,19 @@ const (
 	maxSignupProfession  = 100
 	maxSignupCompanyName = 300
 )
+
+// SignupProfileOf — анкета аккаунта. Незаполненная отдаётся пустой, а не «не найдено»:
+// экран рисует одни и те же поля и в том, и в другом случае.
+func (s *Service) SignupProfileOf(ctx context.Context, userID uuid.UUID) (SignupProfile, error) {
+	p, err := s.repo.GetSignupProfile(ctx, s.db, userID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return SignupProfile{}, nil
+	}
+	if err != nil {
+		return SignupProfile{}, fmt.Errorf("signup profile %s: %w", userID, err)
+	}
+	return p, nil
+}
 
 // SaveSignupProfile сохраняет анкету целиком: повторная отправка перезаписывает ответы. Поля
 // чужой вкладки отбрасываются — человек мог заполнить их и переключиться.

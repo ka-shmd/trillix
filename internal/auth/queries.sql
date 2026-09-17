@@ -305,6 +305,13 @@ WHERE id = $1 AND deleted_at IS NULL;
 UPDATE users SET signup_completed_at = now()
 WHERE id = $1 AND signup_completed_at IS NULL;
 
+-- name: GetSignupProfile :one
+-- Анкета аккаунта для страницы «Аккаунт»: человек правит и очищает то, что указал при
+-- регистрации (ст. 14 152-ФЗ — право на уточнение своих данных).
+SELECT kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position
+FROM signup_profiles
+WHERE user_id = $1;
+
 -- name: UpsertSignupProfile :exec
 -- Анкета регистрации: повторная отправка перезаписывает ответы целиком.
 INSERT INTO signup_profiles (user_id, kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position)
