@@ -9,6 +9,7 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as WelcomeRouteImport } from './routes/welcome'
 import { Route as VerifyEmailRouteImport } from './routes/verify-email'
 import { Route as AuthRouteImport } from './routes/_auth'
 import { Route as AppRouteImport } from './routes/_app'
@@ -54,6 +55,11 @@ import { Route as AppFormsSlugManageInsightsVisitsRouteImport } from './routes/_
 import { Route as AppFormsSlugManageInsightsDropOffsRouteImport } from './routes/_app/forms.$slug._manage.insights.drop-offs'
 import { Route as AppFormsSlugManageInsightsAnswersRouteImport } from './routes/_app/forms.$slug._manage.insights.answers'
 
+const WelcomeRoute = WelcomeRouteImport.update({
+  id: '/welcome',
+  path: '/welcome',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const VerifyEmailRoute = VerifyEmailRouteImport.update({
   id: '/verify-email',
   path: '/verify-email',
@@ -298,6 +304,7 @@ const AppFormsSlugManageInsightsAnswersRoute =
 export interface FileRoutesByFullPath {
   '/': typeof AppIndexRoute
   '/verify-email': typeof VerifyEmailRoute
+  '/welcome': typeof WelcomeRoute
   '/templates': typeof AppTemplatesRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
   '/link-account': typeof AuthLinkAccountRoute
@@ -342,6 +349,7 @@ export interface FileRoutesByFullPath {
 export interface FileRoutesByTo {
   '/': typeof AppIndexRoute
   '/verify-email': typeof VerifyEmailRoute
+  '/welcome': typeof WelcomeRoute
   '/templates': typeof AppTemplatesRoute
   '/forgot-password': typeof AuthForgotPasswordRoute
   '/link-account': typeof AuthLinkAccountRoute
@@ -386,6 +394,7 @@ export interface FileRoutesById {
   '/_app': typeof AppRouteWithChildren
   '/_auth': typeof AuthRouteWithChildren
   '/verify-email': typeof VerifyEmailRoute
+  '/welcome': typeof WelcomeRoute
   '/_app/templates': typeof AppTemplatesRoute
   '/_auth/forgot-password': typeof AuthForgotPasswordRoute
   '/_auth/link-account': typeof AuthLinkAccountRoute
@@ -433,6 +442,7 @@ export interface FileRouteTypes {
   fullPaths:
     | '/'
     | '/verify-email'
+    | '/welcome'
     | '/templates'
     | '/forgot-password'
     | '/link-account'
@@ -477,6 +487,7 @@ export interface FileRouteTypes {
   to:
     | '/'
     | '/verify-email'
+    | '/welcome'
     | '/templates'
     | '/forgot-password'
     | '/link-account'
@@ -520,6 +531,7 @@ export interface FileRouteTypes {
     | '/_app'
     | '/_auth'
     | '/verify-email'
+    | '/welcome'
     | '/_app/templates'
     | '/_auth/forgot-password'
     | '/_auth/link-account'
@@ -567,12 +579,20 @@ export interface RootRouteChildren {
   AppRoute: typeof AppRouteWithChildren
   AuthRoute: typeof AuthRouteWithChildren
   VerifyEmailRoute: typeof VerifyEmailRoute
+  WelcomeRoute: typeof WelcomeRoute
   JoinTokenRoute: typeof JoinTokenRoute
   OauthDoneRoute: typeof OauthDoneRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/welcome': {
+      id: '/welcome'
+      path: '/welcome'
+      fullPath: '/welcome'
+      preLoaderRoute: typeof WelcomeRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/verify-email': {
       id: '/verify-email'
       path: '/verify-email'
@@ -1024,6 +1044,7 @@ const rootRouteChildren: RootRouteChildren = {
   AppRoute: AppRouteWithChildren,
   AuthRoute: AuthRouteWithChildren,
   VerifyEmailRoute: VerifyEmailRoute,
+  WelcomeRoute: WelcomeRoute,
   JoinTokenRoute: JoinTokenRoute,
   OauthDoneRoute: OauthDoneRoute,
 }

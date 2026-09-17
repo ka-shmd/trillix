@@ -1,6 +1,6 @@
 import { z } from 'zod'
 import { apiRequest } from '../../shared/api/client'
-import { userSchema, type User } from '../../entities/user'
+import { meSchema, userSchema, type Me, type User } from '../../entities/user'
 import { identitySchema, type Identity } from '../../entities/identity'
 import type { Credentials } from './validation'
 
@@ -10,8 +10,8 @@ const providersSchema = z.object({ providers: z.array(z.string()) })
 
 // Транспорт auth: каждый ответ парсится userSchema на границе, logout тела не
 // возвращает (204).
-export function getMe(): Promise<User> {
-  return apiRequest('/auth/me', { schema: userSchema })
+export function getMe(): Promise<Me> {
+  return apiRequest('/auth/me', { schema: meSchema })
 }
 
 export function register(body: Credentials): Promise<User> {
