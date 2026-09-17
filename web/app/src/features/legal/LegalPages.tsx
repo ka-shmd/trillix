@@ -52,15 +52,20 @@ export function LegalIndexPage() {
           {docs.data && (
             <ul className="divide-y border-t">
               {docs.data.map((d) => (
-                <li key={d.kind} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-4">
+                // Дата — своей колонкой у правого края и без переноса: длинное название
+                // документа переносится внутри своей колонки, а не выталкивает дату на
+                // следующую строку (найдено владельцем 2026-09-17).
+                <li key={d.kind} className="flex flex-col gap-1 py-4 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
                   <Link
                     to="/legal/$kind"
                     params={{ kind: d.kind }}
-                    className="text-base font-semibold text-primary underline-offset-4 hover:underline"
+                    className="min-w-0 text-base font-semibold text-primary underline-offset-4 hover:underline"
                   >
                     {d.title}
                   </Link>
-                  <span className="text-sm text-muted-foreground">Действует с {formatDate(d.effectiveAt)}</span>
+                  <span className="shrink-0 text-sm whitespace-nowrap text-muted-foreground">
+                    Действует с {formatDate(d.effectiveAt)}
+                  </span>
                 </li>
               ))}
             </ul>

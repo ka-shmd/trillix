@@ -40,11 +40,15 @@ export function LegalSettings() {
         {docs.data && (
           <ul className="divide-y border-t">
             {docs.data.map((d) => (
-              <li key={d.kind} className="flex flex-wrap items-baseline justify-between gap-x-4 gap-y-1 py-4">
-                <span className="text-base font-semibold">
+              // Дата — своей колонкой у правого края и без переноса: длинное название
+              // документа переносится внутри своей колонки, а не выталкивает дату вниз.
+              <li key={d.kind} className="flex flex-col gap-1 py-4 sm:flex-row sm:items-baseline sm:justify-between sm:gap-4">
+                <span className="min-w-0 text-base font-semibold">
                   <DocLink href={legalDocumentPath(d.kind)}>{d.title}</DocLink>
                 </span>
-                <span className="text-sm text-muted-foreground">Действует с {formatDate(d.effectiveAt)}</span>
+                <span className="shrink-0 text-sm whitespace-nowrap text-muted-foreground">
+                  Действует с {formatDate(d.effectiveAt)}
+                </span>
               </li>
             ))}
           </ul>
