@@ -36,6 +36,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/geo"
 	"github.com/ka-shmd/trillix/internal/httpserver"
 	"github.com/ka-shmd/trillix/internal/integrations"
+	"github.com/ka-shmd/trillix/internal/legal"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/media"
 	"github.com/ka-shmd/trillix/internal/notify"
@@ -539,6 +540,21 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	templatesSvc := templates.NewService(pool, templates.Repo{}, workspacesSvc, formsSvc, authSvc)
 	templatesHandler := templates.NewHandler(templatesSvc, authHandler.RequireAuth, authHandler.RequireCSRF)
 
+	// Документы сервиса (docs/design/signup-consent.md §3.4). Сверка с базой — до приёма
+	// запросов: опубликованная редакция, разошедшаяся с файлом, останавливает старт.
+	legalEditions, err := legal.Editions()
+	if err != nil {
+		return err
+	}
+	legalSvc := legal.NewService(pool, legal.Repo{}, legalEditions, time.Now)
+	synced, err := legalSvc.Sync(context.Background())
+	if err != nil {
+		return err
+	}
+	log.Info("legal documents synced",
+		slog.Int("inserted", synced.Inserted), slog.Int("rewritten", synced.Rewritten))
+	legalHandler := legal.NewHandler(legalSvc)
+
 	// Интеграции формы (фаза 25). Провайдер — интерфейс, и типизированный nil
 	// сюда класть НЕЛЬЗЯ: `(*Google)(nil)` в интерфейсе не равен nil, и сервис
 	// считал бы себя настроенным. Отсюда объявление переменной интерфейсного
@@ -751,7 +767,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 		filesPublic.Routes, filesHandler.Routes,
 		visitsPublic.Routes, visitsHandler.Routes, entitlementsHandler.Routes,
 		integrationsHandler.Routes, bookingHandler.Routes, bookingPublic.Routes,
-		templatesHandler.Routes, notifyHandler.Routes,
+		templatesHandler.Routes, notifyHandler.Routes, legalHandler.Routes,
 	}
 
 	// Печатная страница ответа (ADR §10). Путь задаётся явно на каждом контуре
