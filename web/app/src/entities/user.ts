@@ -28,6 +28,16 @@ export const userSchema = z.object({
 
 export type User = z.infer<typeof userSchema>
 
+// Ответ /auth/me — пользователь и признак гейта согласия: закрыт ли кабинет до принятия
+// действующей редакции Пользовательского соглашения (docs/design/signup-consent.md §3.2).
+// Только у /auth/me: остальные ручки отвечают профилем, поэтому кэш me ими сливается, а
+// не заменяется (patchMe в features/auth/queries.ts).
+export const meSchema = userSchema.extend({
+  consentRequired: z.boolean(),
+})
+
+export type Me = z.infer<typeof meSchema>
+
 // initials — что написать в кружке, когда картинки нет: инициалы имени и
 // фамилии, а если их нет — первая буква email. Одна точка на весь кабинет, как
 // и displayName: сайдбар, настройки и список участников обязаны показывать

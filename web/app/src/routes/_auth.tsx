@@ -14,8 +14,20 @@ export const Route = createFileRoute('/_auth')({
 
 function AuthLayout() {
   return (
-    <main className="flex min-h-svh items-center justify-center bg-muted/40 p-6">
+    <main className="flex min-h-svh flex-col items-center justify-center gap-4 bg-muted/40 p-6">
       <Outlet />
+      {/* Политика — там, где собираются данные (ч. 2 ст. 18.1 152-ФЗ): регистрация и вход
+          через провайдера заводят аккаунт с любого из этих экранов. В новой вкладке, чтобы
+          не терять набранное. */}
+      <p className="text-xs text-muted-foreground">
+        <a href="/legal/privacy" target="_blank" rel="noreferrer" className="underline-offset-4 hover:underline">
+          Политика обработки персональных данных
+        </a>
+        {' · '}
+        <a href="/legal" target="_blank" rel="noreferrer" className="underline-offset-4 hover:underline">
+          Правовая информация
+        </a>
+      </p>
     </main>
   )
 }
