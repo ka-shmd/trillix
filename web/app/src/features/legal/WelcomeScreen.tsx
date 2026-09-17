@@ -18,20 +18,27 @@ import {
 } from '../../entities/legal'
 import { humanError } from '../../shared/api/errors'
 import { formatDate } from '../../shared/format'
+import { ErrorState } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card } from '@/components/ui/card'
 import { Checkbox } from '@/components/ui/checkbox'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Skeleton } from '@/components/ui/skeleton'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
+import { cn } from '@/lib/utils'
 
 // Экран согласия (docs/design/signup-consent.md §3.3). Два варианта по ответу сервера:
 // «Поделитесь парой деталей» — анкета по вкладкам «Частное лицо» и «Компания или ИП»
 // (по образцу WebAsk, решение владельца 2026-09-17) и согласия; «Условия использования
 // обновились» — только соглашение. Единственное действие — завершить, и оно доступно, как
 // только отмечено соглашение: анкета необязательна, уйти с экрана без согласия нельзя.
+//
+// Экран — страница, а не окно: сверху название сервиса и шаг, заголовок вне карточки, в
+// карточке два раздела с пометкой «необязательно» и «обязательно», под ними подвал с
+// кнопкой и подсказкой, чего не хватает. История вида — JOURNAL, «Принятие условий при
+// регистрации, слайс G».
 
 interface Props {
   // defaultFullName — ФИО, известное из профиля (имя и фамилия от Яндекса), подставленное в
@@ -53,32 +60,27 @@ export function WelcomeScreen({ defaultFullName, onDone }: Props) {
 
   if (consents.isPending) {
     return (
-      <Card className="w-full max-w-2xl">
-        <CardHeader>
-          <Skeleton className="h-6 w-56" />
-          <Skeleton className="h-4 w-80" />
-        </CardHeader>
-        <CardContent className="flex flex-col gap-3">
+      <Shell step="Регистрация" title={<Skeleton className="h-9 w-80" />}>
+        <Card className="gap-4 p-6 sm:p-8">
+          <Skeleton className="h-6 w-32" />
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
           <Skeleton className="h-8 w-full" />
-        </CardContent>
-      </Card>
+        </Card>
+      </Shell>
     )
   }
   // Без действующей редакции соглашения гейт не закрывается вовсе — сюда это доезжает
   // только сбоем, и показывается как сбой.
   if (consents.isError || !consents.data.terms) {
     return (
-      <Card className="w-full max-w-md">
-        <CardHeader>
-          <CardTitle className="text-xl">Не удалось загрузить условия</CardTitle>
-          <CardDescription>{humanError(consents.error)}</CardDescription>
-        </CardHeader>
-        <CardFooter className="justify-end">
-          <Button onClick={() => void consents.refetch()}>Попробовать ещё раз</Button>
-        </CardFooter>
-      </Card>
+      <Shell step="Регистрация" title="Не удалось загрузить условия">
+        <ErrorState
+          title={humanError(consents.error)}
+          retryLabel="Попробовать ещё раз"
+          onRetry={() => void consents.refetch()}
+        />
+      </Shell>
     )
   }
   const { data } = consents
@@ -120,118 +122,111 @@ function SignupForm({
   }
 
   return (
-    <Card className="w-full max-w-2xl">
-      <CardHeader>
-        <CardTitle className="text-xl">Поделитесь парой деталей</CardTitle>
-        <CardDescription>
-          Так мы подстроим Trillix под ваши задачи. Чтобы завершить регистрацию, примите условия
-          использования.
-        </CardDescription>
-      </CardHeader>
+    <Shell
+      step="Регистрация · последний шаг"
+      title="Поделитесь парой деталей"
+      description="Так мы подстроим Trillix под ваши задачи. Чтобы завершить регистрацию, примите условия использования."
+    >
+      <Card className="gap-0 overflow-hidden py-0">
+        <FormSection title="О вас" note="Необязательно">
+          <div className="flex flex-col gap-5 sm:gap-4">
+            <KindRow value={draft.kind} onChange={(kind) => set('kind', kind)} />
 
-      <CardContent className="flex flex-col gap-6">
-        {/* Подпись слева, поле справа — как на образце: вопросы читаются столбцом, и анкета
-            не превращается в простыню из подписей над полями. На узком экране подпись
-            уходит над полем. */}
-        <div className="grid items-center gap-x-6 gap-y-3 sm:grid-cols-[minmax(0,2fr)_minmax(0,3fr)]">
-          <KindRow value={draft.kind} onChange={(kind) => set('kind', kind)} />
-
-          <TextRow
-            label="Ваше полное имя"
-            placeholder="Например, Иванов Иван Иванович"
-            value={draft.fullName}
-            onChange={(v) => set('fullName', v)}
-            maxLength={200}
-          />
-
-          {draft.kind === 'person' ? (
-            <>
-              <SelectRow
-                label="Чем вы занимаетесь?"
-                options={SIGNUP_OCCUPATIONS}
-                value={draft.occupation}
-                onChange={(v) => set('occupation', v)}
-              />
-              <TextRow
-                label="Ваша профессия"
-                placeholder="Например, дизайнер"
-                value={draft.profession}
-                onChange={(v) => set('profession', v)}
-                maxLength={100}
-              />
-            </>
-          ) : (
-            <>
-              <TextRow
-                label="Название организации или ИП"
-                placeholder="Например, ООО «Ромашка»"
-                value={draft.companyName}
-                onChange={(v) => set('companyName', v)}
-                maxLength={300}
-              />
-              <SelectRow
-                label="Сфера деятельности"
-                options={SIGNUP_INDUSTRIES}
-                value={draft.industry}
-                onChange={(v) => set('industry', v)}
-              />
-              <SelectRow
-                label="Ваша должность"
-                options={SIGNUP_POSITIONS}
-                value={draft.jobPosition}
-                onChange={(v) => set('jobPosition', v)}
-              />
-            </>
-          )}
-
-          <SelectRow
-            label="Как вы о нас узнали?"
-            options={SIGNUP_REFERRALS}
-            value={draft.referral}
-            onChange={(v) => set('referral', v)}
-          />
-          <SelectRow
-            label="Для чего вы будете использовать Trillix?"
-            options={SIGNUP_PURPOSES}
-            value={draft.purpose}
-            onChange={(v) => set('purpose', v)}
-          />
-        </div>
-
-        <ConsentPanel>
-          <ConsentCheck
-            id="welcome-terms"
-            checked={acceptTerms}
-            onChange={setAcceptTerms}
-            label={terms.label}
-            link={terms.link}
-            href={legalDocumentPath('terms', terms.version)}
-          />
-          {marketing && (
-            <ConsentCheck
-              id="welcome-marketing"
-              checked={acceptMarketing}
-              onChange={setAcceptMarketing}
-              label={marketing.label}
-              link={marketing.link}
-              href={legalDocumentPath('marketing', marketing.version)}
+            <TextRow
+              label="Ваше полное имя"
+              placeholder="Например, Иванов Иван Иванович"
+              value={draft.fullName}
+              onChange={(v) => set('fullName', v)}
+              maxLength={200}
             />
-          )}
-        </ConsentPanel>
 
-        {complete.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {humanError(complete.error)}
-          </p>
-        )}
-      </CardContent>
+            {draft.kind === 'person' ? (
+              <>
+                <SelectRow
+                  label="Чем вы занимаетесь?"
+                  options={SIGNUP_OCCUPATIONS}
+                  value={draft.occupation}
+                  onChange={(v) => set('occupation', v)}
+                />
+                <TextRow
+                  label="Ваша профессия"
+                  placeholder="Например, дизайнер"
+                  value={draft.profession}
+                  onChange={(v) => set('profession', v)}
+                  maxLength={100}
+                />
+              </>
+            ) : (
+              <>
+                <TextRow
+                  label="Название организации или ИП"
+                  placeholder="Например, ООО «Ромашка»"
+                  value={draft.companyName}
+                  onChange={(v) => set('companyName', v)}
+                  maxLength={300}
+                />
+                <SelectRow
+                  label="Сфера деятельности"
+                  options={SIGNUP_INDUSTRIES}
+                  value={draft.industry}
+                  onChange={(v) => set('industry', v)}
+                />
+                <SelectRow
+                  label="Ваша должность"
+                  options={SIGNUP_POSITIONS}
+                  value={draft.jobPosition}
+                  onChange={(v) => set('jobPosition', v)}
+                />
+              </>
+            )}
 
-      <CardFooter className="justify-end">
-        <Button disabled={!acceptTerms || complete.isPending} onClick={submit}>
-          Завершить регистрацию
-        </Button>
-      </CardFooter>
-    </Card>
+            <SelectRow
+              label="Как вы о нас узнали?"
+              options={SIGNUP_REFERRALS}
+              value={draft.referral}
+              onChange={(v) => set('referral', v)}
+            />
+            <SelectRow
+              label="Для чего вы будете использовать Trillix?"
+              options={SIGNUP_PURPOSES}
+              value={draft.purpose}
+              onChange={(v) => set('purpose', v)}
+            />
+          </div>
+        </FormSection>
+
+        <FormSection title="Условия использования" note="Обязательно" className="border-t">
+          <ConsentChecks>
+            <ConsentCheck
+              id="welcome-terms"
+              checked={acceptTerms}
+              onChange={setAcceptTerms}
+              label={terms.label}
+              link={terms.link}
+              href={legalDocumentPath('terms', terms.version)}
+            />
+            {marketing && (
+              <ConsentCheck
+                id="welcome-marketing"
+                checked={acceptMarketing}
+                onChange={setAcceptMarketing}
+                label={marketing.label}
+                link={marketing.link}
+                href={legalDocumentPath('marketing', marketing.version)}
+              />
+            )}
+          </ConsentChecks>
+        </FormSection>
+
+        <Footer
+          ready={acceptTerms}
+          pending={complete.isPending}
+          error={complete.isError ? humanError(complete.error) : null}
+          action="Завершить регистрацию"
+          onSubmit={submit}
+        />
+      </Card>
+    </Shell>
   )
 }
 
@@ -240,53 +235,128 @@ function UpdateForm({ terms, onDone }: { terms: Terms; onDone: () => void }) {
   const complete = useCompleteConsent()
 
   return (
-    <Card className="w-full max-w-md">
-      <CardHeader>
-        <CardTitle className="text-xl">Условия использования обновились</CardTitle>
-        <CardDescription>
-          С {formatDate(terms.effectiveAt)} действует новая редакция Пользовательского соглашения.
-          Чтобы продолжить работу, примите её.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="flex flex-col gap-4">
-        <ConsentPanel>
-          <ConsentCheck
-            id="welcome-terms"
-            checked={acceptTerms}
-            onChange={setAcceptTerms}
-            label={terms.label}
-            link={terms.link}
-            href={legalDocumentPath('terms', terms.version)}
-          />
-        </ConsentPanel>
-        {complete.isError && (
-          <p role="alert" className="text-sm text-destructive">
-            {humanError(complete.error)}
-          </p>
-        )}
-      </CardContent>
-      <CardFooter className="justify-end">
-        <Button
-          disabled={!acceptTerms || complete.isPending}
-          onClick={() =>
+    <Shell
+      title="Условия использования обновились"
+      description={`С ${formatDate(terms.effectiveAt)} действует новая редакция Пользовательского соглашения. Чтобы продолжить работу, примите её.`}
+    >
+      <Card className="gap-0 overflow-hidden py-0">
+        <FormSection title="Новая редакция">
+          <ConsentChecks>
+            <ConsentCheck
+              id="welcome-terms"
+              checked={acceptTerms}
+              onChange={setAcceptTerms}
+              label={terms.label}
+              link={terms.link}
+              href={legalDocumentPath('terms', terms.version)}
+            />
+          </ConsentChecks>
+        </FormSection>
+        <Footer
+          ready={acceptTerms}
+          pending={complete.isPending}
+          error={complete.isError ? humanError(complete.error) : null}
+          action="Принять и продолжить"
+          onSubmit={() =>
             complete.mutate(
               { change: { accept: [{ kind: 'terms', version: terms.version }] }, profile: null },
               { onSuccess: () => onDone() },
             )
           }
-        >
-          Принять и продолжить
-        </Button>
-      </CardFooter>
-    </Card>
+        />
+      </Card>
+    </Shell>
   )
 }
 
-// ConsentPanel — согласия отдельной плоскостью под анкетой: это не вопрос о человеке, а
-// условие входа, и в ряду вопросов оно терялось. Политика — строкой внизу панели.
-function ConsentPanel({ children }: { children: React.ReactNode }) {
+// Shell — страница экрана: название сервиса сверху, шаг, заголовок и пояснение вне карточки.
+// Фон страницы темнее карточки: на белом по белому граница карточки терялась.
+function Shell({
+  step,
+  title,
+  description,
+  children,
+}: {
+  // step — где человек в пути регистрации; на экране новой редакции шага нет.
+  step?: string
+  title: React.ReactNode
+  description?: string
+  children: React.ReactNode
+}) {
   return (
-    <div className="flex flex-col gap-3 rounded-lg bg-muted/60 p-4">
+    <div className="min-h-svh bg-muted">
+      <header className="mx-auto flex h-14 w-full max-w-3xl items-center px-5 sm:px-8">
+        <span className="text-base font-bold tracking-tight">Trillix</span>
+      </header>
+      <main className="mx-auto w-full max-w-3xl px-5 pt-6 pb-16 sm:px-8">
+        {step && <p className="mb-2 text-sm font-semibold text-muted-foreground">{step}</p>}
+        <h1 className="text-3xl font-extrabold tracking-tight">{title}</h1>
+        {description && <p className="mt-2 text-base text-muted-foreground">{description}</p>}
+        <div className="mt-8">{children}</div>
+      </main>
+    </div>
+  )
+}
+
+// FormSection — раздел карточки. Пометка справа говорит, что здесь можно пропустить, а без
+// чего дальше не пройти.
+function FormSection({
+  title,
+  note,
+  className,
+  children,
+}: {
+  title: string
+  note?: string
+  className?: string
+  children: React.ReactNode
+}) {
+  return (
+    <section className={cn('px-6 py-6 sm:px-8 sm:py-7', className)}>
+      <div className="flex items-baseline justify-between gap-3">
+        <h2 className="text-xl font-bold tracking-tight">{title}</h2>
+        {note && <span className="text-sm text-muted-foreground">{note}</span>}
+      </div>
+      <div className="mt-5">{children}</div>
+    </section>
+  )
+}
+
+// Footer — подвал карточки с единственным действием. Пока кнопка неактивна, слева сказано
+// почему: неактивная кнопка без объяснения читается поломкой.
+function Footer({
+  ready,
+  pending,
+  error,
+  action,
+  onSubmit,
+}: {
+  ready: boolean
+  pending: boolean
+  error: string | null
+  action: string
+  onSubmit: () => void
+}) {
+  return (
+    <div className="flex flex-wrap items-center justify-between gap-x-6 gap-y-3 border-t bg-muted/40 px-6 py-4 sm:px-8">
+      {error ? (
+        <p role="alert" className="text-sm text-destructive">
+          {error}
+        </p>
+      ) : (
+        <p className="text-sm text-muted-foreground">{ready ? '' : 'Примите соглашение, чтобы продолжить'}</p>
+      )}
+      <Button size="lg" className="w-full sm:ml-auto sm:w-auto" disabled={!ready || pending} onClick={onSubmit}>
+        {action}
+      </Button>
+    </div>
+  )
+}
+
+// ConsentChecks — галочки согласий и строка политики под ними.
+function ConsentChecks({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex flex-col gap-4">
       {children}
       <p className="text-sm text-muted-foreground">
         Как мы обрабатываем данные —{' '}
@@ -296,10 +366,17 @@ function ConsentPanel({ children }: { children: React.ReactNode }) {
   )
 }
 
+// Row — строка анкеты: подпись слева, поле справа, как на образце; колонки одной ширины у всех
+// строк. На узком экране подпись уходит над полем и стоит к нему ближе, чем к соседнему
+// вопросу — иначе пары «подпись — поле» не читаются.
+function Row({ children }: { children: React.ReactNode }) {
+  return <div className="grid gap-2 sm:grid-cols-2 sm:items-center sm:gap-6">{children}</div>
+}
+
 function KindRow({ value, onChange }: { value: SignupKind; onChange: (v: SignupKind) => void }) {
   const labelId = useId()
   return (
-    <>
+    <Row>
       <span id={labelId} className="text-sm font-semibold">
         Кто вы на нашем сервисе?
       </span>
@@ -309,7 +386,7 @@ function KindRow({ value, onChange }: { value: SignupKind; onChange: (v: SignupK
           <TabsTrigger value="company">Компания или ИП</TabsTrigger>
         </TabsList>
       </Tabs>
-    </>
+    </Row>
   )
 }
 
@@ -328,7 +405,7 @@ function TextRow({
 }) {
   const id = useId()
   return (
-    <>
+    <Row>
       <Label htmlFor={id}>{label}</Label>
       <Input
         id={id}
@@ -337,7 +414,7 @@ function TextRow({
         maxLength={maxLength}
         onChange={(e) => onChange(e.target.value)}
       />
-    </>
+    </Row>
   )
 }
 
@@ -354,7 +431,7 @@ function SelectRow<T extends string>({
 }) {
   const id = useId()
   return (
-    <>
+    <Row>
       <Label htmlFor={id}>{label}</Label>
       <Select value={value ?? ''} onValueChange={(v) => onChange(options.find((o) => o.value === v)?.value ?? null)}>
         <SelectTrigger id={id} className="w-full">
@@ -368,7 +445,7 @@ function SelectRow<T extends string>({
           ))}
         </SelectContent>
       </Select>
-    </>
+    </Row>
   )
 }
 
@@ -383,7 +460,7 @@ function DocLink({ href, children }: { href: string; children: string }) {
 
 // ConsentCheck — галочка с подписью от сервера; часть подписи `link` становится ссылкой
 // на документ. Ссылка внутри <label> галочку не переключает: щелчок по интерактивному
-// потомку метку не активирует.
+// потомку метку не активирует. Подпись — основным кеглем: это условие входа, а не сноска.
 function ConsentCheck({
   id,
   checked,
@@ -401,9 +478,16 @@ function ConsentCheck({
 }) {
   const at = link === '' ? -1 : label.indexOf(link)
   return (
-    <div className="flex items-start gap-2">
-      <Checkbox id={id} className="mt-0.5" checked={checked} onCheckedChange={(v) => onChange(v === true)} />
-      <Label htmlFor={id} className="leading-5 font-normal">
+    <div className="flex items-start gap-3">
+      {/* Рамка темнее системной: на белой карточке галочка условия входа не должна
+          теряться. */}
+      <Checkbox
+        id={id}
+        className="mt-1 border-muted-foreground/60"
+        checked={checked}
+        onCheckedChange={(v) => onChange(v === true)}
+      />
+      <Label htmlFor={id} className="text-base leading-6 font-normal">
         {at < 0 ? (
           <span>
             {label} (<DocLink href={href}>документ</DocLink>)
