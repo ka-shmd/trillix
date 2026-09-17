@@ -115,12 +115,6 @@ function TemplateFields({
   set: SetConsent
   invalid: ConsentInvalid
 }) {
-  // Цель и срок у большинства форм — умолчание типового текста, поэтому свёрнуты.
-  // Заполненные раскрыты всегда: спрятанное значение, которое уходит в документ,
-  // автор обязан видеть.
-  const [termsOpen, setTermsOpen] = useState(false)
-  const termsShown = termsOpen || draft.purpose !== '' || draft.retention !== ''
-
   // Предпросмотр ничего на сервере не меняет — мутация здесь ради состояния запроса,
   // кэшировать и инвалидировать нечего.
   const preview = useMutation({
@@ -193,42 +187,26 @@ function TemplateFields({
         </div>
       </div>
 
-      {termsShown ? (
-        <>
-          <div className={FIELD_ROW}>
-            <Label htmlFor="consent-purpose">Цель обработки</Label>
-            <Input
-              id="consent-purpose"
-              placeholder="Как в типовом тексте"
-              value={draft.purpose}
-              maxLength={MAX_CONSENT_PURPOSE_LEN}
-              onChange={(e) => set('purpose', e.target.value)}
-            />
-          </div>
-          <div className={FIELD_ROW}>
-            <Label htmlFor="consent-retention">Срок обработки</Label>
-            <Input
-              id="consent-retention"
-              placeholder="Как в типовом тексте"
-              value={draft.retention}
-              maxLength={MAX_CONSENT_RETENTION_LEN}
-              onChange={(e) => set('retention', e.target.value)}
-            />
-          </div>
-        </>
-      ) : (
-        <p className="text-sm text-muted-foreground">
-          Цель и срок обработки — как в типовом тексте.{' '}
-          <Button
-            type="button"
-            variant="link"
-            className="h-auto p-0 align-baseline"
-            onClick={() => setTermsOpen(true)}
-          >
-            Изменить
-          </Button>
-        </p>
-      )}
+      <div className={FIELD_ROW}>
+        <Label htmlFor="consent-purpose">Цель обработки</Label>
+        <Input
+          id="consent-purpose"
+          placeholder="Как в типовом тексте"
+          value={draft.purpose}
+          maxLength={MAX_CONSENT_PURPOSE_LEN}
+          onChange={(e) => set('purpose', e.target.value)}
+        />
+      </div>
+      <div className={FIELD_ROW}>
+        <Label htmlFor="consent-retention">Срок обработки</Label>
+        <Input
+          id="consent-retention"
+          placeholder="Как в типовом тексте"
+          value={draft.retention}
+          maxLength={MAX_CONSENT_RETENTION_LEN}
+          onChange={(e) => set('retention', e.target.value)}
+        />
+      </div>
 
       <div className="flex flex-wrap gap-x-4 gap-y-1">
         <Button
