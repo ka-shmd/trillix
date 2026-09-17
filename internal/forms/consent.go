@@ -62,6 +62,9 @@ func (s *Service) Consent(ctx context.Context, userID, formID uuid.UUID) (Consen
 // SaveConsent сохраняет раздел. Новая ревизия пишется, только если что-то изменилось
 // (тумблер, настройки или версия шаблона): одинаковые ревизии подряд ничего не
 // доказывают и только множат строки.
+//
+// Той же транзакцией реквизиты включённого согласия с типовыми документами ложатся в
+// список пространства (спека §3.6) — подсказку для других форм.
 func (s *Service) SaveConsent(ctx context.Context, userID, formID uuid.UUID, enabled bool, settings domain.ConsentSettings) (ConsentState, error) {
 	form, err := s.formForUser(ctx, userID, formID, domain.ActionFormWrite)
 	if err != nil {
@@ -103,6 +106,9 @@ func (s *Service) SaveConsent(ctx context.Context, userID, formID uuid.UUID, ena
 		}
 		if n == 0 {
 			return domain.ErrNotFound
+		}
+		if enabled && settings.Documents == domain.ConsentDocTemplate && domain.ConsentOperatorComplete(settings.Operator) {
+			return s.repo.RememberConsentOperator(ctx, tx, form.WorkspaceID, settings.Operator)
 		}
 		return nil
 	})
@@ -208,4 +214,39 @@ func (s *Service) PublicConsentDocument(ctx context.Context, slug string, kind d
 		return domain.ConsentDocument{}, fmt.Errorf("parse version %d schema for %s: %v", version, slug, err)
 	}
 	return domain.RenderConsentDocument(kind, rev.Settings, rev.Template, consentDocInput(parsed, ""))
+}
+
+// consentOperatorsLimit — сколько наборов реквизитов отдаёт подсказка.
+const consentOperatorsLimit = 20
+
+// ConsentOperators — список реквизитов пространства для подсказки в разделе
+// «Персональные данные», свежие первыми.
+func (s *Service) ConsentOperators(ctx context.Context, userID, workspaceID uuid.UUID) ([]ConsentOperatorItem, error) {
+	if err := s.access.Can(ctx, workspaceID, userID, domain.ActionFormRead); err != nil {
+		return nil, err
+	}
+	return s.repo.ListConsentOperators(ctx, s.db, workspaceID, consentOperatorsLimit)
+}
+
+// DeleteConsentOperator убирает набор из списка пространства. Формы и их ревизии хранят
+// свою копию и не меняются.
+func (s *Service) DeleteConsentOperator(ctx context.Context, userID, operatorID uuid.UUID) error {
+	workspaceID, err := s.repo.GetConsentOperatorWorkspace(ctx, s.db, operatorID)
+	if errors.Is(err, pgx.ErrNoRows) {
+		return domain.ErrNotFound
+	}
+	if err != nil {
+		return err
+	}
+	if err := s.access.Can(ctx, workspaceID, userID, domain.ActionFormWrite); err != nil {
+		return err
+	}
+	n, err := s.repo.DeleteConsentOperator(ctx, s.db, operatorID, workspaceID)
+	if err != nil {
+		return err
+	}
+	if n == 0 {
+		return domain.ErrNotFound
+	}
+	return nil
 }

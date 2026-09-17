@@ -15,8 +15,9 @@ const empty: ConsentState = {
   operator: { name: '', inn: '', address: '', email: '' },
   purpose: '',
   retention: '',
-  consent: { mode: 'template', text: '' },
-  policy: { mode: 'template', text: '' },
+  documents: 'template',
+  consentText: '',
+  policyText: '',
   revisionId: null,
   updatedAt: null,
 }
@@ -37,7 +38,7 @@ describe('черновик согласия', () => {
   })
 
   it('переносы в своём тексте — изменение: они часть документа', () => {
-    const a = { ...filled, consentMode: 'custom' as const, consentText: 'абзац' }
+    const a = { ...filled, documents: 'custom' as const, consentText: 'абзац' }
     expect(sameConsent(a, { ...a, consentText: 'абзац\n' })).toBe(false)
   })
 
@@ -45,18 +46,13 @@ describe('черновик согласия', () => {
     expect(anyConsentInvalid(validateConsent(consentDraftFrom(empty)))).toBe(false)
   })
 
-  it('включённый с типовым документом требует реквизиты', () => {
+  it('включённый с типовыми документами требует реквизиты', () => {
     expect(validateConsent({ ...filled, address: '' }).operatorMissing).toBe(true)
     expect(anyConsentInvalid(validateConsent(filled))).toBe(false)
   })
 
-  it('два своих текста реквизитов не требуют, но требуют сами тексты', () => {
-    const custom = {
-      ...consentDraftFrom(empty),
-      enabled: true,
-      consentMode: 'custom' as const,
-      policyMode: 'custom' as const,
-    }
+  it('свои документы реквизитов не требуют, но требуют оба текста', () => {
+    const custom = { ...consentDraftFrom(empty), enabled: true, documents: 'custom' as const }
     const invalid = validateConsent(custom)
     expect(invalid.operatorMissing).toBe(false)
     expect(invalid.consentTextMissing).toBe(true)
@@ -71,5 +67,17 @@ describe('черновик согласия', () => {
     expect(validateConsent({ ...filled, inn: '1234567890' }).inn).toBe(false)
     expect(validateConsent({ ...filled, inn: '' }).inn).toBe(false)
     expect(validateConsent({ ...filled, email: 'не адрес' }).email).toBe(true)
+  })
+
+  it('неверные реквизиты при своих документах сохранение не держат: их не видно', () => {
+    const hidden = {
+      ...filled,
+      documents: 'custom' as const,
+      inn: '123',
+      email: 'не адрес',
+      consentText: 'согласие',
+      policyText: 'политика',
+    }
+    expect(anyConsentInvalid(validateConsent(hidden))).toBe(false)
   })
 })

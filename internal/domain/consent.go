@@ -16,13 +16,14 @@ import (
 // Trillix обрабатывает ответы по его поручению. Поэтому типовой текст без реквизитов
 // автора пуст, и назвать оператора за него продукт не может.
 
-// ConsentDocMode — откуда берётся текст документа.
+// ConsentDocMode — откуда берётся текст документов. Один на оба: смешанного
+// «согласие своё, политика типовая» нет (спека §3.2).
 type ConsentDocMode string
 
 const (
-	// ConsentDocTemplate — типовой текст, собранный из реквизитов (consentdoc.go).
+	// ConsentDocTemplate — типовые тексты, собранные из реквизитов (consentdoc.go).
 	ConsentDocTemplate ConsentDocMode = "template"
-	// ConsentDocCustom — текст автора, хранится в ревизии как есть. Ссылки на внешний
+	// ConsentDocCustom — тексты автора, хранятся в ревизии как есть. Ссылки на внешний
 	// документ нет намеренно: содержимое по ссылке не видно и может быть подменено
 	// (решение владельца 2026-09-16).
 	ConsentDocCustom ConsentDocMode = "custom"
@@ -47,7 +48,8 @@ const (
 	MaxConsentDocTextLen = 60000
 )
 
-// ConsentOperator — реквизиты оператора, которые попадают в типовой текст.
+// ConsentOperator — реквизиты оператора, которые попадают в типовой текст. Тот же
+// набор — строка списка реквизитов пространства (consent_operators).
 type ConsentOperator struct {
 	// Name — наименование организации или ФИО индивидуального предпринимателя.
 	Name string `json:"name"`
@@ -58,27 +60,22 @@ type ConsentOperator struct {
 	Email string `json:"email"`
 }
 
-// ConsentDoc — один документ: источник текста и сам текст для своего.
-type ConsentDoc struct {
-	Mode ConsentDocMode `json:"mode"`
-	// Text — текст автора. Читается только при Mode = custom, но хранится при любом:
-	// переключение на типовой и обратно не теряет вставленное.
-	Text string `json:"text"`
-}
-
 // ConsentSettings — всё, что лежит в form_consent_revisions.settings.
 type ConsentSettings struct {
 	Operator ConsentOperator `json:"operator"`
 	// Purpose и Retention — пусто означает формулировку по умолчанию типового текста
 	// (DefaultConsentPurpose / DefaultConsentRetention).
-	Purpose   string     `json:"purpose"`
-	Retention string     `json:"retention"`
-	Consent   ConsentDoc `json:"consent"`
-	Policy    ConsentDoc `json:"policy"`
+	Purpose   string         `json:"purpose"`
+	Retention string         `json:"retention"`
+	Documents ConsentDocMode `json:"documents"`
+	// ConsentText и PolicyText — тексты автора. Читаются только при Documents = custom,
+	// но хранятся при любом: переключение на типовые и обратно не теряет вставленное.
+	ConsentText string `json:"consentText"`
+	PolicyText  string `json:"policyText"`
 }
 
 // NormalizeConsentSettings обрезает пробелы по краям однострочных полей и
-// подставляет типовой источник документу без режима. Тексты документов не
+// подставляет типовые документы, если источник не назван. Тексты документов не
 // трогаются: переносы строк в них — часть документа.
 func NormalizeConsentSettings(s ConsentSettings) ConsentSettings {
 	s.Operator.Name = strings.TrimSpace(s.Operator.Name)
@@ -87,11 +84,8 @@ func NormalizeConsentSettings(s ConsentSettings) ConsentSettings {
 	s.Operator.Email = strings.TrimSpace(s.Operator.Email)
 	s.Purpose = strings.TrimSpace(s.Purpose)
 	s.Retention = strings.TrimSpace(s.Retention)
-	if s.Consent.Mode == "" {
-		s.Consent.Mode = ConsentDocTemplate
-	}
-	if s.Policy.Mode == "" {
-		s.Policy.Mode = ConsentDocTemplate
+	if s.Documents == "" {
+		s.Documents = ConsentDocTemplate
 	}
 	return s
 }
@@ -99,10 +93,10 @@ func NormalizeConsentSettings(s ConsentSettings) ConsentSettings {
 // ValidateConsentSettings — проверка раздела перед записью ревизии. Ждёт уже
 // нормализованные настройки. Нарушение → ErrValidation (→ 422).
 //
-// Потолки длины проверяются всегда, обязательность — только у ВКЛЮЧЁННОГО согласия:
-// выключенный раздел законно недозаполнен (автор выключил согласие посреди ввода).
-// Реквизиты обязательны, только если хоть один документ типовой: свой текст несёт
-// их сам.
+// Потолки длины проверяются всегда. Всё прочее — только у полей выбранного источника:
+// поля другого хранятся, но автор их не видит, и ошибка в них держала бы сохранение без
+// способа её исправить. Обязательность — только у ВКЛЮЧЁННОГО согласия: выключенный
+// раздел законно недозаполнен (автор выключил согласие посреди ввода).
 func ValidateConsentSettings(enabled bool, s ConsentSettings) error {
 	for _, f := range []struct {
 		name string
@@ -114,32 +108,24 @@ func ValidateConsentSettings(enabled bool, s ConsentSettings) error {
 		{"email для отзыва согласия", s.Operator.Email, MaxConsentEmailLen},
 		{"цель обработки", s.Purpose, MaxConsentPurposeLen},
 		{"срок обработки", s.Retention, MaxConsentRetentionLen},
-		{"текст согласия", s.Consent.Text, MaxConsentDocTextLen},
-		{"текст политики", s.Policy.Text, MaxConsentDocTextLen},
+		{"текст согласия", s.ConsentText, MaxConsentDocTextLen},
+		{"текст политики", s.PolicyText, MaxConsentDocTextLen},
 	} {
 		if utf8.RuneCountInString(f.v) > f.max {
 			return fmt.Errorf("%w: %s длиннее %d символов", ErrValidation, f.name, f.max)
 		}
 	}
-	for _, d := range []struct {
-		name string
-		doc  ConsentDoc
-	}{{"согласия", s.Consent}, {"политики", s.Policy}} {
-		if d.doc.Mode != ConsentDocTemplate && d.doc.Mode != ConsentDocCustom {
-			return fmt.Errorf("%w: неизвестный источник текста %s", ErrValidation, d.name)
+	switch s.Documents {
+	case ConsentDocTemplate:
+		if s.Operator.INN != "" && !validINN(s.Operator.INN) {
+			return fmt.Errorf("%w: ИНН — 10 или 12 цифр", ErrValidation)
 		}
-	}
-	if s.Operator.INN != "" && !validINN(s.Operator.INN) {
-		return fmt.Errorf("%w: ИНН — 10 или 12 цифр", ErrValidation)
-	}
-	if s.Operator.Email != "" && !validEmail(s.Operator.Email) {
-		return fmt.Errorf("%w: email для отзыва согласия — нужен адрес вида name@example.com", ErrValidation)
-	}
-	if !enabled {
-		return nil
-	}
-
-	if s.Consent.Mode == ConsentDocTemplate || s.Policy.Mode == ConsentDocTemplate {
+		if s.Operator.Email != "" && !validEmail(s.Operator.Email) {
+			return fmt.Errorf("%w: email для отзыва согласия — нужен адрес вида name@example.com", ErrValidation)
+		}
+		if !enabled {
+			return nil
+		}
 		switch {
 		case s.Operator.Name == "":
 			return fmt.Errorf("%w: укажите наименование оператора или ФИО", ErrValidation)
@@ -148,14 +134,26 @@ func ValidateConsentSettings(enabled bool, s ConsentSettings) error {
 		case s.Operator.Email == "":
 			return fmt.Errorf("%w: укажите email для отзыва согласия", ErrValidation)
 		}
-	}
-	if s.Consent.Mode == ConsentDocCustom && strings.TrimSpace(s.Consent.Text) == "" {
-		return fmt.Errorf("%w: вставьте текст согласия", ErrValidation)
-	}
-	if s.Policy.Mode == ConsentDocCustom && strings.TrimSpace(s.Policy.Text) == "" {
-		return fmt.Errorf("%w: вставьте текст политики", ErrValidation)
+	case ConsentDocCustom:
+		if !enabled {
+			return nil
+		}
+		if strings.TrimSpace(s.ConsentText) == "" {
+			return fmt.Errorf("%w: вставьте текст согласия", ErrValidation)
+		}
+		if strings.TrimSpace(s.PolicyText) == "" {
+			return fmt.Errorf("%w: вставьте текст политики", ErrValidation)
+		}
+	default:
+		return fmt.Errorf("%w: неизвестный источник документов", ErrValidation)
 	}
 	return nil
+}
+
+// ConsentOperatorComplete — набор, который запоминается в списке пространства:
+// обязательные реквизиты типового текста заполнены.
+func ConsentOperatorComplete(o ConsentOperator) bool {
+	return o.Name != "" && o.Address != "" && o.Email != ""
 }
 
 // validINN — 10 цифр у организации, 12 у физического лица и ИП. Контрольная сумма не

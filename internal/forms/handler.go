@@ -76,6 +76,8 @@ type formsService interface {
 	Consent(ctx context.Context, userID, formID uuid.UUID) (ConsentState, error)
 	SaveConsent(ctx context.Context, userID, formID uuid.UUID, enabled bool, settings domain.ConsentSettings) (ConsentState, error)
 	ConsentPreview(ctx context.Context, userID, formID uuid.UUID, settings domain.ConsentSettings) (consent, policy domain.ConsentDocument, err error)
+	ConsentOperators(ctx context.Context, userID, workspaceID uuid.UUID) ([]ConsentOperatorItem, error)
+	DeleteConsentOperator(ctx context.Context, userID, operatorID uuid.UUID) error
 }
 
 // Handler — HTTP-транспорт модуля forms. Все роуты приватные (за RequireAuth);
@@ -159,6 +161,10 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/consent", h.requireAuth(http.HandlerFunc(h.getConsent)))
 	mux.Handle("PUT /api/v1/forms/{id}/consent", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.putConsent))))
 	mux.Handle("POST /api/v1/forms/{id}/consent/preview", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.previewConsent))))
+	// Список реквизитов принадлежит пространству, а строка адресуется своим id —
+	// пространство сервер резолвит сам (как у расписаний записи).
+	mux.Handle("GET /api/v1/workspaces/{id}/consent-operators", h.requireAuth(http.HandlerFunc(h.consentOperators)))
+	mux.Handle("DELETE /api/v1/consent-operators/{id}", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.deleteConsentOperator))))
 	mux.Handle("POST /api/v1/forms/{id}/publish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.publish))))
 	mux.Handle("POST /api/v1/forms/{id}/unpublish", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.unpublish))))
 	mux.Handle("POST /api/v1/forms/{id}/reopen", h.requireAuth(h.requireCSRF(http.HandlerFunc(h.reopen))))

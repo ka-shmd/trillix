@@ -31,6 +31,17 @@ type Booking struct {
 	Revision        int32
 }
 
+type ConsentOperator struct {
+	ID          uuid.UUID
+	WorkspaceID uuid.UUID
+	Name        string
+	Inn         string
+	Address     string
+	Email       string
+	Fingerprint pgtype.Text
+	UsedAt      pgtype.Timestamptz
+}
+
 type EmailVerificationToken struct {
 	TokenHash []byte
 	UserID    uuid.UUID

@@ -10,7 +10,9 @@ import {
   deleteForm,
   duplicateForm,
   getFormBySlug,
+  deleteConsentOperator,
   getFormConsent,
+  listConsentOperators,
   listForms,
   saveFormConsent,
   searchForms,
@@ -30,7 +32,7 @@ import {
   updateFormPassword,
   updateNotifyOnSubmission,
 } from './api'
-import { type ConsentSettings } from '../../entities/consent'
+import { type ConsentOperatorItem, type ConsentSettings } from '../../entities/consent'
 import { discardDraft, saveDraftSchema } from './builder/api'
 import {
   type CloseSettingsInput,
@@ -131,7 +133,31 @@ export function useSaveFormConsent() {
       saveFormConsent(id, value),
     onSuccess: (state, { id }) => {
       qc.setQueryData(formKeys.consent(id), state)
+      // Сохранение включённого типового согласия пополняет список пространства.
+      void qc.invalidateQueries({ queryKey: formKeys.consentOperatorsAll() })
     },
+  })
+}
+
+export function consentOperatorsQueryOptions(workspaceId: string) {
+  return queryOptions({
+    queryKey: formKeys.consentOperators(workspaceId),
+    queryFn: () => listConsentOperators(workspaceId),
+    enabled: workspaceId !== '',
+  })
+}
+
+// Убрать набор из списка. Строка пропадает из кэша сразу: подсказка открыта, и
+// ждать ответа, глядя на убранное, незачем. Отказ возвращает список перечитыванием.
+export function useDeleteConsentOperator(workspaceId: string) {
+  const qc = useQueryClient()
+  const key = formKeys.consentOperators(workspaceId)
+  return useMutation({
+    mutationFn: (id: string) => deleteConsentOperator(id),
+    onMutate: (id) => {
+      qc.setQueryData<ConsentOperatorItem[]>(key, (items) => items?.filter((it) => it.id !== id))
+    },
+    onSettled: () => qc.invalidateQueries({ queryKey: key }),
   })
 }
 

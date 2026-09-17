@@ -12,25 +12,24 @@ export const MAX_CONSENT_PURPOSE_LEN = 1000
 export const MAX_CONSENT_RETENTION_LEN = 500
 export const MAX_CONSENT_DOC_TEXT_LEN = 60000
 
-// template — типовой текст из реквизитов, custom — свой текст автора.
-export const consentDocSchema = z.object({
-  mode: z.enum(['template', 'custom']),
-  text: z.string(),
+export const consentOperatorSchema = z.object({
+  name: z.string(),
+  inn: z.string(),
+  address: z.string(),
+  email: z.string(),
 })
-export type ConsentDoc = z.infer<typeof consentDocSchema>
+export type ConsentOperator = z.infer<typeof consentOperatorSchema>
 
 export const consentSettingsSchema = z.object({
-  operator: z.object({
-    name: z.string(),
-    inn: z.string(),
-    address: z.string(),
-    email: z.string(),
-  }),
+  operator: consentOperatorSchema,
   // Пусто — формулировка типового текста по умолчанию.
   purpose: z.string(),
   retention: z.string(),
-  consent: consentDocSchema,
-  policy: consentDocSchema,
+  // Источник ОБОИХ документов сразу: template — типовые из реквизитов, custom — тексты
+  // автора (спека §3.2). Тексты хранятся при любом, читаются только при custom.
+  documents: z.enum(['template', 'custom']),
+  consentText: z.string(),
+  policyText: z.string(),
 })
 export type ConsentSettings = z.infer<typeof consentSettingsSchema>
 
@@ -49,3 +48,9 @@ export const consentPreviewSchema = z.object({
   policy: consentDocumentSchema,
 })
 export type ConsentPreview = z.infer<typeof consentPreviewSchema>
+
+// Строка списка реквизитов пространства (0070) — подсказка в поле «Оператор».
+export const consentOperatorItemSchema = consentOperatorSchema.extend({ id: z.string() })
+export type ConsentOperatorItem = z.infer<typeof consentOperatorItemSchema>
+
+export const consentOperatorListSchema = z.object({ items: z.array(consentOperatorItemSchema) })

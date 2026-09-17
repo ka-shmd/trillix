@@ -63,7 +63,9 @@ type fakeStore struct {
 	consentRevs     map[uuid.UUID]ConsentRevision
 	consentCurrent  *uuid.UUID
 	consentInserted int
-	versionSchemas  map[int32]json.RawMessage
+	// consentRemembered — наборы, положенные в список реквизитов пространства.
+	consentRemembered []domain.ConsentOperator
+	versionSchemas    map[int32]json.RawMessage
 
 	// Управление путём автосейва схемы.
 	schemaSaved     bool
@@ -333,6 +335,23 @@ func (f *fakeStore) InsertConsentRevision(_ context.Context, _ postgres.DBTX, in
 func (f *fakeStore) SetFormConsentRevision(_ context.Context, _ postgres.DBTX, _, _, revisionID uuid.UUID) (int64, error) {
 	f.consentCurrent = &revisionID
 	return 1, nil
+}
+
+func (f *fakeStore) RememberConsentOperator(_ context.Context, _ postgres.DBTX, _ uuid.UUID, o domain.ConsentOperator) error {
+	f.consentRemembered = append(f.consentRemembered, o)
+	return nil
+}
+
+func (f *fakeStore) ListConsentOperators(context.Context, postgres.DBTX, uuid.UUID, int32) ([]ConsentOperatorItem, error) {
+	return nil, nil
+}
+
+func (f *fakeStore) GetConsentOperatorWorkspace(context.Context, postgres.DBTX, uuid.UUID) (uuid.UUID, error) {
+	return uuid.Nil, pgx.ErrNoRows
+}
+
+func (f *fakeStore) DeleteConsentOperator(context.Context, postgres.DBTX, uuid.UUID, uuid.UUID) (int64, error) {
+	return 0, nil
 }
 
 func (f *fakeStore) InsertFormVersion(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID, version int32, schema json.RawMessage) (uuid.UUID, error) {

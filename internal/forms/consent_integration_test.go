@@ -21,9 +21,7 @@ type consentDTO struct {
 		Address string `json:"address"`
 		Email   string `json:"email"`
 	} `json:"operator"`
-	Consent struct {
-		Mode string `json:"mode"`
-	} `json:"consent"`
+	Documents  string  `json:"documents"`
 	RevisionID *string `json:"revisionId"`
 }
 
@@ -33,7 +31,7 @@ type consentDocDTO struct {
 }
 
 const consentBody = `{"enabled":true,"operator":{"name":"ООО «Ромашка»","inn":"","address":"Казань","email":"pd@romashka.ru"},` +
-	`"purpose":"","retention":"","consent":{"mode":"template","text":""},"policy":{"mode":"template","text":""}}`
+	`"purpose":"","retention":"","documents":"template","consentText":"","policyText":""}`
 
 func putConsent(t *testing.T, c *http.Client, url, body string, wantStatus int) consentDTO {
 	t.Helper()
@@ -87,7 +85,7 @@ func TestForms_Consent(t *testing.T) {
 	r := do(t, alice, http.MethodGet, consentURL, "", "")
 	var initial consentDTO
 	decode(t, r, &initial)
-	if initial.Enabled || initial.RevisionID != nil || initial.Consent.Mode != "template" {
+	if initial.Enabled || initial.RevisionID != nil || initial.Documents != "template" {
 		t.Fatalf("начальное состояние: %+v", initial)
 	}
 	if pub, _ := getPublicConsent(t, srv.URL, form.Slug); pub != nil {
@@ -173,28 +171,134 @@ func TestForms_ConsentPreview(t *testing.T) {
 	form := createForm(t, alice, srv, "Анкета гостя")
 
 	url := srv.URL + "/api/v1/forms/" + form.ID + "/consent/preview"
-	body := `{"operator":{"name":"ИП Иванов","inn":"123456789012","address":"Тула","email":"i@example.com"},` +
-		`"purpose":"","retention":"","consent":{"mode":"template","text":""},"policy":{"mode":"custom","text":"Своя политика"}}`
-	r := do(t, alice, http.MethodPost, url, body, csrf(t, alice, srv.URL))
-	if r.StatusCode != http.StatusOK {
-		t.Fatalf("preview: статус %d; тело=%s", r.StatusCode, body2(t, r))
+	preview := func(body string) (consent, policy consentDocDTO) {
+		t.Helper()
+		r := do(t, alice, http.MethodPost, url, body, csrf(t, alice, srv.URL))
+		if r.StatusCode != http.StatusOK {
+			t.Fatalf("preview: статус %d; тело=%s", r.StatusCode, body2(t, r))
+		}
+		var out struct {
+			Consent consentDocDTO `json:"consent"`
+			Policy  consentDocDTO `json:"policy"`
+		}
+		decode(t, r, &out)
+		return out.Consent, out.Policy
 	}
-	var preview struct {
-		Consent consentDocDTO `json:"consent"`
-		Policy  consentDocDTO `json:"policy"`
+	operator := `{"operator":{"name":"ИП Иванов","inn":"123456789012","address":"Тула","email":"i@example.com"},"purpose":"","retention":"",`
+
+	consent, _ := preview(operator + `"documents":"template","consentText":"","policyText":"Своя политика"}`)
+	if !strings.Contains(consent.Text, "ИП Иванов, ИНН 123456789012, адрес: Тула") ||
+		!strings.Contains(consent.Text, "«Анкета гостя»") {
+		t.Fatalf("предпросмотр согласия:\n%s", consent.Text)
 	}
-	decode(t, r, &preview)
-	if !strings.Contains(preview.Consent.Text, "ИП Иванов, ИНН 123456789012, адрес: Тула") ||
-		!strings.Contains(preview.Consent.Text, "«Анкета гостя»") {
-		t.Fatalf("предпросмотр согласия:\n%s", preview.Consent.Text)
-	}
-	if preview.Policy.Text != "Своя политика" {
-		t.Fatalf("свой текст политики = %q", preview.Policy.Text)
+	if _, policy := preview(operator + `"documents":"custom","consentText":"Своё","policyText":"Своя политика"}`); policy.Text != "Своя политика" {
+		t.Fatalf("свой текст политики = %q", policy.Text)
 	}
 	// Предпросмотр ничего не сохраняет.
 	var n int
-	if err := testPool.QueryRow(context.Background(), `SELECT count(*) FROM form_consent_revisions`).Scan(&n); err != nil || n != 0 {
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT (SELECT count(*) FROM form_consent_revisions) + (SELECT count(*) FROM consent_operators)`).Scan(&n); err != nil || n != 0 {
 		t.Fatalf("предпросмотр записал ревизий: %d (%v)", n, err)
+	}
+}
+
+type consentOperatorDTO struct {
+	ID      string `json:"id"`
+	Name    string `json:"name"`
+	INN     string `json:"inn"`
+	Address string `json:"address"`
+	Email   string `json:"email"`
+}
+
+func listConsentOperators(t *testing.T, c *http.Client, base, workspaceID string, wantStatus int) []consentOperatorDTO {
+	t.Helper()
+	r := do(t, c, http.MethodGet, base+"/api/v1/workspaces/"+workspaceID+"/consent-operators", "", "")
+	if r.StatusCode != wantStatus {
+		t.Fatalf("GET consent-operators: статус %d, ожидалось %d; тело=%s", r.StatusCode, wantStatus, body2(t, r))
+	}
+	if wantStatus != http.StatusOK {
+		closeBody(t, r)
+		return nil
+	}
+	var out struct {
+		Items []consentOperatorDTO `json:"items"`
+	}
+	decode(t, r, &out)
+	return out.Items
+}
+
+// Список реквизитов пространства (design/privacy-consent.md §3.6): пополняется
+// сохранением типового включённого согласия, не дублирует, не виден чужим, строка
+// убирается без последствий для форм.
+func TestForms_ConsentOperators(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-operators@example.com")
+	bob := registerUser(t, srv, "bob-operators@example.com")
+
+	first := createForm(t, alice, srv, "Первая")
+	second := createForm(t, alice, srv, "Вторая")
+	var ws string
+	if err := testPool.QueryRow(context.Background(),
+		`SELECT workspace_id::text FROM forms WHERE id = $1`, first.ID).Scan(&ws); err != nil {
+		t.Fatalf("пространство формы: %v", err)
+	}
+	consentURL := func(formID string) string { return srv.URL + "/api/v1/forms/" + formID + "/consent" }
+
+	if got := listConsentOperators(t, alice, srv.URL, ws, http.StatusOK); len(got) != 0 {
+		t.Fatalf("список до сохранений: %+v", got)
+	}
+
+	putConsent(t, alice, consentURL(first.ID), consentBody, http.StatusOK)
+	putConsent(t, alice, consentURL(second.ID), consentBody, http.StatusOK)
+	got := listConsentOperators(t, alice, srv.URL, ws, http.StatusOK)
+	if len(got) != 1 || got[0].Name != "ООО «Ромашка»" || got[0].Address != "Казань" || got[0].Email != "pd@romashka.ru" {
+		t.Fatalf("тот же набор из двух форм: %+v", got)
+	}
+
+	// Другой адрес — второй набор, и он свежее. Выключенное и свои документы не пишут.
+	putConsent(t, alice, consentURL(second.ID), strings.Replace(consentBody, "Казань", "Самара", 1), http.StatusOK)
+	putConsent(t, alice, consentURL(first.ID),
+		strings.NewReplacer(`"enabled":true`, `"enabled":false`, "Ромашка", "Выключенная").Replace(consentBody), http.StatusOK)
+	putConsent(t, alice, consentURL(first.ID),
+		strings.NewReplacer("Ромашка", "Своя", `"documents":"template","consentText":"","policyText":""`,
+			`"documents":"custom","consentText":"С","policyText":"П"`).Replace(consentBody), http.StatusOK)
+	got = listConsentOperators(t, alice, srv.URL, ws, http.StatusOK)
+	if len(got) != 2 || got[0].Address != "Самара" || got[1].Address != "Казань" {
+		t.Fatalf("после второго набора: %+v", got)
+	}
+
+	// Наименование и адрес на потолке длины — строка индекса не упирается в предел btree.
+	long := strings.NewReplacer("ООО «Ромашка»", strings.Repeat("Я", 300), "Казань", strings.Repeat("Ж", 500)).Replace(consentBody)
+	putConsent(t, alice, consentURL(second.ID), long, http.StatusOK)
+	putConsent(t, alice, consentURL(first.ID), long, http.StatusOK)
+	if got = listConsentOperators(t, alice, srv.URL, ws, http.StatusOK); len(got) != 3 {
+		t.Fatalf("длинный набор дважды: %d строк, ожидалось 3", len(got))
+	}
+
+	// Чужому — 404 и на список, и на удаление.
+	listConsentOperators(t, bob, srv.URL, ws, http.StatusNotFound)
+	delURL := srv.URL + "/api/v1/consent-operators/" + got[2].ID
+	if r := do(t, bob, http.MethodDelete, delURL, "", csrf(t, bob, srv.URL)); r.StatusCode != http.StatusNotFound {
+		t.Fatalf("DELETE чужого: статус %d", r.StatusCode)
+	} else {
+		closeBody(t, r)
+	}
+
+	r := do(t, alice, http.MethodDelete, delURL, "", csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusNoContent {
+		t.Fatalf("DELETE: статус %d; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+	if got = listConsentOperators(t, alice, srv.URL, ws, http.StatusOK); len(got) != 2 {
+		t.Fatalf("после удаления: %+v", got)
+	}
+	// Удаление строки списка форму не трогает: реквизиты второй формы на месте.
+	r = do(t, alice, http.MethodGet, consentURL(second.ID), "", "")
+	var kept consentDTO
+	decode(t, r, &kept)
+	if kept.Operator.Address != strings.Repeat("Ж", 500) {
+		t.Fatalf("реквизиты формы после удаления из списка: %+v", kept.Operator)
 	}
 }
 

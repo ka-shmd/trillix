@@ -650,3 +650,25 @@ RETURNING created_at;
 UPDATE forms
 SET consent_revision_id = $3
 WHERE id = $1 AND workspace_id = $2;
+
+-- name: RememberConsentOperator :exec
+-- Кладёт реквизиты в список пространства (0070). Тот же набор не дублируется, а
+-- поднимается наверх подсказки.
+INSERT INTO consent_operators (id, workspace_id, name, inn, address, email)
+VALUES ($1, $2, $3, $4, $5, $6)
+ON CONFLICT (workspace_id, fingerprint) DO UPDATE SET used_at = now();
+
+-- name: ListConsentOperators :many
+-- Свежие наборы пространства для подсказки.
+SELECT id, name, inn, address, email
+FROM consent_operators
+WHERE workspace_id = $1
+ORDER BY used_at DESC, id DESC
+LIMIT $2;
+
+-- name: GetConsentOperatorWorkspace :one
+-- Пространство строки списка — для проверки права перед удалением.
+SELECT workspace_id FROM consent_operators WHERE id = $1;
+
+-- name: DeleteConsentOperator :execrows
+DELETE FROM consent_operators WHERE id = $1 AND workspace_id = $2;

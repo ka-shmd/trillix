@@ -1435,6 +1435,63 @@ func (Repo) SetFormConsentRevision(ctx context.Context, db postgres.DBTX, formID
 	return n, nil
 }
 
+// ConsentOperatorItem — строка списка реквизитов пространства (0070).
+type ConsentOperatorItem struct {
+	ID uuid.UUID
+	domain.ConsentOperator
+}
+
+// RememberConsentOperator кладёт реквизиты в список пространства; тот же набор
+// поднимается наверх, а не дублируется.
+func (Repo) RememberConsentOperator(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, o domain.ConsentOperator) error {
+	err := postgres.New(db).RememberConsentOperator(ctx, postgres.RememberConsentOperatorParams{
+		ID:          domain.NewID(),
+		WorkspaceID: workspaceID,
+		Name:        o.Name,
+		Inn:         o.INN,
+		Address:     o.Address,
+		Email:       o.Email,
+	})
+	if err != nil {
+		return fmt.Errorf("remember consent operator: %w", err)
+	}
+	return nil
+}
+
+// ListConsentOperators — свежие наборы пространства, не больше limit.
+func (Repo) ListConsentOperators(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]ConsentOperatorItem, error) {
+	rows, err := postgres.New(db).ListConsentOperators(ctx, postgres.ListConsentOperatorsParams{WorkspaceID: workspaceID, Limit: limit})
+	if err != nil {
+		return nil, fmt.Errorf("list consent operators: %w", err)
+	}
+	out := make([]ConsentOperatorItem, 0, len(rows))
+	for _, r := range rows {
+		out = append(out, ConsentOperatorItem{
+			ID:              r.ID,
+			ConsentOperator: domain.ConsentOperator{Name: r.Name, INN: r.Inn, Address: r.Address, Email: r.Email},
+		})
+	}
+	return out, nil
+}
+
+// GetConsentOperatorWorkspace — пространство строки списка. pgx.ErrNoRows — строки нет.
+func (Repo) GetConsentOperatorWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (uuid.UUID, error) {
+	ws, err := postgres.New(db).GetConsentOperatorWorkspace(ctx, id)
+	if err != nil {
+		return uuid.Nil, fmt.Errorf("get consent operator workspace: %w", err)
+	}
+	return ws, nil
+}
+
+// DeleteConsentOperator убирает строку списка. 0 строк — её уже нет.
+func (Repo) DeleteConsentOperator(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error) {
+	n, err := postgres.New(db).DeleteConsentOperator(ctx, postgres.DeleteConsentOperatorParams{ID: id, WorkspaceID: workspaceID})
+	if err != nil {
+		return 0, fmt.Errorf("delete consent operator: %w", err)
+	}
+	return n, nil
+}
+
 // GetFormVersionSchema — снапшот версии формы по номеру. pgx.ErrNoRows — такой нет.
 func (Repo) GetFormVersionSchema(ctx context.Context, db postgres.DBTX, formID uuid.UUID, version int32) (json.RawMessage, error) {
 	schema, err := postgres.New(db).GetFormVersionSchema(ctx, postgres.GetFormVersionSchemaParams{FormID: formID, Version: version})

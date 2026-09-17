@@ -16,9 +16,8 @@ export interface ConsentDraft {
   email: string
   purpose: string
   retention: string
-  consentMode: 'template' | 'custom'
+  documents: 'template' | 'custom'
   consentText: string
-  policyMode: 'template' | 'custom'
   policyText: string
 }
 
@@ -31,10 +30,9 @@ export function consentDraftFrom(state: ConsentState): ConsentDraft {
     email: state.operator.email,
     purpose: state.purpose,
     retention: state.retention,
-    consentMode: state.consent.mode,
-    consentText: state.consent.text,
-    policyMode: state.policy.mode,
-    policyText: state.policy.text,
+    documents: state.documents,
+    consentText: state.consentText,
+    policyText: state.policyText,
   }
 }
 
@@ -52,8 +50,9 @@ export function consentSettingsValue(d: ConsentDraft): ConsentSettings {
     },
     purpose: d.purpose.trim(),
     retention: d.retention.trim(),
-    consent: { mode: d.consentMode, text: d.consentText },
-    policy: { mode: d.policyMode, text: d.policyText },
+    documents: d.documents,
+    consentText: d.consentText,
+    policyText: d.policyText,
   }
 }
 
@@ -78,19 +77,22 @@ export interface ConsentInvalid {
 const emailCheck = z.email()
 
 // validateConsent зеркалит ValidateConsentSettings (internal/domain/consent.go):
-// обязательность — только у включённого согласия, реквизиты — только если хоть один
-// документ типовой.
+// проверяются только поля выбранного источника документов — поля другого скрыты, и
+// ошибка в них держала бы сохранение без способа её исправить. Обязательность —
+// только у включённого согласия.
 export function validateConsent(d: ConsentDraft): ConsentInvalid {
   const v = consentSettingsValue(d)
-  const needsOperator = d.enabled && (d.consentMode === 'template' || d.policyMode === 'template')
+  const template = d.documents === 'template'
+  const custom = d.enabled && !template
   return {
     operatorMissing:
-      needsOperator &&
+      d.enabled &&
+      template &&
       (v.operator.name === '' || v.operator.address === '' || v.operator.email === ''),
-    consentTextMissing: d.enabled && d.consentMode === 'custom' && d.consentText.trim() === '',
-    policyTextMissing: d.enabled && d.policyMode === 'custom' && d.policyText.trim() === '',
-    inn: v.operator.inn !== '' && !/^(\d{10}|\d{12})$/.test(v.operator.inn),
-    email: v.operator.email !== '' && !emailCheck.safeParse(v.operator.email).success,
+    consentTextMissing: custom && d.consentText.trim() === '',
+    policyTextMissing: custom && d.policyText.trim() === '',
+    inn: template && v.operator.inn !== '' && !/^(\d{10}|\d{12})$/.test(v.operator.inn),
+    email: template && v.operator.email !== '' && !emailCheck.safeParse(v.operator.email).success,
   }
 }
 

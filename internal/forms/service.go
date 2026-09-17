@@ -114,6 +114,10 @@ type Store interface {
 	GetConsentRevision(ctx context.Context, db postgres.DBTX, formID, revisionID uuid.UUID) (ConsentRevision, error)
 	InsertConsentRevision(ctx context.Context, db postgres.DBTX, in NewConsentRevision) (ConsentRevision, error)
 	SetFormConsentRevision(ctx context.Context, db postgres.DBTX, formID, workspaceID, revisionID uuid.UUID) (int64, error)
+	RememberConsentOperator(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, o domain.ConsentOperator) error
+	ListConsentOperators(ctx context.Context, db postgres.DBTX, workspaceID uuid.UUID, limit int32) ([]ConsentOperatorItem, error)
+	GetConsentOperatorWorkspace(ctx context.Context, db postgres.DBTX, id uuid.UUID) (uuid.UUID, error)
+	DeleteConsentOperator(ctx context.Context, db postgres.DBTX, id, workspaceID uuid.UUID) (int64, error)
 }
 
 var _ Store = Repo{}

@@ -19,20 +19,9 @@ import (
 // на руну. Потолок длины в рунах стережёт ValidateConsentSettings.
 const maxConsentBodyBytes = 512 << 10
 
-// consentBody — раздел «Персональные данные» в теле запроса и ответа.
-type consentBody struct {
-	Operator  domain.ConsentOperator `json:"operator"`
-	Purpose   string                 `json:"purpose"`
-	Retention string                 `json:"retention"`
-	Consent   domain.ConsentDoc      `json:"consent"`
-	Policy    domain.ConsentDoc      `json:"policy"`
-}
-
-func (b consentBody) settings() domain.ConsentSettings {
-	return domain.ConsentSettings{
-		Operator: b.Operator, Purpose: b.Purpose, Retention: b.Retention, Consent: b.Consent, Policy: b.Policy,
-	}
-}
+// consentBody — раздел «Персональные данные» в теле запроса и ответа: поля
+// domain.ConsentSettings как есть, его JSON-теги и есть контракт.
+type consentBody = domain.ConsentSettings
 
 type consentRequest struct {
 	Enabled bool `json:"enabled"`
@@ -49,13 +38,10 @@ type consentResponse struct {
 }
 
 func toConsentResponse(st ConsentState) consentResponse {
-	s := st.Settings
 	resp := consentResponse{
-		Enabled: st.Enabled,
-		consentBody: consentBody{
-			Operator: s.Operator, Purpose: s.Purpose, Retention: s.Retention, Consent: s.Consent, Policy: s.Policy,
-		},
-		UpdatedAt: st.UpdatedAt,
+		Enabled:     st.Enabled,
+		consentBody: st.Settings,
+		UpdatedAt:   st.UpdatedAt,
 	}
 	if st.RevisionID != nil {
 		id := st.RevisionID.String()
@@ -124,7 +110,7 @@ func (h *Handler) putConsent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	st, err := h.svc.SaveConsent(r.Context(), userID, formID, req.Enabled, req.settings())
+	st, err := h.svc.SaveConsent(r.Context(), userID, formID, req.Enabled, req.consentBody)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -147,7 +133,7 @@ func (h *Handler) previewConsent(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	consent, policy, err := h.svc.ConsentPreview(r.Context(), userID, formID, req.settings())
+	consent, policy, err := h.svc.ConsentPreview(r.Context(), userID, formID, req)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -156,6 +142,51 @@ func (h *Handler) previewConsent(w http.ResponseWriter, r *http.Request) {
 		Consent: consentDocumentBody{Title: consent.Title, Text: consent.Text},
 		Policy:  consentDocumentBody{Title: policy.Title, Text: policy.Text},
 	})
+}
+
+// consentOperatorView — строка списка реквизитов пространства.
+type consentOperatorView struct {
+	ID string `json:"id"`
+	domain.ConsentOperator
+}
+
+func (h *Handler) consentOperators(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	// {id} здесь — пространство; разбор тот же, что у формы: мусор → 404.
+	workspaceID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	items, err := h.svc.ConsentOperators(r.Context(), userID, workspaceID)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	out := make([]consentOperatorView, 0, len(items))
+	for _, it := range items {
+		out = append(out, consentOperatorView{ID: it.ID.String(), ConsentOperator: it.ConsentOperator})
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, map[string]any{"items": out})
+}
+
+func (h *Handler) deleteConsentOperator(w http.ResponseWriter, r *http.Request) {
+	userID, ok := userID(w, r)
+	if !ok {
+		return
+	}
+	// {id} здесь — строка списка; разбор тот же, что у формы.
+	operatorID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	if err := h.svc.DeleteConsentOperator(r.Context(), userID, operatorID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // consentDocument — GET /public/v1/forms/{slug}/documents/{kind}?revision=…&version=…:

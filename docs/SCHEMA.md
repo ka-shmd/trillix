@@ -1140,7 +1140,7 @@ SHA-256: утечка дампа не даёт рабочих ссылок. Зд
 | `id` | `UUID` | PK |
 | `form_id` | `UUID` | `NOT NULL`, FK → `forms(id)` `ON DELETE CASCADE` |
 | `enabled` | `BOOLEAN` | `NOT NULL` — тумблер согласия. В ревизии, а не колонкой формы: выключение не стирает реквизиты |
-| `settings` | `JSONB` | `NOT NULL` — `domain.ConsentSettings`: `operator` (`name`, `inn`, `address`, `email`), `purpose`, `retention` (пусто = формулировка по умолчанию), `consent` и `policy` (`mode`: `template` — типовой текст из реквизитов, `custom` — свой; `text` — свой текст, хранится при любом режиме) |
+| `settings` | `JSONB` | `NOT NULL` — `domain.ConsentSettings`: `operator` (`name`, `inn`, `address`, `email`), `purpose`, `retention` (пусто = формулировка по умолчанию), `documents` — источник обоих документов (`template` — типовые тексты из реквизитов, `custom` — свои), `consentText` и `policyText` — свои тексты, хранятся при любом источнике |
 | `template` | `SMALLINT` | `NOT NULL`, `CHECK (template > 0)` — версия шаблона типового текста (`domain.ConsentTemplateVersion`). Правка формулировок в коде — новая версия, иначе исправление шаблона переписало бы задним числом текст уже данных согласий |
 | `created_by` | `UUID` | nullable, FK → `users(id)` `ON DELETE SET NULL` — кто сохранил |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
@@ -1148,6 +1148,20 @@ SHA-256: утечка дампа не даёт рабочих ссылок. Зд
 **Индексы:** `idx_form_consent_revisions_form (form_id)` — каскад удаления формы и выборка её ревизий.
 
 **Кольцо внешних ключей** `forms ↔ form_consent_revisions` не мешает удалению: форма уносит ревизии каскадом, а `SET NULL` у `forms.consent_revision_id` не находит уже удалённую строку.
+
+## `consent_operators` (0070)
+
+Список реквизитов оператора в пространстве — подсказка в поле «Оператор» раздела «Персональные данные» другой формы ([`design/privacy-consent.md`](design/privacy-consent.md) §3.6). Пополняется сохранением включённого согласия с типовыми документами; строка убирается автором вручную. **Копия, а не источник:** ревизия согласия хранит реквизиты сама, и правка или удаление строки не меняет ни форм, ни документов.
+
+| Колонка | Тип | Ограничения |
+|---|---|---|
+| `id` | `UUID` | PK |
+| `workspace_id` | `UUID` | `NOT NULL`, FK → `workspaces(id)` `ON DELETE CASCADE` |
+| `name`, `inn`, `address`, `email` | `TEXT` | `NOT NULL` — набор реквизитов (`domain.ConsentOperator`), нормализованный как в ревизии |
+| `fingerprint` | `TEXT` | `GENERATED ALWAYS AS (md5(name ‖ inn ‖ address ‖ email через \x1f)) STORED` — ключ «одинаковые не дублируются». Хешем, а не уникальным индексом по четырём колонкам: наименование и адрес вместе длиннее предела строки индекса btree |
+| `used_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` — последнее сохранение набора; повтор поднимает строку наверх подсказки |
+
+**Ограничения и индексы:** `UNIQUE (workspace_id, fingerprint)` — цель `ON CONFLICT`; `idx_consent_operators_workspace (workspace_id, used_at DESC)` — подсказка, свежие первыми.
 
 ## `schedules` (0050)
 

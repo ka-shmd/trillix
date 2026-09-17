@@ -675,6 +675,7 @@ export function FormSettingsView({ form }: { form: FormDetail }) {
             >
               <ConsentFields
                 formId={form.id}
+                workspaceId={form.workspaceId}
                 draft={consentDraft}
                 set={setConsent}
                 invalid={consentInvalid}
