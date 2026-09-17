@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
 
 	"github.com/ka-shmd/trillix/internal/domain"
@@ -115,6 +116,7 @@ func timestamptz(t time.Time) pgtype.Timestamptz {
 
 func toEdition(r postgres.LegalDocument) Edition {
 	return Edition{
+		ID:                   r.ID,
 		Kind:                 Kind(r.Kind),
 		Version:              r.Version,
 		Title:                r.Title,
@@ -124,4 +126,92 @@ func toEdition(r postgres.LegalDocument) Edition {
 		RequiresReacceptance: r.RequiresReacceptance,
 		Draft:                r.Draft,
 	}
+}
+
+// ConsentEvent — строка журнала согласий на запись.
+type ConsentEvent struct {
+	UserID       uuid.UUID
+	DocumentID   uuid.UUID
+	Action       Action
+	Source       Source
+	CheckboxText string
+	Email        string
+	UserAgent    string
+}
+
+// LatestEvent — последнее событие человека по виду документа.
+type LatestEvent struct {
+	Kind       Kind
+	DocumentID uuid.UUID
+	Version    string
+	Action     Action
+	At         time.Time
+}
+
+// HistoryItem — строка истории согласий.
+type HistoryItem struct {
+	ID      uuid.UUID
+	Kind    Kind
+	Version string
+	Title   string
+	Action  Action
+	Source  Source
+	At      time.Time
+}
+
+func (Repo) TermsAcceptanceMissing(ctx context.Context, db postgres.DBTX, userID uuid.UUID, now time.Time) (bool, error) {
+	missing, err := postgres.New(db).TermsAcceptanceMissing(ctx, postgres.TermsAcceptanceMissingParams{
+		Now: timestamptz(now), UserID: userID,
+	})
+	if err != nil {
+		return false, fmt.Errorf("terms acceptance missing %s: %w", userID, err)
+	}
+	return missing, nil
+}
+
+func (Repo) InsertEvent(ctx context.Context, db postgres.DBTX, e ConsentEvent) error {
+	err := postgres.New(db).InsertConsentEvent(ctx, postgres.InsertConsentEventParams{
+		ID:           domain.NewID(),
+		UserID:       e.UserID,
+		DocumentID:   e.DocumentID,
+		Action:       string(e.Action),
+		Source:       string(e.Source),
+		CheckboxText: e.CheckboxText,
+		Email:        e.Email,
+		UserAgent:    e.UserAgent,
+	})
+	if err != nil {
+		return fmt.Errorf("insert consent event %s: %w", e.UserID, err)
+	}
+	return nil
+}
+
+func (Repo) LatestEvents(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]LatestEvent, error) {
+	rows, err := postgres.New(db).LatestConsentEvents(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("latest consent events %s: %w", userID, err)
+	}
+	out := make([]LatestEvent, len(rows))
+	for i, r := range rows {
+		out[i] = LatestEvent{
+			Kind: Kind(r.Kind), DocumentID: r.DocumentID, Version: r.Version,
+			Action: Action(r.Action), At: r.CreatedAt.Time,
+		}
+	}
+	return out, nil
+}
+
+func (Repo) History(ctx context.Context, db postgres.DBTX, userID uuid.UUID) ([]HistoryItem, error) {
+	rows, err := postgres.New(db).ListConsentHistory(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("consent history %s: %w", userID, err)
+	}
+	out := make([]HistoryItem, len(rows))
+	for i, r := range rows {
+		out[i] = HistoryItem{
+			ID: r.ID, Kind: Kind(r.Kind), Version: r.Version, Title: r.Title,
+			Action: Action(r.Action), Source: Source(r.Source), At: r.CreatedAt.Time,
+		}
+	}
+	return out, nil
 }

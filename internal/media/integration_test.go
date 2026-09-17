@@ -129,6 +129,7 @@ func newStack(t *testing.T) *httptest.Server {
 func newStackWithFetcher(t *testing.T, egress *safehttp.Client) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
+	pgtest.Consents(t, testPool, authSvc)
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	formsSvc := forms.NewService(testPool, postgres.TxRunner{Pool: testPool}, forms.Repo{},
@@ -321,6 +322,7 @@ func registerUser(t *testing.T, srv *httptest.Server, email string) *http.Client
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("register %s: статус %d, ожидался 201", email, r.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	_ = r.Body.Close()
 	return c
 }

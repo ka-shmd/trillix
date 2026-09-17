@@ -10,7 +10,14 @@ var (
 	ErrForbidden    = errors.New("forbidden")
 	ErrValidation   = errors.New("validation failed")
 	ErrUnauthorized = errors.New("unauthorized")
-	ErrRateLimited  = errors.New("too many requests")
+
+	// ErrConsentRequired — сессия есть, но действующая редакция Пользовательского
+	// соглашения не принята: кабинет закрыт до экрана «Завершение регистрации» или
+	// «Условия обновились» (docs/design/signup-consent.md §3.2). Маппится в 403
+	// consent_required — отдельным кодом, потому что кабинет по нему уводит на экран
+	// согласия, а не показывает «нет доступа».
+	ErrConsentRequired = errors.New("consent required")
+	ErrRateLimited     = errors.New("too many requests")
 
 	// ErrTooLarge — тело запроса превысило потолок (MaxBytesReader). Маппится в 413.
 	// Приём ответа ограничивает тело 256 КБ (ARCHITECTURE §4.4, инвариант 3).

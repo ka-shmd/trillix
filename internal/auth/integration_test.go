@@ -43,14 +43,17 @@ func newMailSvc() *mail.Service {
 // newAuthService — реальный сервис auth с подключённой почтой (для сброса пароля)
 // и настоящим модулем пространств: удаление аккаунта спрашивает у него, не
 // осиротеет ли команда, и фейк здесь проверял бы не тот запрос (слайс G).
-func newAuthService() *auth.Service {
+func newAuthService(t *testing.T) *auth.Service {
+	t.Helper()
 	mailSvc := newMailSvc()
 	wsSvc := workspaces.NewService(testPool, postgres.TxRunner{Pool: testPool}, workspaces.Repo{},
 		entitlements.NewService(testPool, entitlements.Repo{}, time.Now), testAppOrigin)
-	return auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, mailSvc, time.Hour, testAppOrigin).
+	svc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, mailSvc, time.Hour, testAppOrigin).
 		WithLoginCodeKey([]byte("integration-test-login-code-key")).
 		WithTeams(wsSvc).
 		WithAvatars(stubAvatars{})
+	pgtest.Consents(t, testPool, svc)
+	return svc
 }
 
 // stubAvatars подменяет объектное хранилище: интеграционный тест проверяет путь
@@ -90,7 +93,7 @@ func resetDB(t *testing.T) {
 // ослабляется, а подменяется всё-пропускающей реализацией).
 func newStack(t *testing.T) *httptest.Server {
 	t.Helper()
-	svc := newAuthService()
+	svc := newAuthService(t)
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, testAppOrigin, false).
 		WithPasswordReset(ratelimit.AllowAll{}, ratelimit.AllowAll{}, ratelimit.AllowAll{}).
 		WithEmailVerification(ratelimit.AllowAll{}, ratelimit.AllowAll{}).

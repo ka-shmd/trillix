@@ -61,6 +61,7 @@ func resetDB(t *testing.T) {
 func newStack(t *testing.T) *httptest.Server {
 	t.Helper()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
+	pgtest.Consents(t, testPool, authSvc)
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	plans := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)
@@ -474,6 +475,7 @@ func registerUser(t *testing.T, srv *httptest.Server, email string) *http.Client
 	if r.StatusCode != http.StatusCreated {
 		t.Fatalf("register %s: статус %d, ожидалось 201", email, r.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	closeBody(t, r)
 	return c
 }

@@ -21,6 +21,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
+	"github.com/ka-shmd/trillix/internal/legal"
 	"github.com/ka-shmd/trillix/internal/mail"
 	"github.com/ka-shmd/trillix/internal/postgres"
 	"github.com/ka-shmd/trillix/internal/submissions"
@@ -68,6 +69,22 @@ func seedAuthService(pool *pgxpool.Pool) *auth.Service {
 	)
 }
 
+// seedCompleteSignup принимает за фикстуру действующую редакцию соглашения — иначе
+// кабинет встретит учётку экраном «Завершение регистрации», а её сессия в e2e получит
+// 403 consent_required. Редакции сверяются с базой так же, как при старте API: сидер
+// может прийти на базу раньше сервера.
+func seedCompleteSignup(ctx context.Context, pool *pgxpool.Pool, authSvc *auth.Service, user auth.User) error {
+	editions, err := legal.Editions()
+	if err != nil {
+		return err
+	}
+	legalSvc := legal.NewService(pool, postgres.TxRunner{Pool: pool}, legal.Repo{}, authSvc, editions, time.Now)
+	if _, err := legalSvc.Sync(ctx); err != nil {
+		return err
+	}
+	return legalSvc.AcceptForSeed(ctx, user.ID, user.Email)
+}
+
 // runSeed наполняет БД демо-данными (пользователь + формы). Идемпотентен: если у
 // демо-пользователя уже есть формы, ничего не добавляет (повторный запуск не
 // плодит дубли).
@@ -97,6 +114,9 @@ func runSeed(cfg config.Config, log *slog.Logger) error {
 		log.Info("seed: demo user already exists", slog.String("email", seedEmail))
 	default:
 		return fmt.Errorf("register seed user: %w", err)
+	}
+	if err := seedCompleteSignup(ctx, pool, authSvc, user); err != nil {
+		return fmt.Errorf("complete seed user signup: %w", err)
 	}
 
 	// Идемпотентность: если формы уже есть — не досыпаем.
@@ -151,13 +171,20 @@ func runSeedUser(args []string, cfg config.Config, log *slog.Logger) error {
 	authSvc := seedAuthService(pool)
 
 	// Пароль в лог не попадает ни в одной ветке (инвариант 2) — только адрес.
-	switch _, _, err := authSvc.Register(ctx, email, password); {
+	user, _, err := authSvc.Register(ctx, email, password)
+	switch {
 	case err == nil:
 		log.Info("seed-user: created", slog.String("email", email))
 	case errors.Is(err, domain.ErrEmailTaken):
+		if user, err = authSvc.UserByEmail(ctx, email); err != nil {
+			return fmt.Errorf("lookup existing user: %w", err)
+		}
 		log.Info("seed-user: already exists", slog.String("email", email))
 	default:
 		return fmt.Errorf("register user: %w", err)
+	}
+	if err := seedCompleteSignup(ctx, pool, authSvc, user); err != nil {
+		return fmt.Errorf("complete user signup: %w", err)
 	}
 	return nil
 }

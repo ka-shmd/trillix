@@ -6,6 +6,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/ka-shmd/trillix/internal/pgtest"
 )
 
 // emailVerifiedInMe читает по /me, подтверждён ли email (поле emailVerified в
@@ -78,6 +80,7 @@ func TestResendVerification_EnqueuesNewLetter(t *testing.T) {
 		`{"email":"`+email+`","password":"`+password+`"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("register: %d; %s", r.StatusCode, body(t, r))
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	clearOutbox(t) // убираем письмо регистрации, считаем именно повторное
 
 	// Повторная отправка (за сессией и CSRF) → 204, новое письмо в очереди.

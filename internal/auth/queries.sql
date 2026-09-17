@@ -298,3 +298,25 @@ DELETE FROM known_devices WHERE expires_at <= now();
 -- строк, а не переставляет дату удаления на новую.
 UPDATE users SET deleted_at = now()
 WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: MarkSignupCompleted :exec
+-- Отметка о завершении регистрации (0071). Ставится той же транзакцией, что и первое
+-- принятие соглашения (internal/legal); уже стоящую не двигает.
+UPDATE users SET signup_completed_at = now()
+WHERE id = $1 AND signup_completed_at IS NULL;
+
+-- name: UpsertSignupProfile :exec
+-- Анкета регистрации: повторная отправка перезаписывает ответы целиком.
+INSERT INTO signup_profiles (user_id, kind, purpose, referral)
+VALUES ($1, $2, $3, $4)
+ON CONFLICT (user_id) DO UPDATE
+SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral, updated_at = now();
+
+-- name: DeleteAbandonedSignups :execrows
+-- Незавершённые регистрации старше срока — удалением строки, а не пометкой deleted_at:
+-- users.email уникален, и пометка держала бы адрес занятым навсегда. Каскад уносит личное
+-- пространство, подписку, привязки и сессии. consent_events ссылается на users с RESTRICT:
+-- событие у незавершённой регистрации — нарушение инварианта «первое принятие ставит
+-- отметку», и тогда запрос падает, а не удаляет доказательство.
+DELETE FROM users
+WHERE signup_completed_at IS NULL AND created_at < $1;

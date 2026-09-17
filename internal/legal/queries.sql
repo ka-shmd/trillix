@@ -47,3 +47,45 @@ SELECT version, effective_at
 FROM legal_documents
 WHERE kind = sqlc.arg(kind) AND effective_at <= sqlc.arg(now)
 ORDER BY effective_at DESC, version DESC;
+
+-- name: TermsAcceptanceMissing :one
+-- Гейт кабинета (спека §3.2): у человека нет принятия редакции соглашения не старше
+-- последней существенной (requires_reacceptance). Существенной ещё не было — годится
+-- принятие любой. Ни одна редакция не вступила в силу — гейта нет: принять было бы нечего.
+SELECT (
+    EXISTS (SELECT 1 FROM legal_documents t WHERE t.kind = 'terms' AND t.effective_at <= sqlc.arg(now))
+    AND NOT EXISTS (
+        SELECT 1
+        FROM consent_events e
+        JOIN legal_documents d ON d.id = e.document_id
+        WHERE e.user_id = sqlc.arg(user_id)
+          AND d.kind = 'terms'
+          AND e.action = 'accepted'
+          AND d.effective_at >= COALESCE(
+              (SELECT max(r.effective_at) FROM legal_documents r
+               WHERE r.kind = 'terms' AND r.requires_reacceptance AND r.effective_at <= sqlc.arg(now)),
+              '-infinity'::timestamptz)
+    )
+)::boolean AS missing;
+
+-- name: InsertConsentEvent :exec
+INSERT INTO consent_events (id, user_id, document_id, action, source, checkbox_text, email, user_agent)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8);
+
+-- name: LatestConsentEvents :many
+-- Последнее событие по каждому виду документа — текущее состояние согласий. id (UUIDv7)
+-- разводит события с одинаковым created_at.
+SELECT DISTINCT ON (d.kind) d.kind, e.document_id, d.version, e.action, e.created_at
+FROM consent_events e
+JOIN legal_documents d ON d.id = e.document_id
+WHERE e.user_id = $1
+ORDER BY d.kind, e.created_at DESC, e.id DESC;
+
+-- name: ListConsentHistory :many
+-- История согласий для «Правовой информации», свежие первыми.
+SELECT e.id, d.kind, d.version, d.title, e.action, e.source, e.created_at
+FROM consent_events e
+JOIN legal_documents d ON d.id = e.document_id
+WHERE e.user_id = $1
+ORDER BY e.created_at DESC, e.id DESC
+LIMIT 200;

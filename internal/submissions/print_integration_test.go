@@ -62,6 +62,7 @@ func printStackOpts(t *testing.T, printerURL string) (*httptest.Server, *printed
 	t.Helper()
 
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
+	pgtest.Consents(t, testPool, authSvc)
 	authH := auth.NewHandler(authSvc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, "http://localhost:5173", false)
 
 	ent := entitlements.NewService(testPool, entitlements.Repo{}, time.Now)

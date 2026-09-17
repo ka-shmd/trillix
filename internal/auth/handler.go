@@ -53,6 +53,8 @@ type authService interface {
 	ForgetDevice(ctx context.Context, userID, deviceID uuid.UUID) error
 	ForgetAllDevices(ctx context.Context, userID uuid.UUID, sessionToken string) error
 	DeleteAccount(ctx context.Context, user User, currentPassword, code string) error
+	ConsentRequired(ctx context.Context, userID uuid.UUID) (bool, error)
+	SaveSignupProfile(ctx context.Context, userID uuid.UUID, p SignupProfile) error
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —
@@ -216,8 +218,8 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// Переотправка кода — та же дверь и те же два ведра: письмо стоит дороже
 	// попытки ввода, и без ведра по аккаунту эта ручка засыпала бы чужой ящик.
 	mux.Handle("POST /api/v1/auth/login-2fa/resend", h.rateLimit(h.loginLimiter, "слишком много попыток входа")(http.HandlerFunc(h.resendLoginCode)))
-	mux.Handle("POST /api/v1/auth/logout", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.logout))))
-	mux.Handle("GET /api/v1/auth/me", h.RequireAuth(http.HandlerFunc(h.me)))
+	mux.Handle("POST /api/v1/auth/logout", h.RequireSession(h.RequireCSRF(http.HandlerFunc(h.logout))))
+	mux.Handle("GET /api/v1/auth/me", h.RequireSession(http.HandlerFunc(h.me)))
 	// Сброс пароля — публичные (сессии ещё/уже нет): CSRF не нужен (как login/
 	// register), аутентификация самим одноразовым токеном. Защита — rate-limit.
 	mux.Handle("POST /api/v1/auth/forgot-password", h.rateLimit(h.forgotIPLimiter, "слишком много запросов сброса")(http.HandlerFunc(h.forgotPassword)))
@@ -335,7 +337,22 @@ func (h *Handler) me(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrUnauthorized)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, toUserResponse(user))
+	resp := meResponse{userResponse: toUserResponse(user)}
+	var err error
+	if resp.ConsentRequired, err = h.svc.ConsentRequired(r.Context(), user.ID); err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
+}
+
+// meResponse — /auth/me: пользователь и то, закрыт ли для него кабинет гейтом согласия.
+// Отдельно от userResponse: остальные ручки отвечают профилем, а гейт — вопрос сессии.
+type meResponse struct {
+	userResponse
+	// ConsentRequired — кабинет закрыт до принятия действующей редакции соглашения:
+	// кабинет уводит на экран согласия.
+	ConsentRequired bool `json:"consentRequired"`
 }
 
 type forgotPasswordRequest struct {
@@ -432,12 +449,33 @@ func (h *Handler) resendVerification(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// RequireAuth пропускает запрос только с живой сессией, кладя пользователя в
-// контекст. Промах — 401 (не 403): факт существования ресурса не раскрывается.
-// Экспортирован для переиспользования другими модулями (forms и далее): их
-// приватные роуты оборачиваются этим middleware, а пользователя достают из
+// RequireAuth пропускает запрос только с живой сессией и принятой действующей
+// редакцией Пользовательского соглашения, кладя пользователя в контекст. Нет сессии —
+// 401 (не 403): факт существования ресурса не раскрывается. Соглашение не принято —
+// 403 consent_required. Экспортирован для переиспользования другими модулями (forms и
+// далее): их приватные роуты оборачиваются этим middleware, а пользователя достают из
 // контекста через UserFromContext.
 func (h *Handler) RequireAuth(next http.Handler) http.Handler {
+	return h.RequireSession(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		user, _ := UserFromContext(r.Context())
+		required, err := h.svc.ConsentRequired(r.Context(), user.ID)
+		if err != nil {
+			httpserver.WriteError(w, r, err)
+			return
+		}
+		if required {
+			httpserver.WriteError(w, r, domain.ErrConsentRequired)
+			return
+		}
+		next.ServeHTTP(w, r)
+	}))
+}
+
+// RequireSession — живая сессия без гейта согласия. Стоит ровно на тех ручках, без
+// которых закрытый гейтом человек не может ни узнать, что от него нужно, ни выполнить это,
+// ни уйти: /auth/me, /auth/logout и ручки согласий (docs/design/signup-consent.md §3.2).
+// Всё остальное — за RequireAuth.
+func (h *Handler) RequireSession(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		c, err := h.readCookie(r, sessionCookieName)
 		if err != nil {

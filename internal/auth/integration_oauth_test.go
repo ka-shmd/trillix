@@ -17,6 +17,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/auth"
 	"github.com/ka-shmd/trillix/internal/domain"
 	"github.com/ka-shmd/trillix/internal/oauth"
+	"github.com/ka-shmd/trillix/internal/pgtest"
 	"github.com/ka-shmd/trillix/internal/ratelimit"
 )
 
@@ -41,7 +42,7 @@ const appOrigin = "http://localhost:5173"
 // newOAuthStack — реальная вертикаль с включённым провайдером.
 func newOAuthStack(t *testing.T, profile oauth.Profile) *httptest.Server {
 	t.Helper()
-	svc := newAuthService()
+	svc := newAuthService(t)
 	h := auth.NewHandler(svc, ratelimit.AllowAll{}, ratelimit.AllowAll{}, false, appOrigin, false).
 		WithOAuth(svc, map[string]oauth.Provider{"yandex": stubProvider{profile}}, ratelimit.AllowAll{}, []byte("integration-test-secret")).
 		WithAccount(auth.AccountLimits{PasswordChange: ratelimit.AllowAll{}, TwoFactor: ratelimit.AllowAll{}, DeleteAccount: ratelimit.AllowAll{}, Avatar: ratelimit.AllowAll{}})
@@ -272,6 +273,7 @@ func TestOAuth_ProviderNameFillsEmptyOnly(t *testing.T) {
 	if !hasSessionCookie(c, srv, t) {
 		t.Fatal("сессия не выдана — дальше проверять нечего")
 	}
+	pgtest.CompleteSignup(t, testPool, "new@yandex.ru")
 	if first, last := profileOf(t, get(t, c, srv.URL+"/api/v1/auth/me")); first != "Иван" || last != "Петров" {
 		t.Fatalf("после входа через провайдера имя=%q фамилия=%q, ожидались Иван/Петров", first, last)
 	}
@@ -306,6 +308,7 @@ func TestOAuth_IdentityCardShowsProviderEmail(t *testing.T) {
 
 	resp := walkStartAndCallback(t, srv, c)
 	_ = resp.Body.Close()
+	pgtest.CompleteSignup(t, testPool, "ivan@yandex.ru")
 
 	var provider, email string
 	if err := testPool.QueryRow(context.Background(),
@@ -348,7 +351,7 @@ func TestOAuth_IdentityCardShowsProviderEmail(t *testing.T) {
 // уронит её этот тест.
 func TestUnlinkIdentity_ConcurrentUnlinksLeaveOneWayIn(t *testing.T) {
 	resetDB(t)
-	svc := newAuthService()
+	svc := newAuthService(t)
 
 	// Прогонов несколько: гонка выигрывается не всегда, и один прогон на старом
 	// коде мог бы пройти случайно.
@@ -416,6 +419,7 @@ func TestOAuth_UnlinkLastIdentityRefused(t *testing.T) {
 
 	resp := walkStartAndCallback(t, srv, c)
 	_ = resp.Body.Close()
+	pgtest.CompleteSignup(t, testPool, "ivan@yandex.ru")
 
 	req, err := http.NewRequest(http.MethodDelete, srv.URL+"/api/v1/account/identities/yandex", nil)
 	if err != nil {

@@ -10,6 +10,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/ka-shmd/trillix/internal/domain"
+	"github.com/ka-shmd/trillix/internal/pgtest"
 )
 
 // Удаление аккаунта против настоящей БД (фаза 23, слайс G). Юниты сервиса видят
@@ -37,6 +38,7 @@ func registerUser(t *testing.T, srv, email, password string) *http.Client {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register %s: статус %d, ожидалось 201; тело=%s", email, resp.StatusCode, body(t, resp))
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	return c
 }
 

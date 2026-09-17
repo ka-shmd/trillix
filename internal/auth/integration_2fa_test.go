@@ -7,6 +7,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/ka-shmd/trillix/internal/pgtest"
 )
 
 // Полный путь второго фактора: включение, вход с кодом из письма, повтор кода,
@@ -70,6 +72,7 @@ func TestTwoFactor_FullLoginRoundTrip(t *testing.T) {
 		`{"email":"`+email+`","password":"`+password+`"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("register: статус %d", r.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	csrf := csrfHeader(t, c, srv.URL)
 
 	// 1. Включение: пароль, и больше ничего — ни секретов, ни резервных кодов.
@@ -179,6 +182,7 @@ func TestTwoFactor_AccountDeleteUsesActionCode(t *testing.T) {
 		`{"email":"`+email+`","password":"`+password+`"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("register: статус %d", r.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	csrf := csrfHeader(t, c, srv.URL)
 	if r := post(t, c, srv.URL+"/api/v1/account/2fa/enable", `{"currentPassword":"`+password+`"}`, csrf); r.StatusCode != http.StatusOK {
 		t.Fatalf("enable: статус %d", r.StatusCode)
