@@ -1,16 +1,37 @@
 import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query'
+import { MutationCache, QueryCache, QueryClient, QueryClientProvider } from '@tanstack/react-query'
 import { createRouter, RouterProvider } from '@tanstack/react-router'
 import { routeTree } from './routeTree.gen'
 import { NotFound } from './shared/NotFound'
 import { ErrorScreen } from './shared/ErrorScreen'
+import { consentRedirectFor } from './shared/api/consentGate'
+import { authKeys } from './features/auth/keys'
+import { legalKeys } from './features/legal/keys'
 import './index.css'
 // Общие стили полей формы (rf-*) — единый источник с рендерером, см.
 // web/shared/fields/fields.css. После index.css: unlayered rf-* перебивают base-слой Tailwind.
 import '@fields/fields.css'
 
-const queryClient = new QueryClient()
+// Гейт согласия посреди сессии (docs/design/signup-consent.md §3.2): 403
+// consent_required от любой ручки — вышла существенная редакция соглашения или адрес
+// открыт мимо гарда _app (/join/{token}).
+//
+// Сносятся ОБА кэша — профиль и согласия: по устаревшему профилю экран согласия отослал бы
+// человека обратно в кабинет, а по устаревшим согласиям (их держит баннер новой редакции на
+// каждой странице) — решил бы, что принимать нечего, и сделал бы то же самое.
+function onApiError(err: unknown) {
+  const target = consentRedirectFor(err, router.state.location)
+  if (!target) return
+  queryClient.removeQueries({ queryKey: authKeys.me() })
+  queryClient.removeQueries({ queryKey: legalKeys.consents() })
+  void router.navigate({ to: '/welcome', search: target })
+}
+
+const queryClient = new QueryClient({
+  queryCache: new QueryCache({ onError: onApiError }),
+  mutationCache: new MutationCache({ onError: onApiError }),
+})
 const router = createRouter({
   routeTree,
   context: { queryClient },

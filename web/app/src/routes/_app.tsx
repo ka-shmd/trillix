@@ -10,19 +10,20 @@ import { SidebarInset, SidebarProvider } from '@/components/ui/sidebar'
 import { AppSidebar } from '../features/app-shell/AppSidebar'
 import { HeaderSidebarTrigger } from '../features/app-shell/HeaderSidebarTrigger'
 import { VerifyEmailBanner } from '../features/app-shell/VerifyEmailBanner'
+import { TermsUpdateBanner } from '../features/legal/TermsUpdateBanner'
 import { NotificationsBell } from '../features/notifications/NotificationsBell'
 import { AppChromeContext } from '../shared/appChrome'
 import { WorkspaceAddressProvider } from '../shared/workspaceContext'
 
 // Layout-группа приложения за сессией. Гард префетчит /auth/me; нет живой
-// сессии → редирект на /login (защищённый маршрут не показывает контент).
+// сессии → редирект на /login (защищённый маршрут не показывает контент). Кабинет
+// закрыт гейтом согласия → экран согласия с возвратом на этот адрес
+// (docs/design/signup-consent.md §3.2).
 export const Route = createFileRoute('/_app')({
-  beforeLoad: async ({ context }) => {
-    try {
-      await context.queryClient.ensureQueryData(meQueryOptions)
-    } catch {
-      throw redirect({ to: '/login' })
-    }
+  beforeLoad: async ({ context, location }) => {
+    const me = await context.queryClient.ensureQueryData(meQueryOptions).catch(() => null)
+    if (!me) throw redirect({ to: '/login' })
+    if (me.consentRequired) throw redirect({ to: '/welcome', search: { redirect: location.href } })
   },
   component: AppLayout,
 })
@@ -95,6 +96,7 @@ function AppLayout() {
             ответам — обычные поля. */}
           <main className="flex-1 overflow-auto">
             {!user.emailVerified && <VerifyEmailBanner />}
+            <TermsUpdateBanner />
             <AppChromeContext.Provider value={chromeSlots}>
               <Outlet />
             </AppChromeContext.Provider>

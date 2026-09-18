@@ -60,6 +60,55 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	// Удаление аккаунта (слайс G) — POST, а не DELETE: у запроса есть тело
 	// (подтверждение паролем и кодом), а DELETE с телом читают не все прокси.
 	mux.Handle("POST /api/v1/account/delete", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.deleteAccount))))
+	// Анкета регистрации — за обычным гейтом: экран отправляет её после принятия
+	// соглашения (docs/design/signup-consent.md §3.5).
+	mux.Handle("PUT /api/v1/account/signup-profile", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.saveSignupProfile))))
+}
+
+// signupProfileRequest — экран «Поделитесь парой деталей»: имя и фамилия (в профиль
+// аккаунта) и анкета.
+type signupProfileRequest struct {
+	FirstName   string  `json:"firstName"`
+	LastName    string  `json:"lastName"`
+	Kind        *string `json:"kind"`
+	Purpose     *string `json:"purpose"`
+	Referral    *string `json:"referral"`
+	Occupation  *string `json:"occupation"`
+	Profession  *string `json:"profession"`
+	CompanyName *string `json:"companyName"`
+	Industry    *string `json:"industry"`
+	JobPosition *string `json:"jobPosition"`
+}
+
+func (h *Handler) saveSignupProfile(w http.ResponseWriter, r *http.Request) {
+	user, ok := UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	var req signupProfileRequest
+	if err := dec.Decode(&req); err != nil {
+		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
+		return
+	}
+	err := h.svc.SaveSignupProfile(r.Context(), user.ID, req.FirstName, req.LastName, SignupProfile{
+		Kind:        req.Kind,
+		Purpose:     req.Purpose,
+		Referral:    req.Referral,
+		Occupation:  req.Occupation,
+		Profession:  req.Profession,
+		CompanyName: req.CompanyName,
+		Industry:    req.Industry,
+		JobPosition: req.JobPosition,
+	})
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 
 type updateProfileRequest struct {

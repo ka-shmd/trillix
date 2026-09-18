@@ -34,6 +34,9 @@ type User struct {
 	// TwoFactorEnabled — включён ли второй фактор (0056). Едет в самом User, а не
 	// отдельным запросом: его спрашивает КАЖДЫЙ путь входа (sessionOrChallenge).
 	TwoFactorEnabled bool
+	// SignupCompletedAt — когда регистрация завершена (0071): первое принятие соглашения.
+	// nil — аккаунт ещё на экране «Завершение регистрации».
+	SignupCompletedAt *time.Time
 }
 
 // Identity — способ входа через провайдера, как его видит экран настроек.
@@ -414,6 +417,8 @@ func userFromRow(u postgres.User) User {
 		LastName:         ptrStr(u.LastName),
 		AvatarKey:        ptrStr(u.AvatarKey),
 		TwoFactorEnabled: u.TwoFactorEnabled,
+
+		SignupCompletedAt: ptrTime(u.SignupCompletedAt),
 	}
 }
 
@@ -593,4 +598,38 @@ func (Repo) DeleteSessionsByUserExcept(ctx context.Context, db postgres.DBTX, us
 		return fmt.Errorf("delete sessions except current: %w", err)
 	}
 	return nil
+}
+
+func (Repo) MarkSignupCompleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error {
+	if err := postgres.New(db).MarkSignupCompleted(ctx, userID); err != nil {
+		return fmt.Errorf("mark signup completed %s: %w", userID, err)
+	}
+	return nil
+}
+
+func (Repo) UpsertSignupProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, p SignupProfile) error {
+	err := postgres.New(db).UpsertSignupProfile(ctx, postgres.UpsertSignupProfileParams{
+		UserID:      userID,
+		Kind:        pgText(p.Kind),
+		Purpose:     pgText(p.Purpose),
+		Referral:    pgText(p.Referral),
+		Occupation:  pgText(p.Occupation),
+		Profession:  pgText(p.Profession),
+		CompanyName: pgText(p.CompanyName),
+		Industry:    pgText(p.Industry),
+		JobPosition: pgText(p.JobPosition),
+	})
+	if err != nil {
+		return fmt.Errorf("upsert signup profile %s: %w", userID, err)
+	}
+	return nil
+}
+
+// DeleteAbandonedSignups удаляет незавершённые регистрации, созданные раньше createdBefore.
+func (Repo) DeleteAbandonedSignups(ctx context.Context, db postgres.DBTX, createdBefore time.Time) (int64, error) {
+	n, err := postgres.New(db).DeleteAbandonedSignups(ctx, pgtype.Timestamptz{Time: createdBefore, Valid: true})
+	if err != nil {
+		return 0, fmt.Errorf("delete abandoned signups: %w", err)
+	}
+	return n, nil
 }

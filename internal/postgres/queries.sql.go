@@ -1118,7 +1118,7 @@ const createUser = `-- name: CreateUser :one
 
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at
 `
 
 type CreateUserParams struct {
@@ -1143,6 +1143,7 @@ func (q *Queries) CreateUser(ctx context.Context, arg CreateUserParams) (User, e
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
 		&i.IsAdmin,
+		&i.SignupCompletedAt,
 	)
 	return i, err
 }
@@ -1198,6 +1199,24 @@ type CreateWorkspaceMemberParams struct {
 func (q *Queries) CreateWorkspaceMember(ctx context.Context, arg CreateWorkspaceMemberParams) error {
 	_, err := q.db.Exec(ctx, createWorkspaceMember, arg.WorkspaceID, arg.UserID, arg.Role)
 	return err
+}
+
+const deleteAbandonedSignups = `-- name: DeleteAbandonedSignups :execrows
+DELETE FROM users
+WHERE signup_completed_at IS NULL AND created_at < $1
+`
+
+// Незавершённые регистрации старше срока — удалением строки, а не пометкой deleted_at:
+// users.email уникален, и пометка держала бы адрес занятым навсегда. Каскад уносит личное
+// пространство, подписку, привязки и сессии. consent_events ссылается на users с RESTRICT:
+// событие у незавершённой регистрации — нарушение инварианта «первое принятие ставит
+// отметку», и тогда запрос падает, а не удаляет доказательство.
+func (q *Queries) DeleteAbandonedSignups(ctx context.Context, createdAt pgtype.Timestamptz) (int64, error) {
+	result, err := q.db.Exec(ctx, deleteAbandonedSignups, createdAt)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const deleteAllNotifications = `-- name: DeleteAllNotifications :execrows
@@ -2192,7 +2211,7 @@ UPDATE users
    SET first_name = COALESCE(first_name, $2),
        last_name  = COALESCE(last_name,  $3)
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at
 `
 
 type FillEmptyProfileParams struct {
@@ -2220,6 +2239,7 @@ func (q *Queries) FillEmptyProfile(ctx context.Context, arg FillEmptyProfilePara
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
 		&i.IsAdmin,
+		&i.SignupCompletedAt,
 	)
 	return i, err
 }
@@ -2490,6 +2510,68 @@ func (q *Queries) GetConsentRevision(ctx context.Context, arg GetConsentRevision
 		&i.Enabled,
 		&i.Settings,
 		&i.Template,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getCurrentLegalDocument = `-- name: GetCurrentLegalDocument :one
+SELECT id, kind, version, title, body, sha256, effective_at, requires_reacceptance, draft, created_at
+FROM legal_documents
+WHERE kind = $1 AND effective_at <= $2
+ORDER BY effective_at DESC, version DESC
+LIMIT 1
+`
+
+type GetCurrentLegalDocumentParams struct {
+	Kind string
+	Now  pgtype.Timestamptz
+}
+
+func (q *Queries) GetCurrentLegalDocument(ctx context.Context, arg GetCurrentLegalDocumentParams) (LegalDocument, error) {
+	row := q.db.QueryRow(ctx, getCurrentLegalDocument, arg.Kind, arg.Now)
+	var i LegalDocument
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Version,
+		&i.Title,
+		&i.Body,
+		&i.Sha256,
+		&i.EffectiveAt,
+		&i.RequiresReacceptance,
+		&i.Draft,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
+const getEffectiveLegalDocument = `-- name: GetEffectiveLegalDocument :one
+SELECT id, kind, version, title, body, sha256, effective_at, requires_reacceptance, draft, created_at
+FROM legal_documents
+WHERE kind = $1 AND version = $2 AND effective_at <= $3
+`
+
+type GetEffectiveLegalDocumentParams struct {
+	Kind    string
+	Version string
+	Now     pgtype.Timestamptz
+}
+
+// Редакция по версии — только вступившая в силу: будущая публично не существует.
+func (q *Queries) GetEffectiveLegalDocument(ctx context.Context, arg GetEffectiveLegalDocumentParams) (LegalDocument, error) {
+	row := q.db.QueryRow(ctx, getEffectiveLegalDocument, arg.Kind, arg.Version, arg.Now)
+	var i LegalDocument
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Version,
+		&i.Title,
+		&i.Body,
+		&i.Sha256,
+		&i.EffectiveAt,
+		&i.RequiresReacceptance,
+		&i.Draft,
 		&i.CreatedAt,
 	)
 	return i, err
@@ -3381,6 +3463,35 @@ func (q *Queries) GetJoinLinkByToken(ctx context.Context, token string) (GetJoin
 	return i, err
 }
 
+const getLegalDocument = `-- name: GetLegalDocument :one
+SELECT id, kind, version, title, body, sha256, effective_at, requires_reacceptance, draft, created_at
+FROM legal_documents
+WHERE kind = $1 AND version = $2
+`
+
+type GetLegalDocumentParams struct {
+	Kind    string
+	Version string
+}
+
+func (q *Queries) GetLegalDocument(ctx context.Context, arg GetLegalDocumentParams) (LegalDocument, error) {
+	row := q.db.QueryRow(ctx, getLegalDocument, arg.Kind, arg.Version)
+	var i LegalDocument
+	err := row.Scan(
+		&i.ID,
+		&i.Kind,
+		&i.Version,
+		&i.Title,
+		&i.Body,
+		&i.Sha256,
+		&i.EffectiveAt,
+		&i.RequiresReacceptance,
+		&i.Draft,
+		&i.CreatedAt,
+	)
+	return i, err
+}
+
 const getMemberRole = `-- name: GetMemberRole :one
 SELECT role
 FROM workspace_members
@@ -3773,7 +3884,7 @@ func (q *Queries) GetScheduleCapacity(ctx context.Context, id uuid.UUID) (int32,
 }
 
 const getSessionUser = `-- name: GetSessionUser :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin, u.signup_completed_at
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL
@@ -3795,6 +3906,7 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
 		&i.IsAdmin,
+		&i.SignupCompletedAt,
 	)
 	return i, err
 }
@@ -4048,7 +4160,7 @@ func (q *Queries) GetSubmissionOwner(ctx context.Context, id uuid.UUID) (GetSubm
 }
 
 const getUserByEmail = `-- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at
 FROM users
 WHERE email = $1 AND deleted_at IS NULL
 `
@@ -4068,13 +4180,14 @@ func (q *Queries) GetUserByEmail(ctx context.Context, email string) (User, error
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
 		&i.IsAdmin,
+		&i.SignupCompletedAt,
 	)
 	return i, err
 }
 
 const getUserByID = `-- name: GetUserByID :one
 
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at
 FROM users
 WHERE id = $1 AND deleted_at IS NULL
 `
@@ -4117,12 +4230,13 @@ func (q *Queries) GetUserByID(ctx context.Context, id uuid.UUID) (User, error) {
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
 		&i.IsAdmin,
+		&i.SignupCompletedAt,
 	)
 	return i, err
 }
 
 const getUserByIdentity = `-- name: GetUserByIdentity :one
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin, u.signup_completed_at
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL
@@ -4151,6 +4265,7 @@ func (q *Queries) GetUserByIdentity(ctx context.Context, arg GetUserByIdentityPa
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
 		&i.IsAdmin,
+		&i.SignupCompletedAt,
 	)
 	return i, err
 }
@@ -4258,6 +4373,36 @@ func (q *Queries) HoldSlot(ctx context.Context, arg HoldSlotParams) (uuid.UUID, 
 	var id uuid.UUID
 	err := row.Scan(&id)
 	return id, err
+}
+
+const insertConsentEvent = `-- name: InsertConsentEvent :exec
+INSERT INTO consent_events (id, user_id, document_id, action, source, checkbox_text, email, user_agent)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+`
+
+type InsertConsentEventParams struct {
+	ID           uuid.UUID
+	UserID       uuid.UUID
+	DocumentID   uuid.UUID
+	Action       string
+	Source       string
+	CheckboxText string
+	Email        string
+	UserAgent    string
+}
+
+func (q *Queries) InsertConsentEvent(ctx context.Context, arg InsertConsentEventParams) error {
+	_, err := q.db.Exec(ctx, insertConsentEvent,
+		arg.ID,
+		arg.UserID,
+		arg.DocumentID,
+		arg.Action,
+		arg.Source,
+		arg.CheckboxText,
+		arg.Email,
+		arg.UserAgent,
+	)
+	return err
 }
 
 const insertConsentRevision = `-- name: InsertConsentRevision :one
@@ -4440,6 +4585,47 @@ func (q *Queries) InsertIntegrationDelivery(ctx context.Context, arg InsertInteg
 		arg.RowCount,
 	)
 	return err
+}
+
+const insertLegalDocument = `-- name: InsertLegalDocument :execrows
+
+INSERT INTO legal_documents (id, kind, version, title, body, sha256, effective_at, requires_reacceptance, draft)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (kind, version) DO NOTHING
+`
+
+type InsertLegalDocumentParams struct {
+	ID                   uuid.UUID
+	Kind                 string
+	Version              string
+	Title                string
+	Body                 string
+	Sha256               string
+	EffectiveAt          pgtype.Timestamptz
+	RequiresReacceptance bool
+	Draft                bool
+}
+
+// Запросы модуля legal. Схема — migrations/0071 (legal_documents).
+// Генерация: `make sqlc`.
+// Заведение редакции при старте API. Уже записанная редакция не трогается: ноль строк
+// означает «есть в базе», и дальше её сверяет сервис.
+func (q *Queries) InsertLegalDocument(ctx context.Context, arg InsertLegalDocumentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, insertLegalDocument,
+		arg.ID,
+		arg.Kind,
+		arg.Version,
+		arg.Title,
+		arg.Body,
+		arg.Sha256,
+		arg.EffectiveAt,
+		arg.RequiresReacceptance,
+		arg.Draft,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
 }
 
 const insertNotifications = `-- name: InsertNotifications :exec
@@ -4698,6 +4884,50 @@ func (q *Queries) IsUserAdmin(ctx context.Context, id uuid.UUID) (bool, error) {
 	return is_admin, err
 }
 
+const latestConsentEvents = `-- name: LatestConsentEvents :many
+SELECT DISTINCT ON (d.kind) d.kind, e.document_id, d.version, e.action, e.created_at
+FROM consent_events e
+JOIN legal_documents d ON d.id = e.document_id
+WHERE e.user_id = $1
+ORDER BY d.kind, e.created_at DESC, e.id DESC
+`
+
+type LatestConsentEventsRow struct {
+	Kind       string
+	DocumentID uuid.UUID
+	Version    string
+	Action     string
+	CreatedAt  pgtype.Timestamptz
+}
+
+// Последнее событие по каждому виду документа — текущее состояние согласий. id (UUIDv7)
+// разводит события с одинаковым created_at.
+func (q *Queries) LatestConsentEvents(ctx context.Context, userID uuid.UUID) ([]LatestConsentEventsRow, error) {
+	rows, err := q.db.Query(ctx, latestConsentEvents, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LatestConsentEventsRow
+	for rows.Next() {
+		var i LatestConsentEventsRow
+		if err := rows.Scan(
+			&i.Kind,
+			&i.DocumentID,
+			&i.Version,
+			&i.Action,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const linkIDsByAccount = `-- name: LinkIDsByAccount :many
 SELECT id FROM form_integrations WHERE account_id = $1
 `
@@ -4717,6 +4947,54 @@ func (q *Queries) LinkIDsByAccount(ctx context.Context, accountID uuid.UUID) ([]
 			return nil, err
 		}
 		items = append(items, id)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listConsentHistory = `-- name: ListConsentHistory :many
+SELECT e.id, d.kind, d.version, d.title, e.action, e.source, e.created_at
+FROM consent_events e
+JOIN legal_documents d ON d.id = e.document_id
+WHERE e.user_id = $1
+ORDER BY e.created_at DESC, e.id DESC
+LIMIT 200
+`
+
+type ListConsentHistoryRow struct {
+	ID        uuid.UUID
+	Kind      string
+	Version   string
+	Title     string
+	Action    string
+	Source    string
+	CreatedAt pgtype.Timestamptz
+}
+
+// История согласий для «Правовой информации», свежие первыми.
+func (q *Queries) ListConsentHistory(ctx context.Context, userID uuid.UUID) ([]ListConsentHistoryRow, error) {
+	rows, err := q.db.Query(ctx, listConsentHistory, userID)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListConsentHistoryRow
+	for rows.Next() {
+		var i ListConsentHistoryRow
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Version,
+			&i.Title,
+			&i.Action,
+			&i.Source,
+			&i.CreatedAt,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, err
@@ -4761,6 +5039,46 @@ func (q *Queries) ListConsentOperators(ctx context.Context, arg ListConsentOpera
 			&i.Inn,
 			&i.Address,
 			&i.Email,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listCurrentLegalDocuments = `-- name: ListCurrentLegalDocuments :many
+SELECT DISTINCT ON (kind) id, kind, version, title, body, sha256, effective_at, requires_reacceptance, draft, created_at
+FROM legal_documents
+WHERE effective_at <= $1
+ORDER BY kind, effective_at DESC, version DESC
+`
+
+// Действующая редакция каждого документа: последняя из вступивших в силу. Порядок
+// внутри DISTINCT ON — дата вступления, при равенстве — дата редакции.
+func (q *Queries) ListCurrentLegalDocuments(ctx context.Context, now pgtype.Timestamptz) ([]LegalDocument, error) {
+	rows, err := q.db.Query(ctx, listCurrentLegalDocuments, now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []LegalDocument
+	for rows.Next() {
+		var i LegalDocument
+		if err := rows.Scan(
+			&i.ID,
+			&i.Kind,
+			&i.Version,
+			&i.Title,
+			&i.Body,
+			&i.Sha256,
+			&i.EffectiveAt,
+			&i.RequiresReacceptance,
+			&i.Draft,
+			&i.CreatedAt,
 		); err != nil {
 			return nil, err
 		}
@@ -5590,6 +5908,44 @@ func (q *Queries) ListKnownDevices(ctx context.Context, userID uuid.UUID) ([]Lis
 			&i.CreatedAt,
 			&i.LastSeenAt,
 		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const listLegalDocumentVersions = `-- name: ListLegalDocumentVersions :many
+SELECT version, effective_at
+FROM legal_documents
+WHERE kind = $1 AND effective_at <= $2
+ORDER BY effective_at DESC, version DESC
+`
+
+type ListLegalDocumentVersionsParams struct {
+	Kind string
+	Now  pgtype.Timestamptz
+}
+
+type ListLegalDocumentVersionsRow struct {
+	Version     string
+	EffectiveAt pgtype.Timestamptz
+}
+
+// Архив редакций документа, свежие первыми.
+func (q *Queries) ListLegalDocumentVersions(ctx context.Context, arg ListLegalDocumentVersionsParams) ([]ListLegalDocumentVersionsRow, error) {
+	rows, err := q.db.Query(ctx, listLegalDocumentVersions, arg.Kind, arg.Now)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ListLegalDocumentVersionsRow
+	for rows.Next() {
+		var i ListLegalDocumentVersionsRow
+		if err := rows.Scan(&i.Version, &i.EffectiveAt); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -6805,6 +7161,18 @@ func (q *Queries) MarkOutboxSent(ctx context.Context, id uuid.UUID) error {
 	return err
 }
 
+const markSignupCompleted = `-- name: MarkSignupCompleted :exec
+UPDATE users SET signup_completed_at = now()
+WHERE id = $1 AND signup_completed_at IS NULL
+`
+
+// Отметка о завершении регистрации (0071). Ставится той же транзакцией, что и первое
+// принятие соглашения (internal/legal); уже стоящую не двигает.
+func (q *Queries) MarkSignupCompleted(ctx context.Context, id uuid.UUID) error {
+	_, err := q.db.Exec(ctx, markSignupCompleted, id)
+	return err
+}
+
 const markUserDeleted = `-- name: MarkUserDeleted :execrows
 UPDATE users SET deleted_at = now()
 WHERE id = $1 AND deleted_at IS NULL
@@ -7198,6 +7566,42 @@ func (q *Queries) RevokeJoinLink(ctx context.Context, workspaceID uuid.UUID) (in
 	return result.RowsAffected(), nil
 }
 
+const rewriteDraftLegalDocument = `-- name: RewriteDraftLegalDocument :execrows
+UPDATE legal_documents
+SET title = $3, body = $4, sha256 = $5, effective_at = $6, requires_reacceptance = $7, draft = $8
+WHERE kind = $1 AND version = $2 AND draft
+`
+
+type RewriteDraftLegalDocumentParams struct {
+	Kind                 string
+	Version              string
+	Title                string
+	Body                 string
+	Sha256               string
+	EffectiveAt          pgtype.Timestamptz
+	RequiresReacceptance bool
+	Draft                bool
+}
+
+// Перезапись черновика из файла. `AND draft` в условии — последний рубеж: опубликованная
+// редакция этим запросом не меняется никогда, что бы ни решил сервис.
+func (q *Queries) RewriteDraftLegalDocument(ctx context.Context, arg RewriteDraftLegalDocumentParams) (int64, error) {
+	result, err := q.db.Exec(ctx, rewriteDraftLegalDocument,
+		arg.Kind,
+		arg.Version,
+		arg.Title,
+		arg.Body,
+		arg.Sha256,
+		arg.EffectiveAt,
+		arg.RequiresReacceptance,
+		arg.Draft,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return result.RowsAffected(), nil
+}
+
 const scheduleInWorkspace = `-- name: ScheduleInWorkspace :one
 SELECT EXISTS (SELECT 1 FROM schedules WHERE id = $1 AND workspace_id = $2)
 `
@@ -7555,7 +7959,7 @@ func (q *Queries) SetTwoFactorEnabled(ctx context.Context, arg SetTwoFactorEnabl
 const setUserAvatarKey = `-- name: SetUserAvatarKey :one
 UPDATE users SET avatar_key = $2
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at
 `
 
 type SetUserAvatarKeyParams struct {
@@ -7582,6 +7986,7 @@ func (q *Queries) SetUserAvatarKey(ctx context.Context, arg SetUserAvatarKeyPara
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
 		&i.IsAdmin,
+		&i.SignupCompletedAt,
 	)
 	return i, err
 }
@@ -7746,6 +8151,39 @@ func (q *Queries) TakenSeatsInRange(ctx context.Context, arg TakenSeatsInRangePa
 		return nil, err
 	}
 	return items, nil
+}
+
+const termsAcceptanceMissing = `-- name: TermsAcceptanceMissing :one
+SELECT (
+    EXISTS (SELECT 1 FROM legal_documents t WHERE t.kind = 'terms' AND t.effective_at <= $1)
+    AND NOT EXISTS (
+        SELECT 1
+        FROM consent_events e
+        JOIN legal_documents d ON d.id = e.document_id
+        WHERE e.user_id = $2
+          AND d.kind = 'terms'
+          AND e.action = 'accepted'
+          AND d.effective_at >= COALESCE(
+              (SELECT max(r.effective_at) FROM legal_documents r
+               WHERE r.kind = 'terms' AND r.requires_reacceptance AND r.effective_at <= $1),
+              '-infinity'::timestamptz)
+    )
+)::boolean AS missing
+`
+
+type TermsAcceptanceMissingParams struct {
+	Now    pgtype.Timestamptz
+	UserID uuid.UUID
+}
+
+// Гейт кабинета (спека §3.2): у человека нет принятия редакции соглашения не старше
+// последней существенной (requires_reacceptance). Существенной ещё не было — годится
+// принятие любой. Ни одна редакция не вступила в силу — гейта нет: принять было бы нечего.
+func (q *Queries) TermsAcceptanceMissing(ctx context.Context, arg TermsAcceptanceMissingParams) (bool, error) {
+	row := q.db.QueryRow(ctx, termsAcceptanceMissing, arg.Now, arg.UserID)
+	var missing bool
+	err := row.Scan(&missing)
+	return missing, err
 }
 
 const touchKnownDevice = `-- name: TouchKnownDevice :execrows
@@ -8724,7 +9162,7 @@ func (q *Queries) UpdateSchedule(ctx context.Context, arg UpdateScheduleParams) 
 const updateUserProfile = `-- name: UpdateUserProfile :one
 UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at
 `
 
 type UpdateUserProfileParams struct {
@@ -8751,6 +9189,7 @@ func (q *Queries) UpdateUserProfile(ctx context.Context, arg UpdateUserProfilePa
 		&i.AvatarKey,
 		&i.TwoFactorEnabled,
 		&i.IsAdmin,
+		&i.SignupCompletedAt,
 	)
 	return i, err
 }
@@ -8981,6 +9420,44 @@ func (q *Queries) UpsertPartialSubmission(ctx context.Context, arg UpsertPartial
 		arg.FormVersionID,
 		arg.Answers,
 		arg.LastBlockID,
+	)
+	return err
+}
+
+const upsertSignupProfile = `-- name: UpsertSignupProfile :exec
+INSERT INTO signup_profiles (user_id, kind, purpose, referral, occupation, profession, company_name, industry, job_position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (user_id) DO UPDATE
+SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral,
+    occupation = EXCLUDED.occupation, profession = EXCLUDED.profession,
+    company_name = EXCLUDED.company_name, industry = EXCLUDED.industry, job_position = EXCLUDED.job_position,
+    updated_at = now()
+`
+
+type UpsertSignupProfileParams struct {
+	UserID      uuid.UUID
+	Kind        pgtype.Text
+	Purpose     pgtype.Text
+	Referral    pgtype.Text
+	Occupation  pgtype.Text
+	Profession  pgtype.Text
+	CompanyName pgtype.Text
+	Industry    pgtype.Text
+	JobPosition pgtype.Text
+}
+
+// Анкета регистрации: повторная отправка перезаписывает ответы целиком.
+func (q *Queries) UpsertSignupProfile(ctx context.Context, arg UpsertSignupProfileParams) error {
+	_, err := q.db.Exec(ctx, upsertSignupProfile,
+		arg.UserID,
+		arg.Kind,
+		arg.Purpose,
+		arg.Referral,
+		arg.Occupation,
+		arg.Profession,
+		arg.CompanyName,
+		arg.Industry,
+		arg.JobPosition,
 	)
 	return err
 }

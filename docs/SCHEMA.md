@@ -44,6 +44,7 @@ users ──< workspace_members >── workspaces ──< forms ──< form_ve
 | `deleted_at` | `TIMESTAMPTZ` | nullable (`0024`); `NOT NULL` = аккаунт удалён (`POST /account/delete`, фаза 23, слайс G). Пометка, а не удаление строки: реальная чистка данных по 152-ФЗ — отдельная фаза POST-MVP |
 | `two_factor_enabled` | `BOOLEAN` | `NOT NULL DEFAULT false` (`0056`); включён ли второй фактор — код на почту при входе с незнакомого устройства. Флаг живёт здесь, а не строкой в отдельной таблице (как было у TOTP): хранить, кроме самого факта, нечего — адрес у аккаунта уже есть. Едет в `User` из тех же запросов, что и сам пользователь: его спрашивает КАЖДЫЙ путь входа |
 | `is_admin` | `BOOLEAN` | `NOT NULL DEFAULT false` (`0059`); администратор СЕРВИСА — единственный, кто заводит публичный шаблон формы. Ставится руками (`UPDATE users SET is_admin = true WHERE email = …`): экрана у флага нет, приложение для админов — отдельная работа. С ролями пространства (`workspace_members.role`) не связан никак: те про доступ к чужим формам, этот — про витрину сервиса |
+| `signup_completed_at` | `TIMESTAMPTZ` | nullable (`0071`); `NULL` = регистрация не завершена — условия ни разу не приняты ([`design/signup-consent.md`](design/signup-consent.md) §3.6). Ставится первым принятием соглашения той же транзакцией, что и событие журнала. **Через 7 дней незавершённая регистрация удаляется строкой** (задача `abandoned-signup-cleanup`, раз в час), а не пометкой `deleted_at` — иначе адрес остался бы занят. Аккаунтам, существовавшим до `0071`, миграция поставила `created_at`: они зарегистрированы по прежним правилам и очистке незавершённых не подлежат. Согласий им не записано |
 
 Имя ничего не гейтит: кабинет показывает его вместо email, когда оно есть. Правится
 `PATCH /account/profile`, у аккаунтов через Яндекс заполняется на входе (фаза 23, слайс B).
@@ -1162,6 +1163,61 @@ SHA-256: утечка дампа не даёт рабочих ссылок. Зд
 | `used_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` — последнее сохранение набора; повтор поднимает строку наверх подсказки |
 
 **Ограничения и индексы:** `UNIQUE (workspace_id, fingerprint)` — цель `ON CONFLICT`; `idx_consent_operators_workspace (workspace_id, used_at DESC)` — подсказка, свежие первыми.
+
+## `legal_documents` (0071)
+
+Редакции собственных документов Trillix: Пользовательского соглашения, Политики обработки персональных данных, согласия на рассылки ([`design/signup-consent.md`](design/signup-consent.md) §3.4). Текст пишется в репозитории (`internal/legal/documents/<kind>/<version>.txt`) и при старте API кладётся сюда; **опубликованная редакция не меняется** — разошёлся файл с базой, API не стартует. Черновик (`draft`) перезаписывается из файла.
+
+| Колонка | Тип | Ограничения |
+|---|---|---|
+| `id` | `UUID` | PK |
+| `kind` | `TEXT` | `NOT NULL`, `CHECK IN ('terms', 'privacy', 'marketing')` |
+| `version` | `TEXT` | `NOT NULL`, `CHECK` на `YYYY-MM-DD` — дата редакции, она же имя файла и `?version=` публичной ручки |
+| `title`, `body` | `TEXT` | `NOT NULL`; тело — абзацы через пустую строку, нормализованное (`\r\n` → `\n`, пробелы по краям) |
+| `sha256` | `TEXT` | `NOT NULL` — hex SHA-256 тела: сверка с файлом при старте |
+| `effective_at` | `TIMESTAMPTZ` | `NOT NULL` — начало дня вступления в силу по Москве. Редакция до этой даты публично не существует |
+| `requires_reacceptance` | `BOOLEAN` | `NOT NULL` — новая редакция закрывает кабинет до принятия; смысл имеет только у `terms` |
+| `draft` | `BOOLEAN` | `NOT NULL` — черновик: перезаписывается из файла, выкатывать нельзя |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+
+**Ограничения:** `UNIQUE (kind, version)` — цель `ON CONFLICT DO NOTHING` при старте.
+
+## `consent_events` (0071)
+
+Журнал согласий: только добавление ([`design/signup-consent.md`](design/signup-consent.md) §3.5). Текущее состояние по виду документа — последнее событие. Пишет `POST /account/consents`, а за фикстуры — сидер и тесты модулей (`source = 'seed'`). **Гейт кабинета** — запрос `TermsAcceptanceMissing`: нет `accepted` на редакцию `terms` не старше последней с `requires_reacceptance`.
+
+| Колонка | Тип | Ограничения |
+|---|---|---|
+| `id` | `UUID` | PK |
+| `user_id` | `UUID` | `NOT NULL`, FK → `users(id)` **`ON DELETE RESTRICT`** — удаление аккаунта не уносит доказательство согласия молча |
+| `document_id` | `UUID` | `NOT NULL`, FK → `legal_documents(id)` `ON DELETE RESTRICT` — точная редакция |
+| `action` | `TEXT` | `NOT NULL`, `CHECK IN ('accepted', 'withdrawn')`; `withdrawn` бывает только у `marketing` (проверяет сервис) |
+| `source` | `TEXT` | `NOT NULL`, `CHECK IN ('signup_password', 'signup_yandex', 'update_screen', 'settings', 'seed')` |
+| `checkbox_text` | `TEXT` | `NOT NULL` — подпись галочки или тумблера, как её видел человек |
+| `email` | `TEXT` | `NOT NULL` — адрес аккаунта на момент события |
+| `user_agent` | `TEXT` | `NOT NULL DEFAULT ''`. IP не пишется, как нигде в продукте |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+
+**Индексы:** `idx_consent_events_user (user_id, created_at DESC)` — гейт и история.
+
+## `signup_profiles` (0071, поля вкладок — 0072, 0073)
+
+Анкета экрана «Поделитесь парой деталей» ([`design/signup-consent.md`](design/signup-consent.md) §3.3): вкладки «Частное лицо» и «Компания или ИП». Строка на аккаунт, каждый ответ необязателен. Имени и фамилии здесь нет: с того же экрана они пишутся в профиль аккаунта (`users.first_name`, `last_name`).
+
+| Колонка | Тип | Ограничения |
+|---|---|---|
+| `user_id` | `UUID` | PK, FK → `users(id)` `ON DELETE CASCADE` |
+| `kind` | `TEXT` | nullable, `CHECK IN ('person', 'company')` — вкладка |
+| `occupation` | `TEXT` | nullable, `CHECK IN ('study', 'employed', 'freelance', 'teaching', 'science', 'other')` — только `person` |
+| `profession` | `TEXT` | nullable, 1–100 символов — только `person` |
+| `company_name` | `TEXT` | nullable, 1–300 символов — только `company` |
+| `industry` | `TEXT` | nullable, `CHECK IN ('education', 'it', 'marketing', 'healthcare', 'retail', 'services', 'manufacturing', 'finance', 'public', 'hr', 'events', 'other')` — только `company` |
+| `job_position` | `TEXT` | nullable, `CHECK IN ('owner', 'marketing', 'hr', 'product', 'analytics', 'teaching', 'development', 'other')` — только `company` |
+| `purpose` | `TEXT` | nullable, `CHECK IN ('research', 'leads', 'events', 'booking', 'feedback', 'quizzes', 'other')` |
+| `referral` | `TEXT` | nullable, `CHECK IN ('search', 'ads', 'social', 'recommendation', 'article', 'other')` |
+| `created_at`, `updated_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` |
+
+**Ограничения:** `signup_profiles_person_fields` — `occupation` и `profession` только у `kind = 'person'`; `signup_profiles_company_fields` — `company_name`, `industry`, `job_position` только у `kind = 'company'`.
 
 ## `schedules` (0050)
 

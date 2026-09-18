@@ -28,7 +28,7 @@ import {
   deleteAvatar,
   verifyEmail,
 } from './api'
-import type { User } from '../../entities/user'
+import type { Me, User } from '../../entities/user'
 
 // Профиль текущего пользователя — серверный стейт, живёт только в Query.
 // retry:false — 401 не ретраится, это ответ «не залогинен», а не сбой.
@@ -40,7 +40,7 @@ export const meQueryOptions = queryOptions({
 })
 
 // adoptSession — единая реакция на «в этой вкладке теперь другая личность»: снести
-// ВЕСЬ клиентский кэш и положить в него нового пользователя.
+// ВЕСЬ клиентский кэш.
 //
 // Выборочное удаление одного лишь authKeys.me() (как было до TD-40) оставляло в
 // общем in-memory QueryClient формы, детали, ответы и воронки предыдущего аккаунта,
@@ -48,11 +48,16 @@ export const meQueryOptions = queryOptions({
 // идентичность при этом всегда была верной — она определяется исключительно cookie
 // session, — поэтому лечится это только на клиенте.
 //
-// Порядок важен: clear() первым, setQueryData — после, иначе свежий me вычистился бы
-// вместе с чужими данными, и гард _app сходил бы за ним ещё раз впустую.
-function adoptSession(qc: QueryClient, user: User): void {
+// Нового пользователя в me НЕ кладём: ответ входа не знает, закрыт ли кабинет гейтом
+// согласия, — это знает только /auth/me, и за ним сходит гард _app.
+function adoptSession(qc: QueryClient): void {
   qc.clear()
-  qc.setQueryData(authKeys.me(), user)
+}
+
+// patchMe сливает профиль из ответа ручки аккаунта с кэшем me. Слиянием, а не заменой:
+// у ответа нет consentRequired, и замена стёрла бы признак гейта.
+function patchMe(qc: QueryClient, user: User): void {
+  qc.setQueryData<Me>(authKeys.me(), (prev) => (prev ? { ...prev, ...user } : prev))
 }
 
 // Сессию открыл колбэк в отдельном окне: объекта пользователя у вкладки нет,
@@ -71,7 +76,7 @@ export function useLogin() {
     // Но только если вход СОСТОЯЛСЯ: при требовании второго фактора сессии нет,
     // и класть в кэш нечего — иначе гард пустил бы в кабинет без входа.
     onSuccess: (result) => {
-      if (!isTwoFactorRequired(result)) adoptSession(qc, result)
+      if (!isTwoFactorRequired(result)) adoptSession(qc)
     },
   })
 }
@@ -82,7 +87,7 @@ export function useLoginTwoFactor() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: loginTwoFactor,
-    onSuccess: (user: User) => adoptSession(qc, user),
+    onSuccess: () => adoptSession(qc),
   })
 }
 
@@ -90,7 +95,7 @@ export function useRegister() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: register,
-    onSuccess: (user: User) => adoptSession(qc, user),
+    onSuccess: () => adoptSession(qc),
   })
 }
 
@@ -151,7 +156,7 @@ export function useLinkProvider() {
     // Требование кода — не вход: сессии нет, класть в кэш нечего (та же
     // развилка, что у useLogin).
     onSuccess: (result) => {
-      if (!isTwoFactorRequired(result)) adoptSession(qc, result)
+      if (!isTwoFactorRequired(result)) adoptSession(qc)
     },
   })
 }
@@ -163,7 +168,7 @@ export function useUpdateProfile() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: updateProfile,
-    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+    onSuccess: (user: User) => patchMe(qc, user),
   })
 }
 
@@ -173,7 +178,7 @@ export function useUploadAvatar() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: uploadAvatar,
-    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+    onSuccess: (user: User) => patchMe(qc, user),
   })
 }
 
@@ -181,7 +186,7 @@ export function useDeleteAvatar() {
   const qc = useQueryClient()
   return useMutation({
     mutationFn: deleteAvatar,
-    onSuccess: (user: User) => qc.setQueryData(authKeys.me(), user),
+    onSuccess: (user: User) => patchMe(qc, user),
   })
 }
 
@@ -236,7 +241,7 @@ export function useEnableTwoFactor() {
   return useMutation({
     mutationFn: enableTwoFactor,
     onSuccess: (user: User) => {
-      qc.setQueryData(authKeys.me(), user)
+      patchMe(qc, user)
       // Включение и выключение забывают все устройства на бэке — список в
       // кэше после этого врёт.
       void qc.invalidateQueries({ queryKey: authKeys.devices() })
@@ -249,7 +254,7 @@ export function useDisableTwoFactor() {
   return useMutation({
     mutationFn: disableTwoFactor,
     onSuccess: (user: User) => {
-      qc.setQueryData(authKeys.me(), user)
+      patchMe(qc, user)
       void qc.invalidateQueries({ queryKey: authKeys.devices() })
     },
   })

@@ -75,6 +75,9 @@ type Store interface {
 	DeleteSession(ctx context.Context, db postgres.DBTX, tokenHash []byte) error
 	DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 	DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64, error)
+	MarkSignupCompleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
+	UpsertSignupProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, p SignupProfile) error
+	DeleteAbandonedSignups(ctx context.Context, db postgres.DBTX, createdBefore time.Time) (int64, error)
 	UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error)
 	SetAvatarKey(ctx context.Context, db postgres.DBTX, userID uuid.UUID, key *string) (User, error)
 	FillEmptyProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error)
@@ -140,6 +143,10 @@ type Service struct {
 	// загрузка отвечает ошибкой; снять уже стоящий аватар при этом можно —
 	// на это хранилище не нужно.
 	avatars avatarStore
+	// consents — гейт согласия перед кабинетом (реализация — *legal.Service,
+	// подключается WithConsents). nil = не подключён, и RequireAuth отвечает ошибкой,
+	// а не пропускает (errConsentGateMissing).
+	consents consentGate
 }
 
 // avatarStore — узкий интерфейс потребителя над media.Service: кладёт байты

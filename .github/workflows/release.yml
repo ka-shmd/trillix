@@ -17,8 +17,24 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # Гейт тега: черновая редакция документа сервиса (заглушки вместо реквизитов) на прод
+  # не уезжает (docs/design/signup-consent.md §3.4). Сборки ждут его, чтобы в GHCR и в
+  # Release не появилось ни одного артефакта с черновиком. Локально — make check-legal-release.
+  legal-documents:
+    name: Документы сервиса без черновиков
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - name: реестр без черновых редакций
+        run: make check-legal-release
+
   image:
     name: Go-образы → GHCR
+    needs: [legal-documents]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -61,6 +77,7 @@ jobs:
 
   static:
     name: Статика фронтов → GitHub Release
+    needs: [legal-documents]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

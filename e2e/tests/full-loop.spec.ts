@@ -48,11 +48,19 @@ test('регистрация → форма → публикация → отв�
   const scaleAnswer = '4' // деление шкалы: дефолтный диапазон 1–5 (DEFAULT_SCALE_MIN/MAX)
 
   // 1. Регистрация (создаёт сессию, cookie Secure по https). После успеха приложение
-  // само уводит на дашборд — дожидаемся навигации, а не гоним goto в гонку с POST.
+  // уводит на экран согласия: кабинет закрыт, пока не принято Пользовательское
+  // соглашение (docs/design/signup-consent.md). Дожидаемся навигации, а не гоним goto в
+  // гонку с POST.
   await page.goto('/register')
   await page.getByLabel('Email').fill(email)
   await page.getByLabel('Пароль').fill('supersecret123')
   await page.getByRole('button', { name: 'Создать аккаунт' }).click()
+  await page.waitForURL('**/welcome**')
+
+  // 1а. Принимаем соглашение, анкету не заполняем — и приложение уводит на дашборд.
+  await expect(page.getByRole('button', { name: 'Завершить регистрацию' })).toBeDisabled()
+  await page.getByRole('checkbox', { name: /Принимаю Пользовательское соглашение/ }).click()
+  await page.getByRole('button', { name: 'Завершить регистрацию' }).click()
   await page.waitForURL('**/forms')
 
   // 2. Новая форма → редактор (кнопок «Новая форма» на дашборде две — в шапке и в

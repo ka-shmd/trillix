@@ -3,7 +3,7 @@
 -- name: CreateUser :one
 INSERT INTO users (id, email, password_hash)
 VALUES ($1, $2, $3)
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at;
 
 -- Четыре запроса ниже (GetUserByID, GetUserByEmail, GetSessionUser,
 -- GetUserByIdentity) — ВСЕ пути, которыми код узнаёт пользователя, и у каждого
@@ -30,7 +30,7 @@ RETURNING id, email, password_hash, created_at, email_verified_at, first_name, l
 -- name: GetUserByID :one
 -- Пользователь по идентификатору. Нужен второму шагу входа (фаза 23, слайс F):
 -- кто входит, называет подписанная cookie, а не сессия — сессии ещё нет.
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at
 FROM users
 WHERE id = $1 AND deleted_at IS NULL;
 
@@ -43,7 +43,7 @@ FROM users
 WHERE id = $1 AND deleted_at IS NULL;
 
 -- name: GetUserByEmail :one
-SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin
+SELECT id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at
 FROM users
 WHERE email = $1 AND deleted_at IS NULL;
 
@@ -78,7 +78,7 @@ VALUES ($1, $2, $3);
 
 -- name: GetSessionUser :one
 -- Пользователь по живой (не истёкшей) сессии — для RequireAuth и /auth/me.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin, u.signup_completed_at
 FROM sessions s
 JOIN users u ON u.id = s.user_id
 WHERE s.token_hash = $1 AND s.expires_at > now() AND u.deleted_at IS NULL;
@@ -93,7 +93,7 @@ DELETE FROM sessions WHERE expires_at <= now();
 -- Пользователь по привязке к провайдеру (миграция 0009). Ключ — пара
 -- (провайдер, идентификатор у провайдера), а не email: адрес у провайдера
 -- сменить можно, идентификатор — нет.
-SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin
+SELECT u.id, u.email, u.password_hash, u.created_at, u.email_verified_at, u.first_name, u.last_name, u.deleted_at, u.avatar_key, u.two_factor_enabled, u.is_admin, u.signup_completed_at
 FROM user_identities i
 JOIN users u ON u.id = i.user_id
 WHERE i.provider = $1 AND i.provider_user_id = $2 AND u.deleted_at IS NULL;
@@ -142,7 +142,7 @@ DELETE FROM user_identities WHERE user_id = $1 AND provider = $2;
 -- нельзя. Пустое приезжает как NULL — приведение делает repo (pgText).
 UPDATE users SET first_name = $2, last_name = $3
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at;
 
 -- name: SetUserAvatarKey :one
 -- Ключ аватара целиком: значение — поставить, NULL — снять. Отдельным запросом,
@@ -151,7 +151,7 @@ RETURNING id, email, password_hash, created_at, email_verified_at, first_name, l
 -- слать чужое поле, чтобы его не затереть.
 UPDATE users SET avatar_key = $2
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at;
 
 -- name: FillEmptyProfile :one
 -- Дозаполнение профиля данными провайдера (фаза 23, слайс B). COALESCE, а не
@@ -162,7 +162,7 @@ UPDATE users
    SET first_name = COALESCE(first_name, $2),
        last_name  = COALESCE(last_name,  $3)
 WHERE id = $1
-RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin;
+RETURNING id, email, password_hash, created_at, email_verified_at, first_name, last_name, deleted_at, avatar_key, two_factor_enabled, is_admin, signup_completed_at;
 
 -- name: SetUserPassword :exec
 -- Ставит новый argon2id-хеш (сброс пароля). Для provider-only аккаунта переводит
@@ -298,3 +298,28 @@ DELETE FROM known_devices WHERE expires_at <= now();
 -- строк, а не переставляет дату удаления на новую.
 UPDATE users SET deleted_at = now()
 WHERE id = $1 AND deleted_at IS NULL;
+
+-- name: MarkSignupCompleted :exec
+-- Отметка о завершении регистрации (0071). Ставится той же транзакцией, что и первое
+-- принятие соглашения (internal/legal); уже стоящую не двигает.
+UPDATE users SET signup_completed_at = now()
+WHERE id = $1 AND signup_completed_at IS NULL;
+
+-- name: UpsertSignupProfile :exec
+-- Анкета регистрации: повторная отправка перезаписывает ответы целиком.
+INSERT INTO signup_profiles (user_id, kind, purpose, referral, occupation, profession, company_name, industry, job_position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+ON CONFLICT (user_id) DO UPDATE
+SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral,
+    occupation = EXCLUDED.occupation, profession = EXCLUDED.profession,
+    company_name = EXCLUDED.company_name, industry = EXCLUDED.industry, job_position = EXCLUDED.job_position,
+    updated_at = now();
+
+-- name: DeleteAbandonedSignups :execrows
+-- Незавершённые регистрации старше срока — удалением строки, а не пометкой deleted_at:
+-- users.email уникален, и пометка держала бы адрес занятым навсегда. Каскад уносит личное
+-- пространство, подписку, привязки и сессии. consent_events ссылается на users с RESTRICT:
+-- событие у незавершённой регистрации — нарушение инварианта «первое принятие ставит
+-- отметку», и тогда запрос падает, а не удаляет доказательство.
+DELETE FROM users
+WHERE signup_completed_at IS NULL AND created_at < $1;

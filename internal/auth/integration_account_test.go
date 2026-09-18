@@ -10,6 +10,8 @@ import (
 	"net/http"
 	"strings"
 	"testing"
+
+	"github.com/ka-shmd/trillix/internal/pgtest"
 )
 
 // profileOf разбирает объект пользователя из ответа /auth/* и отдаёт имя и
@@ -56,6 +58,7 @@ func TestAccountProfile_PersistsAndReturnsInMe(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: статус %d, ожидалось 201; тело=%s", resp.StatusCode, body(t, resp))
 	}
+	pgtest.CompleteSignup(t, testPool, "user@example.com")
 	// Свежий аккаунт — без имени: колонки nullable, заполнить их при регистрации
 	// нечем (парольная регистрация имени не спрашивает).
 	if first, last := profileOf(t, get(t, c, srv.URL+"/api/v1/auth/me")); first != "" || last != "" {
@@ -98,6 +101,7 @@ func TestAccountProfile_TouchesOnlyOwnAccount(t *testing.T) {
 	if r := post(t, a, srv.URL+"/api/v1/auth/register", `{"email":"a@example.com","password":"supersecret1"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("register A: статус %d", r.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, "a@example.com")
 	if r := patch(t, a, srv.URL+"/api/v1/account/profile", `{"firstName":"Анна","lastName":"Аксёнова"}`, csrfHeader(t, a, srv.URL)); r.StatusCode != http.StatusOK {
 		t.Fatalf("patch A: статус %d; тело=%s", r.StatusCode, body(t, r))
 	}
@@ -106,6 +110,7 @@ func TestAccountProfile_TouchesOnlyOwnAccount(t *testing.T) {
 	if r := post(t, b, srv.URL+"/api/v1/auth/register", `{"email":"b@example.com","password":"supersecret1"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("register B: статус %d", r.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, "b@example.com")
 	if r := patch(t, b, srv.URL+"/api/v1/account/profile", `{"firstName":"Борис","lastName":"Бирюков"}`, csrfHeader(t, b, srv.URL)); r.StatusCode != http.StatusOK {
 		t.Fatalf("patch B: статус %d; тело=%s", r.StatusCode, body(t, r))
 	}
@@ -134,6 +139,7 @@ func TestAccountPassword_KillsOtherSessionsKeepsCurrent(t *testing.T) {
 		`{"email":"`+email+`","password":"`+oldPassword+`"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("register: статус %d", r.StatusCode)
 	}
+	pgtest.CompleteSignup(t, testPool, email)
 	elsewhere := newClient(t)
 	if r := post(t, elsewhere, srv.URL+"/api/v1/auth/login",
 		`{"email":"`+email+`","password":"`+oldPassword+`"}`, ""); r.StatusCode != http.StatusOK {
@@ -201,6 +207,7 @@ func TestAccountAvatar_PersistsAndClears(t *testing.T) {
 	if resp.StatusCode != http.StatusCreated {
 		t.Fatalf("register: статус %d, ожидалось 201; тело=%s", resp.StatusCode, body(t, resp))
 	}
+	pgtest.CompleteSignup(t, testPool, "user@example.com")
 	if key := avatarKeyOf(t, get(t, c, srv.URL+"/api/v1/auth/me")); key != "" {
 		t.Fatalf("у нового аккаунта ключ аватара %q, ожидался пустой", key)
 	}

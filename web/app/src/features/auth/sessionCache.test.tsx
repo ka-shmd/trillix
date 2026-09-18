@@ -87,7 +87,7 @@ describe('TD-40: смена личности в той же вкладке чи�
     expect(qc.getQueryData(authKeys.me())).toBeUndefined()
   })
 
-  it('вход другим аккаунтом не наследует кэш прежнего, но кладёт нового в me', async () => {
+  it('вход другим аккаунтом не наследует кэш прежнего, включая me', async () => {
     const { qc, wrapper } = setup()
 
     const { result } = renderHook(() => useLogin(), { wrapper })
@@ -97,8 +97,8 @@ describe('TD-40: смена личности в той же вкладке чи�
     await waitFor(() => expect(result.current.isSuccess).toBe(true))
 
     expect(leftovers(qc)).toEqual([])
-    // clear() идёт ПЕРЕД setQueryData, иначе свежий профиль вычистился бы вместе
-    // с чужими данными и гард _app сходил бы за ним ещё раз.
-    expect(qc.getQueryData(authKeys.me())).toMatchObject({ id: 'user-b' })
+    // Нового пользователя в me не кладём: ответ входа не знает, закрыт ли кабинет
+    // гейтом согласия, — за /auth/me сходит гард _app (docs/design/signup-consent.md §3.2).
+    expect(qc.getQueryData(authKeys.me())).toBeUndefined()
   })
 })

@@ -85,6 +85,28 @@ type fakeAuthService struct {
 	deletedPass    string
 	deletedCode    string
 	deleteRequests int
+
+	// Гейт согласия и анкета (docs/design/signup-consent.md).
+	consentRequired   bool
+	consentErr        error
+	consentAsked      uuid.UUID
+	signupProfile     SignupProfile
+	signupFirstName   string
+	signupLastName    string
+	signupProfileUser uuid.UUID
+	signupProfileErr  error
+}
+
+func (f *fakeAuthService) ConsentRequired(_ context.Context, userID uuid.UUID) (bool, error) {
+	f.consentAsked = userID
+	return f.consentRequired, f.consentErr
+}
+
+func (f *fakeAuthService) SaveSignupProfile(_ context.Context, userID uuid.UUID, firstName, lastName string, p SignupProfile) error {
+	f.signupProfileUser = userID
+	f.signupFirstName, f.signupLastName = firstName, lastName
+	f.signupProfile = p
+	return f.signupProfileErr
 }
 
 func (f *fakeAuthService) DeleteAccount(_ context.Context, user User, currentPassword, code string) error {
