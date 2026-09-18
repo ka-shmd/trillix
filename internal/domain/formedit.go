@@ -635,7 +635,7 @@ func ChatJSONSchema() json.RawMessage {
 	return json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {
-    "action": {"type": "string", "enum": [%q, %q, %q]},
+    "action": {"type": "string", "enum": [%q, %q]},
     "reply": {"type": "string"},
     "planBlocked": {"type": "boolean"},
     "title": {
@@ -706,12 +706,9 @@ func ChatJSONSchema() json.RawMessage {
   },
   "required": ["action", "reply", "planBlocked", "title", "add", "update", "remove", "move", "design"],
   "additionalProperties": false
-}`, ActionEdit, ActionAnswer, ActionDesign, item, item, themes, fonts,
+}`, ActionEdit, ActionAnswer, item, item, themes, fonts,
 		densities, aligns, outlines, btnVariants, btnWidths, btnAligns))
 }
-
-// ActionDesign — третье намерение: оформление страницы формы (фаза 26, слайс F).
-const ActionDesign = "design"
 
 // ChatDesign — оформление глазами модели: узкий срез FormDesign, а не он целиком.
 //

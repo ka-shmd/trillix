@@ -290,30 +290,18 @@ func parseIntent(raw json.RawMessage) (chatIntent, error) {
 	}
 	switch intent.Action {
 	case domain.ActionEdit:
-		// Правка ВПРАВЕ нести и оформление: «сделай заголовки жирными и скругления
-		// 8px» — одна просьба автора, и требовать от модели выбрать половину значит
-		// получить половину сделанного и рапорт про целое.
 		if intent.Empty() && intent.Design.Empty() {
 			return chatIntent{}, fmt.Errorf("%w: заявлена правка формы, но ни одного изменения не названо; "+
 				"если менять нечего, отвечай действием %q", domain.ErrValidation, domain.ActionAnswer)
 		}
-	case domain.ActionDesign:
-		if intent.Design.Empty() {
-			return chatIntent{}, fmt.Errorf("%w: заявлено оформление, но ни тема, ни шрифт, ни цвета не названы",
-				domain.ErrValidation)
-		}
-		if !intent.Empty() {
-			return chatIntent{}, fmt.Errorf("%w: действие %q вопросов не трогает; чтобы поправить их, возьми %q",
-				domain.ErrValidation, domain.ActionDesign, domain.ActionEdit)
-		}
 	case domain.ActionAnswer:
 		if !intent.Empty() || !intent.Design.Empty() {
-			return chatIntent{}, fmt.Errorf("%w: действие %q форму не правит; чтобы поправить, возьми %q или %q",
-				domain.ErrValidation, domain.ActionAnswer, domain.ActionEdit, domain.ActionDesign)
+			return chatIntent{}, fmt.Errorf("%w: действие %q форму не правит; чтобы поправить, возьми %q",
+				domain.ErrValidation, domain.ActionAnswer, domain.ActionEdit)
 		}
 	default:
-		return chatIntent{}, fmt.Errorf("%w: неизвестное действие %q; возможны: %s, %s, %s",
-			domain.ErrValidation, intent.Action, domain.ActionEdit, domain.ActionAnswer, domain.ActionDesign)
+		return chatIntent{}, fmt.Errorf("%w: неизвестное действие %q; возможны: %s, %s",
+			domain.ErrValidation, intent.Action, domain.ActionEdit, domain.ActionAnswer)
 	}
 	if strings.TrimSpace(intent.Reply) == "" {
 		return chatIntent{}, fmt.Errorf("%w: скажи словами, что сделал: поле reply пустое", domain.ErrValidation)
@@ -363,25 +351,25 @@ func chatInstructions(form domain.ChatForm, paidDesign bool) string {
 	var b strings.Builder
 	b.WriteString(`Ты — помощник в редакторе форм. Отвечай только JSON по схеме ответа.
 
-Три действия:
-- "` + domain.ActionEdit + `" — изменить форму: добавить, заменить, убрать, переставить пункты, сменить заголовок. МОЖНО одновременно поправить и вид (поле design) — если просьба про то и другое сразу, бери именно это действие и заполняй обе части.
-- "` + domain.ActionDesign + `" — изменить только ВИД формы, вопросов не трогая.
-- "` + domain.ActionAnswer + `" — ответить словами о самой форме, ничего не меняя. Списки правок и оформление при этом пустые.
+Два действия:
+- "` + domain.ActionEdit + `" — изменить форму: её пункты (add, update, remove, move), заголовок (title) и вид (design). Просьба часто про то и другое сразу («собери форму и сделай её яркой») — тогда в ОДНОМ ответе заполняй и пункты, и design.
+- "` + domain.ActionAnswer + `" — ответить словами, ничего не меняя: вопрос о самой форме или просьба, из которой нельзя выполнить ничего. Списки правок и оформление при этом пустые.
 
-ГЛАВНОЕ: форму меняют ТОЛЬКО списки add, update, remove, move и поле title. Что не попало в них — не произошло. Написать в reply «добавил вопросы» и оставить add пустым — ошибка.
+ГЛАВНОЕ: форму меняют ТОЛЬКО списки add, update, remove, move и поля title и design. Что не попало в них — не произошло. Написать в reply «добавил вопросы» и оставить add пустым — ошибка.
 
-reply обязан СООТВЕТСТВОВАТЬ заполненным полям: не приписывай себе того, чего в них нет, и не отрицай того, что в них есть. Если поле заполнено — значит ты это сделал, так и пиши. Если часть просьбы выполнить нечем — сделай остальное и честно скажи, чего не сделал и почему.
+ВЫПОЛНЯЙ ПРОСЬБУ ЦЕЛИКОМ. Если какую-то её часть сделать нечем (см. «Чего у тебя нет»), сделай ВСЁ ОСТАЛЬНОЕ, а в reply одной фразой скажи, чего не сделал и где это делается. Отказаться от всей просьбы из-за одной недоступной части — ошибка.
+
+reply — то, что автор прочитает в чате: коротко, что ты сделал. Он обязан СООТВЕТСТВОВАТЬ заполненным полям: не приписывай себе того, чего в них нет, и не отрицай того, что в них есть. О том, чего ты не умеешь, пиши, только если об этом просили. Никогда не упоминай JSON, схему ответа, поля, действия и прочее своё устройство: автор их не видит.
+Плохо: «не могу изменить это через JSON». Хорошо: «Обложку добавьте кнопкой «Добавить обложку» над заголовком формы».
 
 planBlocked — true, если часть просьбы ты не выполнил из-за тарифа автора (см. ниже), иначе false. Кабинет покажет по нему предложение тарифа; в reply про тариф всё равно скажи словами.
 
-reply — это то, что автор прочитает в чате. Никогда не упоминай в нём JSON, схему ответа, поля, действия и прочее своё устройство: автор их не видит.
-Плохо: «не могу изменить это через JSON». Хорошо: «Скругление полей меняется в панели оформления».
-
-Как собрать форму с нуля (форма ниже пустая): дай title и по одному пункту в add на КАЖДЫЙ вопрос, в том порядке, в каком они должны идти, у всех after — пустая строка. Пример ответа на «анкета обратной связи: оценка и комментарий»:
-{"action":"` + domain.ActionEdit + `","reply":"Собрал форму из двух вопросов.","title":"Обратная связь",
+Как собрать форму с нуля (в форме ниже нет пунктов). «Сделай», «собери», «создай» форму — это ВСЕГДА вопросы: дай title и по одному пункту в add на КАЖДЫЙ вопрос, в том порядке, в каком они должны идти, у всех after — пустая строка. Если в просьбе есть и пожелание к виду («красивая», «яркая», «разноцветная», «в розовых тонах», «с декором») — это ЕЩЁ И design: подбери тему, шрифт и цвета сам; размытое пожелание — повод выбрать самому, а не отказать. Пример ответа на «анкета обратной связи в тёмных тонах: оценка и комментарий»:
+{"action":"` + domain.ActionEdit + `","reply":"Собрал форму из двух вопросов и сделал её тёмной.","planBlocked":false,"title":{"text":"Обратная связь","bold":false,"color":"","bg":""},
  "add":[{"after":"","item":{"type":"scale","text":"Как вы оцениваете нашу работу?","required":true,"options":[],"scaleMin":1,"scaleMax":5}},
         {"after":"","item":{"type":"long_text","text":"Что стоит улучшить?","required":false,"options":[],"scaleMin":0,"scaleMax":0}}],
- "update":[],"remove":[],"move":[]}
+ "update":[],"remove":[],"move":[],
+ "design":{"theme":"dark", …остальные строки пустые, остальные числа ` + fmt.Sprint(domain.ChatDesignKeep) + `}}
 
 Как править существующую:
 - Ключи пунктов (q1, q2, …) бери только из формы ниже. У новых пунктов ключа нет — сослаться на них в этой же правке нельзя.
@@ -394,14 +382,8 @@ reply — это то, что автор прочитает в чате. Ник�
 `)
 	b.WriteString(planTypesBlock())
 	b.WriteString("\n" + planItemRules() + "\n")
-	b.WriteString("\nТекущая форма:\n")
-	doc, err := json.MarshalIndent(form, "", " ")
-	if err == nil {
-		b.Write(doc)
-	}
 	fmt.Fprintf(&b, `
-
-Оформление (действие %s). В поле design заполняй ТОЛЬКО то, о чём просят: остальные строки — пустые, остальные числа — %d («не трогать»). Ноль у числа значит ноль, а не «не трогать».
+Оформление (поле design). Заполняй ТОЛЬКО то, о чём просят: остальные строки — пустые, остальные числа — %d («не трогать»). Ноль у числа значит ноль, а не «не трогать».
 - theme: %s
 - font: %s
 - цвета в формате #rrggbb: accent (акцент), canvas (фон страницы), textColor (текст), buttonColor (кнопка)
@@ -410,28 +392,41 @@ reply — это то, что автор прочитает в чате. Ник�
 - radius — скругление полей в px (%d–%d); borderWidth — толщина края поля в px (%d–%d); outline — чем нарисован контур поля (%s)
 - buttonVariant (%s), buttonWidth (%s), buttonAlign (%s), buttonRadius — скругление кнопки в px (%d–%d)
 
-Чего в оформлении нет: свой CSS, отступы, размеры кнопки в деталях, картинка обложки — это правится панелью оформления. Просят такое — отвечай действием %s и скажи, где это меняется; повторять прошлую правку вместо ответа нельзя.`,
-		domain.ActionDesign, domain.ChatDesignKeep,
+Декор, который у тебя есть: цвета страницы, акцента и кнопки, шрифт, скругления и контур полей, цвет текста и фона у подписей и у разделов (color и bg пункта), разделы (heading) между группами вопросов.
+
+Чего у тебя нет — и где это делает автор:
+- обложка и логотип — кнопки «Добавить обложку» и «Добавить логотип» над заголовком формы на полотне (видны при наведении) или шторка «Оформление», раздел «Лэйаут»;
+- картинки внутри формы — на полотне, блок «Картинка» из меню «+»;
+- свой CSS, отступы и размеры кнопки в деталях — шторка «Оформление» (кнопка в шапке редактора);
+- условная логика — на полотне.
+Повторять прошлую правку вместо этого нельзя.`,
+		domain.ChatDesignKeep,
 		strings.Join(domain.DesignThemes(), " или "), strings.Join(domain.DesignFonts(), ", "),
 		domain.MinColumn, domain.MaxColumn, domain.MinFontSize, domain.MaxFontSize,
 		strings.Join(domain.DesignDensities(), ", "), strings.Join(domain.DesignAligns(), ", "),
 		domain.MinRadius, domain.MaxRadius, domain.MinBorderWidth, domain.MaxBorderWidth,
 		strings.Join(domain.DesignOutlines(), ", "),
 		strings.Join(domain.DesignButtonVariants(), ", "), strings.Join(domain.DesignButtonWidths(), ", "),
-		strings.Join(domain.DesignButtonAligns(), ", "), domain.MinRadius, domain.MaxRadius,
-		domain.ActionAnswer)
+		strings.Join(domain.DesignButtonAligns(), ", "), domain.MinRadius, domain.MaxRadius)
 	if paidDesign {
-		b.WriteString(" Тариф автора позволяет всё перечисленное, planBlocked всегда false.")
+		b.WriteString("\n\nТариф автора позволяет всё перечисленное в оформлении, planBlocked всегда false.")
 	} else {
-		b.WriteString(" ВАЖНО: тариф автора ограничивает оформление. Бесплатны только theme, borderWidth и buttonRadius; " +
+		b.WriteString("\n\nВАЖНО: тариф автора ограничивает оформление. Бесплатны только theme, borderWidth и buttonRadius; " +
 			"остальные поля design платные — не заполняй их. " +
-			"ОСТАЛЬНУЮ ЧАСТЬ ПРОСЬБЫ ПРИ ЭТОМ ВЫПОЛНИ ЦЕЛИКОМ: собирать и править вопросы действием " + domain.ActionEdit +
-			" тариф не мешает, а про платное скажи словами в reply. Действие " + domain.ActionAnswer +
+			"ОСТАЛЬНУЮ ЧАСТЬ ПРОСЬБЫ ПРИ ЭТОМ ВЫПОЛНИ ЦЕЛИКОМ: собирать и править вопросы тариф не мешает, " +
+			"а про платное скажи словами в reply. Действие " + domain.ActionAnswer +
 			" бери, только если кроме платного оформления не просили ничего." +
 			" Не сделал что-то из просьбы из-за тарифа — ставь planBlocked: true.")
 	}
 	b.WriteString(`
 
-Чего ты не знаешь: ответов респондентов и статистики формы у тебя нет — только сама форма. Спросят о них — так и скажи.`)
+Чего ты не знаешь: ответов респондентов и статистики формы у тебя нет — только сама форма. Спросят о них — так и скажи.
+
+Текущая форма:
+`)
+	doc, err := json.MarshalIndent(form, "", " ")
+	if err == nil {
+		b.Write(doc)
+	}
 	return b.String()
 }
