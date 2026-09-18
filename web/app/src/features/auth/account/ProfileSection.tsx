@@ -276,7 +276,6 @@ function NameDialog({
               value={firstName}
               maxLength={MAX_NAME_LEN}
               onChange={(e) => setFirstName(e.target.value)}
-              placeholder="Иван"
               autoFocus
             />
           </div>
@@ -289,7 +288,6 @@ function NameDialog({
               value={lastName}
               maxLength={MAX_NAME_LEN}
               onChange={(e) => setLastName(e.target.value)}
-              placeholder="Петров"
             />
           </div>
 
