@@ -442,6 +442,33 @@ func TestChat_Design(t *testing.T) {
 		}
 	})
 
+	// Обложку ставят только по прямой просьбе: указание об этом модель не держала и
+	// ставила её на любую просьбу про вид, поэтому без слова «обложка» поля нет в схеме
+	// ответа, а присланное всё равно — отвергается.
+	t.Run("обложка без просьбы не ставится", func(t *testing.T) {
+		const cover = `{"action":"edit_form","reply":"Сделал ярче.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"#db2777","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1,"cover":"#fecaca"}}`
+		fake := ai.NewFake(cover, cover)
+		svc, store := chatService(fake, &fakePlans{allowed: true})
+
+		_, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай форму ярче", nil, nil)
+		if !errors.Is(err, domain.ErrUnavailable) {
+			t.Fatalf("ошибка = %v, ожидался отказ: обложку не просили", err)
+		}
+		if strings.Contains(string(fake.Requests()[0].Schema), `"cover"`) {
+			t.Error("поле обложки есть в схеме ответа, хотя автор её не просил")
+		}
+
+		asked := ai.NewFake(cover)
+		svc, store = chatService(asked, &fakePlans{allowed: true})
+		if _, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай ярче и добавь Обложку", nil, nil); err != nil {
+			t.Fatalf("обложку по просьбе не пустили: %v", err)
+		}
+		if !strings.Contains(string(asked.Requests()[0].Schema), `"cover"`) {
+			t.Error("автор просит обложку, а поля в схеме ответа нет")
+		}
+	})
+
 	// Обложка — хром страницы, и гейта тарифа у неё нет ни в панели, ни здесь.
 	t.Run("обложка цветом бесплатна и на закрытом тарифе", func(t *testing.T) {
 		const cover = `{"action":"edit_form","reply":"Добавил розовую обложку.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
@@ -724,7 +751,7 @@ func TestChatInstructions_FreeDesignFields(t *testing.T) {
 // форму и сделай красивой» отказывалась целиком. И называет, ГДЕ автор сделает
 // недоступное сам: без адреса модель его выдумывала («настройки аккаунта»).
 func TestChatInstructions_WholeRequest(t *testing.T) {
-	text := chatInstructions(domain.ProjectForm(domain.FormSchema{}), true)
+	text := chatInstructions(domain.ProjectForm(domain.FormSchema{}), true, false)
 	for _, want := range []string{
 		"сделай ВСЁ ОСТАЛЬНОЕ",
 		"«Добавить логотип»",

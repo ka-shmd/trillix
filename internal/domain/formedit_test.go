@@ -750,3 +750,22 @@ func mustJSON(t *testing.T, s FormSchema) json.RawMessage {
 	}
 	return raw
 }
+
+// Модель пишет ответ в порядке полей схемы. reply после правок описывает сделанное;
+// стоя вторым, он обещал «обложку поставить не могу», а следом шла поставленная обложка.
+func TestChatJSONSchema_ReplyAfterEdits(t *testing.T) {
+	for _, withCover := range []bool{false, true} {
+		schema := string(ChatJSONSchema(withCover))
+		design, reply := strings.Index(schema, `"design"`), strings.Index(schema, `"reply"`)
+		if design < 0 || reply < design {
+			t.Errorf("withCover=%v: reply стоит раньше design в схеме ответа", withCover)
+		}
+		if got := strings.Contains(schema, `"cover"`); got != withCover {
+			t.Errorf("withCover=%v: поле обложки в схеме = %v", withCover, got)
+		}
+		var v any
+		if err := json.Unmarshal([]byte(schema), &v); err != nil {
+			t.Errorf("withCover=%v: схема не разбирается: %v", withCover, err)
+		}
+	}
+}

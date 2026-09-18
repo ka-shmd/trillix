@@ -634,7 +634,15 @@ const (
 // Все поля обязательны (строгий режим провайдера иначе не работает), поэтому
 // «ничего не меняем» выражается пустыми списками и пустым заголовком, а не
 // отсутствием ключей.
-func ChatJSONSchema() json.RawMessage {
+//
+// ПОРЯДОК ПОЛЕЙ — ПОРЯДОК, в котором модель пишет ответ: reply и planBlocked стоят
+// ПОСЛЕ правок, чтобы ответ описывал сделанное. Пока reply шёл вторым, модель писала
+// «обложку поставить не могу» и следом ставила её.
+//
+// withCover — есть ли в правке вида поле обложки. Его дают, только когда автор
+// просит обложку: модель, заполняя блок design, заполняла его целиком и ставила
+// обложку на любую просьбу про вид, указание «только по прямой просьбе» не держала.
+func ChatJSONSchema(withCover bool) json.RawMessage {
 	item := planItemJSONSchema()
 	// Каждое перечисление получает пустую строку: в строгом режиме поле обязано
 	// присутствовать, и «не трогать» выражается ею.
@@ -647,12 +655,15 @@ func ChatJSONSchema() json.RawMessage {
 	outlines := withEmpty(designOutlines)
 	btnVariants, btnWidths := withEmpty(designButtonVariant), withEmpty(designButtonWidth)
 	btnAligns := withEmpty(designButtonAligns)
+	coverProp, coverReq := "", ""
+	if withCover {
+		coverProp, coverReq = `
+        "cover": {"type": "string"},`, `"cover", `
+	}
 	return json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {
     "action": {"type": "string", "enum": [%q, %q]},
-    "reply": {"type": "string"},
-    "planBlocked": {"type": "boolean"},
     "title": {
       "type": "object",
       "properties": {
@@ -694,7 +705,7 @@ func ChatJSONSchema() json.RawMessage {
     },
     "design": {
       "type": "object",
-      "properties": {
+      "properties": {%s
         "theme": {"type": "string", "enum": %s},
         "font": {"type": "string", "enum": %s},
         "accent": {"type": "string"},
@@ -711,19 +722,20 @@ func ChatJSONSchema() json.RawMessage {
         "buttonVariant": {"type": "string", "enum": %s},
         "buttonWidth": {"type": "string", "enum": %s},
         "buttonAlign": {"type": "string", "enum": %s},
-        "buttonRadius": {"type": "integer"},
-        "cover": {"type": "string"}
+        "buttonRadius": {"type": "integer"}
       },
-      "required": ["theme", "font", "accent", "canvas", "textColor", "buttonColor",
+      "required": [%s"theme", "font", "accent", "canvas", "textColor", "buttonColor",
         "width", "fontSize", "density", "align", "radius", "borderWidth", "outline",
-        "buttonVariant", "buttonWidth", "buttonAlign", "buttonRadius", "cover"],
+        "buttonVariant", "buttonWidth", "buttonAlign", "buttonRadius"],
       "additionalProperties": false
-    }
+    },
+    "reply": {"type": "string"},
+    "planBlocked": {"type": "boolean"}
   },
   "required": ["action", "reply", "planBlocked", "title", "add", "update", "remove", "move", "design"],
   "additionalProperties": false
-}`, ActionEdit, ActionAnswer, item, item, themes, fonts,
-		densities, aligns, outlines, btnVariants, btnWidths, btnAligns))
+}`, ActionEdit, ActionAnswer, item, item, coverProp, themes, fonts,
+		densities, aligns, outlines, btnVariants, btnWidths, btnAligns, coverReq))
 }
 
 // ChatDesign — оформление глазами модели: узкий срез FormDesign, а не он целиком.
@@ -773,7 +785,8 @@ type ChatDesign struct {
 	ButtonRadius  int    `json:"buttonRadius"`
 
 	// Cover — залить обложку этим цветом (#rrggbb); пусто — не трогать. Обложку-
-	// картинку правка отвергает (ApplyChatDesign).
+	// картинку правка отвергает (ApplyChatDesign). В схеме ответа поле есть, только
+	// когда автор просит обложку (ChatJSONSchema).
 	Cover string `json:"cover"`
 }
 
