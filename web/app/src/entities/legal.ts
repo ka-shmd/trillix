@@ -189,18 +189,14 @@ export const SIGNUP_REFERRALS = [
 
 type Code<T extends readonly { value: string }[]> = T[number]['value']
 
-// codes — коды списка кортежем для z.enum: так тип ответа остаётся объединением литералов, а
-// не просто строкой, и опечатка в коде ловится компилятором.
-const codes = <T extends readonly { value: string }[]>(list: T) =>
-  list.map((o) => o.value) as unknown as [Code<T>, ...Code<T>[]]
-
 export type SignupKind = Code<typeof SIGNUP_KINDS>
 
-// SignupDraft — анкета, как её держит экран: поля обеих вкладок живут вместе, чтобы
-// переключение вкладки не стирало набранное.
+// SignupDraft — экран «Поделитесь парой деталей», как его держит экран: поля обеих вкладок
+// живут вместе, чтобы переключение вкладки не стирало набранное.
 export interface SignupDraft {
+  firstName: string
+  lastName: string
   kind: SignupKind
-  fullName: string
   occupation: Code<typeof SIGNUP_OCCUPATIONS> | null
   profession: string
   companyName: string
@@ -210,59 +206,18 @@ export interface SignupDraft {
   referral: Code<typeof SIGNUP_REFERRALS> | null
 }
 
-// SignupProfile — тело PUT /account/signup-profile и ответ GET. null — вопрос пропущен; вид
-// тоже бывает пустым: анкету могли не заполнять вовсе.
-export const signupProfileSchema = z.object({
-  kind: z.enum(codes(SIGNUP_KINDS)).nullable(),
-  fullName: z.string().nullable(),
-  occupation: z.enum(codes(SIGNUP_OCCUPATIONS)).nullable(),
-  profession: z.string().nullable(),
-  companyName: z.string().nullable(),
-  industry: z.enum(codes(SIGNUP_INDUSTRIES)).nullable(),
-  jobPosition: z.enum(codes(SIGNUP_POSITIONS)).nullable(),
-  purpose: z.enum(codes(SIGNUP_PURPOSES)).nullable(),
-  referral: z.enum(codes(SIGNUP_REFERRALS)).nullable(),
-})
+// SignupProfile — тело PUT /account/signup-profile. Имя и фамилию сервер пишет в профиль
+// аккаунта, пустая строка стирает; остальное — анкета, null — вопрос пропущен.
+export type SignupProfile = Omit<SignupDraft, 'profession' | 'companyName'> & {
+  profession: string | null
+  companyName: string | null
+}
 
-export type SignupProfile = z.infer<typeof signupProfileSchema>
-
-// draftFromProfile — анкета аккаунта в черновик экрана: пустые значения становятся пустой
-// строкой или «не указано», вид по умолчанию — частное лицо.
-export function draftFromProfile(p: SignupProfile | undefined, fallbackFullName = ''): SignupDraft {
-  if (!p) return emptySignupDraft(fallbackFullName)
+export function emptySignupDraft(firstName = '', lastName = ''): SignupDraft {
   return {
-    kind: p.kind ?? 'person',
-    fullName: p.fullName ?? fallbackFullName,
-    occupation: p.occupation,
-    profession: p.profession ?? '',
-    companyName: p.companyName ?? '',
-    industry: p.industry,
-    jobPosition: p.jobPosition,
-    purpose: p.purpose,
-    referral: p.referral,
-  }
-}
-
-// signupAnswerLabel — подпись варианта для показа человеку; неизвестный код (список
-// разошёлся с сервером) не показывается вовсе.
-export function signupAnswerLabel(
-  list: readonly { value: string; label: string }[],
-  value: string | null,
-): string | null {
-  return list.find((o) => o.value === value)?.label ?? null
-}
-
-// signupProfileFilled — заполнил ли человек хоть что-нибудь, кроме вида.
-export function signupProfileFilled(p: SignupProfile | undefined): boolean {
-  if (!p) return false
-  // Вид не считается ответом: он выбран всегда, хотя бы умолчанием вкладки.
-  return Object.entries(p).some(([key, value]) => key !== 'kind' && value !== null && value !== '')
-}
-
-export function emptySignupDraft(fullName = ''): SignupDraft {
-  return {
+    firstName,
+    lastName,
     kind: 'person',
-    fullName,
     occupation: null,
     profession: '',
     companyName: '',
@@ -273,15 +228,16 @@ export function emptySignupDraft(fullName = ''): SignupDraft {
   }
 }
 
-// signupProfileOf — анкета к отправке: пустые строки становятся «пропущено», поля чужой
-// вкладки не уходят. Сервер отбрасывает их и сам, но отправлять то, что человек видит
+// signupProfileOf — экран к отправке: пустые строки анкеты становятся «пропущено», поля
+// чужой вкладки не уходят. Сервер отбрасывает их и сам, но отправлять то, что человек видит
 // скрытым, незачем.
 export function signupProfileOf(d: SignupDraft): SignupProfile {
   const text = (v: string) => (v.trim() === '' ? null : v.trim())
   const person = d.kind === 'person'
   return {
+    firstName: d.firstName.trim(),
+    lastName: d.lastName.trim(),
     kind: d.kind,
-    fullName: text(d.fullName),
     occupation: person ? d.occupation : null,
     profession: person ? text(d.profession) : null,
     companyName: person ? null : text(d.companyName),

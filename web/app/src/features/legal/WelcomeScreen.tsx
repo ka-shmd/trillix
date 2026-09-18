@@ -33,14 +33,13 @@ import { cn } from '@/lib/utils'
 // регистрации, слайс G».
 
 interface Props {
-  // defaultFullName — ФИО, известное из профиля (имя и фамилия от Яндекса), подставленное в
-  // анкету заранее.
-  defaultFullName: string
+  // defaultName — имя и фамилия из профиля аккаунта (от Яндекса), подставленные заранее.
+  defaultName: { firstName: string; lastName: string }
   // onDone — согласие принято: маршрут возвращает человека туда, куда он шёл.
   onDone: () => void
 }
 
-export function WelcomeScreen({ defaultFullName, onDone }: Props) {
+export function WelcomeScreen({ defaultName, onDone }: Props) {
   const consents = useQuery(consentsQueryOptions)
   const screen = consents.data?.screen
 
@@ -84,7 +83,7 @@ export function WelcomeScreen({ defaultFullName, onDone }: Props) {
   if (data.screen === null || !terms) return null
 
   return data.screen === 'signup' ? (
-    <SignupForm consents={data} terms={terms} defaultFullName={defaultFullName} onDone={onDone} />
+    <SignupForm consents={data} terms={terms} defaultName={defaultName} onDone={onDone} />
   ) : (
     <UpdateForm terms={terms} onDone={onDone} />
   )
@@ -95,15 +94,15 @@ type Terms = NonNullable<Consents['terms']>
 function SignupForm({
   consents,
   terms,
-  defaultFullName,
+  defaultName,
   onDone,
 }: {
   consents: Consents
   terms: Terms
-  defaultFullName: string
+  defaultName: Props['defaultName']
   onDone: () => void
 }) {
-  const [draft, setDraft] = useState<SignupDraft>(() => emptySignupDraft(defaultFullName))
+  const [draft, setDraft] = useState<SignupDraft>(() => emptySignupDraft(defaultName.firstName, defaultName.lastName))
   const [acceptTerms, setAcceptTerms] = useState(false)
   const [acceptMarketing, setAcceptMarketing] = useState(false)
   const complete = useCompleteConsent()
@@ -279,7 +278,7 @@ function Footer({
 }
 
 // ConsentChecks — галочки согласий и ссылка на политику под ними: политика обязана быть
-// доступна там, где собираются данные (ч. 2 ст. 18.1 152-ФЗ), а анкета собирает ФИО и
+// доступна там, где собираются данные (ч. 2 ст. 18.1 152-ФЗ), а экран собирает имя, фамилию и
 // организацию.
 function ConsentChecks({ children }: { children: React.ReactNode }) {
   return (

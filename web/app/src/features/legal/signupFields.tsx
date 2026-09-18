@@ -14,14 +14,12 @@ import { Label } from '@/components/ui/label'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { Tabs, TabsList, TabsTrigger } from '@/components/ui/tabs'
 
-// Поля анкеты регистрации — одни и те же на экране «Поделитесь парой деталей» и в окне
-// правки на странице «Аккаунт» (docs/design/signup-consent.md §3.3): вопросы, их порядок и
-// подписи не должны разъезжаться между двумя местами.
+// Поля экрана «Поделитесь парой деталей» (docs/design/signup-consent.md §3.3): имя и
+// фамилия (сервер пишет их в профиль аккаунта) и анкета по вкладкам.
 
-// NONE — значение пункта «Не указано» в списке. Пустая строка значением SelectItem быть не
-// может (Radix её запрещает), а очистить ответ человек должен уметь: на странице аккаунта он
-// правит и убирает то, что указал при регистрации.
-const NONE = '__none__'
+// MAX_NAME_LEN зеркалит MaxPersonNameLen из internal/auth/service_account.go — тот же
+// потолок, что у «Изменить имя» на странице «Аккаунт».
+const MAX_NAME_LEN = 100
 
 export function SignupFields({
   draft,
@@ -38,11 +36,18 @@ export function SignupFields({
       <KindRow value={draft.kind} onChange={(kind) => set('kind', kind)} />
 
       <TextRow
-        label="Ваше полное имя"
-        placeholder="Например, Иванов Иван Иванович"
-        value={draft.fullName}
-        onChange={(v) => set('fullName', v)}
-        maxLength={200}
+        label="Ваше имя"
+        placeholder="Например, Иван"
+        value={draft.firstName}
+        onChange={(v) => set('firstName', v)}
+        maxLength={MAX_NAME_LEN}
+      />
+      <TextRow
+        label="Ваша фамилия"
+        placeholder="Например, Иванов"
+        value={draft.lastName}
+        onChange={(v) => set('lastName', v)}
+        maxLength={MAX_NAME_LEN}
       />
 
       {draft.kind === 'person' ? (
@@ -168,15 +173,11 @@ function SelectRow<T extends string>({
   return (
     <Row>
       <Label htmlFor={id}>{label}</Label>
-      <Select
-        value={value ?? NONE}
-        onValueChange={(v) => onChange(options.find((o) => o.value === v)?.value ?? null)}
-      >
+      <Select value={value ?? ''} onValueChange={(v) => onChange(options.find((o) => o.value === v)?.value ?? null)}>
         <SelectTrigger id={id} className="w-full">
           <SelectValue placeholder="Выберите из списка" />
         </SelectTrigger>
         <SelectContent>
-          <SelectItem value={NONE}>Не указано</SelectItem>
           {options.map((o) => (
             <SelectItem key={o.value} value={o.value}>
               {o.label}

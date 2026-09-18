@@ -3911,43 +3911,6 @@ func (q *Queries) GetSessionUser(ctx context.Context, tokenHash []byte) (User, e
 	return i, err
 }
 
-const getSignupProfile = `-- name: GetSignupProfile :one
-SELECT kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position
-FROM signup_profiles
-WHERE user_id = $1
-`
-
-type GetSignupProfileRow struct {
-	Kind        pgtype.Text
-	Purpose     pgtype.Text
-	Referral    pgtype.Text
-	FullName    pgtype.Text
-	Occupation  pgtype.Text
-	Profession  pgtype.Text
-	CompanyName pgtype.Text
-	Industry    pgtype.Text
-	JobPosition pgtype.Text
-}
-
-// Анкета аккаунта для страницы «Аккаунт»: человек правит и очищает то, что указал при
-// регистрации (ст. 14 152-ФЗ — право на уточнение своих данных).
-func (q *Queries) GetSignupProfile(ctx context.Context, userID uuid.UUID) (GetSignupProfileRow, error) {
-	row := q.db.QueryRow(ctx, getSignupProfile, userID)
-	var i GetSignupProfileRow
-	err := row.Scan(
-		&i.Kind,
-		&i.Purpose,
-		&i.Referral,
-		&i.FullName,
-		&i.Occupation,
-		&i.Profession,
-		&i.CompanyName,
-		&i.Industry,
-		&i.JobPosition,
-	)
-	return i, err
-}
-
 const getSubmissionFile = `-- name: GetSubmissionFile :one
 SELECT id, workspace_id, form_id, submission_id, object_key, original_name, content_type
 FROM submission_files
@@ -9462,11 +9425,11 @@ func (q *Queries) UpsertPartialSubmission(ctx context.Context, arg UpsertPartial
 }
 
 const upsertSignupProfile = `-- name: UpsertSignupProfile :exec
-INSERT INTO signup_profiles (user_id, kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO signup_profiles (user_id, kind, purpose, referral, occupation, profession, company_name, industry, job_position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (user_id) DO UPDATE
 SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral,
-    full_name = EXCLUDED.full_name, occupation = EXCLUDED.occupation, profession = EXCLUDED.profession,
+    occupation = EXCLUDED.occupation, profession = EXCLUDED.profession,
     company_name = EXCLUDED.company_name, industry = EXCLUDED.industry, job_position = EXCLUDED.job_position,
     updated_at = now()
 `
@@ -9476,7 +9439,6 @@ type UpsertSignupProfileParams struct {
 	Kind        pgtype.Text
 	Purpose     pgtype.Text
 	Referral    pgtype.Text
-	FullName    pgtype.Text
 	Occupation  pgtype.Text
 	Profession  pgtype.Text
 	CompanyName pgtype.Text
@@ -9491,7 +9453,6 @@ func (q *Queries) UpsertSignupProfile(ctx context.Context, arg UpsertSignupProfi
 		arg.Kind,
 		arg.Purpose,
 		arg.Referral,
-		arg.FullName,
 		arg.Occupation,
 		arg.Profession,
 		arg.CompanyName,

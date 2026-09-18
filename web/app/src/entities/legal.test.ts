@@ -64,7 +64,7 @@ describe('consentSourceLabel', () => {
 describe('signupProfileOf', () => {
   it('частное лицо: пробелы обрезаны, пустое — пропущено, поля компании не уходят', () => {
     const draft = {
-      ...emptySignupDraft('  Петров Иван  '),
+      ...emptySignupDraft('  Иван  ', '   '),
       profession: '   ',
       occupation: 'study' as const,
       companyName: 'ООО «Ромашка»',
@@ -72,9 +72,11 @@ describe('signupProfileOf', () => {
       jobPosition: 'owner' as const,
       purpose: 'leads' as const,
     }
+    // Пустая фамилия — пустая строка, а не null: для профиля аккаунта это «стереть».
     expect(signupProfileOf(draft)).toEqual({
+      firstName: 'Иван',
+      lastName: '',
       kind: 'person',
-      fullName: 'Петров Иван',
       occupation: 'study',
       profession: null,
       companyName: null,
@@ -87,7 +89,7 @@ describe('signupProfileOf', () => {
 
   it('компания: поля частного лица не уходят', () => {
     const draft = {
-      ...emptySignupDraft('Иванов Иван'),
+      ...emptySignupDraft('Иван', 'Иванов'),
       kind: 'company' as const,
       occupation: 'study' as const,
       profession: 'дизайнер',

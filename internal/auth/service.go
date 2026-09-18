@@ -76,7 +76,6 @@ type Store interface {
 	DeleteSessionsByUser(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
 	DeleteExpiredSessions(ctx context.Context, db postgres.DBTX) (int64, error)
 	MarkSignupCompleted(ctx context.Context, db postgres.DBTX, userID uuid.UUID) error
-	GetSignupProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID) (SignupProfile, error)
 	UpsertSignupProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, p SignupProfile) error
 	DeleteAbandonedSignups(ctx context.Context, db postgres.DBTX, createdBefore time.Time) (int64, error)
 	UpdateProfile(ctx context.Context, db postgres.DBTX, userID uuid.UUID, firstName, lastName *string) (User, error)
