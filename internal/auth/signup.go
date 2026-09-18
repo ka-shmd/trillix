@@ -59,12 +59,11 @@ func (s *Service) MarkSignupCompleted(ctx context.Context, db postgres.DBTX, use
 
 // SignupProfile — анкета при завершении регистрации: общие вопросы и поля вкладок «Частное
 // лицо» (Occupation, Profession) и «Компания или ИП» (CompanyName, Industry, JobPosition).
-// nil — вопрос пропущен.
+// nil — вопрос пропущен. Имени и фамилии здесь нет: они живут в профиле аккаунта.
 type SignupProfile struct {
 	Kind        *string
 	Purpose     *string
 	Referral    *string
-	FullName    *string
 	Occupation  *string
 	Profession  *string
 	CompanyName *string
@@ -88,33 +87,30 @@ var (
 
 // Потолки свободных полей анкеты в рунах. Зеркалит CHECK signup_profiles (0072).
 const (
-	maxSignupFullName    = 200
 	maxSignupProfession  = 100
 	maxSignupCompanyName = 300
 )
 
-// SignupProfileOf — анкета аккаунта. Незаполненная отдаётся пустой, а не «не найдено»:
-// экран рисует одни и те же поля и в том, и в другом случае.
-func (s *Service) SignupProfileOf(ctx context.Context, userID uuid.UUID) (SignupProfile, error) {
-	p, err := s.repo.GetSignupProfile(ctx, s.db, userID)
-	if errors.Is(err, pgx.ErrNoRows) {
-		return SignupProfile{}, nil
-	}
+// SaveSignupProfile сохраняет экран «Поделитесь парой деталей»: имя и фамилию — в профиль
+// аккаунта, как их ставит «Изменить имя» (пустая строка стирает), остальное — в анкету
+// целиком, повторная отправка перезаписывает ответы. Поля чужой вкладки отбрасываются —
+// человек мог заполнить их и переключиться. Одной транзакцией: половина экрана без другой
+// не записывается.
+func (s *Service) SaveSignupProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string, p SignupProfile) error {
+	first, err := normalizePersonName(firstName, "имя")
 	if err != nil {
-		return SignupProfile{}, fmt.Errorf("signup profile %s: %w", userID, err)
+		return err
 	}
-	return p, nil
-}
-
-// SaveSignupProfile сохраняет анкету целиком: повторная отправка перезаписывает ответы. Поля
-// чужой вкладки отбрасываются — человек мог заполнить их и переключиться.
-func (s *Service) SaveSignupProfile(ctx context.Context, userID uuid.UUID, p SignupProfile) error {
-	p.FullName, p.Profession, p.CompanyName = trimmedOrNil(p.FullName), trimmedOrNil(p.Profession), trimmedOrNil(p.CompanyName)
+	last, err := normalizePersonName(lastName, "фамилия")
+	if err != nil {
+		return err
+	}
+	p.Profession, p.CompanyName = trimmedOrNil(p.Profession), trimmedOrNil(p.CompanyName)
 	if !oneOf(p.Kind, signupKinds) || !oneOf(p.Purpose, signupPurposes) || !oneOf(p.Referral, signupReferrals) ||
 		!oneOf(p.Occupation, signupOccupations) || !oneOf(p.Industry, signupIndustries) || !oneOf(p.JobPosition, signupPositions) {
 		return fmt.Errorf("%w: такого варианта ответа нет", domain.ErrValidation)
 	}
-	if tooLong(p.FullName, maxSignupFullName) || tooLong(p.Profession, maxSignupProfession) || tooLong(p.CompanyName, maxSignupCompanyName) {
+	if tooLong(p.Profession, maxSignupProfession) || tooLong(p.CompanyName, maxSignupCompanyName) {
 		return fmt.Errorf("%w: слишком длинный ответ", domain.ErrValidation)
 	}
 	if p.Kind == nil || *p.Kind != "person" {
@@ -123,7 +119,12 @@ func (s *Service) SaveSignupProfile(ctx context.Context, userID uuid.UUID, p Sig
 	if p.Kind == nil || *p.Kind != "company" {
 		p.CompanyName, p.Industry, p.JobPosition = nil, nil, nil
 	}
-	return s.repo.UpsertSignupProfile(ctx, s.db, userID, p)
+	return s.tx.WithTx(ctx, func(tx pgx.Tx) error {
+		if _, e := s.repo.UpdateProfile(ctx, tx, userID, first, last); e != nil {
+			return e
+		}
+		return s.repo.UpsertSignupProfile(ctx, tx, userID, p)
+	})
 }
 
 func trimmedOrNil(v *string) *string {

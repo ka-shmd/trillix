@@ -62,13 +62,13 @@ function stubApi(initial: Consents, post: () => Response = () => json(consents(n
   return calls
 }
 
-function renderScreen(defaultFullName = '', cached?: Consents) {
+function renderScreen(defaultName = { firstName: '', lastName: '' }, cached?: Consents) {
   const qc = new QueryClient({ defaultOptions: { mutations: { retry: false } } })
   if (cached) qc.setQueryData(legalKeys.consents(), cached)
   const onDone = vi.fn()
   render(
     <QueryClientProvider client={qc}>
-      <WelcomeScreen defaultFullName={defaultFullName} onDone={onDone} />
+      <WelcomeScreen defaultName={defaultName} onDone={onDone} />
     </QueryClientProvider>,
   )
   return { onDone }
@@ -102,13 +102,14 @@ describe('экран «Поделитесь парой деталей»', () => 
     expect(button('Завершить регистрацию').disabled).toBe(false)
   })
 
-  it('частное лицо: ФИО подставлено из профиля, вопросы вкладки и общие', async () => {
+  it('частное лицо: имя и фамилия подставлены из профиля, вопросы вкладки и общие', async () => {
     stubApi(consents('signup'))
-    renderScreen('Петров Иван')
+    renderScreen({ firstName: 'Иван', lastName: 'Петров' })
     await screen.findByText('Поделитесь парой деталей')
 
     expect(screen.getByRole('tab', { name: 'Частное лицо' }).getAttribute('aria-selected')).toBe('true')
-    expect(input('Ваше полное имя').value).toBe('Петров Иван')
+    expect(input('Ваше имя').value).toBe('Иван')
+    expect(input('Ваша фамилия').value).toBe('Петров')
     for (const label of ['Чем вы занимаетесь?', 'Ваша профессия', 'Как вы о нас узнали?', 'Для чего вы будете использовать Trillix?']) {
       expect(screen.getByLabelText(label)).toBeTruthy()
     }
@@ -117,9 +118,10 @@ describe('экран «Поделитесь парой деталей»', () => 
 
   it('«Завершить регистрацию»: сначала согласия, потом анкета частного лица', async () => {
     const calls = stubApi(consents('signup'))
-    const { onDone } = renderScreen('Петров Иван')
+    const { onDone } = renderScreen({ firstName: 'Иван', lastName: 'Петров' })
     await screen.findByText('Поделитесь парой деталей')
-    fireEvent.change(input('Ваше полное имя'), { target: { value: 'Петров Иван Сергеевич ' } })
+    fireEvent.change(input('Ваше имя'), { target: { value: 'Иван ' } })
+    fireEvent.change(input('Ваша фамилия'), { target: { value: '' } })
     fireEvent.change(input('Ваша профессия'), { target: { value: 'дизайнер' } })
     checkTerms()
     fireEvent.click(screen.getByRole('checkbox', { name: /Даю согласие/ }))
@@ -136,9 +138,11 @@ describe('экран «Поделитесь парой деталей»', () => 
         { kind: 'marketing', version: '2026-09-17' },
       ],
     })
+    // Стёртая фамилия уходит пустой строкой: сервер стирает её и в профиле аккаунта.
     expect(calls.find((c) => c.method === 'PUT')?.body).toEqual({
+      firstName: 'Иван',
+      lastName: '',
       kind: 'person',
-      fullName: 'Петров Иван Сергеевич',
       occupation: null,
       profession: 'дизайнер',
       companyName: null,
@@ -161,7 +165,8 @@ describe('экран «Поделитесь парой деталей»', () => 
     expect(screen.getByLabelText('Ваша должность')).toBeTruthy()
     expect(screen.queryByLabelText('Ваша профессия')).toBeNull()
 
-    fireEvent.change(input('Ваше полное имя'), { target: { value: 'Иванов Иван' } })
+    fireEvent.change(input('Ваше имя'), { target: { value: 'Иван' } })
+    fireEvent.change(input('Ваша фамилия'), { target: { value: 'Иванов' } })
     fireEvent.change(input('Название организации или ИП'), { target: { value: 'ООО «Ромашка»' } })
     checkTerms()
     fireEvent.click(button('Завершить регистрацию'))
@@ -170,8 +175,9 @@ describe('экран «Поделитесь парой деталей»', () => 
     // Галочка рассылок не отмечена — принимается только соглашение.
     expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ accept: [{ kind: 'terms', version: '2026-09-17' }] })
     expect(calls.find((c) => c.method === 'PUT')?.body).toMatchObject({
+      firstName: 'Иван',
+      lastName: 'Иванов',
       kind: 'company',
-      fullName: 'Иванов Иван',
       companyName: 'ООО «Ромашка»',
       profession: null,
       occupation: null,
@@ -217,7 +223,7 @@ describe('экран «Поделитесь парой деталей»', () => 
 describe('экран «Условия использования обновились»', () => {
   it('одна галочка соглашения, без анкеты и рассылок; «Принять и продолжить» шлёт только соглашение', async () => {
     const calls = stubApi(consents('update'))
-    const { onDone } = renderScreen('Петров Иван')
+    const { onDone } = renderScreen({ firstName: 'Иван', lastName: 'Петров' })
     await screen.findByText('Условия использования обновились')
 
     expect(screen.queryByRole('tab')).toBeNull()
@@ -244,7 +250,7 @@ it('согласие уже дано — экран сразу возвраща�
 // его сюда — и так по кругу, пока не приедет ответ сервера.
 it('устаревший кэш согласий не выбрасывает с экрана до ответа сервера', async () => {
   stubApi(consents('update'))
-  const { onDone } = renderScreen('', consents(null))
+  const { onDone } = renderScreen(undefined, consents(null))
   expect(onDone).not.toHaveBeenCalled()
   expect(await screen.findByText('Условия использования обновились')).toBeTruthy()
   expect(onDone).not.toHaveBeenCalled()

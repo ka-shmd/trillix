@@ -305,20 +305,13 @@ WHERE id = $1 AND deleted_at IS NULL;
 UPDATE users SET signup_completed_at = now()
 WHERE id = $1 AND signup_completed_at IS NULL;
 
--- name: GetSignupProfile :one
--- Анкета аккаунта для страницы «Аккаунт»: человек правит и очищает то, что указал при
--- регистрации (ст. 14 152-ФЗ — право на уточнение своих данных).
-SELECT kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position
-FROM signup_profiles
-WHERE user_id = $1;
-
 -- name: UpsertSignupProfile :exec
 -- Анкета регистрации: повторная отправка перезаписывает ответы целиком.
-INSERT INTO signup_profiles (user_id, kind, purpose, referral, full_name, occupation, profession, company_name, industry, job_position)
-VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+INSERT INTO signup_profiles (user_id, kind, purpose, referral, occupation, profession, company_name, industry, job_position)
+VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 ON CONFLICT (user_id) DO UPDATE
 SET kind = EXCLUDED.kind, purpose = EXCLUDED.purpose, referral = EXCLUDED.referral,
-    full_name = EXCLUDED.full_name, occupation = EXCLUDED.occupation, profession = EXCLUDED.profession,
+    occupation = EXCLUDED.occupation, profession = EXCLUDED.profession,
     company_name = EXCLUDED.company_name, industry = EXCLUDED.industry, job_position = EXCLUDED.job_position,
     updated_at = now();
 

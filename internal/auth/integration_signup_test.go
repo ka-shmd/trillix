@@ -6,7 +6,6 @@ package auth_test
 
 import (
 	"context"
-	"io"
 	"net/http"
 	"strings"
 	"testing"
@@ -81,16 +80,6 @@ func TestSignupProfile(t *testing.T) {
 		`{"email":"`+email+`","password":"supersecret1"}`, ""); r.StatusCode != http.StatusCreated {
 		t.Fatalf("регистрация: %d", r.StatusCode)
 	}
-	readProfile := func() (int, string) {
-		t.Helper()
-		resp := get(t, c, srv.URL+"/api/v1/account/signup-profile")
-		defer func() { _ = resp.Body.Close() }()
-		raw, err := io.ReadAll(resp.Body)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return resp.StatusCode, string(raw)
-	}
 	put := func(body string) int {
 		t.Helper()
 		req, err := http.NewRequest(http.MethodPut, srv.URL+"/api/v1/account/signup-profile", strings.NewReader(body))
@@ -110,46 +99,60 @@ func TestSignupProfile(t *testing.T) {
 		t.Fatalf("анкета до согласия: %d, ожидалось 403", code)
 	}
 	pgtest.CompleteSignup(t, testPool, email)
-	// Незаполненная анкета — пустая, а не «не найдено»: экран рисует те же поля.
-	if code, body := readProfile(); code != http.StatusOK || !strings.Contains(body, `"kind":null`) {
-		t.Fatalf("пустая анкета: %d %s", code, body)
-	}
-	if code := put(`{"kind":"robot"}`); code != http.StatusUnprocessableEntity {
+	if code := put(`{"firstName":"Иван","kind":"robot"}`); code != http.StatusUnprocessableEntity {
 		t.Fatalf("чужой вариант: %d, ожидалось 422", code)
 	}
-	if code := put(`{"kind":"company","purpose":"leads","fullName":"Иванов Иван","companyName":"ООО «Ромашка»","industry":"it","jobPosition":"owner"}`); code != http.StatusNoContent {
+	var first, last *string
+	readName := func() {
+		t.Helper()
+		err := testPool.QueryRow(context.Background(),
+			`SELECT first_name, last_name FROM users WHERE email = $1`, email).Scan(&first, &last)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Отказ по анкете не записал и имя: экран сохраняется целиком или никак.
+	readName()
+	if first != nil || last != nil {
+		t.Fatalf("имя записано при отказе: %v %v", first, last)
+	}
+	if code := put(`{"firstName":" Иван ","lastName":"Иванов","kind":"company","purpose":"leads","companyName":"ООО «Ромашка»","industry":"it","jobPosition":"owner"}`); code != http.StatusNoContent {
 		t.Fatalf("анкета компании: %d", code)
 	}
-	var fullName, company, industry, occupation, profession, purpose, referral *string
+	// Имя и фамилия — в профиле аккаунта: их видит кабинет и правит «Изменить имя».
+	readName()
+	if first == nil || *first != "Иван" || last == nil || *last != "Иванов" {
+		t.Fatalf("имя в профиле: %v %v", first, last)
+	}
+	var company, industry, occupation, profession, purpose, referral *string
 	var kind string
 	read := func() {
 		t.Helper()
 		err := testPool.QueryRow(context.Background(), `
-			SELECT p.kind, p.full_name, p.company_name, p.industry, p.occupation, p.profession, p.purpose, p.referral
+			SELECT p.kind, p.company_name, p.industry, p.occupation, p.profession, p.purpose, p.referral
 			FROM signup_profiles p JOIN users u ON u.id = p.user_id WHERE u.email = $1`, email).
-			Scan(&kind, &fullName, &company, &industry, &occupation, &profession, &purpose, &referral)
+			Scan(&kind, &company, &industry, &occupation, &profession, &purpose, &referral)
 		if err != nil {
 			t.Fatal(err)
 		}
 	}
 	read()
-	if kind != "company" || fullName == nil || *fullName != "Иванов Иван" || company == nil || *company != "ООО «Ромашка»" ||
+	if kind != "company" || company == nil || *company != "ООО «Ромашка»" ||
 		industry == nil || *industry != "it" || purpose == nil || *purpose != "leads" {
-		t.Fatalf("анкета компании в базе: %s %v %v %v %v", kind, fullName, company, industry, purpose)
+		t.Fatalf("анкета компании в базе: %s %v %v %v", kind, company, industry, purpose)
 	}
-	// Повторная отправка частным лицом перезаписывает анкету целиком, поля компании уходят.
-	if code := put(`{"kind":"person","purpose":null,"referral":"search","fullName":"Иванов Иван","occupation":"freelance","profession":"дизайнер","companyName":"ООО «Ромашка»"}`); code != http.StatusNoContent {
+	// Повторная отправка частным лицом перезаписывает анкету целиком, поля компании уходят;
+	// пустая фамилия стирается.
+	if code := put(`{"firstName":"Иван","lastName":"","kind":"person","purpose":null,"referral":"search","occupation":"freelance","profession":"дизайнер","companyName":"ООО «Ромашка»"}`); code != http.StatusNoContent {
 		t.Fatalf("повторная анкета: %d", code)
 	}
 	read()
-	// То же самое читает страница аккаунта: там анкету правят и очищают.
-	code, body := readProfile()
-	if code != http.StatusOK || !strings.Contains(body, `"fullName":"Иванов Иван"`) ||
-		!strings.Contains(body, `"occupation":"freelance"`) || !strings.Contains(body, `"companyName":null`) {
-		t.Fatalf("анкета через ручку: %d %s", code, body)
-	}
 	if kind != "person" || company != nil || industry != nil || occupation == nil || *occupation != "freelance" ||
 		profession == nil || *profession != "дизайнер" || purpose != nil || referral == nil || *referral != "search" {
 		t.Fatalf("анкета частного лица в базе: %s %v %v %v %v %v %v", kind, company, industry, occupation, profession, purpose, referral)
+	}
+	readName()
+	if first == nil || *first != "Иван" || last != nil {
+		t.Fatalf("имя после повторной анкеты: %v %v", first, last)
 	}
 }

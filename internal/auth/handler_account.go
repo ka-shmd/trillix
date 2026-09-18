@@ -62,34 +62,22 @@ func (h *Handler) AccountRoutes(mux *http.ServeMux) {
 	mux.Handle("POST /api/v1/account/delete", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.deleteAccount))))
 	// Анкета регистрации — за обычным гейтом: экран отправляет её после принятия
 	// соглашения (docs/design/signup-consent.md §3.5).
-	mux.Handle("GET /api/v1/account/signup-profile", h.RequireAuth(http.HandlerFunc(h.signupProfile)))
 	mux.Handle("PUT /api/v1/account/signup-profile", h.RequireAuth(h.RequireCSRF(http.HandlerFunc(h.saveSignupProfile))))
 }
 
+// signupProfileRequest — экран «Поделитесь парой деталей»: имя и фамилия (в профиль
+// аккаунта) и анкета.
 type signupProfileRequest struct {
+	FirstName   string  `json:"firstName"`
+	LastName    string  `json:"lastName"`
 	Kind        *string `json:"kind"`
 	Purpose     *string `json:"purpose"`
 	Referral    *string `json:"referral"`
-	FullName    *string `json:"fullName"`
 	Occupation  *string `json:"occupation"`
 	Profession  *string `json:"profession"`
 	CompanyName *string `json:"companyName"`
 	Industry    *string `json:"industry"`
 	JobPosition *string `json:"jobPosition"`
-}
-
-func (h *Handler) signupProfile(w http.ResponseWriter, r *http.Request) {
-	user, ok := UserFromContext(r.Context())
-	if !ok {
-		httpserver.WriteError(w, r, domain.ErrUnauthorized)
-		return
-	}
-	p, err := h.svc.SignupProfileOf(r.Context(), user.ID)
-	if err != nil {
-		httpserver.WriteError(w, r, err)
-		return
-	}
-	httpserver.WriteJSON(w, r, http.StatusOK, signupProfileRequest(p))
 }
 
 func (h *Handler) saveSignupProfile(w http.ResponseWriter, r *http.Request) {
@@ -106,7 +94,16 @@ func (h *Handler) saveSignupProfile(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, fmt.Errorf("%w: неверное тело запроса", domain.ErrValidation))
 		return
 	}
-	err := h.svc.SaveSignupProfile(r.Context(), user.ID, SignupProfile(req))
+	err := h.svc.SaveSignupProfile(r.Context(), user.ID, req.FirstName, req.LastName, SignupProfile{
+		Kind:        req.Kind,
+		Purpose:     req.Purpose,
+		Referral:    req.Referral,
+		Occupation:  req.Occupation,
+		Profession:  req.Profession,
+		CompanyName: req.CompanyName,
+		Industry:    req.Industry,
+		JobPosition: req.JobPosition,
+	})
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

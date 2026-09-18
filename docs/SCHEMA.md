@@ -1200,15 +1200,14 @@ SHA-256: утечка дампа не даёт рабочих ссылок. Зд
 
 **Индексы:** `idx_consent_events_user (user_id, created_at DESC)` — гейт и история.
 
-## `signup_profiles` (0071, поля вкладок — 0072)
+## `signup_profiles` (0071, поля вкладок — 0072, 0073)
 
-Анкета экрана «Поделитесь парой деталей» ([`design/signup-consent.md`](design/signup-consent.md) §3.3): вкладки «Частное лицо» и «Компания или ИП». Строка на аккаунт, каждый ответ необязателен.
+Анкета экрана «Поделитесь парой деталей» ([`design/signup-consent.md`](design/signup-consent.md) §3.3): вкладки «Частное лицо» и «Компания или ИП». Строка на аккаунт, каждый ответ необязателен. Имени и фамилии здесь нет: с того же экрана они пишутся в профиль аккаунта (`users.first_name`, `last_name`).
 
 | Колонка | Тип | Ограничения |
 |---|---|---|
 | `user_id` | `UUID` | PK, FK → `users(id)` `ON DELETE CASCADE` |
 | `kind` | `TEXT` | nullable, `CHECK IN ('person', 'company')` — вкладка |
-| `full_name` | `TEXT` | nullable, 1–200 символов — ФИО одной строкой; с профилем `users.first_name/last_name` не связано (отчества там нет) |
 | `occupation` | `TEXT` | nullable, `CHECK IN ('study', 'employed', 'freelance', 'teaching', 'science', 'other')` — только `person` |
 | `profession` | `TEXT` | nullable, 1–100 символов — только `person` |
 | `company_name` | `TEXT` | nullable, 1–300 символов — только `company` |

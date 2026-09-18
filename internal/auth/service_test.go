@@ -323,13 +323,6 @@ func (f *fakeStore) MarkSignupCompleted(_ context.Context, _ postgres.DBTX, _ uu
 	return nil
 }
 
-func (f *fakeStore) GetSignupProfile(_ context.Context, _ postgres.DBTX, _ uuid.UUID) (SignupProfile, error) {
-	if f.signupProfile == nil {
-		return SignupProfile{}, pgx.ErrNoRows
-	}
-	return *f.signupProfile, nil
-}
-
 func (f *fakeStore) UpsertSignupProfile(_ context.Context, _ postgres.DBTX, _ uuid.UUID, p SignupProfile) error {
 	f.signupProfile = &p
 	return nil

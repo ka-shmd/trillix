@@ -32,9 +32,7 @@ function WelcomePage() {
   const navigate = useNavigate()
   const qc = useQueryClient()
   const { data: me } = useQuery(meQueryOptions)
-  // ФИО в порядке «Фамилия Имя»: так его пишут в анкете, а профиль от Яндекса отчества не
-  // знает — человек допишет его сам.
-  const defaultFullName = [me?.lastName, me?.firstName].filter(Boolean).join(' ')
+  const defaultName = { firstName: me?.firstName ?? '', lastName: me?.lastName ?? '' }
 
   // me сносится, а не патчится: гард _app перечитает его и сам решит, открыт ли кабинет.
   const onDone = useCallback(() => {
@@ -42,5 +40,5 @@ function WelcomePage() {
     void navigate({ href: safeRedirect(target) })
   }, [qc, navigate, target])
 
-  return <WelcomeScreen defaultFullName={defaultFullName} onDone={onDone} />
+  return <WelcomeScreen defaultName={defaultName} onDone={onDone} />
 }

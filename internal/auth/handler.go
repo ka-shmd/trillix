@@ -54,8 +54,7 @@ type authService interface {
 	ForgetAllDevices(ctx context.Context, userID uuid.UUID, sessionToken string) error
 	DeleteAccount(ctx context.Context, user User, currentPassword, code string) error
 	ConsentRequired(ctx context.Context, userID uuid.UUID) (bool, error)
-	SignupProfileOf(ctx context.Context, userID uuid.UUID) (SignupProfile, error)
-	SaveSignupProfile(ctx context.Context, userID uuid.UUID, p SignupProfile) error
+	SaveSignupProfile(ctx context.Context, userID uuid.UUID, firstName, lastName string, p SignupProfile) error
 }
 
 // RateLimiter — лимитер, нужный auth (жёсткий по IP на логин). Реализация —

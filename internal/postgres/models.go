@@ -343,7 +343,6 @@ type SignupProfile struct {
 	Referral    pgtype.Text
 	CreatedAt   pgtype.Timestamptz
 	UpdatedAt   pgtype.Timestamptz
-	FullName    pgtype.Text
 	Occupation  pgtype.Text
 	Profession  pgtype.Text
 	CompanyName pgtype.Text
