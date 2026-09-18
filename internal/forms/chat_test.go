@@ -442,6 +442,29 @@ func TestChat_Design(t *testing.T) {
 		}
 	})
 
+	// Обложка — хром страницы, и гейта тарифа у неё нет ни в панели, ни здесь.
+	t.Run("обложка цветом бесплатна и на закрытом тарифе", func(t *testing.T) {
+		const cover = `{"action":"edit_form","reply":"Добавил розовую обложку.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1,"cover":"#fecaca"}}`
+		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
+		svc, store := chatService(ai.NewFake(cover), plans)
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "добавь розовую обложку", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		if res.PlanRequired {
+			t.Error("бесплатная обложка помечена как упёршаяся в тариф")
+		}
+		schema, err := domain.ValidateSchema(res.Schema)
+		if err != nil {
+			t.Fatalf("документ не проходит ValidateSchema: %v", err)
+		}
+		if schema.Cover == nil || schema.Cover.Color != "#fecaca" {
+			t.Errorf("обложка = %+v", schema.Cover)
+		}
+	})
+
 	t.Run("цвет на открытом тарифе применяется", func(t *testing.T) {
 		plans := &fakePlans{allowed: true}
 		svc, store := chatService(ai.NewFake(blue), plans)
@@ -684,12 +707,13 @@ func TestChatInstructions_FreeDesignFields(t *testing.T) {
 		Width: 800, FontSize: 18, Density: "cozy", Align: "center",
 		Radius: 8, BorderWidth: 2, Outline: "full",
 		ButtonVariant: "solid", ButtonWidth: "full", ButtonAlign: "center", ButtonRadius: 8,
+		Cover: "#fecaca",
 	}
 	free := domain.ChatDesignFree(full)
-	if free.Theme != "dark" || free.BorderWidth != 2 || free.ButtonRadius != 8 {
+	if free.Theme != "dark" || free.BorderWidth != 2 || free.ButtonRadius != 8 || free.Cover != "#fecaca" {
 		t.Errorf("бесплатное поле стало платным: %+v", free)
 	}
-	free.Theme, free.BorderWidth, free.ButtonRadius = "", domain.ChatDesignKeep, domain.ChatDesignKeep
+	free.Theme, free.BorderWidth, free.ButtonRadius, free.Cover = "", domain.ChatDesignKeep, domain.ChatDesignKeep, ""
 	if !free.Empty() {
 		t.Errorf("бесплатных полей стало больше (%+v) — поправь фразу про тариф в chatInstructions", free)
 	}
@@ -703,7 +727,6 @@ func TestChatInstructions_WholeRequest(t *testing.T) {
 	text := chatInstructions(domain.ProjectForm(domain.FormSchema{}), true)
 	for _, want := range []string{
 		"сделай ВСЁ ОСТАЛЬНОЕ",
-		"«Добавить обложку»",
 		"«Добавить логотип»",
 	} {
 		if !strings.Contains(text, want) {
