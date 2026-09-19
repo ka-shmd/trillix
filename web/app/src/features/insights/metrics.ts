@@ -1,4 +1,5 @@
 import { type FormFunnel, type FunnelStep } from '../../entities/funnel'
+import { formatDuration } from '../../shared/format'
 
 // Числа и фразы аналитики, не привязанные к разметке. Отдельно от компонентов,
 // чтобы их можно было проверять юнитом, не поднимая DOM.
@@ -27,6 +28,12 @@ export type FunnelRow = {
   leftTimeSec?: number
 }
 
+// Ключи двух ступеней воронки — не шагов формы, а её краёв. Названы константами
+// потому, что по ним различается формулировка потери: на первой ступени уходят «не
+// тронув ни одного вопроса», а не «остановившись здесь».
+export const OPENED_KEY = 'opened'
+export const SUBMITTED_KEY = 'submitted'
+
 // Шаги воронки: страницы у многостраничной формы, вопросы — у одностраничной. Номер
 // у вопроса — позиция во всей форме; у страницы номер уже в подписи («Страница 3»)
 // либо его заменяет имя.
@@ -45,11 +52,16 @@ export function funnelSteps(funnel: FormFunnel): FunnelRow[] {
 }
 
 // Воронка целиком: ступень «Открыли форму», шаги, ступень «Отправили форму».
+//
+// Отдельной ступени «Начали отвечать» здесь НЕТ, хотя такое число есть на карточках.
+// У многостраничной формы оно совпало бы с «дошли» первой страницы — её видели все,
+// кто тронул хоть один вопрос, — и воронка открывалась бы двумя строками с одним и
+// тем же числом. Не начавшие показаны там, где им место: потерей первой ступени.
 export function funnelRows(funnel: FormFunnel): FunnelRow[] {
   return [
-    { key: 'opened', label: 'Открыли форму', reached: funnel.visits, dropped: funnel.leftBeforeFirst },
+    { key: OPENED_KEY, label: 'Открыли форму', reached: funnel.visits, dropped: funnel.leftBeforeFirst },
     ...funnelSteps(funnel),
-    { key: 'submitted', label: 'Отправили форму', reached: funnel.submitted, dropped: 0 },
+    { key: SUBMITTED_KEY, label: 'Отправили форму', reached: funnel.submitted, dropped: 0 },
   ]
 }
 
@@ -100,15 +112,50 @@ export function dropPercent(row: FunnelRow): number | null {
   return row.reached >= MIN_BASE ? percentOf(row.dropped, row.reached) : null
 }
 
-// Фраза целиком, а не склонение одного слова: в ней согласуются ДВА глагола
-// («остановился … не пошёл» против «остановились … не пошли»), и склонять их по
-// отдельности значит рано или поздно получить «1 остановился и дальше не пошли».
+// Фраза целиком, а не склонение одного слова: числительное и глагол согласуются,
+// и склонять их по отдельности значит рано или поздно получить «1 остановились».
+//
+// Коротко («остановились здесь», а не «остановились здесь и дальше не пошли»):
+// строка стоит под КАЖДЫМ шагом, а шагов у формы бывает пятнадцать. Смысл держит
+// соседняя доля — «— 4 % дошедших», — и хвост из четырёх слов её только отодвигал.
 export function droppedPhrase(n: number): string {
   // 1, 21, 31… — единственное число; 11 — исключение (одиннадцать остановились).
   const singular = n % 10 === 1 && n % 100 !== 11
+  return singular ? `${n} остановился здесь` : `${n} остановились здесь`
+}
+
+// Потеря на первой ступени: человек открыл форму и ушёл, не тронув ни одного
+// вопроса. Это не отвал на вопросе, и лечится оно другим — заголовком, длиной
+// формы, ожиданиями от ссылки (docs/ANALYTICS.md, LeftBeforeFirst).
+export function leftBeforeFirstPhrase(n: number): string {
+  const singular = n % 10 === 1 && n % 100 !== 11
   return singular
-    ? `${n} остановился здесь и дальше не пошёл`
-    : `${n} остановились здесь и дальше не пошли`
+    ? `${n} ушёл, не тронув ни одного вопроса`
+    : `${n} ушли, не тронув ни одного вопроса`
+}
+
+// Строка потери под полоской шага: сколько человек здесь остановилось и какая это
+// доля. null — терять было некому.
+//
+// Доля называется только над порогом малых выборок (dropPercent), и знаменатель у
+// первой ступени другой: там «дошедшие» — это все визиты формы, и слово «дошедших»
+// в первой же строке воронки читалось бы как отсылка к чему-то прежде неё.
+export function lossPhrase(row: FunnelRow): string | null {
+  if (row.dropped === 0) return null
+  const first = row.key === OPENED_KEY
+  const phrase = first ? leftBeforeFirstPhrase(row.dropped) : droppedPhrase(row.dropped)
+  const pct = dropPercent(row)
+  if (pct === null) return phrase
+  return `${phrase} — ${pct} % ${first ? 'визитов' : 'дошедших'}`
+}
+
+// Время на шаге готовой строкой: медиана у прошедших дальше и у ушедших. Есть
+// только у шагов-страниц и только когда по ним есть данные.
+export function stepMeta(row: FunnelRow): string | null {
+  const parts: string[] = []
+  if (row.timeSec !== undefined) parts.push(`обычно проводят здесь ${formatDuration(row.timeSec)}`)
+  if (row.leftTimeSec !== undefined) parts.push(`ушедшие — ${formatDuration(row.leftTimeSec)}`)
+  return parts.length > 0 ? parts.join(' · ') : null
 }
 
 // Изменение к прошлому окну (спека design/analytics-v2.md §8). null — строки нет:

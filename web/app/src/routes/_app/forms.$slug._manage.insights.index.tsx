@@ -9,7 +9,7 @@ import { InsightCards } from '../../features/insights/Cards'
 import { SegmentPicker } from '../../features/insights/SegmentPicker'
 import { VersionsTable } from '../../features/insights/VersionsTable'
 import { versionStatsQueryOptions } from '../../features/insights/queries'
-import { FunnelChart } from '../../features/insights/lazyCharts'
+import { Funnel } from '../../features/insights/Funnel'
 import {
   funnelRows,
   funnelSteps,
@@ -167,14 +167,13 @@ function OverviewPage() {
             description="В опубликованных версиях формы нет вопросов."
           />
         ) : (
-          <>
-            <FunnelChart rows={funnelRows(funnel.data)} base={funnel.data.visits} />
-            {funnel.data.leftBeforeFirst > 0 && (
-              <p className="text-sm text-muted-foreground">
-                {funnel.data.leftBeforeFirst} ушли, не тронув ни одного вопроса.
-              </p>
-            )}
-          </>
+          // Абзаца «N ушли, не тронув ни одного вопроса» под воронкой больше нет:
+          // это потеря первой ступени, и теперь она написана под её же полоской.
+          <Funnel
+            rows={funnelRows(funnel.data)}
+            base={funnel.data.visits}
+            worstKey={worstStep(funnelSteps(funnel.data))?.key}
+          />
         )}
       </Section>
 
@@ -223,11 +222,12 @@ function PageQuestions({ funnel }: { funnel: FormFunnel }) {
   // Ключ страницы '' (первая) Select не принимает — пустое значение у него значит
   // «ничего не выбрано». Отсюда префикс page: — тот же, что у строк воронки.
   const pageKey = value.slice('page:'.length)
+  const rows = pageQuestionRows(funnel, pageKey)
 
   return (
     <Section
       title="Вопросы страницы"
-      description="Сколько человек дошло до каждого вопроса выбранной страницы и где они остановились."
+      description="Где останавливаются внутри выбранной страницы."
       action={
         <Select value={value} onValueChange={setChosen}>
           <SelectTrigger className="w-[220px]" aria-label="Страница">
@@ -243,21 +243,21 @@ function PageQuestions({ funnel }: { funnel: FormFunnel }) {
         </Select>
       }
     >
-      <FunnelChart rows={pageQuestionRows(funnel, pageKey)} base={funnel.visits} />
+      <Funnel rows={rows} base={funnel.visits} worstKey={worstStep(rows)?.key} />
     </Section>
   )
 }
 
 // Пояснение раздела называет САМЫЙ ПРОБЛЕМНЫЙ шаг — то, ради чего на экран и
-// заходят. Разбор по каждому шагу остаётся в тултипе его полоски.
+// заходят. ЧИСЛА оно не повторяет: шаг подсвечен в самой воронке, и его потеря
+// написана под его же полоской. Пока их печатали и здесь, одна и та же дробь
+// стояла на экране дважды в двух шрифтах.
 function funnelHint(funnel: FormFunnel | undefined): string {
   const general = 'Сколько человек дошло до каждого шага и где они останавливаются.'
   if (!funnel) return general
   const steps = funnelSteps(funnel)
   const worst = worstStep(steps)
-  if (worst) {
-    return `Чаще всего уходят на шаге «${worst.label}»: ${worst.dropped} из ${worst.reached}, ${worst.percent} %.`
-  }
+  if (worst) return `Чаще всего уходят на шаге «${worst.label}» — он выделен ниже.`
   // Отвалы есть, но все на шагах ниже порога малых выборок: назвать худший нельзя, а
   // «никто не останавливался» было бы неправдой.
   if (steps.some((s) => s.dropped > 0)) return general

@@ -144,15 +144,15 @@ describe('dropPercent', () => {
 })
 
 describe('droppedPhrase', () => {
-  it('согласует оба глагола по числу', () => {
-    expect(droppedPhrase(1)).toBe('1 остановился здесь и дальше не пошёл')
-    expect(droppedPhrase(21)).toBe('21 остановился здесь и дальше не пошёл')
-    expect(droppedPhrase(5)).toBe('5 остановились здесь и дальше не пошли')
+  it('согласует глагол с числительным', () => {
+    expect(droppedPhrase(1)).toBe('1 остановился здесь')
+    expect(droppedPhrase(21)).toBe('21 остановился здесь')
+    expect(droppedPhrase(5)).toBe('5 остановились здесь')
   })
 
   // 11 — исключение из правила «оканчивается на 1»: одиннадцать остановились.
   it('одиннадцать во множественном числе', () => {
-    expect(droppedPhrase(11)).toBe('11 остановились здесь и дальше не пошли')
+    expect(droppedPhrase(11)).toBe('11 остановились здесь')
   })
 })
 

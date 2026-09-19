@@ -1,7 +1,6 @@
 import { lazy, Suspense } from 'react'
 
 import { type BucketStep, type LabelCount, type TimeBucket } from '../../entities/visitsBreakdown'
-import { type FunnelRow } from './metrics'
 import { type ScalePoint } from '../../entities/summary'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -11,18 +10,19 @@ import { Skeleton } from '@/components/ui/skeleton'
 // настройках.
 //
 // Импортируй графики ОТСЮДА, а не из соседних файлов напрямую: прямой импорт из
-// VisitsChart/FunnelChart/ShareChart втащит recharts обратно в общий чанк, и
+// VisitsChart/ShareChart/ScaleTrendChart втащит recharts обратно в общий чанк, и
 // проверка этого — только замер сборки (`npm run build`), потому что работать
 // будет одинаково.
+//
+// Воронки здесь нет и не должно появиться: с фазы 30 она нарисована разметкой
+// (features/insights/Funnel.tsx), и «Обзор» — единственная вкладка аналитики,
+// которая не грузит recharts вовсе.
 //
 // Заглушка каждого графика ростом с сам график: скачок раскладки на месте, где
 // человек уже читает числа, дороже лишней сотни байт разметки.
 
 const VisitsChartImpl = lazy(() =>
   import('./VisitsChart').then((m) => ({ default: m.VisitsChart })),
-)
-const FunnelChartImpl = lazy(() =>
-  import('./FunnelChart').then((m) => ({ default: m.FunnelChart })),
 )
 const ShareChartImpl = lazy(() => import('./ShareChart').then((m) => ({ default: m.ShareChart })))
 const ScaleTrendChartImpl = lazy(() =>
@@ -33,18 +33,6 @@ export function VisitsChart(props: { buckets: TimeBucket[]; step: BucketStep }) 
   return (
     <Suspense fallback={<Skeleton className="h-60 w-full" />}>
       <VisitsChartImpl {...props} />
-    </Suspense>
-  )
-}
-
-export function FunnelChart(props: { rows: FunnelRow[]; base: number }) {
-  // Высота воронки считается по числу строк. Число 26 зеркалит ROW_HEIGHT в
-  // FunnelChart.tsx — импортировать его оттуда нельзя, импорт значения втащил бы
-  // модуль с recharts обратно в общий чанк.
-  const height = props.rows.length * 26 + 16
-  return (
-    <Suspense fallback={<Skeleton className="w-full" style={{ height }} />}>
-      <FunnelChartImpl {...props} />
     </Suspense>
   )
 }
