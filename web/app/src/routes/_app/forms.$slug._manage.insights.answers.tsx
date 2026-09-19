@@ -2,10 +2,12 @@ import { createFileRoute } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
-import { type BlockSummary } from '../../entities/summary'
+import { type BlockSummary, type ScaleStats } from '../../entities/summary'
+import { type BucketStep } from '../../entities/visitsBreakdown'
 import { BarRows, type BarRow } from '../../features/insights/Breakdown'
 import { VisitCards } from '../../features/insights/Cards'
-import { percentOf } from '../../features/insights/metrics'
+import { ScaleTrendChart } from '../../features/insights/lazyCharts'
+import { MIN_BASE, percentOf } from '../../features/insights/metrics'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { BlockAnswersDialog } from '../../features/submissions/BlockAnswersDialog'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
@@ -78,6 +80,7 @@ function SummaryPage() {
                 key={b.blockId}
                 block={b}
                 total={total}
+                trendStep={summary.data.trendStep}
                 formId={formId ?? ''}
                 period={period}
               />
@@ -92,11 +95,13 @@ function SummaryPage() {
 function BlockCard({
   block,
   total,
+  trendStep,
   formId,
   period,
 }: {
   block: BlockSummary
   total: number
+  trendStep: BucketStep
   formId: string
   period: Period
 }) {
@@ -115,6 +120,7 @@ function BlockCard({
           {block.asked < total && ` — вопрос показали ${block.asked} из ${total}`}
         </p>
       </div>
+      {block.scale && <ScaleSummary block={block} scale={block.scale} step={trendStep} />}
       {block.kind === 'distribution' ? (
         <Distribution block={block} />
       ) : block.kind === 'number' ? (
@@ -230,5 +236,48 @@ function NumberStats({ block }: { block: BlockSummary }) {
         </div>
       ))}
     </dl>
+  )
+}
+
+const signedFmt = new Intl.NumberFormat(LOCALE, { signDisplay: 'exceptZero' })
+
+// Шкала и звёзды: средняя, NPS у шкалы 0–10 и ряд средней. NPS — разность долей,
+// поэтому подчиняется порогу малых выборок: «−100» по одному ответу владелец прочтёт
+// как приговор форме. Ряд рисуется, когда непустых корзин хотя бы две — одна точка
+// не линия.
+function ScaleSummary({
+  block,
+  scale,
+  step,
+}: {
+  block: BlockSummary
+  scale: ScaleStats
+  step: BucketStep
+}) {
+  const marks = block.buckets.map((b) => Number(b.key)).filter((n) => Number.isFinite(n))
+  const min = marks.length > 0 ? Math.min(...marks) : 0
+  const max = marks.length > 0 ? Math.max(...marks) : 5
+  const filled = scale.trend.filter((p) => p.n > 0).length
+  const showNps = scale.nps !== undefined && block.answered >= MIN_BASE
+
+  return (
+    <div className="flex flex-col gap-3">
+      <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        <div>
+          <dt className="text-sm text-muted-foreground">Средняя</dt>
+          <dd className="mt-0.5 text-xl font-bold tabular-nums">
+            {numberFmt.format(scale.avg)}
+            <span className="text-sm font-normal text-muted-foreground"> из {max}</span>
+          </dd>
+        </div>
+        {showNps && (
+          <div>
+            <dt className="text-sm text-muted-foreground">NPS</dt>
+            <dd className="mt-0.5 text-xl font-bold tabular-nums">{signedFmt.format(scale.nps!)}</dd>
+          </div>
+        )}
+      </dl>
+      {filled >= 2 && <ScaleTrendChart points={scale.trend} step={step} min={min} max={max} />}
+    </div>
   )
 }

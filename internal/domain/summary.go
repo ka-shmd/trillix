@@ -2,6 +2,7 @@ package domain
 
 import (
 	"encoding/json"
+	"math"
 	"sort"
 	"strconv"
 	"strings"
@@ -67,6 +68,25 @@ type NumberStats struct {
 	Max float64
 }
 
+// ScaleStats — средняя и NPS шкалы или звёзд (спека design/analytics-v2.md §6.1).
+type ScaleStats struct {
+	// Avg — средняя по ответившим, в делениях шкалы (у звёзд — в звёздах).
+	Avg float64
+	// NPS — индекс от −100 до 100: доля 9–10 минус доля 0–6. nil, если шкала свежей
+	// версии не 0–10: у шкалы 1–5 «промоутеров» нет.
+	NPS *int
+	// Trend — средняя по корзинам окна (шаг — StepFor); nil, если ряд не заказан.
+	Trend []ScalePoint
+}
+
+// ScalePoint — корзина ряда шкалы. N = 0 — ответов не было, Avg тогда ноль и ничего
+// не значит: «средняя 0» и «никто не ответил» — разные показания.
+type ScalePoint struct {
+	At  time.Time
+	N   int
+	Avg float64
+}
+
 // BlockSummary — сводка одного вопроса.
 //
 // Asked — сколько ответов пришло по версиям, где этот вопрос БЫЛ (знаменатель), а не
@@ -82,6 +102,7 @@ type BlockSummary struct {
 	Answered int
 	Buckets  []SummaryBucket // Kind == SummaryDistribution
 	Number   *NumberStats    // Kind == SummaryNumber, nil если никто не ответил
+	Scale    *ScaleStats     // шкала и звёзды, nil если никто не ответил
 	// Samples — последние ответы на этот вопрос, новыми сверху, не больше
 	// SamplesLimit. У текстового вопроса распределение бессмысленно, а сами ответы
 	// ценны — ради них раскладка и переехала на формат Tally (ADR §10).
@@ -104,6 +125,8 @@ type AnswerSample struct {
 type Summary struct {
 	Total  int
 	Blocks []BlockSummary
+	// TrendStep — шаг рядов шкал (ScaleStats.Trend): от него зависят подписи оси.
+	TrendStep BucketStep
 }
 
 // SummaryBuilder копит счётчики. Создаётся один раз на запрос, затем Add вызывается
@@ -117,6 +140,15 @@ type SummaryBuilder struct {
 	// правилами, а не карта типов.
 	blocksByVer map[int][]Block
 	total       int
+	// Ряд шкал по времени (Trend): шаг и границы окна. Пустой шаг — ряда нет.
+	trendStep          BucketStep
+	trendFrom, trendTo time.Time
+}
+
+// Trend заказывает ряд средней у шкал: корзины шага step в границах окна (нулевая
+// граница — взять из данных, как у ряда визитов).
+func (b *SummaryBuilder) Trend(step BucketStep, from, to time.Time) {
+	b.trendStep, b.trendFrom, b.trendTo = step, from, to
 }
 
 // summaryAcc — счётчики одного вопроса.
@@ -134,6 +166,11 @@ type summaryAcc struct {
 	// Числа: сумма и границы по ответившим.
 	sum, min, max float64
 	numCount      int
+	// Шкалы и звёзды: сумма делений, промоутеры (9–10) и критики (0–6) для NPS, ряд.
+	scaleSum              float64
+	scaleN                int
+	promoters, detractors int
+	trend                 map[time.Time]*scaleBucket
 	// samples — последние ответы, новыми сверху. Наполняются, пока не наберётся
 	// sampleLimit: обход идёт от свежих к старым, поэтому первые же и есть
 	// последние.
@@ -274,6 +311,9 @@ func (b *SummaryBuilder) Add(version int, at time.Time, answers map[string]json.
 		// Тип берётся из версии ответа, а не из свежей: смена типа блока владельцем
 		// не должна заставлять разбирать старый ответ по новым правилам.
 		a.add(typ, raw)
+		if typ.isScaleLike() {
+			a.addScale(raw, at, b.trendStep)
+		}
 		a.addSample(typ, raw, at)
 	}
 }
@@ -370,6 +410,9 @@ func (b *SummaryBuilder) Result() Summary {
 			Asked:    a.asked,
 			Answered: a.answered,
 			Samples:  a.samples,
+		}
+		if a.typ.isScaleLike() && a.scaleN > 0 {
+			s.Scale = a.scaleStats(b.trendStep, b.trendFrom, b.trendTo)
 		}
 		switch s.Kind {
 		case SummaryDistribution:
@@ -489,4 +532,81 @@ func (a *summaryAcc) scaleBuckets() []SummaryBucket {
 		out = append(out, SummaryBucket{Key: key, Label: key, Count: a.counts[key]})
 	}
 	return out
+}
+
+// scaleBucket — корзина ряда шкалы.
+type scaleBucket struct {
+	sum float64
+	n   int
+}
+
+// addScale копит среднюю, NPS и ряд. Деление приходит строкой («4») — так его
+// хранит ответ; нечисловое пропускается, как и в распределении.
+func (a *summaryAcc) addScale(raw json.RawMessage, at time.Time, step BucketStep) {
+	v, ok := decodeString(raw)
+	if !ok {
+		return
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return
+	}
+	a.scaleSum += float64(n)
+	a.scaleN++
+	switch {
+	case n >= 9:
+		a.promoters++
+	case n <= 6:
+		a.detractors++
+	}
+	if step == "" {
+		return
+	}
+	if a.trend == nil {
+		a.trend = make(map[time.Time]*scaleBucket)
+	}
+	key := truncateTo(at, step)
+	bk := a.trend[key]
+	if bk == nil {
+		bk = &scaleBucket{}
+		a.trend[key] = bk
+	}
+	bk.sum += float64(n)
+	bk.n++
+}
+
+// scaleStats — итог шкалы. NPS — только у шкалы 0–10 свежей версии; ряд — все
+// корзины окна подряд, пустые с N = 0.
+func (a *summaryAcc) scaleStats(step BucketStep, from, to time.Time) *ScaleStats {
+	st := &ScaleStats{Avg: a.scaleSum / float64(a.scaleN)}
+	if a.typ == BlockScale && a.scaleMin == 0 && a.scaleMax == 10 {
+		nps := int(math.Round(float64(a.promoters-a.detractors) * 100 / float64(a.scaleN)))
+		st.NPS = &nps
+	}
+	if step == "" || len(a.trend) == 0 {
+		return st
+	}
+	var first, last time.Time
+	for k := range a.trend {
+		if first.IsZero() || k.Before(first) {
+			first = k
+		}
+		if last.IsZero() || k.After(last) {
+			last = k
+		}
+	}
+	if !from.IsZero() {
+		first = truncateTo(from.UTC(), step)
+	}
+	if !to.IsZero() {
+		last = truncateTo(to.UTC(), step)
+	}
+	for at := first; !at.After(last); at = nextBucket(at, step) {
+		p := ScalePoint{At: at}
+		if bk := a.trend[at]; bk != nil {
+			p.N, p.Avg = bk.n, bk.sum/float64(bk.n)
+		}
+		st.Trend = append(st.Trend, p)
+	}
+	return st
 }

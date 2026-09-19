@@ -428,15 +428,32 @@ type blockSummaryResponse struct {
 	Answered int                     `json:"answered"`
 	Buckets  []summaryBucketResponse `json:"buckets,omitempty"`
 	Number   *numberStatsResponse    `json:"number,omitempty"`
+	// Scale — средняя, NPS (у шкалы 0–10) и ряд средней; у шкал и звёзд с ответами.
+	Scale *scaleStatsResponse `json:"scale,omitempty"`
 	// Samples — до domain.SamplesLimit последних значений, новыми сверху. Потолок
 	// часть контракта: аналитическая ручка отдаёт счётчики и небольшую выборку, всё
 	// остальное — через листинг ответов со своей пагинацией (ADR §10).
 	Samples []answerSampleResponse `json:"samples,omitempty"`
 }
 
+type scalePointResponse struct {
+	At string `json:"at"`
+	// N = 0 — ответов в корзине не было; avg тогда ноль и ничего не значит.
+	N   int     `json:"n"`
+	Avg float64 `json:"avg"`
+}
+
+type scaleStatsResponse struct {
+	Avg   float64              `json:"avg"`
+	NPS   *int                 `json:"nps,omitempty"`
+	Trend []scalePointResponse `json:"trend"`
+}
+
 type summaryResponse struct {
 	Total  int                    `json:"total"`
 	Blocks []blockSummaryResponse `json:"blocks"`
+	// trendStep — шаг рядов шкал: hour | day, выбирает сервер по окну.
+	TrendStep string `json:"trendStep"`
 }
 
 // summary отдаёт агрегат по ответам формы: наружу уходят только счётчики, сырые
@@ -494,6 +511,13 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		if b.Number != nil {
 			item.Number = &numberStatsResponse{Avg: b.Number.Avg, Min: b.Number.Min, Max: b.Number.Max}
 		}
+		if b.Scale != nil {
+			trend := make([]scalePointResponse, len(b.Scale.Trend))
+			for j, p := range b.Scale.Trend {
+				trend[j] = scalePointResponse{At: p.At.UTC().Format(time.RFC3339), N: p.N, Avg: p.Avg}
+			}
+			item.Scale = &scaleStatsResponse{Avg: b.Scale.Avg, NPS: b.Scale.NPS, Trend: trend}
+		}
 		if len(b.Samples) > 0 {
 			item.Samples = make([]answerSampleResponse, len(b.Samples))
 			for j, sm := range b.Samples {
@@ -505,7 +529,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		}
 		blocks[i] = item
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks})
+	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, TrendStep: string(sum.TrendStep)})
 }
 
 type answerResponse struct {
