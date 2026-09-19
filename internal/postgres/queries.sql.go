@@ -10014,24 +10014,25 @@ func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (V
 
 const visitPageDurations = `-- name: VisitPageDurations :many
 WITH path AS (
+    -- Визит соединяется один раз, здесь, а не в каждой ветке ниже: иначе две ветки
+    -- ходили бы в form_visits точечным чтением на каждую строку пути.
     SELECT p.visit_id, p.block_id, p.reached_at,
+           v.created_at, v.updated_at, v.submitted,
            lead(p.reached_at) OVER w AS next_at,
            row_number() OVER w       AS n
     FROM form_visit_pages p
+    JOIN form_visits v ON v.id = p.visit_id
     WHERE p.form_id = $1
       AND p.visit_created_at >= $2::timestamptz
       AND p.visit_created_at <  $3::timestamptz
-      AND ($4::text IS NULL OR EXISTS (
-          SELECT 1 FROM form_visits sv WHERE sv.id = p.visit_id
-        AND ($4::text IS NULL OR
+      AND ($4::text IS NULL OR
              (CASE $4::text
-                  WHEN 'ua'      THEN coalesce(sv.meta->>'user_agent', '')
-                  WHEN 'source'  THEN coalesce(sv.meta->>'referer', '') || chr(31) || coalesce(sv.meta->>'utm_source', '') || chr(31) || coalesce(sv.meta->>'utm_medium', '')
-                  WHEN 'country' THEN coalesce(sv.country_code, '')
-                  WHEN 'city'    THEN coalesce(sv.city, '') || chr(31) || coalesce(sv.country_code, '')
-                  WHEN 'version' THEN sv.form_version_id::text
+                  WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
+                  WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
+                  WHEN 'country' THEN coalesce(v.country_code, '')
+                  WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
+                  WHEN 'version' THEN v.form_version_id::text
               END) = ANY($5::text[]))
-      ))
     WINDOW w AS (PARTITION BY p.visit_id ORDER BY p.reached_at, p.block_id)
 ),
 spans AS (
@@ -10040,13 +10041,13 @@ spans AS (
     FROM path
     WHERE path.next_at IS NOT NULL
     UNION ALL
-    SELECT '', '', false, path.reached_at - v.created_at
-    FROM path JOIN form_visits v ON v.id = path.visit_id
+    SELECT '', '', false, path.reached_at - path.created_at
+    FROM path
     WHERE path.n = 1
     UNION ALL
-    SELECT path.block_id, '', true, v.updated_at - path.reached_at
-    FROM path JOIN form_visits v ON v.id = path.visit_id
-    WHERE path.next_at IS NULL AND NOT v.submitted
+    SELECT path.block_id, '', true, path.updated_at - path.reached_at
+    FROM path
+    WHERE path.next_at IS NULL AND NOT path.submitted
     UNION ALL
     SELECT '', v.last_block_id, true, v.updated_at - v.created_at
     FROM form_visits v
@@ -10056,7 +10057,7 @@ spans AS (
       AND NOT v.submitted
       AND v.last_block_id IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM form_visit_pages x WHERE x.visit_id = v.id)
-    AND ($4::text IS NULL OR
+  AND ($4::text IS NULL OR
          (CASE $4::text
               WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
               WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')

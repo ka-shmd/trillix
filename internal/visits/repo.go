@@ -78,7 +78,7 @@ func (Repo) InsertPage(ctx context.Context, db postgres.DBTX, visitID, formID uu
 func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PathCount, error) {
 	from, to := postgres.PeriodBounds(period)
 	kind, keys := segParams(f)
-	rows, err := postgres.New(db).CountVisitPaths(ctx, postgres.CountVisitPathsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	rows, err := postgres.New(postgres.CustomPlans(db)).CountVisitPaths(ctx, postgres.CountVisitPathsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("count visit paths: %w", err)
 	}
@@ -98,7 +98,7 @@ func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PageSpan, error) {
 	from, to := postgres.PeriodBounds(period)
 	kind, keys := segParams(f)
-	rows, err := postgres.New(db).VisitPageDurations(ctx, postgres.VisitPageDurationsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitPageDurations(ctx, postgres.VisitPageDurationsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("visit page durations: %w", err)
 	}
@@ -120,7 +120,7 @@ func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, p
 func (Repo) VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error) {
 	from, to := postgres.PeriodBounds(period)
 	kind, keys := segParams(f)
-	rows, err := postgres.New(db).VisitVersionStats(ctx, postgres.VisitVersionStatsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitVersionStats(ctx, postgres.VisitVersionStatsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("visit version stats: %w", err)
 	}
@@ -162,7 +162,7 @@ func nullText(s string) pgtype.Text {
 func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.LastBlockCount, error) {
 	from, to := postgres.PeriodBounds(period)
 	kind, keys := segParams(f)
-	rows, err := postgres.New(db).CountVisitsByLastBlock(ctx, postgres.CountVisitsByLastBlockParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).CountVisitsByLastBlock(ctx, postgres.CountVisitsByLastBlockParams{
 		FormID:  formID,
 		FromTs:  from,
 		ToTs:    to,
@@ -196,7 +196,7 @@ func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, pe
 		prevFrom = pgtype.Timestamptz{Time: prev.From, Valid: true}
 	}
 	kind, keys := segParams(f)
-	row, err := postgres.New(db).VisitInsights(ctx, postgres.VisitInsightsParams{
+	row, err := postgres.New(postgres.CustomPlans(db)).VisitInsights(ctx, postgres.VisitInsightsParams{
 		FormID:     formID,
 		FromTs:     from,
 		PrevFromTs: prevFrom,
@@ -236,7 +236,7 @@ func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, pe
 // достраивает домен, у которого есть границы периода.
 func (Repo) Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitTimeseries(ctx, postgres.VisitTimeseriesParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitTimeseries(ctx, postgres.VisitTimeseriesParams{
 		FormID: formID,
 		Step:   string(step),
 		FromTs: from,
@@ -260,7 +260,7 @@ func (Repo) Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 // решает домен: здесь только тройки и счётчики.
 func (Repo) Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.SourceRow, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitSources(ctx, postgres.VisitSourcesParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitSources(ctx, postgres.VisitSourcesParams{
 		FormID: formID,
 		FromTs: from,
 		ToTs:   to,
@@ -284,7 +284,7 @@ func (Repo) Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, per
 // UserAgents — сгруппированные строки user-agent. Разбор — в домене.
 func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.UserAgentRow, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitUserAgents(ctx, postgres.VisitUserAgentsParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitUserAgents(ctx, postgres.VisitUserAgentsParams{
 		FormID: formID,
 		FromTs: from,
 		ToTs:   to,
@@ -302,7 +302,7 @@ func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 // Countries — визиты по странам за период. Визиты без гео сюда не попадают.
 func (Repo) Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitCountries(ctx, postgres.VisitCountriesParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitCountries(ctx, postgres.VisitCountriesParams{
 		FormID: formID,
 		FromTs: from,
 		ToTs:   to,
@@ -326,7 +326,7 @@ func (Repo) Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, p
 // разных странах склеивать нельзя.
 func (Repo) Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitCities(ctx, postgres.VisitCitiesParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitCities(ctx, postgres.VisitCitiesParams{
 		FormID: formID,
 		FromTs: from,
 		ToTs:   to,
@@ -357,7 +357,7 @@ type FormConversion struct {
 // ConversionWindows — окна конверсии всех форм с визитами с baseFrom; неделя
 // начинается с recentFrom.
 func (Repo) ConversionWindows(ctx context.Context, db postgres.DBTX, baseFrom, recentFrom time.Time) ([]FormConversion, error) {
-	rows, err := postgres.New(db).ConversionWindows(ctx, postgres.ConversionWindowsParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).ConversionWindows(ctx, postgres.ConversionWindowsParams{
 		RecentFrom: pgtype.Timestamptz{Time: recentFrom, Valid: true},
 		BaseFrom:   pgtype.Timestamptz{Time: baseFrom, Valid: true},
 	})
