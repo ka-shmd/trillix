@@ -1559,12 +1559,11 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 		return domain.Summary{}, err
 	}
 	sum := builder.Result()
-	sum.TrendStep = domain.StepFor(period)
 	if !scope.IsZero() {
 		sum.Unfiltered = &unfiltered
 	}
 	if scope.Withheld(sum.Total) {
-		return domain.Summary{TrendStep: sum.TrendStep, Unfiltered: &unfiltered, Blocks: []domain.BlockSummary{}, Withheld: true}, nil
+		return domain.Summary{Unfiltered: &unfiltered, Blocks: []domain.BlockSummary{}, Withheld: true}, nil
 	}
 	return sum, nil
 }

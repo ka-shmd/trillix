@@ -20,8 +20,12 @@ export const summaryBucketSchema = z.object({
 })
 export type SummaryBucket = z.infer<typeof summaryBucketSchema>
 
+// Медиана стоит рядом со средней не для полноты: у денежных и возрастных вопросов
+// средняя живёт под выбросами («сколько готовы тратить» — среднее 19 934 ₽ при
+// максимуме 148 200). На экране главная медиана, средняя рядом.
 export const numberStatsSchema = z.object({
   avg: z.number(),
+  median: z.number(),
   min: z.number(),
   max: z.number(),
 })
@@ -54,6 +58,10 @@ export const scaleStatsSchema = z.object({
   avg: z.number(),
   // Нет у шкалы не 0–10: у шкалы 1–5 «промоутеров» не бывает.
   nps: z.number().int().optional(),
+  // Шаг ряда — у КАЖДОЙ шкалы свой: ряд укрупняется по своей длине, а у «всего
+  // времени» длина берётся из данных вопроса (domain.CoarsenScalePoints). Раньше
+  // шаг был один на всю сводку и лежал в её корне.
+  step: bucketStepSchema,
   trend: z.array(scalePointSchema),
 })
 export type ScaleStats = z.infer<typeof scaleStatsSchema>
@@ -78,8 +86,6 @@ export type BlockSummary = z.infer<typeof blockSummarySchema>
 export const formSummarySchema = z.object({
   total: z.number().int(),
   blocks: z.array(blockSummarySchema),
-  // Шаг рядов шкал — выбирает сервер по окну, как у ряда визитов.
-  trendStep: bucketStepSchema,
   // Сколько ответов в окне без фильтра («в выборке N из M»); только при фильтре.
   unfiltered: z.number().int().optional(),
   // Сегмент по визиту, в котором меньше 5 ответов: вопросов и чисел нет (ADR §10).

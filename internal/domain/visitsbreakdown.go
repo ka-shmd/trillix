@@ -385,3 +385,44 @@ func CountKnownSources(rows []SourceRow) int {
 	}
 	return n
 }
+
+// CoarsenScalePoints — то же укрупнение, что у ряда визитов, но для УРОВНЯ, а не
+// количества: средние по корзинам складывать нельзя, их надо взвешивать числом
+// ответов. Пустая корзина остаётся пустой — это разрыв линии, а не ноль.
+//
+// Нужно ровно по той же причине: ряд средней шкалы за «всё время» превращался в
+// частокол из сотни дневных точек, скачущих вокруг одного уровня, — кардиограмму,
+// из которой не следует ничего.
+func CoarsenScalePoints(points []ScalePoint, step BucketStep) ([]ScalePoint, BucketStep) {
+	for len(points) > MaxBuckets {
+		next, ok := coarser(step)
+		if !ok {
+			return points, step
+		}
+		points, step = foldScalePoints(points, next), next
+	}
+	return points, step
+}
+
+func foldScalePoints(points []ScalePoint, step BucketStep) []ScalePoint {
+	out := make([]ScalePoint, 0, len(points))
+	// sums идёт рядом с out: в самой точке лежит уже средняя, а для взвешивания
+	// нужна сумма. Держать её в ScalePoint значило бы вынести наружу черновик.
+	sums := make([]float64, 0, len(points))
+	for _, p := range points {
+		at := truncateTo(p.At, step)
+		if n := len(out); n > 0 && out[n-1].At.Equal(at) {
+			sums[n-1] += p.Avg * float64(p.N)
+			out[n-1].N += p.N
+			continue
+		}
+		out = append(out, ScalePoint{At: at, N: p.N})
+		sums = append(sums, p.Avg*float64(p.N))
+	}
+	for i := range out {
+		if out[i].N > 0 {
+			out[i].Avg = sums[i] / float64(out[i].N)
+		}
+	}
+	return out
+}

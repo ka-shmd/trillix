@@ -422,9 +422,10 @@ type summaryBucketResponse struct {
 }
 
 type numberStatsResponse struct {
-	Avg float64 `json:"avg"`
-	Min float64 `json:"min"`
-	Max float64 `json:"max"`
+	Avg    float64 `json:"avg"`
+	Median float64 `json:"median"`
+	Min    float64 `json:"min"`
+	Max    float64 `json:"max"`
 }
 
 // answerSampleResponse — одно показанное значение ответа. Наружу уходит текст, уже
@@ -459,16 +460,18 @@ type scalePointResponse struct {
 }
 
 type scaleStatsResponse struct {
-	Avg   float64              `json:"avg"`
-	NPS   *int                 `json:"nps,omitempty"`
+	Avg float64 `json:"avg"`
+	NPS *int    `json:"nps,omitempty"`
+	// step — фактический шаг ряда: hour | day | week | month. У КАЖДОЙ шкалы свой,
+	// потому что ряд укрупняется по своей длине, а у «всего времени» длина берётся
+	// из данных вопроса (domain.CoarsenScalePoints).
+	Step  string               `json:"step"`
 	Trend []scalePointResponse `json:"trend"`
 }
 
 type summaryResponse struct {
 	Total  int                    `json:"total"`
 	Blocks []blockSummaryResponse `json:"blocks"`
-	// trendStep — шаг рядов шкал: hour | day, выбирает сервер по окну.
-	TrendStep string `json:"trendStep"`
 	// unfiltered — сколько ответов в окне без выборки; только при выборке.
 	Unfiltered *int `json:"unfiltered,omitempty"`
 	// withheld — визитная выборка меньше порога: вопросов и чисел нет.
@@ -549,14 +552,24 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if b.Number != nil {
-			item.Number = &numberStatsResponse{Avg: b.Number.Avg, Min: b.Number.Min, Max: b.Number.Max}
+			item.Number = &numberStatsResponse{
+				Avg:    b.Number.Avg,
+				Median: b.Number.Median,
+				Min:    b.Number.Min,
+				Max:    b.Number.Max,
+			}
 		}
 		if b.Scale != nil {
 			trend := make([]scalePointResponse, len(b.Scale.Trend))
 			for j, p := range b.Scale.Trend {
 				trend[j] = scalePointResponse{At: p.At.UTC().Format(time.RFC3339), N: p.N, Avg: p.Avg}
 			}
-			item.Scale = &scaleStatsResponse{Avg: b.Scale.Avg, NPS: b.Scale.NPS, Trend: trend}
+			item.Scale = &scaleStatsResponse{
+				Avg:   b.Scale.Avg,
+				NPS:   b.Scale.NPS,
+				Step:  string(b.Scale.Step),
+				Trend: trend,
+			}
 		}
 		if len(b.Samples) > 0 {
 			item.Samples = make([]answerSampleResponse, len(b.Samples))
@@ -569,7 +582,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		}
 		blocks[i] = item
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, TrendStep: string(sum.TrendStep), Unfiltered: sum.Unfiltered, Withheld: sum.Withheld})
+	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, Unfiltered: sum.Unfiltered, Withheld: sum.Withheld})
 }
 
 type answerResponse struct {

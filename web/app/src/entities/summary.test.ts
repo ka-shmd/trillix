@@ -67,12 +67,11 @@ const realServerPayload = {
         { key: '9', label: '9', count: 0 },
         { key: '10', label: '10', count: 0 },
       ],
-      // scale и trendStep ниже дописаны по DTO (фаза 30): средняя и NPS шкалы 0–10 с
+      // scale ниже дописан по DTO (фаза 30): средняя и NPS шкалы 0–10 с
       // единственным ответом «0» и ряд по суткам.
-      scale: { avg: 0, nps: -100, trend: [{ at: '2026-08-24T00:00:00Z', n: 1, avg: 0 }] },
+      scale: { avg: 0, nps: -100, step: 'day', trend: [{ at: '2026-08-24T00:00:00Z', n: 1, avg: 0 }] },
     },
   ],
-  trendStep: 'day',
 }
 
 describe('formSummarySchema', () => {
@@ -112,7 +111,6 @@ describe('formSummarySchema', () => {
   it('принимает числовой вопрос со статистикой и без неё', () => {
     const withStats = formSummarySchema.parse({
       total: 1,
-      trendStep: 'day',
       blocks: [
         {
           blockId: 'age',
@@ -121,15 +119,14 @@ describe('formSummarySchema', () => {
           kind: 'number',
           asked: 3,
           answered: 3,
-          number: { avg: 30, min: 20, max: 40 },
+          number: { avg: 30, median: 28, min: 20, max: 40 },
         },
       ],
     })
-    expect(blockAt(withStats, 0).number).toEqual({ avg: 30, min: 20, max: 40 })
+    expect(blockAt(withStats, 0).number).toEqual({ avg: 30, median: 28, min: 20, max: 40 })
 
     const noStats = formSummarySchema.parse({
       total: 1,
-      trendStep: 'day',
       blocks: [
         { blockId: 'age', label: 'Возраст', type: 'number', kind: 'number', asked: 1, answered: 0 },
       ],
@@ -143,7 +140,6 @@ describe('formSummarySchema', () => {
     expect(() =>
       formSummarySchema.parse({
         total: 1,
-        trendStep: 'day',
         blocks: [
           {
             blockId: 'x',

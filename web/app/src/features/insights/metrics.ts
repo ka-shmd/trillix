@@ -10,6 +10,15 @@ export function percentOf(count: number, base: number): number {
   return base > 0 ? Math.round((count / base) * 100) : 0
 }
 
+// Доля строкой. Отличается от percentOf одним случаем, зато важным: значение есть,
+// а округление даёт ноль. «10 · 0 %» владелец читает как поломку — это не ноль, это
+// меньше половины процента.
+export function percentText(count: number, base: number): string {
+  const pct = percentOf(count, base)
+  if (pct === 0 && count > 0 && base > 0) return '<1 %'
+  return `${pct} %`
+}
+
 // Порог малых выборок (ADR §10, спека design/analytics-v2.md §7): при знаменателе
 // меньше этого доля не показывается — остаётся число, — и такой шаг не бывает худшим.
 export const MIN_BASE = 20
