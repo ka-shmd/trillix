@@ -255,7 +255,7 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period d
 	if err != nil {
 		return domain.Funnel{}, err
 	}
-	return domain.BuildFunnel(domain.QuestionOrder(schemas), counts), nil
+	return domain.BuildFunnel(domain.QuestionOrder(schemas), domain.PageOrder(schemas), counts), nil
 }
 
 // Insights — счётчики визитов за период для карточек над вкладками Insights.

@@ -4,7 +4,8 @@ import { formFunnelSchema } from './funnel'
 
 // Фикстура снята РЕАЛЬНЫМ ответом сервера с dev-контура (curl на
 // GET /api/v1/forms/{id}/funnel), а не выдумана: выдуманная проверяла бы схему саму
-// против себя и разошлась бы с Go-DTO молча.
+// против себя и разошлась бы с Go-DTO молча. Поля page и pages дописаны по DTO
+// (internal/visits/handler.go) — у одностраничной формы так отвечает сервер.
 const realResponse = {
   visits: 4,
   submitted: 1,
@@ -13,28 +14,33 @@ const realResponse = {
     {
       blockId: 'blk_2312e361-a9de-47d8-9269-f8c3f5856861',
       label: 'пишу какой-то вопрос',
+      page: '',
       reached: 2,
       droppedHere: 0,
     },
     {
       blockId: 'blk_db910474-f77f-42a8-929f-7abae4ecb0db',
       label: '(без названия) blk_db910474-f77f-42a8-929f-7abae4ecb0db',
+      page: '',
       reached: 1,
       droppedHere: 0,
     },
     {
       blockId: 'blk_6dda4c84-3f91-430e-ad56-9f45bcb0f42e',
       label: '(без названия) blk_6dda4c84-3f91-430e-ad56-9f45bcb0f42e',
+      page: '',
       reached: 1,
       droppedHere: 0,
     },
     {
       blockId: 'blk_0d92eac2-7112-46b8-8134-3669fab80e49',
       label: 'пишу еще какой-то вопрос',
+      page: '',
       reached: 1,
       droppedHere: 1,
     },
   ],
+  pages: [],
 }
 
 describe('formFunnelSchema', () => {
@@ -69,6 +75,7 @@ describe('formFunnelSchema', () => {
       submitted: 0,
       leftBeforeFirst: 0,
       steps: [],
+      pages: [],
     })
     expect(parsed.steps).toEqual([])
   })

@@ -84,8 +84,20 @@ func newServer(t *testing.T) *httptest.Server {
 
 const oneQuestionSchema = `{"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":true,"settings":{}}]}`
 
+// twoPageSchema — две страницы: «Имя» на первой, «Телефон» на второй «Контакты».
+const twoPageSchema = `{"blocks":[` +
+	`{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","settings":{}},` +
+	`{"id":"pb1","groupId":"g_pb1","type":"page_break","settings":{"pageName":"Контакты"}},` +
+	`{"id":"t_b2","groupId":"g_b2","type":"title","text":[{"t":"Телефон"}]},{"id":"b2","groupId":"g_b2","type":"phone","settings":{}}]}`
+
 // publishedForm создаёт пользователя, форму и публикует её; возвращает slug.
 func publishedForm(t *testing.T) string {
+	t.Helper()
+	return publishedFormWith(t, oneQuestionSchema)
+}
+
+// publishedFormWith — то же с заданной схемой.
+func publishedFormWith(t *testing.T, schema string) string {
 	t.Helper()
 	ctx := context.Background()
 	authSvc := auth.NewService(testPool, postgres.TxRunner{Pool: testPool}, auth.Repo{}, pgtest.MailService(testPool), time.Hour, "")
@@ -102,7 +114,7 @@ func publishedForm(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("create form: %v", err)
 	}
-	if _, err := formsSvc.UpdateDraftSchema(ctx, user.ID, form.ID, json.RawMessage(oneQuestionSchema), form.UpdatedAt); err != nil {
+	if _, err := formsSvc.UpdateDraftSchema(ctx, user.ID, form.ID, json.RawMessage(schema), form.UpdatedAt); err != nil {
 		t.Fatalf("save schema: %v", err)
 	}
 	if _, err := formsSvc.Publish(ctx, user.ID, form.ID); err != nil {
@@ -462,6 +474,46 @@ func TestFunnel_EndToEnd(t *testing.T) {
 	// Ядро шага: отправивший коснулся b1 последним, но отвалом не является.
 	if step.DroppedHere != 2 {
 		t.Errorf("DroppedHere = %d, ждали 2: отправивший не отвал", step.DroppedHere)
+	}
+}
+
+// Многостраничная форма: шаги-страницы с именем с разрыва, вопросы по страницам.
+func TestFunnel_Pages(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedFormWith(t, twoPageSchema)
+	formID, userID := formOwner(t, slug)
+
+	// Двое бросили на первой странице, трое дошли до второй, из них один отправил.
+	for i := 0; i < 2; i++ {
+		id := domain.NewID().String()
+		beacon(t, srv, slug, id, 0, "")
+		beacon(t, srv, slug, id, 1, "b1")
+	}
+	for i := 0; i < 3; i++ {
+		id := domain.NewID().String()
+		beacon(t, srv, slug, id, 0, "")
+		beacon(t, srv, slug, id, 1, "b2")
+	}
+
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Funnel: %v", err)
+	}
+	want := []domain.FunnelPage{
+		{Key: "", Label: "Страница 1", Reached: 5, DroppedHere: 2},
+		{Key: "pb1", Label: "Контакты", Reached: 3, DroppedHere: 3},
+	}
+	if len(f.Pages) != len(want) {
+		t.Fatalf("страниц %d, ждали %d: %+v", len(f.Pages), len(want), f.Pages)
+	}
+	for i, w := range want {
+		if f.Pages[i] != w {
+			t.Errorf("страница %d = %+v, ждали %+v", i, f.Pages[i], w)
+		}
+	}
+	if len(f.Steps) != 2 || f.Steps[1].BlockID != "b2" || f.Steps[1].Page != "pb1" {
+		t.Errorf("шаги-вопросы: %+v", f.Steps)
 	}
 }
 

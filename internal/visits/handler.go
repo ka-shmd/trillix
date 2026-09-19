@@ -44,6 +44,14 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 type funnelStepResponse struct {
 	BlockID     string `json:"blockId"`
 	Label       string `json:"label"`
+	Page        string `json:"page"`
+	Reached     int    `json:"reached"`
+	DroppedHere int    `json:"droppedHere"`
+}
+
+type funnelPageResponse struct {
+	Key         string `json:"key"`
+	Label       string `json:"label"`
 	Reached     int    `json:"reached"`
 	DroppedHere int    `json:"droppedHere"`
 }
@@ -53,6 +61,8 @@ type funnelResponse struct {
 	Submitted       int                  `json:"submitted"`
 	LeftBeforeFirst int                  `json:"leftBeforeFirst"`
 	Steps           []funnelStepResponse `json:"steps"`
+	// Pages пуст у одностраничной формы — по нему экран и выбирает, чем считать шаги.
+	Pages []funnelPageResponse `json:"pages"`
 }
 
 // funnel отдаёт воронку формы: сколько визитов дошло до каждого вопроса и сколько
@@ -102,15 +112,21 @@ func (h *Handler) funnel(w http.ResponseWriter, r *http.Request) {
 		steps[i] = funnelStepResponse{
 			BlockID:     s.BlockID,
 			Label:       s.Label,
+			Page:        s.Page,
 			Reached:     s.Reached,
 			DroppedHere: s.DroppedHere,
 		}
+	}
+	pages := make([]funnelPageResponse, len(f.Pages))
+	for i, p := range f.Pages {
+		pages[i] = funnelPageResponse{Key: p.Key, Label: p.Label, Reached: p.Reached, DroppedHere: p.DroppedHere}
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, funnelResponse{
 		Visits:          f.Visits,
 		Submitted:       f.Submitted,
 		LeftBeforeFirst: f.LeftBeforeFirst,
 		Steps:           steps,
+		Pages:           pages,
 	})
 }
 

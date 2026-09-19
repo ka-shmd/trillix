@@ -26,6 +26,8 @@ type LastBlockCount struct {
 type FunnelStep struct {
 	BlockID string
 	Label   string
+	// Page — ключ страницы вопроса (Page.Key); у одностраничной формы пуст.
+	Page string
 	// Reached — сколько визитов дошло ДО этого вопроса: остановившиеся на нём плюс
 	// все, кто оказался дальше, включая отправивших. Невозрастает по шагам.
 	Reached int
@@ -47,6 +49,19 @@ type Funnel struct {
 	// вопрос внутри.
 	LeftBeforeFirst int
 	Steps           []FunnelStep
+	// Pages — шаги-страницы многостраничной формы (PageOrder); пусто у одностраничной.
+	// Вопросы в Steps тогда идут по страницам, и вопросы одной страницы стоят подряд.
+	Pages []FunnelPage
+}
+
+// FunnelPage — шаг воронки многостраничной формы: страница целиком.
+type FunnelPage struct {
+	Key   string
+	Label string
+	// Reached — дошли до страницы: закончившие визит на её вопросах или дальше.
+	Reached int
+	// DroppedHere — остановились на её вопросах и форму НЕ отправили.
+	DroppedHere int
 }
 
 // BuildFunnel собирает воронку.
@@ -63,7 +78,12 @@ type Funnel struct {
 // остаются в Visits (они были), но ни в один Reached не входят — из-за чего
 // Reached первого шага может быть меньше, чем Visits − LeftBeforeFirst. Это
 // честнее, чем тихо прибавить мусор к реальному вопросу.
-func BuildFunnel(questions []Question, counts []LastBlockCount) Funnel {
+//
+// pages — страницы формы (PageOrder), nil у одностраничной. Если они есть, вопросы
+// переставляются по страницам: вопрос, оставшийся только в прежней версии, встаёт в
+// конец СВОЕЙ страницы, а не в конец формы, — иначе «дошли» у вопросов последней
+// страницы включало бы ушедших с первой.
+func BuildFunnel(questions []Question, pages []Page, counts []LastBlockCount) Funnel {
 	var f Funnel
 
 	// endedAt — все закончившие на блоке (для Reached), droppedAt — только не
@@ -89,9 +109,21 @@ func BuildFunnel(questions []Question, counts []LastBlockCount) Funnel {
 		}
 	}
 
-	f.Steps = make([]FunnelStep, len(questions))
-	for i, q := range questions {
-		f.Steps[i] = FunnelStep{BlockID: q.ID, Label: q.Label, DroppedHere: droppedAt[q.ID]}
+	f.Steps = make([]FunnelStep, 0, len(questions))
+	if len(pages) == 0 {
+		for _, q := range questions {
+			f.Steps = append(f.Steps, FunnelStep{BlockID: q.ID, Label: q.Label, DroppedHere: droppedAt[q.ID]})
+		}
+	} else {
+		labels := make(map[string]string, len(questions))
+		for _, q := range questions {
+			labels[q.ID] = q.Label
+		}
+		for _, p := range pages {
+			for _, id := range p.QuestionIDs {
+				f.Steps = append(f.Steps, FunnelStep{BlockID: id, Label: labels[id], Page: p.Key, DroppedHere: droppedAt[id]})
+			}
+		}
 	}
 
 	// Reached считается с конца: дошедшие до вопроса i — это закончившие на нём плюс
@@ -100,6 +132,22 @@ func BuildFunnel(questions []Question, counts []LastBlockCount) Funnel {
 	for i := len(f.Steps) - 1; i >= 0; i-- {
 		running += endedAt[f.Steps[i].BlockID]
 		f.Steps[i].Reached = running
+	}
+
+	// Вопросы страницы стоят подряд, поэтому «дошли до страницы» — это «дошли до её
+	// первого вопроса», а отвал страницы — сумма отвалов её вопросов.
+	if len(pages) > 0 {
+		f.Pages = make([]FunnelPage, len(pages))
+		byKey := make(map[string]int, len(pages))
+		for i, p := range pages {
+			f.Pages[i] = FunnelPage{Key: p.Key, Label: p.Label}
+			byKey[p.Key] = i
+		}
+		for i := len(f.Steps) - 1; i >= 0; i-- {
+			pg := &f.Pages[byKey[f.Steps[i].Page]]
+			pg.Reached = f.Steps[i].Reached
+			pg.DroppedHere += f.Steps[i].DroppedHere
+		}
 	}
 	return f
 }
