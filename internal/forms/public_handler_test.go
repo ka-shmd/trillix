@@ -220,10 +220,10 @@ func TestPublicGet_Published_ReturnsSchemaAndValidToken(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("статус %d, ожидалось 200", rec.Code)
 	}
-	// В ETag не только id версии, но и состояние бейджа: тариф меняется без
-	// переиздания, и без метки клиент вечно получал бы 304 с прежним телом.
-	if got := rec.Header().Get("ETag"); got != `"`+vid.String()+`+b`+`"` {
-		t.Fatalf("ETag = %q, ожидался id версии с меткой бейджа", got)
+	// Id версии в ETag — схема; живые поля тела покрывает хеш после него
+	// (public_etag_test.go).
+	if got := rec.Header().Get("ETag"); !strings.HasPrefix(got, `"`+vid.String()+`-`) || !strings.HasSuffix(got, `"`) {
+		t.Fatalf("ETag = %q, ожидался id версии с хешем представления", got)
 	}
 	if cc := rec.Header().Get("Cache-Control"); cc != "public, max-age=60" {
 		t.Fatalf("Cache-Control = %q", cc)
@@ -320,8 +320,10 @@ func TestPublicGet_LimitReached_Returns410Default(t *testing.T) {
 func TestPublicGet_IfNoneMatch_Returns304(t *testing.T) {
 	vid := uuid.New()
 	svc := fakePublicSvc{pf: WithDocument(PublicForm{PublicFormRef: PublicFormRef{Version: 1, VersionID: vid, Status: domain.FormStatusPublished}, Title: "x", Schema: json.RawMessage(`{}`)})}
+	first := httptest.NewRecorder()
+	newPublicMux(t, svc).ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil))
 	req := httptest.NewRequest(http.MethodGet, "/public/v1/forms/abc", nil)
-	req.Header.Set("If-None-Match", `"`+vid.String()+`+b`+`"`)
+	req.Header.Set("If-None-Match", first.Header().Get("ETag"))
 
 	rec := httptest.NewRecorder()
 	newPublicMux(t, svc).ServeHTTP(rec, req)

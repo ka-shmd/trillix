@@ -2,6 +2,8 @@ package forms
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -183,7 +185,7 @@ func (h *PublicHandler) Routes(mux *http.ServeMux) {
 // publicFormResponse — тело GET /public/v1/forms/{slug}.
 //
 // Токена времени здесь НЕТ и быть не должно: ответ кэшируемый (max-age=60 плюс
-// иммутабельный ETag), а значит его возраст измерял бы возраст записи в кэше
+// ETag), а значит его возраст измерял бы возраст записи в кэше
 // браузера, а не время заполнения формы. Токен приезжает отдельной некэшируемой
 // ручкой /public/v1/form-token — ADR §10.
 type publicFormResponse struct {
@@ -402,25 +404,37 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// ETag = id опубликованной версии: иммутабелен, меняется только при новой
-	// публикации. Кэш 60 с — терпимо для формы (правки видны после переиздания).
+	// Тело без схемы собирается ДО ветки 304: всё в нём — живые колонки формы и
+	// решения сервера (тумблеры, тариф, расписание, согласие), которые меняются без
+	// перепубликации, и ETag считается по нему (см. viewETag).
 	//
-	// ПЛЮС СОСТОЯНИЕ БЕЙДЖА: оно не часть версии, а часть ПРЕДСТАВЛЕНИЯ, и меняется
-	// от тумблера автора и от смены тарифа, а не от переиздания. Без него автор,
-	// снявший бейдж (или подписавшийся), получал бы на каждый повторный запрос 304 с
-	// прежним телом — то есть бейдж оставался бы у всех, кто уже открывал форму,
-	// пока не сменится версия.
-	showBadge := h.showBadge(r, pf.WorkspaceID, pf.Branding)
-	// Счётчик Метрики — тоже свойство выдачи (тумблер автора плюс тариф), поэтому он
-	// решается здесь же и входит в ETag вместе с бейджем.
-	metrika := h.metrika(r, pf.WorkspaceID, pf.MetrikaCounter)
+	// МИНА: поле тела, выставленное ниже ветки 304, в ETag не попадёт, и после его
+	// смены уже открывавший форму получит 304 с прежним значением до новой версии.
+	// Ниже выставляется только Schema — она покрыта id версии.
+	resp := publicFormResponse{
+		Title:           pf.Title,
+		Version:         pf.Version,
+		ShowBadge:       h.showBadge(r, pf.WorkspaceID, pf.Branding),
+		CollectPartial:  h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
+		Progress:        pf.Progress,
+		AutoJump:        pf.AutoJump,
+		SaveLocally:     pf.SaveLocally,
+		AllowBack:       pf.AllowBack,
+		Booking:         h.bookingFacts(r, pf.ScheduleID),
+		Metrika:         h.metrika(r, pf.WorkspaceID, pf.MetrikaCounter),
+		ConsentRevision: consentRevisionString(pf.ConsentRevisionID),
+	}
 	// Форма под паролем кэша не получает ВОВСЕ — ни публичного, ни ETag'а: no-store
 	// поставлен выше, и перебивать его здесь нельзя. Публичный max-age у тела с
 	// вопросами означал бы, что общий прокси раздаёт содержимое закрытой формы
 	// кому угодно, а сама выдача зависит от заголовка запроса, которого нет в ключе
 	// кэша. Минута кэша разблокированной формы того не стоит.
 	if len(pf.PasswordSealed) == 0 {
-		etag := `"` + pf.VersionID.String() + viewETagSuffix(showBadge, pf.Progress, pf.AutoJump, pf.SaveLocally, pf.AllowBack, metrika, pf.ConsentRevisionID) + `"`
+		etag, err := viewETag(pf.VersionID, resp)
+		if err != nil {
+			httpserver.WriteError(w, r, fmt.Errorf("etag of public form %s: %w", r.PathValue("slug"), err))
+			return
+		}
 		w.Header().Set("Cache-Control", "public, max-age=60")
 		w.Header().Set("ETag", etag)
 		if etagMatches(r.Header.Get("If-None-Match"), etag) {
@@ -448,21 +462,9 @@ func (h *PublicHandler) get(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, fmt.Errorf("marshal public schema %s: %w", r.PathValue("slug"), err))
 		return
 	}
+	resp.Schema = schema
 
-	httpserver.WriteJSON(w, r, http.StatusOK, publicFormResponse{
-		Title:           pf.Title,
-		Version:         pf.Version,
-		Schema:          schema,
-		ShowBadge:       showBadge,
-		CollectPartial:  h.collectPartial(r, pf.WorkspaceID, pf.CollectPartial),
-		Progress:        pf.Progress,
-		AutoJump:        pf.AutoJump,
-		SaveLocally:     pf.SaveLocally,
-		AllowBack:       pf.AllowBack,
-		Booking:         h.bookingFacts(r, pf.ScheduleID),
-		Metrika:         metrika,
-		ConsentRevision: consentRevisionString(pf.ConsentRevisionID),
-	})
+	httpserver.WriteJSON(w, r, http.StatusOK, resp)
 }
 
 func consentRevisionString(id *uuid.UUID) *string {
@@ -528,41 +530,18 @@ func (h *PublicHandler) showBadge(r *http.Request, workspaceID uuid.UUID, intent
 	return show
 }
 
-// viewETagSuffix — метка ПРЕДСТАВЛЕНИЯ в ETag: всё, что меняет тело ответа, не меняя
-// опубликованной версии. Сегодня это бейдж (тумблер автора плюс тариф) и шкала
-// прогресса (тумблер автора). Отдельной функцией, а не тернарником по месту: суффикс
-// участвует в сравнении с If-None-Match, и обе стороны обязаны считать его одинаково.
-//
-// МИНА: забытый здесь признак означает 304 с прежним телом до самой перепубликации —
-// автор переключил тумблер, а все, кто форму уже открывал, видят старое.
-func viewETagSuffix(showBadge, progress, autoJump, saveLocally, allowBack bool, metrika *string, consent *uuid.UUID) string {
-	suffix := ""
-	if showBadge {
-		suffix += "+b"
+// viewETag — ETag публичной формы: `"<id версии>-<хеш тела без схемы>"`. Схема
+// неизменна в пределах версии и покрыта её id; остальное тело хешируется целиком,
+// поэтому новое поле ответа попадает в ETag без правок здесь. 16 hex-знаков SHA-256
+// различают состояния одной версии одной формы — большего от них не требуется.
+func viewETag(versionID uuid.UUID, view publicFormResponse) (string, error) {
+	view.Schema = nil
+	raw, err := json.Marshal(view)
+	if err != nil {
+		return "", fmt.Errorf("marshal view: %w", err)
 	}
-	if progress {
-		suffix += "+p"
-	}
-	if autoJump {
-		suffix += "+j"
-	}
-	if saveLocally {
-		suffix += "+s"
-	}
-	if allowBack {
-		suffix += "+k"
-	}
-	// Номер, а не признак «счётчик есть»: смена номера тоже меняет тело ответа. Номер —
-	// только цифры (CHECK миграции 0067), кавычку ETag он не порвёт.
-	if metrika != nil {
-		suffix += "+m" + *metrika
-	}
-	// Id ревизии, а не признак «согласие есть»: новая ревизия меняет id в теле ответа, и
-	// без него рендерер отправлял бы ответ с прежней ревизией.
-	if consent != nil {
-		suffix += "+c" + consent.String()
-	}
-	return suffix
+	sum := sha256.Sum256(raw)
+	return `"` + versionID.String() + "-" + hex.EncodeToString(sum[:8]) + `"`, nil
 }
 
 // closedMessageOrDefault — свой текст владельца, если задан, иначе дефолт.
