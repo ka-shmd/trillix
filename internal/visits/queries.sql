@@ -244,24 +244,48 @@ GROUP BY 1, 2, 3, 4;
 --
 -- Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
 -- второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
-SELECT count(*)::bigint                                        AS visits,
-       count(*) FILTER (WHERE submitted)::bigint               AS submitted,
-       count(DISTINCT visitor_key)::bigint                     AS unique_visitors,
-       count(*) FILTER (WHERE updated_at > created_at)::bigint AS timed_visits,
+--
+-- Колонки *_prev — прошлое окно той же длины (сравнение на карточках, спека
+-- design/analytics-v2.md §8), тем же сканом: выборка начинается с prev_from, окна
+-- разводит FILTER. Без сравнения prev_from = from_ts, и *_prev нулевые.
+-- started — начали отвечать: тронули вопрос или отправили (верх воронки без
+-- ушедших сразу), нужен прошлому окну карточек «Отвалов».
+SELECT
+       count(*) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz)::bigint AS visits,
+       count(*) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz AND submitted)::bigint AS submitted,
+       count(*) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz AND (last_block_id IS NOT NULL OR submitted))::bigint AS started,
+       count(DISTINCT visitor_key) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz)::bigint AS unique_visitors,
+       count(*) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz AND updated_at > created_at)::bigint AS timed_visits,
        coalesce(
            percentile_cont(0.5) WITHIN GROUP (
                ORDER BY extract(epoch FROM updated_at - created_at)
-           ) FILTER (WHERE updated_at > created_at),
-       0)::float8                                              AS median_duration_sec,
-       count(*) FILTER (WHERE submitted AND updated_at > created_at)::bigint AS timed_completions,
+           ) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz AND updated_at > created_at),
+       0)::float8 AS median_duration_sec,
+       count(*) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz AND submitted AND updated_at > created_at)::bigint AS timed_completions,
        coalesce(
            percentile_cont(0.5) WITHIN GROUP (
                ORDER BY extract(epoch FROM updated_at - created_at)
-           ) FILTER (WHERE submitted AND updated_at > created_at),
-       0)::float8                                              AS completion_duration_sec
+           ) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz AND submitted AND updated_at > created_at),
+       0)::float8 AS completion_duration_sec,
+       count(*) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz)::bigint AS visits_prev,
+       count(*) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz AND submitted)::bigint AS submitted_prev,
+       count(*) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz AND (last_block_id IS NOT NULL OR submitted))::bigint AS started_prev,
+       count(DISTINCT visitor_key) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz)::bigint AS unique_visitors_prev,
+       count(*) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz AND updated_at > created_at)::bigint AS timed_visits_prev,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz AND updated_at > created_at),
+       0)::float8 AS median_duration_sec_prev,
+       count(*) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz AND submitted AND updated_at > created_at)::bigint AS timed_completions_prev,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz AND submitted AND updated_at > created_at),
+       0)::float8 AS completion_duration_sec_prev
 FROM form_visits
 WHERE form_id = $1
-  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at >= sqlc.arg(prev_from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz
   AND (sqlc.narg(seg_kind)::text IS NULL OR
        (CASE sqlc.narg(seg_kind)::text

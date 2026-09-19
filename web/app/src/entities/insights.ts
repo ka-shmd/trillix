@@ -5,7 +5,7 @@ import { z } from 'zod'
 //
 // Про ответы здесь ничего нет и быть не может: ответы и визиты — два независимых
 // множества (docs/ANALYTICS.md §1), и число ответов приезжает своим запросом.
-export const visitInsightsSchema = z.object({
+const insightsCountersSchema = z.object({
   visits: z.number().int(),
   submitted: z.number().int(),
   // uniqueVisitors — сколько РАЗНЫХ посетителей. Ключ посетителя суточный, поэтому
@@ -19,5 +19,14 @@ export const visitInsightsSchema = z.object({
   // Длительность ЗАВЕРШЕНИЯ формы и её знаменатель — карточки вкладки «Отвалы».
   timedCompletions: z.number().int(),
   completionDurationSec: z.number(),
+  // Начали отвечать: тронули вопрос или отправили.
+  started: z.number().int(),
+})
+
+// previous — те же числа за прошлое окно той же длины (фаза 30, сравнение на
+// карточках); нет у «всего времени».
+export const visitInsightsSchema = insightsCountersSchema.extend({
+  previous: insightsCountersSchema.optional(),
 })
 export type VisitInsights = z.infer<typeof visitInsightsSchema>
+export type InsightsCounters = z.infer<typeof insightsCountersSchema>

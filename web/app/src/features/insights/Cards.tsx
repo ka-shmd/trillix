@@ -3,9 +3,9 @@ import { useQuery } from '@tanstack/react-query'
 import { formDetailQueryOptions } from '../forms/queries'
 import { submissionsCountQueryOptions } from '../submissions/queries'
 import { visitInsightsQueryOptions } from './queries'
-import { conversionText } from './metrics'
+import { conversionText, countDelta, durationDelta, rateDelta } from './metrics'
 import { formatDuration } from '../../shared/format'
-import { type Period } from '../../shared/period'
+import { previousPeriodLabels, type Period } from '../../shared/period'
 
 // Полоса карточек над вкладками аналитики.
 //
@@ -27,23 +27,39 @@ import { type Period } from '../../shared/period'
 // Разметка — dt/dd внутри dl полосы, а не заголовок с абзацем: подпись карточки это
 // имя величины, а не раздел страницы. Заголовком она попадала в оглавление
 // скринридера вперемешку с настоящими разделами.
+//
+// delta — изменение к прошлому окну той же длины (metrics.ts: countDelta и соседи),
+// compareLabel — с чем сравнили («к прошлым 7 дням»). Нет изменения — нет и строки.
 export function Card({
   title,
   value,
   pending,
+  delta,
+  compareLabel,
 }: {
   title: string
   value: number | string | undefined
   pending: boolean
+  delta?: string | null
+  compareLabel?: string
 }) {
   return (
     <div className="rounded-lg bg-muted/50 px-4 py-3">
       <dt className="text-sm text-muted-foreground">{title}</dt>
       <dd className="mt-0.5 text-xl font-bold tabular-nums">
         {pending ? <span className="text-muted-foreground">…</span> : (value ?? '—')}
+        {!pending && delta && compareLabel && (
+          <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
+            {delta} {compareLabel}
+          </span>
+        )}
       </dd>
     </div>
   )
+}
+
+function compareLabelFor(period: Period): string | undefined {
+  return period === 'all' ? undefined : previousPeriodLabels[period]
 }
 
 // VisitCards — трафик: вкладки «Ответы» и «Визиты».
@@ -63,16 +79,45 @@ export function VisitCards({ slug, period }: { slug: string; period: Period }) {
     enabled: formId !== undefined,
   })
   const measured = visits.data !== undefined && visits.data.timedVisits > 0
+  const v = visits.data
+  const prev = v?.previous
+  const label = compareLabelFor(period)
 
   return (
     <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Card title="Визиты" value={visits.data?.visits} pending={visits.isPending} />
-      <Card title="Ответы" value={answers.data?.submissions} pending={answers.isPending} />
-      <Card title="Уникальные" value={visits.data?.uniqueVisitors} pending={visits.isPending} />
+      <Card
+        title="Визиты"
+        value={v?.visits}
+        pending={visits.isPending}
+        delta={v && countDelta(v.visits, prev?.visits)}
+        compareLabel={label}
+      />
+      <Card
+        title="Ответы"
+        value={answers.data?.submissions}
+        pending={answers.isPending}
+        delta={answers.data && countDelta(answers.data.submissions, answers.data.previous)}
+        compareLabel={label}
+      />
+      <Card
+        title="Уникальные"
+        value={v?.uniqueVisitors}
+        pending={visits.isPending}
+        delta={v && countDelta(v.uniqueVisitors, prev?.uniqueVisitors)}
+        compareLabel={label}
+      />
       <Card
         title="Длительность визита"
         value={measured ? formatDuration(visits.data.medianDurationSec) : undefined}
         pending={visits.isPending}
+        delta={
+          v &&
+          durationDelta(
+            { sec: v.medianDurationSec, samples: v.timedVisits },
+            prev && { sec: prev.medianDurationSec, samples: prev.timedVisits },
+          )
+        }
+        compareLabel={label}
       />
     </dl>
   )
@@ -117,15 +162,53 @@ export function CompletionCards({
       ? conversionText(completed, started)
       : undefined
 
+  // Прошлое окно — из счётчиков визитов: воронку за прошлое окно ради четырёх чисел
+  // никто не считает, а «начали» и «отправили» там те же.
+  const prev = visits.data?.previous
+  const label = compareLabelFor(period)
+
   return (
     <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Card title="Начали отвечать" value={started} pending={pending} />
-      <Card title="Завершили" value={completed} pending={pending} />
-      <Card title="Доля завершивших" value={rate} pending={pending} />
+      <Card
+        title="Начали отвечать"
+        value={started}
+        pending={pending}
+        delta={started === undefined ? null : countDelta(started, prev?.started)}
+        compareLabel={label}
+      />
+      <Card
+        title="Завершили"
+        value={completed}
+        pending={pending}
+        delta={completed === undefined ? null : countDelta(completed, prev?.submitted)}
+        compareLabel={label}
+      />
+      <Card
+        title="Доля завершивших"
+        value={rate}
+        pending={pending}
+        delta={
+          started === undefined || completed === undefined
+            ? null
+            : rateDelta(
+                { part: completed, base: started },
+                prev && { part: prev.submitted, base: prev.started },
+              )
+        }
+        compareLabel={label}
+      />
       <Card
         title="Длительность заполнения"
         value={measured ? formatDuration(visits.data.completionDurationSec) : undefined}
         pending={visits.isPending}
+        delta={
+          visits.data &&
+          durationDelta(
+            { sec: visits.data.completionDurationSec, samples: visits.data.timedCompletions },
+            prev && { sec: prev.completionDurationSec, samples: prev.timedCompletions },
+          )
+        }
+        compareLabel={label}
       />
     </dl>
   )

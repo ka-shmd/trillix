@@ -187,7 +187,7 @@ type Store interface {
 	GetForPrint(ctx context.Context, db postgres.DBTX, formID, id uuid.UUID) (PrintRow, error)
 	ListForDelivery(ctx context.Context, db postgres.DBTX, formID uuid.UUID, ids []uuid.UUID) ([]Submission, error)
 	ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, cursorID uuid.UUID, limit int32, period domain.Period) ([]Submission, error)
-	CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error)
+	CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period) (current, previous int64, err error)
 	// CountSubmissions — ВСЕ ответы формы (включая скрытые тарифом): нужен
 	// жёсткому капу формы, у которого своя семантика.
 	CountSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.UUID) (int64, error)
@@ -1590,15 +1590,26 @@ func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, bl
 // CountInPeriod — сколько видимых ответов пришло за окно наблюдения. Карточка
 // «Ответы» над вкладками Insights; гейта тарифа нет (счётчик своих же ответов
 // платным быть не может), авторизация — та же, что у листинга.
-func (s *Service) CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error) {
+//
+// previous — то же за прошлое окно той же длины (сравнение на карточке); nil у
+// «всего времени».
+func (s *Service) CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (count int, previous *int, err error) {
 	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	n, err := s.repo.CountInPeriod(ctx, s.db, formID, period)
+	var prev *domain.Period
+	if p, ok := domain.PreviousPeriod(period, s.now()); ok {
+		prev = &p
+	}
+	cur, prevN, err := s.repo.CountInPeriod(ctx, s.db, formID, period, prev)
 	if err != nil {
-		return 0, err
+		return 0, nil, err
 	}
-	return int(n), nil
+	if prev != nil {
+		n := int(prevN)
+		previous = &n
+	}
+	return int(cur), previous, nil
 }
 
 // DeleteForForm удаляет один ответ формы (GDPR-гигиена). Порядок: авторизация

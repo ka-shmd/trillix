@@ -70,6 +70,7 @@ type fakeStore struct {
 	paths       []domain.PathCount
 	spans       []domain.PageSpan
 	filter      domain.VisitFilter // фильтр сегмента, с которым сервис пришёл в стор
+	prev        *domain.Period     // прошлое окно карточек
 	versionStat map[uuid.UUID]domain.VersionStat
 	marked      []uuid.UUID
 	byLastBlock []domain.LastBlockCount
@@ -130,8 +131,8 @@ func (s *fakeStore) CountByLastBlock(_ context.Context, _ postgres.DBTX, _ uuid.
 	return s.byLastBlock, nil
 }
 
-func (s *fakeStore) Insights(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period, f domain.VisitFilter) (domain.VisitInsights, error) {
-	s.period, s.filter = period, f
+func (s *fakeStore) Insights(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period, prev *domain.Period, f domain.VisitFilter) (domain.VisitInsights, error) {
+	s.period, s.filter, s.prev = period, f, prev
 	return s.insights, nil
 }
 
@@ -826,5 +827,26 @@ func TestVersions_FreshFirstOnlyWithVisits(t *testing.T) {
 	}
 	if !got[0].PublishedAt.Equal(published) || got[0].Visits != 30 || got[0].Submitted != 15 {
 		t.Errorf("версия 2: %+v", got[0])
+	}
+}
+
+// Карточки сравнивают окно с прошлым той же длины; у «всего времени» прошлого нет.
+func TestInsights_PreviousWindow(t *testing.T) {
+	store := &fakeStore{}
+	svc := segmentSvc(openPlans(), store, nil)
+	svc.now = func() time.Time { return now }
+
+	week := domain.Period{From: now.AddDate(0, 0, -7)}
+	if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), week, domain.Segment{}); err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if store.prev == nil || !store.prev.From.Equal(now.AddDate(0, 0, -14)) || !store.prev.To.Equal(week.From) {
+		t.Errorf("прошлое окно: %+v", store.prev)
+	}
+	if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{}); err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if store.prev != nil {
+		t.Errorf("у всего времени прошлое окно: %+v", store.prev)
 	}
 }

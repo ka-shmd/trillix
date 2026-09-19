@@ -34,6 +34,14 @@ export const periodLabels: Record<Period, string> = {
   '30d': '30 дней',
 }
 
+// С чем сравнивается окно на карточках: с прошлым окном той же длины. У «всего
+// времени» сравнения нет.
+export const previousPeriodLabels: Record<Exclude<Period, 'all'>, string> = {
+  '24h': 'к прошлым суткам',
+  '7d': 'к прошлым 7 дням',
+  '30d': 'к прошлым 30 дням',
+}
+
 const periodHours: Record<Exclude<Period, 'all'>, number> = {
   '24h': 24,
   '7d': 24 * 7,

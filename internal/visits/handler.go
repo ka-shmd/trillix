@@ -170,6 +170,28 @@ type insightsResponse struct {
 	// Карточки вкладки «Отвалы»: длительность ЗАВЕРШЕНИЯ формы и её знаменатель.
 	TimedCompletions      int     `json:"timedCompletions"`
 	CompletionDurationSec float64 `json:"completionDurationSec"`
+	// started — начали отвечать; previous — то же за прошлое окно той же длины (нет
+	// у «всего времени»).
+	Started  int               `json:"started"`
+	Previous *insightsResponse `json:"previous,omitempty"`
+}
+
+func insightsDTO(in domain.VisitInsights) insightsResponse {
+	out := insightsResponse{
+		Visits:                in.Visits,
+		Submitted:             in.Submitted,
+		UniqueVisitors:        in.UniqueVisitors,
+		TimedVisits:           in.TimedVisits,
+		MedianDurationSec:     in.MedianDurationSec,
+		TimedCompletions:      in.TimedCompletions,
+		CompletionDurationSec: in.CompletionDurationSec,
+		Started:               in.Started,
+	}
+	if in.Previous != nil {
+		prev := insightsDTO(*in.Previous)
+		out.Previous = &prev
+	}
+	return out
 }
 
 // insights отдаёт счётчики визитов за период. Число ответов формы сюда не входит —
@@ -203,15 +225,7 @@ func (h *Handler) insights(w http.ResponseWriter, r *http.Request) {
 		slog.Int("visits", in.Visits),
 		slog.Duration("duration", time.Since(start)),
 	)
-	httpserver.WriteJSON(w, r, http.StatusOK, insightsResponse{
-		Visits:                in.Visits,
-		Submitted:             in.Submitted,
-		UniqueVisitors:        in.UniqueVisitors,
-		TimedVisits:           in.TimedVisits,
-		MedianDurationSec:     in.MedianDurationSec,
-		TimedCompletions:      in.TimedCompletions,
-		CompletionDurationSec: in.CompletionDurationSec,
-	})
+	httpserver.WriteJSON(w, r, http.StatusOK, insightsDTO(in))
 }
 
 // --- DTO вкладки «Визиты» ---

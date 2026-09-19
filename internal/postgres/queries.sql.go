@@ -581,16 +581,24 @@ func (q *Queries) CountSubmissionsForCabinet(ctx context.Context, formID uuid.UU
 }
 
 const countSubmissionsInPeriod = `-- name: CountSubmissionsInPeriod :one
-SELECT count(*)::bigint FROM submissions
+SELECT count(*) FILTER (WHERE created_at >= $2::timestamptz)::bigint AS current,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz)::bigint AS previous
+FROM submissions
 WHERE form_id = $1 AND NOT over_quota
-  AND created_at >= $2::timestamptz
-  AND created_at <  $3::timestamptz
+  AND created_at >= $3::timestamptz
+  AND created_at <  $4::timestamptz
 `
 
 type CountSubmissionsInPeriodParams struct {
-	FormID uuid.UUID
-	FromTs pgtype.Timestamptz
-	ToTs   pgtype.Timestamptz
+	FormID     uuid.UUID
+	FromTs     pgtype.Timestamptz
+	PrevFromTs pgtype.Timestamptz
+	ToTs       pgtype.Timestamptz
+}
+
+type CountSubmissionsInPeriodRow struct {
+	Current  int64
+	Previous int64
 }
 
 // Карточка «Ответы» над вкладками Insights (спека §5). Считает ВИДИМЫЕ ответы —
@@ -600,11 +608,20 @@ type CountSubmissionsInPeriodParams struct {
 // Свой запрос, а не поле в счётчиках визитов: ответы и визиты — два независимых
 // множества (ANALYTICS.md §1) и два модуля, и складывать их в одну строку значит
 // однажды поделить одно на другое.
-func (q *Queries) CountSubmissionsInPeriod(ctx context.Context, arg CountSubmissionsInPeriodParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countSubmissionsInPeriod, arg.FormID, arg.FromTs, arg.ToTs)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+//
+// Прошлое окно той же длины (сравнение на карточке, спека design/analytics-v2.md §8)
+// считается тем же сканом: выборка начинается с prev_from, текущее окно — FILTER.
+// Без сравнения prev_from = from_ts, и previous равно нулю.
+func (q *Queries) CountSubmissionsInPeriod(ctx context.Context, arg CountSubmissionsInPeriodParams) (CountSubmissionsInPeriodRow, error) {
+	row := q.db.QueryRow(ctx, countSubmissionsInPeriod,
+		arg.FormID,
+		arg.FromTs,
+		arg.PrevFromTs,
+		arg.ToTs,
+	)
+	var i CountSubmissionsInPeriodRow
+	err := row.Scan(&i.Current, &i.Previous)
+	return i, err
 }
 
 const countUnreadNotifications = `-- name: CountUnreadNotifications :one
@@ -9712,51 +9729,79 @@ func (q *Queries) VisitCountries(ctx context.Context, arg VisitCountriesParams) 
 }
 
 const visitInsights = `-- name: VisitInsights :one
-SELECT count(*)::bigint                                        AS visits,
-       count(*) FILTER (WHERE submitted)::bigint               AS submitted,
-       count(DISTINCT visitor_key)::bigint                     AS unique_visitors,
-       count(*) FILTER (WHERE updated_at > created_at)::bigint AS timed_visits,
+SELECT
+       count(*) FILTER (WHERE created_at >= $2::timestamptz)::bigint AS visits,
+       count(*) FILTER (WHERE created_at >= $2::timestamptz AND submitted)::bigint AS submitted,
+       count(*) FILTER (WHERE created_at >= $2::timestamptz AND (last_block_id IS NOT NULL OR submitted))::bigint AS started,
+       count(DISTINCT visitor_key) FILTER (WHERE created_at >= $2::timestamptz)::bigint AS unique_visitors,
+       count(*) FILTER (WHERE created_at >= $2::timestamptz AND updated_at > created_at)::bigint AS timed_visits,
        coalesce(
            percentile_cont(0.5) WITHIN GROUP (
                ORDER BY extract(epoch FROM updated_at - created_at)
-           ) FILTER (WHERE updated_at > created_at),
-       0)::float8                                              AS median_duration_sec,
-       count(*) FILTER (WHERE submitted AND updated_at > created_at)::bigint AS timed_completions,
+           ) FILTER (WHERE created_at >= $2::timestamptz AND updated_at > created_at),
+       0)::float8 AS median_duration_sec,
+       count(*) FILTER (WHERE created_at >= $2::timestamptz AND submitted AND updated_at > created_at)::bigint AS timed_completions,
        coalesce(
            percentile_cont(0.5) WITHIN GROUP (
                ORDER BY extract(epoch FROM updated_at - created_at)
-           ) FILTER (WHERE submitted AND updated_at > created_at),
-       0)::float8                                              AS completion_duration_sec
+           ) FILTER (WHERE created_at >= $2::timestamptz AND submitted AND updated_at > created_at),
+       0)::float8 AS completion_duration_sec,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz)::bigint AS visits_prev,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz AND submitted)::bigint AS submitted_prev,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz AND (last_block_id IS NOT NULL OR submitted))::bigint AS started_prev,
+       count(DISTINCT visitor_key) FILTER (WHERE created_at <  $2::timestamptz)::bigint AS unique_visitors_prev,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz AND updated_at > created_at)::bigint AS timed_visits_prev,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE created_at <  $2::timestamptz AND updated_at > created_at),
+       0)::float8 AS median_duration_sec_prev,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz AND submitted AND updated_at > created_at)::bigint AS timed_completions_prev,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE created_at <  $2::timestamptz AND submitted AND updated_at > created_at),
+       0)::float8 AS completion_duration_sec_prev
 FROM form_visits
 WHERE form_id = $1
-  AND created_at >= $2::timestamptz
-  AND created_at <  $3::timestamptz
-  AND ($4::text IS NULL OR
-       (CASE $4::text
+  AND created_at >= $3::timestamptz
+  AND created_at <  $4::timestamptz
+  AND ($5::text IS NULL OR
+       (CASE $5::text
             WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(country_code, '')
             WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
             WHEN 'version' THEN form_version_id::text
-        END) = ANY($5::text[]))
+        END) = ANY($6::text[]))
 `
 
 type VisitInsightsParams struct {
-	FormID  uuid.UUID
-	FromTs  pgtype.Timestamptz
-	ToTs    pgtype.Timestamptz
-	SegKind pgtype.Text
-	SegKeys []string
+	FormID     uuid.UUID
+	FromTs     pgtype.Timestamptz
+	PrevFromTs pgtype.Timestamptz
+	ToTs       pgtype.Timestamptz
+	SegKind    pgtype.Text
+	SegKeys    []string
 }
 
 type VisitInsightsRow struct {
-	Visits                int64
-	Submitted             int64
-	UniqueVisitors        int64
-	TimedVisits           int64
-	MedianDurationSec     float64
-	TimedCompletions      int64
-	CompletionDurationSec float64
+	Visits                    int64
+	Submitted                 int64
+	Started                   int64
+	UniqueVisitors            int64
+	TimedVisits               int64
+	MedianDurationSec         float64
+	TimedCompletions          int64
+	CompletionDurationSec     float64
+	VisitsPrev                int64
+	SubmittedPrev             int64
+	StartedPrev               int64
+	UniqueVisitorsPrev        int64
+	TimedVisitsPrev           int64
+	MedianDurationSecPrev     float64
+	TimedCompletionsPrev      int64
+	CompletionDurationSecPrev float64
 }
 
 // Карточки над вкладками Insights в части визитов: сколько пришло, сколько из них
@@ -9788,10 +9833,17 @@ type VisitInsightsRow struct {
 //
 // Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
 // второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
+//
+// Колонки *_prev — прошлое окно той же длины (сравнение на карточках, спека
+// design/analytics-v2.md §8), тем же сканом: выборка начинается с prev_from, окна
+// разводит FILTER. Без сравнения prev_from = from_ts, и *_prev нулевые.
+// started — начали отвечать: тронули вопрос или отправили (верх воронки без
+// ушедших сразу), нужен прошлому окну карточек «Отвалов».
 func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (VisitInsightsRow, error) {
 	row := q.db.QueryRow(ctx, visitInsights,
 		arg.FormID,
 		arg.FromTs,
+		arg.PrevFromTs,
 		arg.ToTs,
 		arg.SegKind,
 		arg.SegKeys,
@@ -9800,11 +9852,20 @@ func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (V
 	err := row.Scan(
 		&i.Visits,
 		&i.Submitted,
+		&i.Started,
 		&i.UniqueVisitors,
 		&i.TimedVisits,
 		&i.MedianDurationSec,
 		&i.TimedCompletions,
 		&i.CompletionDurationSec,
+		&i.VisitsPrev,
+		&i.SubmittedPrev,
+		&i.StartedPrev,
+		&i.UniqueVisitorsPrev,
+		&i.TimedVisitsPrev,
+		&i.MedianDurationSecPrev,
+		&i.TimedCompletionsPrev,
+		&i.CompletionDurationSecPrev,
 	)
 	return i, err
 }
