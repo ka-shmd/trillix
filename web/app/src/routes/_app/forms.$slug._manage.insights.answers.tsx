@@ -1,10 +1,11 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { type BlockSummary, type ScaleStats } from '../../entities/summary'
 import { type BucketStep } from '../../entities/visitsBreakdown'
 import { BarRows, type BarRow } from '../../features/insights/Breakdown'
+import { AnswerFilterBar } from '../../features/insights/AnswerFilterBar'
 import { VisitCards } from '../../features/insights/Cards'
 import { ScaleTrendChart } from '../../features/insights/lazyCharts'
 import { MIN_BASE, percentOf } from '../../features/insights/metrics'
@@ -12,6 +13,8 @@ import { formDetailQueryOptions } from '../../features/forms/queries'
 import { BlockAnswersDialog } from '../../features/submissions/BlockAnswersDialog'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
 import { formatDate, LOCALE, pluralAnswers } from '../../shared/format'
+import { decodeFilter, encodeFilter, filterFromSearch, type FilterCondition } from '../../shared/answerFilter'
+import { ApiError } from '../../shared/api/errors'
 import { type Period } from '../../shared/period'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
@@ -27,7 +30,14 @@ import { Button } from '@/components/ui/button'
 // выгружаются). Вопросы идут ОДНОЙ колонкой и без подложки: список вопросов читают
 // сверху вниз, в том порядке, в каком их видел респондент, а вторая колонка ломает
 // этот порядок пополам. Разделяет вопросы воздух, а не коробка.
+//
+// Фильтр (?where=, спека design/analytics-v2.md §6.2) — только этой вкладки: сводка и
+// её окна «все ответы» считаются по ответам, прошедшим условия.
 export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/answers')({
+  validateSearch: (search): { where?: string } => {
+    const where = filterFromSearch(search.where)
+    return where ? { where } : {}
+  },
   component: SummaryPage,
 })
 
@@ -35,15 +45,29 @@ function SummaryPage() {
   // URL адресует форму slug'ом; UUID для запроса сводки берём из загруженной формы —
   // как на странице ответов.
   const { slug } = Route.useParams()
-  const { period } = Route.useSearch()
+  const { period, where } = Route.useSearch()
+  const navigate = Route.useNavigate()
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const summary = useQuery({
+    ...submissionsSummaryQueryOptions(formId ?? '', period, where),
+    enabled: formId !== undefined,
+  })
+  // Вопросы для панели фильтра — из сводки без фильтра: при закрытом тарифе или пустой
+  // выборке отфильтрованной сводки нет, а менять условия всё равно нужно. Запрос тот
+  // же, что без фильтра, и берётся из кеша.
+  const questions = useQuery({
     ...submissionsSummaryQueryOptions(formId ?? '', period),
     enabled: formId !== undefined,
   })
+  const conditions = decodeFilter(where)
+  const setConditions = (next: FilterCondition[]) =>
+    void navigate({ search: (prev) => ({ ...prev, where: encodeFilter(next) }), replace: true })
 
   const total = summary.data?.total ?? 0
+  const unfiltered = summary.data?.unfiltered
+  const planRequired =
+    summary.isError && summary.error instanceof ApiError && summary.error.code === 'plan_required'
 
   return (
     <div className="flex flex-col gap-12">
@@ -52,15 +76,39 @@ function SummaryPage() {
       <Section
         title="Ответы по вопросам"
         description={
-          summary.isSuccess && total > 0
-            ? `${total} ${pluralAnswers(total)} за выбранный период`
-            : 'Распределение ответов по каждому вопросу формы.'
+          summary.isSuccess && unfiltered !== undefined
+            ? `Ответов в выборке: ${total} из ${unfiltered}`
+            : summary.isSuccess && total > 0
+              ? `${total} ${pluralAnswers(total)} за выбранный период`
+              : 'Распределение ответов по каждому вопросу формы.'
         }
       >
+        {questions.data && questions.data.blocks.length > 0 && (
+          <AnswerFilterBar
+            blocks={questions.data.blocks}
+            conditions={conditions}
+            onChange={setConditions}
+          />
+        )}
         {summary.isPending ? (
           <LoadingRows rows={3} />
+        ) : planRequired ? (
+          <EmptyState
+            title="Фильтры закрыты тарифом"
+            description="Сводка по выбранной группе респондентов доступна на тарифе с аналитикой."
+            action={
+              <Button asChild size="sm">
+                <Link to="/settings/plan">Посмотреть тариф</Link>
+              </Button>
+            }
+          />
         ) : summary.isError ? (
           <ErrorState title="Не удалось посчитать сводку." onRetry={() => summary.refetch()} />
+        ) : total === 0 && unfiltered !== undefined ? (
+          <EmptyState
+            title="Под условия не подошёл ни один ответ"
+            description="Измените условия фильтра или сбросьте его."
+          />
         ) : total === 0 ? (
           <EmptyState
             title="Ответов пока нет"
@@ -83,6 +131,7 @@ function SummaryPage() {
                 trendStep={summary.data.trendStep}
                 formId={formId ?? ''}
                 period={period}
+                where={where}
               />
             ))}
           </div>
@@ -98,12 +147,14 @@ function BlockCard({
   trendStep,
   formId,
   period,
+  where,
 }: {
   block: BlockSummary
   total: number
   trendStep: BucketStep
   formId: string
   period: Period
+  where: string | undefined
 }) {
   const [allOpen, setAllOpen] = useState(false)
 
@@ -149,6 +200,7 @@ function BlockCard({
             label={block.label}
             answered={block.answered}
             period={period}
+            where={where}
           />
         </>
       )}

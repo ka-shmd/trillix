@@ -57,22 +57,25 @@ export function partialsListQueryOptions(formId: string) {
 }
 
 // Сводка формы — обычный запрос (не пагинируется: сервер отдаёт готовый итог).
-export function submissionsSummaryQueryOptions(formId: string, period: Period) {
+// Отказ по тарифу (фильтр закрыт) не ретраится: это устойчивый ответ, а не сбой.
+export function submissionsSummaryQueryOptions(formId: string, period: Period, where?: string) {
   return queryOptions({
     ...analyticsFreshness,
-    queryKey: submissionKeys.summary(formId, period),
-    queryFn: () => getSummary(formId, period),
+    queryKey: submissionKeys.summary(formId, period, where),
+    queryFn: () => getSummary(formId, period, where),
+    retry: (count: number, error: Error) =>
+      !(error instanceof ApiError && error.code === 'plan_required') && count < 3,
   })
 }
 
 // Все значения одного вопроса — курсорная пагинация, как у списка ответов.
 // enabled оставлен вызывающему: запрос уходит только при открытом окне, иначе
 // каждый вопрос сводки тянул бы свою страницу заранее.
-export function blockAnswersQueryOptions(formId: string, blockId: string, period: Period) {
+export function blockAnswersQueryOptions(formId: string, blockId: string, period: Period, where?: string) {
   return infiniteQueryOptions({
     ...analyticsFreshness,
-    queryKey: submissionKeys.blockAnswers(formId, period, blockId),
-    queryFn: ({ pageParam }) => listBlockAnswers(formId, blockId, period, pageParam),
+    queryKey: submissionKeys.blockAnswers(formId, period, blockId, where),
+    queryFn: ({ pageParam }) => listBlockAnswers(formId, blockId, period, pageParam, where),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   })

@@ -32,8 +32,8 @@ type listService interface {
 	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
 	ListFeedForForm(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (FeedPage, error)
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
-	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error)
-	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error)
+	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period, filter domain.AnswerFilter) (domain.Summary, error)
+	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, filter domain.AnswerFilter, after *Cursor, limit int) (AnswerPage, error)
 	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, *int, error)
 	GetForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) (Submission, map[string]domain.AnswerFile, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
@@ -454,6 +454,8 @@ type summaryResponse struct {
 	Blocks []blockSummaryResponse `json:"blocks"`
 	// trendStep — шаг рядов шкал: hour | day, выбирает сервер по окну.
 	TrendStep string `json:"trendStep"`
+	// unfiltered — сколько ответов в окне без фильтра; только при фильтре.
+	Unfiltered *int `json:"unfiltered,omitempty"`
 }
 
 // summary отдаёт агрегат по ответам формы: наружу уходят только счётчики, сырые
@@ -479,8 +481,14 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	filter, err := domain.ParseAnswerFilter(r.URL.Query().Get("where"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
 	start := time.Now()
-	sum, err := h.svc.Summary(r.Context(), userID, formID, period)
+	sum, err := h.svc.Summary(r.Context(), userID, formID, period, filter)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -529,7 +537,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		}
 		blocks[i] = item
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, TrendStep: string(sum.TrendStep)})
+	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, TrendStep: string(sum.TrendStep), Unfiltered: sum.Unfiltered})
 }
 
 type answerResponse struct {
@@ -568,7 +576,12 @@ func (h *Handler) blockAnswers(w http.ResponseWriter, r *http.Request) {
 	}
 	// Окно наблюдения то же, что у сводки, и это несущее: открыв «все ответы» из
 	// строки «Ответили 12 из 34» за неделю, владелец обязан увидеть те же двенадцать.
-	page, err := h.svc.BlockAnswers(r.Context(), userID, formID, r.PathValue("block"), period,
+	filter, err := domain.ParseAnswerFilter(r.URL.Query().Get("where"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	page, err := h.svc.BlockAnswers(r.Context(), userID, formID, r.PathValue("block"), period, filter,
 		after, parseLimit(r.URL.Query().Get("limit")))
 	if err != nil {
 		httpserver.WriteError(w, r, err)

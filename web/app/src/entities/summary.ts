@@ -80,6 +80,8 @@ export const formSummarySchema = z.object({
   blocks: z.array(blockSummarySchema),
   // Шаг рядов шкал — выбирает сервер по окну, как у ряда визитов.
   trendStep: bucketStepSchema,
+  // Сколько ответов в окне без фильтра («в выборке N из M»); только при фильтре.
+  unfiltered: z.number().int().optional(),
 })
 export type FormSummary = z.infer<typeof formSummarySchema>
 
