@@ -48,6 +48,13 @@ func (p fakePlans) CheckWorkspace(context.Context, uuid.UUID, entitlements.Key) 
 // openPlans — тариф, который воронку не закрывает (обычный случай тестов не про гейт).
 func openPlans() fakePlans { return fakePlans{allowed: true} }
 
+// keyPlans — тариф, закрывающий ровно перечисленные ключи.
+type keyPlans map[entitlements.Key]bool
+
+func (p keyPlans) CheckWorkspace(_ context.Context, _ uuid.UUID, key entitlements.Key) (entitlements.Decision, error) {
+	return entitlements.Decision{Allowed: !p[key]}, nil
+}
+
 type upsertCall struct {
 	id, formID, versionID uuid.UUID
 	lastBlockID           *string
@@ -62,6 +69,8 @@ type fakeStore struct {
 	pages       []string // block_id вставленных строк пути
 	paths       []domain.PathCount
 	spans       []domain.PageSpan
+	filter      domain.VisitFilter // фильтр сегмента, с которым сервис пришёл в стор
+	versionStat map[uuid.UUID]domain.VersionStat
 	marked      []uuid.UUID
 	byLastBlock []domain.LastBlockCount
 	insights    domain.VisitInsights
@@ -98,12 +107,17 @@ func (s *fakeStore) InsertPage(_ context.Context, _ postgres.DBTX, _, _ uuid.UUI
 	return nil
 }
 
-func (s *fakeStore) CountPaths(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ domain.Period) ([]domain.PathCount, error) {
+func (s *fakeStore) CountPaths(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ domain.Period, _ domain.VisitFilter) ([]domain.PathCount, error) {
 	return s.paths, nil
 }
 
-func (s *fakeStore) PageSpans(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ domain.Period) ([]domain.PageSpan, error) {
+func (s *fakeStore) PageSpans(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ domain.Period, _ domain.VisitFilter) ([]domain.PageSpan, error) {
 	return s.spans, nil
+}
+
+func (s *fakeStore) VersionStats(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error) {
+	s.period, s.filter = period, f
+	return s.versionStat, nil
 }
 
 func (s *fakeStore) MarkSubmitted(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID) (int64, error) {
@@ -111,13 +125,13 @@ func (s *fakeStore) MarkSubmitted(_ context.Context, _ postgres.DBTX, id, _ uuid
 	return 0, nil
 }
 
-func (s *fakeStore) CountByLastBlock(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error) {
-	s.period = period
+func (s *fakeStore) CountByLastBlock(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.LastBlockCount, error) {
+	s.period, s.filter = period, f
 	return s.byLastBlock, nil
 }
 
-func (s *fakeStore) Insights(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
-	s.period = period
+func (s *fakeStore) Insights(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period, f domain.VisitFilter) (domain.VisitInsights, error) {
+	s.period, s.filter = period, f
 	return s.insights, nil
 }
 
@@ -394,7 +408,7 @@ func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	store := &fakeStore{byLastBlock: []domain.LastBlockCount{{BlockID: "b1", Visits: 5}}}
 	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), store, fakeGeo{}, keySecret)
 
-	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
 	}
@@ -415,7 +429,7 @@ func TestFunnel_SingleCountQueryAndDerivedTotals(t *testing.T) {
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[{"id":"t_b1","groupId":"g_b1","type":"title","text":[{"t":"Имя"}]},{"id":"b1","groupId":"g_b1","type":"short_text","required":false,"settings":{}}]}`),
 	}}}, openPlans(), store, fakeGeo{}, keySecret)
 
-	f, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	f, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{})
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -442,7 +456,7 @@ func TestFunnel_PlanDenies_ErrPlanRequired(t *testing.T) {
 		Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`),
 	}}}, fakePlans{allowed: false}, &fakeStore{}, fakeGeo{}, keySecret)
 
-	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{})
 	if !errors.Is(err, domain.ErrPlanRequired) {
 		t.Fatalf("ошибка = %v, ждали domain.ErrPlanRequired", err)
 	}
@@ -454,7 +468,7 @@ func TestFunnel_PlanDenies_ErrPlanRequired(t *testing.T) {
 func TestFunnel_ForeignForm_404BeforePlanGate(t *testing.T) {
 	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, fakePlans{allowed: false}, &fakeStore{}, fakeGeo{}, keySecret)
 
-	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	_, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ждали domain.ErrNotFound (гейт тарифа не должен опережать авторизацию)", err)
 	}
@@ -465,7 +479,7 @@ func TestFunnel_ForeignForm_404BeforePlanGate(t *testing.T) {
 func TestInsights_ForeignFormIsNotFound(t *testing.T) {
 	svc := NewService(nil, fakeForms{err: domain.ErrNotFound}, openPlans(), &fakeStore{}, fakeGeo{}, keySecret)
 
-	_, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	_, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{})
 	if !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
 	}
@@ -479,7 +493,7 @@ func TestInsights_NotGatedByPlan(t *testing.T) {
 	store := &fakeStore{insights: domain.VisitInsights{Visits: 7, Submitted: 2}}
 	svc := NewService(nil, fakeForms{}, fakePlans{allowed: false}, store, fakeGeo{}, keySecret)
 
-	in, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{})
+	in, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{})
 	if err != nil {
 		t.Fatalf("неожиданная ошибка: %v", err)
 	}
@@ -500,7 +514,7 @@ func TestPeriodReachesStore(t *testing.T) {
 	t.Run("карточки", func(t *testing.T) {
 		store := &fakeStore{}
 		svc := NewService(nil, fakeForms{}, openPlans(), store, fakeGeo{}, keySecret)
-		if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), period); err != nil {
+		if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), period, domain.Segment{}); err != nil {
 			t.Fatalf("неожиданная ошибка: %v", err)
 		}
 		if store.period != period {
@@ -511,7 +525,7 @@ func TestPeriodReachesStore(t *testing.T) {
 	t.Run("воронка", func(t *testing.T) {
 		store := &fakeStore{}
 		svc := NewService(nil, fakeForms{}, openPlans(), store, fakeGeo{}, keySecret)
-		if _, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), period); err != nil {
+		if _, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), period, domain.Segment{}); err != nil {
 			t.Fatalf("неожиданная ошибка: %v", err)
 		}
 		if store.period != period {
@@ -703,5 +717,114 @@ func TestRecord_NoSecretNoVisitorKey(t *testing.T) {
 	}
 	if store.upserts[0].visitorKey != nil {
 		t.Fatalf("ключ = %x, ждали nil", store.upserts[0].visitorKey)
+	}
+}
+
+const (
+	uaPhone   = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+	uaDesktop = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+)
+
+func segmentSvc(plans Plans, store *fakeStore, versions []forms.Version) *Service {
+	return NewService(nil, fakeForms{versions: versions}, plans, store, fakeGeo{}, keySecret)
+}
+
+// Сегмент по устройству сводится к строкам user-agent периода, которые разбираются в
+// это устройство; воронка идёт в стор уже с этим фильтром.
+func TestFunnel_SegmentResolvesToUserAgents(t *testing.T) {
+	store := &fakeStore{agents: []domain.UserAgentRow{{UserAgent: uaPhone}, {UserAgent: uaDesktop}}}
+	svc := segmentSvc(openPlans(), store, nil)
+
+	if _, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{Dim: domain.SegDevice, Value: "Телефон"}); err != nil {
+		t.Fatalf("Funnel: %v", err)
+	}
+	if store.filter.Kind != domain.FilterUserAgent || len(store.filter.Keys) != 1 || store.filter.Keys[0] != uaPhone {
+		t.Errorf("фильтр = %+v, ждали строку айфона", store.filter)
+	}
+}
+
+// Без сегмента фильтра нет вовсе — не «пустой список».
+func TestFunnel_NoSegmentNoFilter(t *testing.T) {
+	store := &fakeStore{}
+	if _, err := segmentSvc(openPlans(), store, nil).Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{}); err != nil {
+		t.Fatalf("Funnel: %v", err)
+	}
+	if !store.filter.IsZero() {
+		t.Errorf("фильтр без сегмента: %+v", store.filter)
+	}
+}
+
+// Сегмент — ключ analytics_segments; сегмент по источнику — ещё и analytics_sources,
+// иначе закрытая разбивка источников читалась бы сегментами по одному. Воронка при
+// этом открыта: закрыт именно разрез.
+func TestSegment_Gates(t *testing.T) {
+	ctx := context.Background()
+	phone := domain.Segment{Dim: domain.SegDevice, Value: "Телефон"}
+	vk := domain.Segment{Dim: domain.SegSource, Value: "vk.com"}
+
+	closedSegments := segmentSvc(keyPlans{entitlements.AnalyticsSegments: true}, &fakeStore{}, nil)
+	if _, err := closedSegments.Funnel(ctx, uuid.New(), uuid.New(), domain.Period{}, phone); !errors.Is(err, domain.ErrPlanRequired) {
+		t.Errorf("сегмент при закрытом analytics_segments: %v, ждали ErrPlanRequired", err)
+	}
+	if _, err := closedSegments.Insights(ctx, uuid.New(), uuid.New(), domain.Period{}, phone); !errors.Is(err, domain.ErrPlanRequired) {
+		t.Errorf("карточки с сегментом: %v, ждали ErrPlanRequired", err)
+	}
+	if _, err := closedSegments.Funnel(ctx, uuid.New(), uuid.New(), domain.Period{}, domain.Segment{}); err != nil {
+		t.Errorf("воронка без сегмента закрылась вместе с сегментами: %v", err)
+	}
+
+	closedSources := segmentSvc(keyPlans{entitlements.AnalyticsSources: true}, &fakeStore{}, nil)
+	if _, err := closedSources.Funnel(ctx, uuid.New(), uuid.New(), domain.Period{}, vk); !errors.Is(err, domain.ErrPlanRequired) {
+		t.Errorf("сегмент по источнику при закрытых источниках: %v, ждали ErrPlanRequired", err)
+	}
+	if _, err := closedSources.Funnel(ctx, uuid.New(), uuid.New(), domain.Period{}, phone); err != nil {
+		t.Errorf("сегмент по устройству закрыли источники: %v", err)
+	}
+}
+
+// Сегмент по версии — id версии с этим номером; номера нет — пустой список (ноль
+// визитов), а не «все».
+func TestSegment_VersionByNumber(t *testing.T) {
+	v1, v2 := uuid.New(), uuid.New()
+	versions := []forms.Version{
+		{ID: v1, Number: 1, Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`)},
+		{ID: v2, Number: 2, Schema: json.RawMessage(`{"schemaVersion":1,"blocks":[]}`)},
+	}
+	store := &fakeStore{}
+	svc := segmentSvc(openPlans(), store, versions)
+
+	if _, err := svc.Funnel(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{Dim: domain.SegVersion, Value: "2"}); err != nil {
+		t.Fatalf("Funnel: %v", err)
+	}
+	if store.filter.Kind != domain.FilterVersion || len(store.filter.Keys) != 1 || store.filter.Keys[0] != v2.String() {
+		t.Errorf("фильтр версии = %+v, ждали %s", store.filter, v2)
+	}
+	if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{Dim: domain.SegVersion, Value: "9"}); err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if store.filter.IsZero() || len(store.filter.Keys) != 0 {
+		t.Errorf("несуществующая версия: %+v, ждали пустой список", store.filter)
+	}
+}
+
+// Разрез по версиям: свежие сверху, номер и дата — из модуля форм, версии без
+// визитов в окне не показываются.
+func TestVersions_FreshFirstOnlyWithVisits(t *testing.T) {
+	v1, v2, v3 := uuid.New(), uuid.New(), uuid.New()
+	published := time.Date(2026, 9, 1, 10, 0, 0, 0, time.UTC)
+	versions := []forms.Version{{ID: v1, Number: 1}, {ID: v2, Number: 2, PublishedAt: published}, {ID: v3, Number: 3}}
+	store := &fakeStore{versionStat: map[uuid.UUID]domain.VersionStat{
+		v1: {Visits: 10, Submitted: 2},
+		v2: {Visits: 30, Submitted: 15},
+	}}
+	got, err := segmentSvc(openPlans(), store, versions).Versions(context.Background(), uuid.New(), uuid.New(), domain.Period{}, domain.Segment{})
+	if err != nil {
+		t.Fatalf("Versions: %v", err)
+	}
+	if len(got) != 2 || got[0].Number != 2 || got[1].Number != 1 {
+		t.Fatalf("версии: %+v", got)
+	}
+	if !got[0].PublishedAt.Equal(published) || got[0].Visits != 30 || got[0].Submitted != 15 {
+		t.Errorf("версия 2: %+v", got[0])
 	}
 }

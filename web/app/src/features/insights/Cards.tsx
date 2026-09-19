@@ -3,6 +3,7 @@ import { useQuery } from '@tanstack/react-query'
 import { formDetailQueryOptions } from '../forms/queries'
 import { submissionsCountQueryOptions } from '../submissions/queries'
 import { visitInsightsQueryOptions } from './queries'
+import { conversionText } from './metrics'
 import { formatDuration } from '../../shared/format'
 import { type Period } from '../../shared/period'
 
@@ -82,15 +83,19 @@ export function VisitCards({ slug, period }: { slug: string; period: Period }) {
 // «Начали отвечать» и «Завершили» приходят из воронки (это её же верх), а
 // длительность завершения — из счётчиков визитов: там она считается тем же сканом,
 // что и остальные, и отдельный запрос был бы походом за числом из той же выборки.
+//
+// segment — сегмент «Отвалов»: длительность считается по тем же визитам, что воронка.
 export function CompletionCards({
   slug,
   period,
+  segment,
   started,
   completed,
   pending,
 }: {
   slug: string
   period: Period
+  segment?: string
   started: number | undefined
   completed: number | undefined
   pending: boolean
@@ -98,17 +103,18 @@ export function CompletionCards({
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const visits = useQuery({
-    ...visitInsightsQueryOptions(formId ?? '', period),
+    ...visitInsightsQueryOptions(formId ?? '', period, segment),
     enabled: formId !== undefined,
   })
   const measured = visits.data !== undefined && visits.data.timedCompletions > 0
 
   // Доля считается от НАЧАВШИХ, а не от всех визитов: «дошли до конца» отвечает на
   // вопрос про форму, а не про трафик. Нулевой знаменатель даёт прочерк, а не 0 %:
-  // «никто не начинал» и «никто не дошёл» — разные новости.
+  // «никто не начинал» и «никто не дошёл» — разные новости. Ниже порога малых выборок
+  // — «N из M», а не процент.
   const rate =
     started !== undefined && completed !== undefined && started > 0
-      ? `${Math.round((completed / started) * 100)} %`
+      ? conversionText(completed, started)
       : undefined
 
   return (

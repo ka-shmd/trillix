@@ -1,5 +1,7 @@
 package domain
 
+import "time"
+
 // VisitInsights — счётчики визитов за окно наблюдения: то, что стоит карточками
 // над всеми вкладками Insights (спека design/analytics-tally.md §5).
 //
@@ -30,6 +32,19 @@ type VisitInsights struct {
 	// TimedCompletions и CompletionDurationSec — то же самое, но только по визитам,
 	// закончившимся ответом: «сколько занимает заполнить форму». Всегда больше
 	// длительности визита, в которую входят ушедшие через три секунды.
+	TimedCompletions      int
+	CompletionDurationSec float64
+}
+
+// VersionStat — визиты одной опубликованной версии за окно наблюдения (спека
+// design/analytics-v2.md §5.3): помогла ли правка — видно сравнением строк.
+type VersionStat struct {
+	Number      int
+	PublishedAt time.Time
+	Visits      int
+	Submitted   int
+	// TimedCompletions — знаменатель медианы CompletionDurationSec: визиты с ответом,
+	// от которых доехал не один бикон. 0 — медианы нет.
 	TimedCompletions      int
 	CompletionDurationSec float64
 }

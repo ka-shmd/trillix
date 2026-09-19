@@ -548,7 +548,8 @@ WHERE f.slug = $1;
 -- CSV-экспорту (фаза 6): колонки — объединение блоков по всем версиям, а подписи
 -- choice-опций берутся из версии, по которой отправлен ответ. Версий на форму
 -- немного — грузятся разом. form_versions иммутабельна, порядок стабилен.
-SELECT version, schema
+-- id и created_at нужны аналитике: сегмент и разрез по версии (фаза 30).
+SELECT id, version, schema, created_at
 FROM form_versions
 WHERE form_id = $1
 ORDER BY version;

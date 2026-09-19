@@ -19,8 +19,9 @@ type Middleware = func(http.Handler) http.Handler
 
 // analyticsService — часть сервиса, нужная приватному транспорту.
 type analyticsService interface {
-	Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Funnel, error)
-	Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
+	Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) (domain.Funnel, error)
+	Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) (domain.VisitInsights, error)
+	Versions(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) ([]domain.VersionStat, error)
 	Breakdown(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitsBreakdown, error)
 }
 
@@ -39,6 +40,21 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/funnel", h.requireAuth(http.HandlerFunc(h.funnel)))
 	mux.Handle("GET /api/v1/forms/{id}/insights", h.requireAuth(http.HandlerFunc(h.insights)))
 	mux.Handle("GET /api/v1/forms/{id}/insights/visits", h.requireAuth(http.HandlerFunc(h.breakdown)))
+	mux.Handle("GET /api/v1/forms/{id}/insights/versions", h.requireAuth(http.HandlerFunc(h.versions)))
+}
+
+// windowFromRequest — окно наблюдения и сегмент из query-строки (`?from&to&segment`).
+// Сегмент читают воронка, карточки и разрез по версиям — одним разбором.
+func windowFromRequest(r *http.Request) (domain.Period, domain.Segment, error) {
+	period, err := httpserver.PeriodFromRequest(r)
+	if err != nil {
+		return domain.Period{}, domain.Segment{}, err
+	}
+	seg, err := domain.ParseSegment(r.URL.Query().Get("segment"))
+	if err != nil {
+		return domain.Period{}, domain.Segment{}, err
+	}
+	return period, seg, nil
 }
 
 type funnelStepResponse struct {
@@ -92,14 +108,14 @@ func (h *Handler) funnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	period, err := httpserver.PeriodFromRequest(r)
+	period, seg, err := windowFromRequest(r)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 
 	start := time.Now()
-	f, err := h.svc.Funnel(r.Context(), u.ID, formID, period)
+	f, err := h.svc.Funnel(r.Context(), u.ID, formID, period, seg)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -170,14 +186,14 @@ func (h *Handler) insights(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrNotFound)
 		return
 	}
-	period, err := httpserver.PeriodFromRequest(r)
+	period, seg, err := windowFromRequest(r)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 
 	start := time.Now()
-	in, err := h.svc.Insights(r.Context(), u.ID, formID, period)
+	in, err := h.svc.Insights(r.Context(), u.ID, formID, period, seg)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -327,4 +343,62 @@ func places(in []domain.PlaceCount) []placeResponse {
 		out[i] = placeResponse{Name: p.Name, CountryCode: p.CountryCode, Visits: p.Visits, Submitted: p.Submitted}
 	}
 	return out
+}
+
+type versionStatResponse struct {
+	Number      int    `json:"number"`
+	PublishedAt string `json:"publishedAt"`
+	Visits      int    `json:"visits"`
+	Submitted   int    `json:"submitted"`
+	// timedCompletions — знаменатель медианы: 0 — «данных нет», а не «ноль секунд».
+	TimedCompletions      int     `json:"timedCompletions"`
+	CompletionDurationSec float64 `json:"completionDurationSec"`
+}
+
+type versionsResponse struct {
+	Versions []versionStatResponse `json:"versions"`
+}
+
+// versions отдаёт разрез по версиям формы за окно: свежие сверху, только версии с
+// визитами в окне.
+func (h *Handler) versions(w http.ResponseWriter, r *http.Request) {
+	u, ok := auth.UserFromContext(r.Context())
+	if !ok {
+		httpserver.WriteError(w, r, domain.ErrUnauthorized)
+		return
+	}
+	formID, err := uuid.Parse(r.PathValue("id"))
+	if err != nil {
+		httpserver.WriteError(w, r, domain.ErrNotFound)
+		return
+	}
+	period, seg, err := windowFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
+	start := time.Now()
+	stats, err := h.svc.Versions(r.Context(), u.ID, formID, period, seg)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.LoggerFrom(r.Context()).Info("visits versions",
+		slog.String("form_id", formID.String()),
+		slog.Int("versions", len(stats)),
+		slog.Duration("duration", time.Since(start)),
+	)
+	out := make([]versionStatResponse, len(stats))
+	for i, s := range stats {
+		out[i] = versionStatResponse{
+			Number:                s.Number,
+			PublishedAt:           s.PublishedAt.UTC().Format(time.RFC3339),
+			Visits:                s.Visits,
+			Submitted:             s.Submitted,
+			TimedCompletions:      s.TimedCompletions,
+			CompletionDurationSec: s.CompletionDurationSec,
+		}
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, versionsResponse{Versions: out})
 }
