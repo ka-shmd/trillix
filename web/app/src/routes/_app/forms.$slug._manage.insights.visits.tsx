@@ -1,27 +1,23 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 
-import {
-  type LabelCount,
-  type PlaceCount,
-  type VisitsBreakdown,
-} from '../../entities/visitsBreakdown'
+import { type PlaceCount, type VisitsBreakdown } from '../../entities/visitsBreakdown'
 import { formDetailQueryOptions } from '../../features/forms/queries'
-import { BreakdownTabs } from '../../features/insights/Breakdown'
+import { BreakdownList, BreakdownTabs, type BreakdownRow } from '../../features/insights/Breakdown'
 import { InsightCards } from '../../features/insights/Cards'
 import { visitsBreakdownQueryOptions } from '../../features/insights/queries'
-import { ShareChart, VisitsChart } from '../../features/insights/lazyCharts'
+import { VisitsChart } from '../../features/insights/lazyCharts'
 import { pluralViews } from '../../shared/format'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
 
-// Вкладка «Визиты» (/forms/$slug/insights/visits): откуда пришли люди и с чего
-// смотрели (спека design/analytics-tally.md §8).
+// Вкладка «Визиты» (/forms/$slug/insights/visits): кто приходит — откуда, с чего и
+// когда (спека design/analytics-v3.md §5).
 //
-// Всё считает сервер, сюда приезжают только счётчики. Шесть разбивок собраны в ДВА
-// раздела с вкладками — «откуда приходят» и «с чего смотрят»: столбиком из шести
-// списков вкладка заняла бы полтора экрана, хотя смотрят на один разрез за раз.
+// Всё считает сервер, сюда приезжают только счётчики. Разделов два, и оба идут В
+// ОДНУ КОЛОНКУ во всю ширину: пока они стояли парой колонок, на разбивку оставалось
+// пол-экрана, и подписи источников и городов в них не помещались.
 export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/visits')({
   component: VisitsPage,
 })
@@ -72,69 +68,59 @@ function Breakdowns({ data }: { data: VisitsBreakdown }) {
         <VisitsChart buckets={data.timeseries} step={data.step} />
       </Section>
 
-      {/* Две колонки, а не шесть секций подряд. Внутри каждой — вкладки: разбивки
-          одного раздела отвечают на один вопрос разными разрезами, и показывать их
-          все сразу значит заставлять выбирать глазами. */}
-      <div className="grid gap-8 md:grid-cols-2">
-        <Section
-          title="Откуда приходят"
-          description="По каким ссылкам и из каких мест открывают форму."
-        >
-          <BreakdownTabs
-            panels={[
-              { value: 'sources', label: 'Источники', content: <Sources data={data} /> },
-              // Три состояния, и их нельзя схлопывать в два. ЕСТЬ данные — рисуем
-              // всегда, даже если справочник сейчас отключён: собранные страны
-              // никуда не делись и остаются правдой. НЕТ данных, но справочник
-              // подключён — рисуем с объяснением. НЕТ данных и справочника нет —
-              // вкладка исчезает целиком, потому что рассказывать не о чем. Без
-              // среднего случая выключенное гео неотличимо от ненаписанной функции
-              // — ровно так оно и выглядело владельцу.
-              ...(data.countries.length > 0 || data.geoConfigured
-                ? [
-                    {
-                      value: 'countries',
-                      label: 'Страны',
-                      content: <Places rows={data.countries} unknown={data.unknownPlace} />,
-                    },
-                  ]
-                : []),
-              ...(data.cities.length > 0 || data.geoConfigured
-                ? [{ value: 'cities', label: 'Города', content: <Places rows={data.cities} /> }]
-                : []),
-            ]}
-          />
-        </Section>
+      {/* Внутри раздела — вкладки: разбивки одного раздела отвечают на один вопрос
+          разными разрезами, и показывать их все сразу значит заставлять выбирать
+          глазами. Разделов при этом два, а не шесть: столбиком из шести списков
+          вкладка заняла бы полтора экрана. */}
+      <Section
+        title="Откуда приходят"
+        description="По каким ссылкам и из каких мест открывают форму."
+      >
+        <BreakdownTabs
+          panels={[
+            { value: 'sources', label: 'Источники', content: <Sources data={data} /> },
+            // Три состояния, и их нельзя схлопывать в два. ЕСТЬ данные — рисуем
+            // всегда, даже если справочник сейчас отключён: собранные страны
+            // никуда не делись и остаются правдой. НЕТ данных, но справочник
+            // подключён — рисуем с объяснением. НЕТ данных и справочника нет —
+            // вкладка исчезает целиком, потому что рассказывать не о чем. Без
+            // среднего случая выключенное гео неотличимо от ненаписанной функции
+            // — ровно так оно и выглядело владельцу.
+            ...(data.countries.length > 0 || data.geoConfigured
+              ? [
+                  {
+                    value: 'countries',
+                    label: 'Страны',
+                    content: <Places rows={data.countries} unknown={data.unknownPlace} />,
+                  },
+                ]
+              : []),
+            ...(data.cities.length > 0 || data.geoConfigured
+              ? [{ value: 'cities', label: 'Города', content: <Places rows={data.cities} /> }]
+              : []),
+          ]}
+        />
+      </Section>
 
-        <Section title="С чего смотрят" description="Устройство, браузер и система посетителей.">
-          <BreakdownTabs
-            panels={[
-              { value: 'devices', label: 'Устройства', content: <Share rows={data.devices} /> },
-              { value: 'browsers', label: 'Браузеры', content: <Share rows={data.browsers} /> },
-              { value: 'systems', label: 'Система', content: <Share rows={data.systems} /> },
-            ]}
-          />
-        </Section>
-      </div>
+      <Section title="С чего смотрят" description="Устройство, браузер и система посетителей.">
+        <BreakdownTabs
+          panels={[
+            { value: 'devices', label: 'Устройства', content: <Labels rows={data.devices} /> },
+            { value: 'browsers', label: 'Браузеры', content: <Labels rows={data.browsers} /> },
+            { value: 'systems', label: 'Система', content: <Labels rows={data.systems} /> },
+          ]}
+        />
+      </Section>
 
-      <p className="text-xs text-muted-foreground">
+      <p className="text-sm text-muted-foreground">
         Аналитика без cookie: мы не храним персональные данные посетителей.
       </p>
     </>
   )
 }
 
-// Все шесть разбивок вкладки показываются ОДИНАКОВО — кольцом с легендой. Вопрос
-// к ним один и тот же: «как поделилось», и отвечает на него доля целого. Кольцо
-// держит длинный хвост потому, что девятая строка и дальше сворачиваются в
-// «Прочее», а числа хвоста показываются наведением (features/insights/ShareChart).
-function Share({ rows }: { rows: LabelCount[] }) {
-  if (rows.length === 0) return <NoRows />
-  return <ShareChart rows={rows} />
-}
-
-function NoRows() {
-  return <p className="text-sm text-muted-foreground">Данных нет.</p>
+function Labels({ rows }: { rows: { label: string; visits: number; submitted: number }[] }) {
+  return <BreakdownList rows={rows.map((r) => ({ ...r, key: r.label }))} />
 }
 
 // Источники. Закрытая тарифом вкладка показывает НАСТОЯЩЕЕ число визитов с
@@ -159,8 +145,9 @@ function Sources({ data }: { data: VisitsBreakdown }) {
     )
   }
   return (
-    <Share
+    <BreakdownList
       rows={data.sources.map((s) => ({
+        key: `${s.source}/${s.medium}`,
         label: s.medium === 'Нет' ? s.source : `${s.source} / ${s.medium}`,
         visits: s.visits,
         submitted: s.submitted,
@@ -180,20 +167,20 @@ function Places({ rows, unknown }: { rows: PlaceCount[]; unknown?: number }) {
       </p>
     )
   }
+  const list: BreakdownRow[] = rows.map((r) => ({
+    key: `${r.countryCode}/${r.name}`,
+    label: `${flag(r.countryCode)} ${r.name}`.trim(),
+    visits: r.visits,
+    submitted: r.submitted,
+  }))
   return (
     <div className="flex flex-col gap-2">
-      <Share
-        rows={rows.map((r) => ({
-          label: `${flag(r.countryCode)} ${r.name}`.trim(),
-          visits: r.visits,
-          submitted: r.submitted,
-        }))}
-      />
+      <BreakdownList rows={list} />
       {/* Число без объяснения: сколько визитов не попало в список — это данные
           владельца, а ПОЧЕМУ они не попали (IPv6, приватные сети, пробелы
           справочника) — вопрос разработчика, и на экране ему не место. */}
       {unknown !== undefined && unknown > 0 && (
-        <p className="text-xs text-muted-foreground">
+        <p className="text-sm text-muted-foreground">
           Ещё {unknown} {pluralViews(unknown)} без страны
         </p>
       )}

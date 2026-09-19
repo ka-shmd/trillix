@@ -3,9 +3,14 @@ import { z } from 'zod'
 // Вкладка «Визиты» (спека design/analytics-tally.md §8). Зеркалит
 // breakdownResponse из internal/visits/handler.go.
 
-// Шаг ряда выбирает СЕРВЕР (domain.StepFor): от него зависит и запрос, и подписи
-// оси, а вторая копия этого выбора на клиенте разъехалась бы молча.
-export const bucketStepSchema = z.enum(['hour', 'day'])
+// Шаг ряда выбирает СЕРВЕР (domain.StepFor и domain.CoarsenBuckets): от него
+// зависят и запрос, и подписи оси, а вторая копия этого выбора на клиенте
+// разъехалась бы молча.
+//
+// Недели и месяцы приезжают только укрупнением: запрос считает часы или сутки, а
+// слишком длинный ряд сервер складывает уже по факту — «всё время» у новой формы
+// это три дня, у старой три года.
+export const bucketStepSchema = z.enum(['hour', 'day', 'week', 'month'])
 export type BucketStep = z.infer<typeof bucketStepSchema>
 
 export const timeBucketSchema = z.object({

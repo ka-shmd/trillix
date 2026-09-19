@@ -1,6 +1,6 @@
 import { lazy, Suspense } from 'react'
 
-import { type BucketStep, type LabelCount, type TimeBucket } from '../../entities/visitsBreakdown'
+import { type BucketStep, type TimeBucket } from '../../entities/visitsBreakdown'
 import { type ScalePoint } from '../../entities/summary'
 import { Skeleton } from '@/components/ui/skeleton'
 
@@ -10,13 +10,13 @@ import { Skeleton } from '@/components/ui/skeleton'
 // настройках.
 //
 // Импортируй графики ОТСЮДА, а не из соседних файлов напрямую: прямой импорт из
-// VisitsChart/ShareChart/ScaleTrendChart втащит recharts обратно в общий чанк, и
-// проверка этого — только замер сборки (`npm run build`), потому что работать
-// будет одинаково.
+// VisitsChart/ScaleTrendChart втащит recharts обратно в общий чанк, и проверка
+// этого — только замер сборки (`npm run build`), потому что работать будет
+// одинаково.
 //
-// Воронки здесь нет и не должно появиться: с фазы 30 она нарисована разметкой
-// (features/insights/Funnel.tsx), и «Обзор» — единственная вкладка аналитики,
-// которая не грузит recharts вовсе.
+// Графиков осталось два, и это результат редизайна фазы 30: воронка нарисована
+// разметкой (features/insights/Funnel.tsx), разбивки «Визитов» — списками
+// (features/insights/Breakdown.tsx). «Обзор» не грузит recharts вовсе.
 //
 // Заглушка каждого графика ростом с сам график: скачок раскладки на месте, где
 // человек уже читает числа, дороже лишней сотни байт разметки.
@@ -24,7 +24,6 @@ import { Skeleton } from '@/components/ui/skeleton'
 const VisitsChartImpl = lazy(() =>
   import('./VisitsChart').then((m) => ({ default: m.VisitsChart })),
 )
-const ShareChartImpl = lazy(() => import('./ShareChart').then((m) => ({ default: m.ShareChart })))
 const ScaleTrendChartImpl = lazy(() =>
   import('./ScaleTrendChart').then((m) => ({ default: m.ScaleTrendChart })),
 )
@@ -33,14 +32,6 @@ export function VisitsChart(props: { buckets: TimeBucket[]; step: BucketStep }) 
   return (
     <Suspense fallback={<Skeleton className="h-60 w-full" />}>
       <VisitsChartImpl {...props} />
-    </Suspense>
-  )
-}
-
-export function ShareChart(props: { rows: LabelCount[] }) {
-  return (
-    <Suspense fallback={<Skeleton className="size-32 rounded-full" />}>
-      <ShareChartImpl {...props} />
     </Suspense>
   )
 }

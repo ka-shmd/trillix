@@ -32,6 +32,7 @@ const ENTRY_MS = 450
 
 const hourFmt = new Intl.DateTimeFormat(LOCALE, { hour: '2-digit', minute: '2-digit' })
 const dayFmt = new Intl.DateTimeFormat(LOCALE, { day: 'numeric', month: 'short' })
+const monthFmt = new Intl.DateTimeFormat(LOCALE, { month: 'short', year: '2-digit' })
 const hourFullFmt = new Intl.DateTimeFormat(LOCALE, {
   day: 'numeric',
   month: 'short',
@@ -43,14 +44,44 @@ const dayFullFmt = new Intl.DateTimeFormat(LOCALE, {
   day: 'numeric',
   month: 'long',
 })
+const monthFullFmt = new Intl.DateTimeFormat(LOCALE, { month: 'long', year: 'numeric' })
+
+// Подписи оси и подсказки по шагу ряда. У недели подпись — её первый день, а в
+// подсказке об этом сказано словом: «неделя с 14 сентября» и «14 сент.» — разные
+// сообщения, и без слова точка читалась бы как одни сутки.
+function tickFormatter(step: BucketStep): (at: string) => string {
+  const fmt = step === 'hour' ? hourFmt : step === 'month' ? monthFmt : dayFmt
+  return (at) => fmt.format(new Date(at))
+}
+
+function fullFormatter(step: BucketStep): (at: string) => string {
+  switch (step) {
+    case 'hour':
+      return (at) => hourFullFmt.format(new Date(at))
+    case 'week':
+      return (at) => `неделя с ${dayFullFmt.format(new Date(at))}`
+    case 'month':
+      return (at) => monthFullFmt.format(new Date(at))
+    default:
+      return (at) => dayFullFmt.format(new Date(at))
+  }
+}
+
+// Ширина оси значений — по самому длинному числу, а не константой. С зашитыми 32
+// пикселями тик «270» начинался за левым краем SVG (x = −3.5) и читался как «70»:
+// текст в SVG не переносится и не сжимается, он просто уходит под обрез.
+function axisWidth(max: number): number {
+  return 12 + String(Math.max(max, 1)).length * 8
+}
 
 export function VisitsChart({ buckets, step }: { buckets: TimeBucket[]; step: BucketStep }) {
-  const tickFmt = step === 'hour' ? hourFmt : dayFmt
-  const fullFmt = step === 'hour' ? hourFullFmt : dayFullFmt
+  const tick = tickFormatter(step)
+  const full = fullFormatter(step)
   // Второй ряд считается здесь, а не на сервере: это та же величина под другим
   // углом (визиты минус отправившие), и заводить ради неё поле в контракте значит
   // разрешить двум числам разъехаться.
   const data = buckets.map((b) => ({ ...b, rest: b.visits - b.submitted }))
+  const width = axisWidth(Math.max(0, ...buckets.map((b) => b.visits)))
 
   return (
     <ChartContainer config={chartConfig} className="aspect-auto h-60 w-full">
@@ -62,13 +93,13 @@ export function VisitsChart({ buckets, step }: { buckets: TimeBucket[]; step: Bu
           axisLine={false}
           tickMargin={8}
           minTickGap={24}
-          tickFormatter={(value: string) => tickFmt.format(new Date(value))}
+          tickFormatter={tick}
         />
         <YAxis
           tickLine={false}
           axisLine={false}
           tickMargin={8}
-          width={32}
+          width={width}
           tickCount={4}
           allowDecimals={false}
         />
@@ -78,7 +109,7 @@ export function VisitsChart({ buckets, step }: { buckets: TimeBucket[]; step: Bu
             <ChartTooltipContent
               labelFormatter={(_, payload) => {
                 const at: unknown = payload[0]?.payload?.at
-                return typeof at === 'string' ? fullFmt.format(new Date(at)) : ''
+                return typeof at === 'string' ? full(at) : ''
               }}
             />
           }

@@ -527,9 +527,15 @@ func (s *Service) Breakdown(ctx context.Context, userID, formID uuid.UUID, perio
 	for _, c := range countries {
 		withPlace += c.Visits
 	}
+	// Укрупнение — ПОСЛЕ заполнения пустых корзин и по факту, а не по окну: «всё
+	// время» у новой формы это три дня, у старой — три года, и до запроса длину
+	// ряда не знает никто (domain.CoarsenBuckets).
+	series, seriesStep := domain.CoarsenBuckets(
+		domain.FillBuckets(buckets, step, period.From, period.To), step)
+
 	out := domain.VisitsBreakdown{
-		Step:          step,
-		Timeseries:    domain.FillBuckets(buckets, step, period.From, period.To),
+		Step:          seriesStep,
+		Timeseries:    series,
 		SourcesLocked: !d.Allowed,
 		KnownSources:  domain.CountKnownSources(sources),
 		Devices:       devices,
