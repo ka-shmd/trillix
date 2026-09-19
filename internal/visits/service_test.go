@@ -85,6 +85,7 @@ type fakeStore struct {
 	agents      []domain.UserAgentRow
 	step        domain.BucketStep
 	period      domain.Period // окно наблюдения, с которым сервис пришёл в стор
+	keyPeriod   domain.Period // окно, по которому собирались сырые значения сегмента
 	upsetErr    error
 }
 
@@ -160,12 +161,12 @@ func (s *fakeStore) Cities(_ context.Context, _ postgres.DBTX, _ uuid.UUID, peri
 }
 
 func (s *fakeStore) Sources(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.SourceRow, error) {
-	s.period = period
+	s.period, s.keyPeriod = period, period
 	return s.sources, nil
 }
 
 func (s *fakeStore) UserAgents(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period) ([]domain.UserAgentRow, error) {
-	s.period = period
+	s.period, s.keyPeriod = period, period
 	return s.agents, nil
 }
 
@@ -855,6 +856,34 @@ func TestInsights_PreviousWindow(t *testing.T) {
 	}
 	if store.prev != nil {
 		t.Errorf("у всего времени прошлое окно: %+v", store.prev)
+	}
+}
+
+// Ключи сегмента собираются по оба окна сразу: список сырых значений, собранный по
+// текущему окну, не содержал бы значений только прошлого (сменившаяся мажорная
+// версия браузера, сменившийся utm) — и прошлое окно карточек обнулялось бы.
+func TestInsights_SegmentKeysCoverPreviousWindow(t *testing.T) {
+	store := &fakeStore{agents: []domain.UserAgentRow{{UserAgent: "Mozilla/5.0 (iPhone)"}}}
+	svc := segmentSvc(openPlans(), store, nil)
+	svc.now = func() time.Time { return now }
+
+	week := domain.Period{From: now.AddDate(0, 0, -7)}
+	phone := domain.Segment{Dim: domain.SegDevice, Value: "Телефон"}
+	if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), week, phone); err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if !store.keyPeriod.From.Equal(now.AddDate(0, 0, -14)) {
+		t.Errorf("окно сбора ключей: from = %v, ждали начало прошлого окна %v", store.keyPeriod.From, now.AddDate(0, 0, -14))
+	}
+	if !store.keyPeriod.To.Equal(week.To) {
+		t.Errorf("окно сбора ключей: to = %v, ждали верх текущего %v", store.keyPeriod.To, week.To)
+	}
+	// У «всего времени» прошлого окна нет — окно сбора остаётся своим.
+	if _, err := svc.Insights(context.Background(), uuid.New(), uuid.New(), domain.Period{}, phone); err != nil {
+		t.Fatalf("Insights (всё время): %v", err)
+	}
+	if !store.keyPeriod.From.IsZero() {
+		t.Errorf("всё время: окно сбора ключей съехало на %v", store.keyPeriod.From)
 	}
 }
 

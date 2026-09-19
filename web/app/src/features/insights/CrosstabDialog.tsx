@@ -6,6 +6,7 @@ import { MIN_BASE, percentOf } from './metrics'
 import { crosstabQueryOptions } from './queries'
 import { ApiError } from '../../shared/api/errors'
 import { type Period } from '../../shared/period'
+import { SEGMENT_K } from '../../shared/segment'
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog'
 import {
   Select,
@@ -73,7 +74,9 @@ export function CrosstabDialog({
         ) : table.isError ? (
           <p className="text-sm text-muted-foreground">Не удалось посчитать таблицу.</p>
         ) : table.data.withheld ? (
-          <p className="text-sm text-muted-foreground">В выборке меньше 5 ответов — таблица не показывается.</p>
+          <p className="text-sm text-muted-foreground">
+            В выборке меньше {SEGMENT_K} ответов — таблица не показывается.
+          </p>
         ) : table.data.total === 0 ? (
           <p className="text-sm text-muted-foreground">Никто не ответил на оба вопроса.</p>
         ) : (

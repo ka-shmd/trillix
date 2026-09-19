@@ -48,5 +48,4 @@ export const formFunnelSchema = z.object({
 })
 
 export type FunnelStep = z.infer<typeof funnelStepSchema>
-export type FunnelPage = z.infer<typeof funnelPageSchema>
 export type FormFunnel = z.infer<typeof formFunnelSchema>

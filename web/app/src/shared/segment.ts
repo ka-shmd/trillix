@@ -39,3 +39,9 @@ export function splitSegment(segment: string | undefined): { dim: SegmentDim; va
 export function segmentParams(segment: string | undefined): Record<string, string> {
   return segment ? { segment } : {}
 }
+
+// Порог малых выборок — ЗЕРКАЛИТ domain.SegmentK. В ответе API числа нет (`withheld`
+// булево), поэтому копия порога живёт здесь: три экрана объясняют человеку, почему
+// распределения, таблица и сами ответы не показаны, и обязаны называть то же число,
+// по которому сервер их скрыл.
+export const SEGMENT_K = 5

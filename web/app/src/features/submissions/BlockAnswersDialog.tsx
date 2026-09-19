@@ -4,6 +4,7 @@ import { blockAnswersQueryOptions } from './queries'
 import { formatDate, pluralAnswers } from '../../shared/format'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
 import { type Period } from '../../shared/period'
+import { SEGMENT_K } from '../../shared/segment'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -91,7 +92,7 @@ export function BlockAnswersDialog({
           <ErrorState title="Не удалось загрузить ответы." onRetry={() => answers.refetch()} />
         ) : answers.data.pages[0]?.withheld ? (
           <p className="text-sm text-muted-foreground">
-            В выборке меньше 5 ответов — сами ответы не показываются.
+            В выборке меньше {SEGMENT_K} ответов — сами ответы не показываются.
           </p>
         ) : (
           <ScrollArea className="max-h-[60vh]">

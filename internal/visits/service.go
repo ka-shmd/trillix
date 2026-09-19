@@ -361,15 +361,25 @@ func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period
 	if err != nil {
 		return domain.VisitInsights{}, err
 	}
-	filter, err := s.segmentFilter(ctx, userID, form.WorkspaceID, formID, period, seg, nil)
-	if err != nil {
-		return domain.VisitInsights{}, err
-	}
 	// Прошлое окно той же длины — ради сравнения на карточках (спека
 	// design/analytics-v2.md §8); у «всего времени» его нет.
 	var prev *domain.Period
 	if p, ok := domain.PreviousPeriod(period, s.now()); ok {
 		prev = &p
+	}
+	// МИНА: ключи сегмента собираются по ОБА окна сразу, а не по текущему. Сегменты
+	// с ключом-строкой (устройство, браузер, ОС, источник) разворачиваются в список
+	// сырых значений выборки, и список, собранный по текущему окну, не содержит
+	// значений, встречавшихся только в прошлом — а фильтр в VisitInsights режет им
+	// обе половины скана. Браузер, обновивший мажорную версию на границе окна, или
+	// кампания, сменившая utm, обнуляли бы *_prev и давали рост в тысячи процентов.
+	keyPeriod := period
+	if prev != nil {
+		keyPeriod.From = prev.From
+	}
+	filter, err := s.segmentFilter(ctx, userID, form.WorkspaceID, formID, keyPeriod, seg, nil)
+	if err != nil {
+		return domain.VisitInsights{}, err
 	}
 	return s.repo.Insights(ctx, s.db, formID, period, prev, filter)
 }
