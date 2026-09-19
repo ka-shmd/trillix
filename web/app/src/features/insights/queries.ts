@@ -2,7 +2,7 @@ import { queryOptions } from '@tanstack/react-query'
 
 import { insightsKeys } from './keys'
 import { ApiError } from '../../shared/api/errors'
-import { getVersionStats, getVisitInsights, getVisitsBreakdown } from './api'
+import { getCrosstab, getVersionStats, getVisitInsights, getVisitsBreakdown } from './api'
 import { analyticsFreshness, type Period } from '../../shared/period'
 
 // Карточки аналитики — обычный запрос: сервер отдаёт готовые счётчики.
@@ -32,5 +32,21 @@ export function visitsBreakdownQueryOptions(formId: string, period: Period) {
     ...analyticsFreshness,
     queryKey: insightsKeys.breakdown(formId, period),
     queryFn: () => getVisitsBreakdown(formId, period),
+  })
+}
+
+export function crosstabQueryOptions(
+  formId: string,
+  period: Period,
+  rows: string,
+  cols: string,
+  where?: string,
+) {
+  return queryOptions({
+    ...analyticsFreshness,
+    queryKey: insightsKeys.crosstab(formId, period, rows, cols, where),
+    queryFn: () => getCrosstab(formId, period, rows, cols, where),
+    retry: (count: number, error: Error) =>
+      !(error instanceof ApiError && error.code === 'plan_required') && count < 3,
   })
 }

@@ -89,3 +89,68 @@ func TestSummary_Filter(t *testing.T) {
 		t.Errorf("сводка без фильтра при закрытых сегментах: статус %d", r.StatusCode)
 	}
 }
+
+// Таблица сопряжённости через HTTP: клетки, итог, фильтр режет и её; открытый вопрос
+// — 422; закрытый тариф — 402.
+func TestCrosstab_EndToEnd(t *testing.T) {
+	resetDB(t)
+	srv := fullStack(t)
+	owner, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
+	formID := publishSummaryForm(t, ownerID)
+	v1 := versionID(t, formID, 1)
+	insertAnswer(t, formID, v1, `{"b_src":"o1","b_rate":"5"}`)
+	insertAnswer(t, formID, v1, `{"b_src":"o1","b_rate":"4"}`)
+	insertAnswer(t, formID, v1, `{"b_src":"o2","b_rate":"5"}`)
+	insertAnswer(t, formID, v1, `{"b_rate":"1"}`)
+
+	get := func(query string) *http.Response {
+		t.Helper()
+		resp, err := owner.Get(srv.URL + "/api/v1/forms/" + formID.String() + "/submissions/crosstab?" + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = resp.Body.Close() })
+		return resp
+	}
+	resp := get("rows=b_src&cols=b_rate")
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("статус %d", resp.StatusCode)
+	}
+	var body struct {
+		Rows []struct {
+			Key   string `json:"key"`
+			Label string `json:"label"`
+			Total int    `json:"total"`
+		} `json:"rows"`
+		Cells [][]int `json:"cells"`
+		Total int     `json:"total"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+		t.Fatal(err)
+	}
+	// Строки: Друзья, Поиск; столбцы — деления 1..5.
+	if body.Total != 3 || body.Rows[0].Label != "Друзья" || body.Rows[0].Total != 2 ||
+		body.Cells[0][4] != 1 || body.Cells[0][3] != 1 || body.Cells[1][4] != 1 {
+		t.Errorf("таблица: %+v", body)
+	}
+
+	filtered := get("rows=b_src&cols=b_rate&where=" + domain.EncodeAnswerFilter(domain.AnswerFilter{{BlockID: "b_rate", Op: domain.OpGte, Value: "5"}}))
+	var fb struct {
+		Total int `json:"total"`
+	}
+	if err := json.NewDecoder(filtered.Body).Decode(&fb); err != nil || fb.Total != 2 {
+		t.Errorf("с фильтром: %d, %v", fb.Total, err)
+	}
+	if r := get("rows=b_src&cols=b_note"); r.StatusCode != http.StatusUnprocessableEntity {
+		t.Errorf("открытый вопрос: статус %d, ждали 422", r.StatusCode)
+	}
+	if _, err := testPool.Exec(context.Background(), `UPDATE plans SET limits = jsonb_set(limits, '{analytics_segments}', 'false')`); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_, _ = testPool.Exec(context.Background(), `UPDATE plans SET limits = jsonb_set(limits, '{analytics_segments}', 'true')`)
+	})
+	if r := get("rows=b_src&cols=b_rate"); r.StatusCode != http.StatusPaymentRequired {
+		t.Errorf("закрытый тариф: статус %d, ждали 402", r.StatusCode)
+	}
+}

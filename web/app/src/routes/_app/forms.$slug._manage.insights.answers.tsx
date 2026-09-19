@@ -7,6 +7,7 @@ import { type BucketStep } from '../../entities/visitsBreakdown'
 import { BarRows, type BarRow } from '../../features/insights/Breakdown'
 import { AnswerFilterBar } from '../../features/insights/AnswerFilterBar'
 import { VisitCards } from '../../features/insights/Cards'
+import { CrosstabDialog } from '../../features/insights/CrosstabDialog'
 import { ScaleTrendChart } from '../../features/insights/lazyCharts'
 import { MIN_BASE, percentOf } from '../../features/insights/metrics'
 import { formDetailQueryOptions } from '../../features/forms/queries'
@@ -132,6 +133,7 @@ function SummaryPage() {
                 formId={formId ?? ''}
                 period={period}
                 where={where}
+                closed={summary.data.blocks.filter((o) => o.kind === 'distribution')}
               />
             ))}
           </div>
@@ -148,6 +150,7 @@ function BlockCard({
   formId,
   period,
   where,
+  closed,
 }: {
   block: BlockSummary
   total: number
@@ -155,8 +158,12 @@ function BlockCard({
   formId: string
   period: Period
   where: string | undefined
+  // Закрытые вопросы сводки — с ними этот можно сравнить таблицей.
+  closed: BlockSummary[]
 }) {
   const [allOpen, setAllOpen] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
+  const others = block.kind === 'distribution' ? closed.filter((o) => o.blockId !== block.blockId) : []
 
   return (
     <article className="flex flex-col gap-3">
@@ -178,6 +185,27 @@ function BlockCard({
         <NumberStats block={block} />
       ) : (
         <Samples block={block} />
+      )}
+      {others.length > 0 && block.answered > 0 && (
+        <>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto justify-start p-0"
+            onClick={() => setCompareOpen(true)}
+          >
+            Сравнить с другим вопросом
+          </Button>
+          <CrosstabDialog
+            open={compareOpen}
+            onOpenChange={setCompareOpen}
+            formId={formId}
+            period={period}
+            where={where}
+            block={block}
+            others={others}
+          />
+        </>
       )}
       {/* «Все ответы» показывается, только когда показано не всё: сводка отдаёт
           десять последних значений, и у вопроса с девятью ответами кнопка открыла

@@ -1,6 +1,7 @@
 import { apiRequest } from '../../shared/api/client'
 import { visitInsightsSchema, type VisitInsights } from '../../entities/insights'
 import { visitsBreakdownSchema, type VisitsBreakdown } from '../../entities/visitsBreakdown'
+import { crosstabSchema, type Crosstab } from '../../entities/summary'
 import { versionStatsSchema, type VersionStat } from '../../entities/versionStats'
 import { periodRange, type Period } from '../../shared/period'
 import { segmentParams } from '../../shared/segment'
@@ -39,4 +40,16 @@ export async function getVersionStats(
     schema: versionStatsSchema,
   })
   return res.versions
+}
+
+// Таблица сопряжённости: вопрос rows × вопрос cols, с окном и фильтром сводки.
+export function getCrosstab(
+  formId: string,
+  period: Period,
+  rows: string,
+  cols: string,
+  where?: string,
+): Promise<Crosstab> {
+  const query = new URLSearchParams({ ...periodRange(period), rows, cols, ...(where ? { where } : {}) })
+  return apiRequest(`/forms/${formId}/submissions/crosstab?${query.toString()}`, { schema: crosstabSchema })
 }

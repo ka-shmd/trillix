@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   blockAnswersPageSchema,
+  crosstabSchema,
   formSummarySchema,
   type BlockSummary,
   type FormSummary,
@@ -196,5 +197,18 @@ describe('страница значений одного вопроса', () => 
   it('пустой курсор на последней странице — null, а не отсутствие поля', () => {
     const page = blockAnswersPageSchema.parse({ answers: [], nextCursor: null })
     expect(page.nextCursor).toBeNull()
+  })
+})
+
+describe('crosstabSchema', () => {
+  // Форма ответа — по DTO crosstabResponse (internal/submissions/handler.go).
+  it('разбирает таблицу', () => {
+    const parsed = crosstabSchema.parse({
+      rows: [{ key: 'o1', label: 'Друзья', total: 2 }],
+      cols: [{ key: '5', label: '5', total: 1 }],
+      cells: [[1]],
+      total: 2,
+    })
+    expect(parsed.cells[0]?.[0]).toBe(1)
   })
 })

@@ -34,6 +34,7 @@ type listService interface {
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
 	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period, filter domain.AnswerFilter) (domain.Summary, error)
 	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, filter domain.AnswerFilter, after *Cursor, limit int) (AnswerPage, error)
+	Crosstab(ctx context.Context, userID, formID uuid.UUID, period domain.Period, rowID, colID string, filter domain.AnswerFilter) (domain.Crosstab, error)
 	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, *int, error)
 	GetForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) (Submission, map[string]domain.AnswerFile, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
@@ -102,6 +103,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// из её строки и живёт по тем же правилам (то же окно наблюдения, тот же рендер).
 	mux.Handle("GET /api/v1/forms/{id}/submissions/summary/{block}", h.requireAuth(http.HandlerFunc(h.blockAnswers)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/count", h.requireAuth(http.HandlerFunc(h.count)))
+	mux.Handle("GET /api/v1/forms/{id}/submissions/crosstab", h.requireAuth(http.HandlerFunc(h.crosstab)))
 	// Печать — СВОЙ корень, а не подпуть /submissions/{sid}: рядом живёт
 	// /submissions/summary/{block}, и «{sid}/pdf» с ним неразличим для маршрутизатора
 	// (оба матчат .../submissions/summary/pdf). Тот же приём, что у черновиков,
@@ -950,4 +952,61 @@ func decodeTimeCursor(s string) (*TimeCursor, error) {
 		return nil, fmt.Errorf("time cursor: parse id: %w", err)
 	}
 	return &TimeCursor{At: ts, ID: rowID}, nil
+}
+
+type crossAxisResponse struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Total — ответов с этим значением в таблице (ответили на оба вопроса).
+	Total int `json:"total"`
+}
+
+type crosstabResponse struct {
+	Rows  []crossAxisResponse `json:"rows"`
+	Cols  []crossAxisResponse `json:"cols"`
+	Cells [][]int             `json:"cells"`
+	Total int                 `json:"total"`
+}
+
+// crosstab отдаёт таблицу сопряжённости двух закрытых вопросов (`?rows=&cols=`),
+// с тем же окном наблюдения и фильтром, что у сводки.
+func (h *Handler) crosstab(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	period, err := httpserver.PeriodFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	filter, err := domain.ParseAnswerFilter(r.URL.Query().Get("where"))
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	q := r.URL.Query()
+	start := time.Now()
+	ct, err := h.svc.Crosstab(r.Context(), userID, formID, period, q.Get("rows"), q.Get("cols"), filter)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.LoggerFrom(r.Context()).Info("submissions crosstab",
+		slog.String("form_id", formID.String()),
+		slog.Int("answers", ct.Total),
+		slog.Duration("duration", time.Since(start)),
+	)
+	axis := func(in []domain.SummaryBucket) []crossAxisResponse {
+		out := make([]crossAxisResponse, len(in))
+		for i, b := range in {
+			out[i] = crossAxisResponse{Key: b.Key, Label: b.Label, Total: b.Count}
+		}
+		return out
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, crosstabResponse{Rows: axis(ct.Rows), Cols: axis(ct.Cols), Cells: ct.Cells, Total: ct.Total})
 }
