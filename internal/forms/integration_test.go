@@ -718,10 +718,10 @@ func TestForms_Behavior_AppliesWithoutRepublish(t *testing.T) {
 		t.Fatalf("набор не заменился целиком: autoJump=%v saveLocally=%v allowBack=%v", d.AutoJump, d.SaveLocally, d.AllowBack)
 	}
 
-	// ⚠ ХОД НАЗАД ВХОДИТ В ETag САМ ПО СЕБЕ (мина viewETagSuffix): забытый там признак
-	// означает 304 с прежним телом до самой перепубликации — автор включил возврат, а
-	// все, кто форму уже открывал, листают её только вперёд. Меняем ОДИН этот флаг,
-	// остальные не трогаем, и требуем нового ETag.
+	// ⚠ ХОД НАЗАД ВХОДИТ В ETag САМ ПО СЕБЕ (мина viewETag): без этого 304 с прежним
+	// телом до самой перепубликации — автор включил возврат, а все, кто форму уже
+	// открывал, листают её только вперёд. Меняем ОДИН этот флаг, остальные не трогаем,
+	// и требуем нового ETag.
 	_, etagOnlySave := getPublicOK(t, anon, srv, form.Slug)
 	patchBehavior(t, alice, srv, form.ID, `{"autoJump":false,"saveLocally":true,"allowBack":true}`, http.StatusOK)
 	backOn, etagBack := getPublicOK(t, anon, srv, form.Slug)
@@ -740,6 +740,43 @@ func TestForms_Behavior_AppliesWithoutRepublish(t *testing.T) {
 	}
 	closeBody(t, r)
 	patchBehavior(t, bob, srv, form.ID, `{"autoJump":true,"saveLocally":true,"allowBack":true}`, http.StatusNotFound)
+}
+
+// Сбор незавершённых, включённый у опубликованной формы, доезжает до того, кто форму
+// уже открывал: условный запрос с прежним ETag получает новое тело, а не 304.
+func TestForms_CollectPartial_AppliesWithoutRepublish(t *testing.T) {
+	resetDB(t)
+	srv := newStack(t)
+	alice := registerUser(t, srv, "alice-partial@example.com")
+	anon := newClient(t)
+
+	form := createForm(t, alice, srv, "Анкета")
+	publishForm(t, alice, srv, form.ID, http.StatusOK)
+	setPlanGate(t, form.Slug, "submissions_partial", true)
+
+	before, etag := getPublicOK(t, anon, srv, form.Slug)
+	if before.CollectPartial {
+		t.Fatal("сбор незавершённых включён до всякой настройки")
+	}
+
+	r := do(t, alice, http.MethodPatch, srv.URL+"/api/v1/forms/"+form.ID, `{"collectPartial":true}`, csrf(t, alice, srv.URL))
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH collectPartial: статус %d, ожидалось 200; тело=%s", r.StatusCode, body2(t, r))
+	}
+	closeBody(t, r)
+
+	r = doWithHeader(t, anon, http.MethodGet, srv.URL+"/public/v1/forms/"+form.Slug, "If-None-Match", etag)
+	if r.StatusCode != http.StatusOK {
+		t.Fatalf("условный запрос с прежним ETag после включения сбора: статус %d, ожидалось 200", r.StatusCode)
+	}
+	var after publicFormDTO
+	decode(t, r, &after)
+	if !after.CollectPartial {
+		t.Fatal("включённый сбор не доехал до публичной формы без перепубликации")
+	}
+	if after.Version != before.Version {
+		t.Fatalf("версия формы изменилась (%d → %d) — тумблер не имеет права публиковать", before.Version, after.Version)
+	}
 }
 
 func patchBehavior(t *testing.T, c *http.Client, srv *httptest.Server, id, behavior string, wantStatus int) {
@@ -1998,23 +2035,31 @@ func discardDraft(t *testing.T, c *http.Client, srv *httptest.Server, id, update
 // формы — тем же UPDATE, каким гейт двигают на проде.
 func setBrandingGate(t *testing.T, slug string, allowed bool) {
 	t.Helper()
+	setPlanGate(t, slug, "form_branding", allowed)
+}
+
+// setPlanGate открывает или закрывает переключатель тарифа (key — ключ
+// plans.limits) на плане владельца формы; после теста бесплатные планы получают
+// его обратно закрытым, как в миграциях.
+func setPlanGate(t *testing.T, slug, key string, allowed bool) {
+	t.Helper()
 	value := "false"
 	if allowed {
 		value = "true"
 	}
 	if _, err := testPool.Exec(context.Background(),
-		`UPDATE plans SET limits = jsonb_set(limits, '{form_branding}', $1::jsonb)
+		`UPDATE plans SET limits = jsonb_set(limits, ARRAY[$3::text], $1::jsonb)
 		 WHERE code = (SELECT s.plan_code FROM subscriptions s
 		               JOIN workspace_members o ON o.user_id = s.user_id AND o.role = 'owner'
 		               JOIN forms f ON f.workspace_id = o.workspace_id WHERE f.slug = $2)`,
-		value, slug); err != nil {
-		t.Fatalf("set branding gate: %v", err)
+		value, slug, key); err != nil {
+		t.Fatalf("set plan gate %s: %v", key, err)
 	}
 	t.Cleanup(func() {
 		if _, err := testPool.Exec(context.Background(),
-			`UPDATE plans SET limits = jsonb_set(limits, '{form_branding}', 'false')
-			 WHERE code IN ('free', 'legacy_free')`); err != nil {
-			t.Fatalf("reset branding gate: %v", err)
+			`UPDATE plans SET limits = jsonb_set(limits, ARRAY[$1::text], 'false')
+			 WHERE code IN ('free', 'legacy_free')`, key); err != nil {
+			t.Fatalf("reset plan gate %s: %v", key, err)
 		}
 	})
 }
@@ -2112,12 +2157,13 @@ type publicFormDTO struct {
 	Schema  json.RawMessage `json:"schema"`
 	// Token остаётся полем DTO, чтобы тест мог доказать его ОТСУТСТВИЕ в
 	// кэшируемом теле: токен выдаёт отдельная некэшируемая ручка (ADR §10).
-	Token       string `json:"token"`
-	ShowBadge   bool   `json:"showBadge"`
-	Progress    bool   `json:"progress"`
-	AutoJump    bool   `json:"autoJump"`
-	SaveLocally bool   `json:"saveLocally"`
-	AllowBack   bool   `json:"allowBack"`
+	Token          string `json:"token"`
+	ShowBadge      bool   `json:"showBadge"`
+	CollectPartial bool   `json:"collectPartial"`
+	Progress       bool   `json:"progress"`
+	AutoJump       bool   `json:"autoJump"`
+	SaveLocally    bool   `json:"saveLocally"`
+	AllowBack      bool   `json:"allowBack"`
 }
 
 // getFormToken — токен времени отдельной ручкой; возвращает его и Cache-Control.
