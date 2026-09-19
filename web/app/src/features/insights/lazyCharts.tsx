@@ -1,7 +1,7 @@
 import { lazy, Suspense } from 'react'
 
-import { type FormFunnel } from '../../entities/funnel'
 import { type BucketStep, type LabelCount, type TimeBucket } from '../../entities/visitsBreakdown'
+import { type FunnelRow } from './metrics'
 import { Skeleton } from '@/components/ui/skeleton'
 
 // ГРАНИЦА ЗАГРУЗКИ recharts. Библиотека тянет за собой около 116 КиБ gzip — треть
@@ -33,11 +33,11 @@ export function VisitsChart(props: { buckets: TimeBucket[]; step: BucketStep }) 
   )
 }
 
-export function FunnelChart(props: { funnel: FormFunnel }) {
-  // Высота воронки считается по числу шагов: две ступени плюс вопросы. Число 26
-  // зеркалит ROW_HEIGHT в FunnelChart.tsx — импортировать его оттуда нельзя,
-  // импорт значения втащил бы модуль с recharts обратно в общий чанк.
-  const height = (props.funnel.steps.length + 2) * 26 + 16
+export function FunnelChart(props: { rows: FunnelRow[]; base: number }) {
+  // Высота воронки считается по числу строк. Число 26 зеркалит ROW_HEIGHT в
+  // FunnelChart.tsx — импортировать его оттуда нельзя, импорт значения втащил бы
+  // модуль с recharts обратно в общий чанк.
+  const height = props.rows.length * 26 + 16
   return (
     <Suspense fallback={<Skeleton className="w-full" style={{ height }} />}>
       <FunnelChartImpl {...props} />

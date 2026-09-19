@@ -17,7 +17,7 @@ import {
   type SubmissionsKind,
 } from './api'
 import { ApiError } from '../../shared/api/errors'
-import { type Period } from '../../shared/period'
+import { analyticsFreshness, type Period } from '../../shared/period'
 
 // Ответы формы — серверный стейт с курсорной пагинацией (новые сверху), страницы
 // подгружаются через getNextPageParam; курсор непрозрачен для клиента.
@@ -59,6 +59,7 @@ export function partialsListQueryOptions(formId: string) {
 // Сводка формы — обычный запрос (не пагинируется: сервер отдаёт готовый итог).
 export function submissionsSummaryQueryOptions(formId: string, period: Period) {
   return queryOptions({
+    ...analyticsFreshness,
     queryKey: submissionKeys.summary(formId, period),
     queryFn: () => getSummary(formId, period),
   })
@@ -69,6 +70,7 @@ export function submissionsSummaryQueryOptions(formId: string, period: Period) {
 // каждый вопрос сводки тянул бы свою страницу заранее.
 export function blockAnswersQueryOptions(formId: string, blockId: string, period: Period) {
   return infiniteQueryOptions({
+    ...analyticsFreshness,
     queryKey: submissionKeys.blockAnswers(formId, period, blockId),
     queryFn: ({ pageParam }) => listBlockAnswers(formId, blockId, period, pageParam),
     initialPageParam: undefined as string | undefined,
@@ -79,6 +81,7 @@ export function blockAnswersQueryOptions(formId: string, blockId: string, period
 // Счётчик ответов за период — карточка над вкладками аналитики.
 export function submissionsCountQueryOptions(formId: string, period: Period) {
   return queryOptions({
+    ...analyticsFreshness,
     queryKey: submissionKeys.count(formId, period),
     queryFn: () => getSubmissionsCount(formId, period),
   })

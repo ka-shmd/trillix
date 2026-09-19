@@ -22,6 +22,11 @@ export const DEFAULT_PERIOD: Period = '24h'
 
 export const periodSchema = periodEnum.catch(DEFAULT_PERIOD)
 
+// Свежесть запросов аналитики (TD-79). Каждый из них — полный проход по визитам или
+// ответам формы за окно, поэтому фокус окна их не перезапускает, а повторный заход на
+// вкладку в пределах минуты берёт кеш. Смена окна — другой ключ и новый запрос.
+export const analyticsFreshness = { staleTime: 60 * 1000, refetchOnWindowFocus: false } as const
+
 export const periodLabels: Record<Period, string> = {
   all: 'Всё время',
   '24h': '24 часа',

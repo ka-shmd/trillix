@@ -1,17 +1,30 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
+import { useState } from 'react'
 
 import { type FormFunnel } from '../../entities/funnel'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { funnelQueryOptions } from '../../features/funnel/queries'
 import { CompletionCards } from '../../features/insights/Cards'
 import { FunnelChart } from '../../features/insights/lazyCharts'
-import { worstStep } from '../../features/insights/metrics'
+import {
+  funnelRows,
+  funnelSteps,
+  pageQuestionRows,
+  worstStep,
+} from '../../features/insights/metrics'
 import { pluralPeople } from '../../shared/format'
 import { ApiError } from '../../shared/api/errors'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 
 // Вкладка «Отвалы» (/forms/$slug/insights/drop-offs): на каком вопросе люди уходят.
 //
@@ -100,33 +113,73 @@ function FunnelPage() {
           />
         ) : (
           <>
-            <FunnelChart funnel={funnel.data} />
+            <FunnelChart rows={funnelRows(funnel.data)} base={funnel.data.visits} />
             {funnel.data.leftBeforeFirst > 0 && (
               <p className="text-sm text-muted-foreground">
                 {funnel.data.leftBeforeFirst} ушли, не тронув ни одного вопроса.
               </p>
             )}
-            {/* Честная оговорка на самом экране, а не только в документации: пока
-                форма — одна длинная страница, «дошёл» означает «коснулся поля».
-                Проскроллившего и передумавшего не видно, и владелец должен знать
-                это, читая числа. */}
-            <p className="text-xs text-muted-foreground">
-              «Дошёл до вопроса» считается по касанию поля: человек, который пролистал форму и ушёл,
-              ничего не заполнив, в шаги не попадает. С приходом многостраничных форм счёт станет
-              точнее.
-            </p>
           </>
         )}
       </Section>
+
+      {funnel.data && funnel.data.visits > 0 && funnel.data.pages.length > 0 && (
+        <PageQuestions funnel={funnel.data} />
+      )}
     </div>
+  )
+}
+
+// Вопросы одной страницы многостраничной формы. Выбор страницы — список, а не щелчок
+// по полоске графика: полоска не кнопка, и с клавиатуры до неё не добраться. Сначала
+// открыта страница, названная в пояснении воронки, — ради неё сюда и спускаются.
+function PageQuestions({ funnel }: { funnel: FormFunnel }) {
+  const [chosen, setChosen] = useState<string | null>(null)
+  const worst = worstStep(funnelSteps(funnel))
+  const fallback = worst ? worst.key : `page:${funnel.pages[0]!.key}`
+  // Выбранной страницы может не оказаться в новом окне наблюдения — тогда снова
+  // страница по умолчанию, а не пустой список.
+  const value = chosen !== null && funnel.pages.some((p) => `page:${p.key}` === chosen) ? chosen : fallback
+  // Ключ страницы '' (первая) Select не принимает — пустое значение у него значит
+  // «ничего не выбрано». Отсюда префикс page: — тот же, что у строк воронки.
+  const pageKey = value.slice('page:'.length)
+
+  return (
+    <Section
+      title="Вопросы страницы"
+      description="Сколько человек дошло до каждого вопроса выбранной страницы и где они остановились."
+      action={
+        <Select value={value} onValueChange={setChosen}>
+          <SelectTrigger className="w-[220px]" aria-label="Страница">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent>
+            {funnel.pages.map((p) => (
+              <SelectItem key={p.key} value={`page:${p.key}`}>
+                {p.label}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      }
+    >
+      <FunnelChart rows={pageQuestionRows(funnel, pageKey)} base={funnel.visits} />
+    </Section>
   )
 }
 
 // Пояснение раздела называет САМЫЙ ПРОБЛЕМНЫЙ шаг — то, ради чего на экран и
 // заходят. Разбор по каждому шагу остаётся в тултипе его полоски.
 function funnelHint(funnel: FormFunnel | undefined): string {
-  if (!funnel) return 'Сколько человек дошло до каждого вопроса и где они останавливаются.'
-  const worst = worstStep(funnel.steps)
-  if (!worst) return 'Ни на одном вопросе люди пока не останавливались.'
-  return `Больше всего теряется на шаге «${worst.label}» — ${worst.dropped} ${pluralPeople(worst.dropped)}.`
+  const general = 'Сколько человек дошло до каждого шага и где они останавливаются.'
+  if (!funnel) return general
+  const steps = funnelSteps(funnel)
+  const worst = worstStep(steps)
+  if (worst) {
+    return `Чаще всего уходят на шаге «${worst.label}»: ${worst.dropped} из ${worst.reached}, ${worst.percent} %.`
+  }
+  // Отвалы есть, но все на шагах ниже порога малых выборок: назвать худший нельзя, а
+  // «никто не останавливался» было бы неправдой.
+  if (steps.some((s) => s.dropped > 0)) return general
+  return 'Ни на одном шаге люди пока не останавливались.'
 }

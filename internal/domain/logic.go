@@ -514,10 +514,17 @@ func (p Plan) OptionVisible(blockID, optionID string) bool {
 	return opts[optionID]
 }
 
-// page — страница документа и разрыв, её закрывающий (nil у последней).
+// page — страница документа, разрыв, её закрывающий (nil у последней), и разрыв, её
+// открывающий (nil у первой).
+//
+// Открывающий — ПОСЛЕДНИЙ разрыв перед страницей, а закрывающий предыдущую — ПЕРВЫЙ:
+// при двух разрывах подряд это разные блоки. Открывающий зеркалит pageNumbers в
+// @fields/groups — на нём живёт имя страницы (settings.pageName), и аналитика обязана
+// назвать страницу так же, как её подписывает полотно.
 type page struct {
 	blocks []Block
 	closer *Block
+	opener *Block
 }
 
 // splitPages режет документ на страницы разрывами. Зеркалит splitPages в
@@ -532,19 +539,24 @@ type page struct {
 func splitPages(blocks []Block) []page {
 	var pages []page
 	var cur []Block
+	var lastBreak, opener *Block
 	for i := range blocks {
 		if blocks[i].Type != BlockPageBreak {
+			if len(cur) == 0 && len(pages) > 0 {
+				opener = lastBreak
+			}
 			cur = append(cur, blocks[i])
 			continue
 		}
+		lastBreak = &blocks[i]
 		if len(cur) == 0 {
 			continue // инертный разрыв: страницы не открывает и не закрывает
 		}
-		pages = append(pages, page{blocks: cur, closer: &blocks[i]})
-		cur = nil
+		pages = append(pages, page{blocks: cur, closer: &blocks[i], opener: opener})
+		cur, opener = nil, nil
 	}
 	if len(cur) > 0 {
-		pages = append(pages, page{blocks: cur})
+		pages = append(pages, page{blocks: cur, opener: opener})
 	}
 	if len(pages) == 0 {
 		pages = append(pages, page{})
