@@ -1,5 +1,6 @@
 import { z } from 'zod'
 import { blockTypeSchema } from '@entities/formSchema'
+import { bucketStepSchema } from './visitsBreakdown'
 
 // Сводка ответов формы (фаза 8.5 шаг 3). Единственный источник типа — эта Zod-схема
 // (web/CLAUDE.md), зеркалит summaryResponse из internal/submissions/handler.go.
@@ -39,6 +40,24 @@ export const answerSampleSchema = z.object({
 })
 export type AnswerSample = z.infer<typeof answerSampleSchema>
 
+// Шкала и звёзды (спека design/analytics-v2.md §6.1): средняя, NPS у шкалы 0–10 и
+// ряд средней по корзинам окна. n = 0 — в корзине ответов не было, avg тогда ничего
+// не значит: «средняя 0» и «никто не ответил» — разные показания.
+export const scalePointSchema = z.object({
+  at: z.string(),
+  n: z.number().int(),
+  avg: z.number(),
+})
+export type ScalePoint = z.infer<typeof scalePointSchema>
+
+export const scaleStatsSchema = z.object({
+  avg: z.number(),
+  // Нет у шкалы не 0–10: у шкалы 1–5 «промоутеров» не бывает.
+  nps: z.number().int().optional(),
+  trend: z.array(scalePointSchema),
+})
+export type ScaleStats = z.infer<typeof scaleStatsSchema>
+
 export const blockSummarySchema = z.object({
   blockId: z.string(),
   label: z.string(),
@@ -48,6 +67,8 @@ export const blockSummarySchema = z.object({
   answered: z.number().int(),
   buckets: z.array(summaryBucketSchema).default([]),
   number: numberStatsSchema.nullish(),
+  // Только у шкал и звёзд, на которые ответили (сервер шлёт с omitempty).
+  scale: scaleStatsSchema.nullish(),
   // Последние значения — не больше десяти: остальное живёт в листинге ответов со
   // своей пагинацией. Сервер шлёт поле с omitempty, отсюда default.
   samples: z.array(answerSampleSchema).default([]),
@@ -57,6 +78,8 @@ export type BlockSummary = z.infer<typeof blockSummarySchema>
 export const formSummarySchema = z.object({
   total: z.number().int(),
   blocks: z.array(blockSummarySchema),
+  // Шаг рядов шкал — выбирает сервер по окну, как у ряда визитов.
+  trendStep: bucketStepSchema,
 })
 export type FormSummary = z.infer<typeof formSummarySchema>
 

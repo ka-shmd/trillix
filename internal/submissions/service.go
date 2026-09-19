@@ -1514,13 +1514,18 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	}
 
 	builder := domain.NewSummaryBuilder(vs)
+	// Ряд шкал — тем же шагом, что ряд визитов за это окно: два графика одного экрана
+	// с разной сеткой времени читались бы как расхождение данных.
+	builder.Trend(domain.StepFor(period), period.From, period.To)
 	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
 		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)
 		return nil
 	}); err != nil {
 		return domain.Summary{}, err
 	}
-	return builder.Result(), nil
+	sum := builder.Result()
+	sum.TrendStep = domain.StepFor(period)
+	return sum, nil
 }
 
 // AnswerPage — страница значений ОДНОГО вопроса, новыми сверху.
