@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { type VisitsBreakdown } from '../../entities/visitsBreakdown'
-import { segmentOptions } from './segment'
+import { segmentOptions, withSelected } from './segment'
 
 const breakdown: VisitsBreakdown = {
   step: 'day',
@@ -53,5 +53,29 @@ describe('segmentOptions', () => {
 
   it('пока разбивка не приехала — вариантов нет', () => {
     expect(segmentOptions('device', undefined, undefined)).toEqual([])
+  })
+})
+
+// Выбранный сегмент переживает смену окна: значение, которого в новом окне нет, всё
+// равно обязано стоять в списке — иначе триггер пустеет, а фильтр работает.
+describe('withSelected', () => {
+  const devices = [{ value: 'Телефон', label: 'Телефон' }]
+
+  it('значение из списка не дублируется', () => {
+    expect(withSelected(devices, 'device', 'Телефон')).toEqual(devices)
+  })
+
+  it('без выбранного список не меняется', () => {
+    expect(withSelected(devices, 'device', undefined)).toEqual(devices)
+  })
+
+  it('пропавшее из окна значение добавляется со своей подписью', () => {
+    expect(withSelected(devices, 'device', 'Планшет')).toEqual([
+      ...devices,
+      { value: 'Планшет', label: 'Планшет' },
+    ])
+    expect(withSelected([], 'city', 'BY:Минск')).toEqual([{ value: 'BY:Минск', label: 'Минск (BY)' }])
+    expect(withSelected([], 'version', '2')).toEqual([{ value: '2', label: 'Версия 2' }])
+    expect(withSelected([], 'country', 'BY')).toEqual([{ value: 'BY', label: 'BY' }])
   })
 })

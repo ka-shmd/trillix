@@ -5,12 +5,16 @@ import { ApiError } from '../../shared/api/errors'
 import { getCrosstab, getVersionStats, getVisitInsights, getVisitsBreakdown } from './api'
 import { analyticsFreshness, type Period } from '../../shared/period'
 
-// Карточки аналитики — обычный запрос: сервер отдаёт готовые счётчики.
+// Карточки аналитики — обычный запрос: сервер отдаёт готовые счётчики. Отказ по
+// тарифу не ретраится: с сегментом ручка гейтится так же, как воронка, а 402 —
+// устойчивый ответ, а не сбой.
 export function visitInsightsQueryOptions(formId: string, period: Period, segment?: string) {
   return queryOptions({
     ...analyticsFreshness,
     queryKey: insightsKeys.visits(formId, period, segment),
     queryFn: () => getVisitInsights(formId, period, segment),
+    retry: (count: number, error: Error) =>
+      !(error instanceof ApiError && error.code === 'plan_required') && count < 3,
   })
 }
 

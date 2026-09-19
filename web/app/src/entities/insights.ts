@@ -29,4 +29,3 @@ export const visitInsightsSchema = insightsCountersSchema.extend({
   previous: insightsCountersSchema.optional(),
 })
 export type VisitInsights = z.infer<typeof visitInsightsSchema>
-export type InsightsCounters = z.infer<typeof insightsCountersSchema>

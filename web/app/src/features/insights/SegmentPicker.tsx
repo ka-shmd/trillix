@@ -2,7 +2,7 @@ import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
 import { versionStatsQueryOptions, visitsBreakdownQueryOptions } from './queries'
-import { segmentOptions } from './segment'
+import { segmentOptions, withSelected } from './segment'
 import { type Period } from '../../shared/period'
 import { isSegmentDim, segmentDimLabels, splitSegment, type SegmentDim } from '../../shared/segment'
 import { Button } from '@/components/ui/button'
@@ -45,7 +45,10 @@ export function SegmentPicker({
     ...versionStatsQueryOptions(formId, period),
     enabled: dim === 'version',
   })
-  const options = dim ? segmentOptions(dim, breakdown.data, versions.data) : []
+  const selected = current?.dim === dim ? current.value : undefined
+  // Выбранное значение остаётся в списке, даже если в окне его больше нет, — иначе
+  // триггер пустеет, а фильтр продолжает работать (см. withSelected).
+  const options = dim ? withSelected(segmentOptions(dim, breakdown.data, versions.data), dim, selected) : []
   const loading = dim === 'version' ? versions.isPending : breakdown.isPending
 
   return (
@@ -78,7 +81,7 @@ export function SegmentPicker({
 
       {dim && (
         <Select
-          value={current?.dim === dim ? current.value : ''}
+          value={selected ?? ''}
           onValueChange={(value) => {
             setPendingDim(null)
             onChange(`${dim}:${value}`)

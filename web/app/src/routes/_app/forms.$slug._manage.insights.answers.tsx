@@ -15,10 +15,16 @@ import { formDetailQueryOptions } from '../../features/forms/queries'
 import { BlockAnswersDialog } from '../../features/submissions/BlockAnswersDialog'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
 import { formatDate, LOCALE, pluralAnswers } from '../../shared/format'
-import { decodeFilter, encodeFilter, filterFromSearch, type FilterCondition } from '../../shared/answerFilter'
+import {
+  decodeFilter,
+  emptyScopeHint,
+  encodeFilter,
+  filterFromSearch,
+  type FilterCondition,
+} from '../../shared/answerFilter'
 import { ApiError } from '../../shared/api/errors'
 import { type Period } from '../../shared/period'
-import { segmentFromSearch } from '../../shared/segment'
+import { SEGMENT_K, segmentFromSearch } from '../../shared/segment'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
@@ -119,13 +125,13 @@ function SummaryPage() {
           <ErrorState title="Не удалось посчитать сводку." onRetry={() => summary.refetch()} />
         ) : summary.data.withheld ? (
           <EmptyState
-            title="В выборке меньше 5 ответов"
+            title={`В выборке меньше ${SEGMENT_K} ответов`}
             description="По узкой группе распределения не показываются: так ответы нельзя связать с конкретным человеком. Расширьте период или выберите другой сегмент."
           />
         ) : total === 0 && unfiltered !== undefined ? (
           <EmptyState
             title="Под условия не подошёл ни один ответ"
-            description="Измените условия фильтра или сбросьте его."
+            description={emptyScopeHint(where !== undefined, segment !== undefined)}
           />
         ) : total === 0 ? (
           <EmptyState

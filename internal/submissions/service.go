@@ -1411,6 +1411,22 @@ func (s *Service) versionedSchemas(ctx context.Context, userID, formID uuid.UUID
 	return parseVersions(formID, versions)
 }
 
+// scopeSchemas — то же для чтений с выборкой (сводка, сопряжённость, окно «все
+// ответы»): версии формы и её пространство одним разом. Пространство нужно гейту
+// кросс-аналитики, и добывать его заново на каждой проверке значило бы читать форму
+// по три раза за запрос.
+func (s *Service) scopeSchemas(ctx context.Context, userID, formID uuid.UUID) ([]domain.VersionedSchema, uuid.UUID, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	vs, err := s.versionedSchemas(ctx, userID, formID)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	return vs, form.WorkspaceID, nil
+}
+
 // parseVersions разбирает снапшоты версий в типы домена. Общее у авторизованного
 // чтения (выгрузка, сводка) и у фоновой доставки — разница между ними в том, кто
 // и с какой проверкой прав добыл versions, а не в том, как их читать.
@@ -1518,11 +1534,11 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 // сегмент по визиту. При выборке в Unfiltered — сколько ответов в окне без неё;
 // визитная выборка меньше domain.SegmentK не раскрывается (Withheld, без вопросов).
 func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period, scope domain.AnswerScope) (domain.Summary, error) {
-	vs, err := s.versionedSchemas(ctx, userID, formID)
+	vs, workspaceID, err := s.scopeSchemas(ctx, userID, formID)
 	if err != nil {
 		return domain.Summary{}, err
 	}
-	match, err := s.answerMatcher(ctx, userID, formID, vs, scope)
+	match, err := s.answerMatcher(ctx, workspaceID, vs, scope)
 	if err != nil {
 		return domain.Summary{}, err
 	}
@@ -1557,18 +1573,25 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 // §6.3) за окно, с выборкой сводки. Кросс-аналитика: ключ analytics_segments, после
 // авторизации, — даже без выборки.
 func (s *Service) Crosstab(ctx context.Context, userID, formID uuid.UUID, period domain.Period, rowID, colID string, scope domain.AnswerScope) (domain.Crosstab, error) {
-	vs, err := s.versionedSchemas(ctx, userID, formID)
+	vs, workspaceID, err := s.scopeSchemas(ctx, userID, formID)
 	if err != nil {
 		return domain.Crosstab{}, err
 	}
-	if err := s.checkSegments(ctx, userID, formID, domain.Segment{}); err != nil {
+	// Гейт спрашивается ОДИН раз: с выборкой тот же ключ (и analytics_sources у
+	// сегмента по источнику) проверит answerMatcher ниже, а без выборки спросить
+	// больше некому — сопряжённость закрыта тарифом и сама по себе.
+	if scope.IsZero() {
+		if err := s.checkSegments(ctx, workspaceID, domain.Segment{}); err != nil {
+			return domain.Crosstab{}, err
+		}
+	}
+	// Матчер строится ДО разбора вопросов таблицы: при непустой выборке тариф
+	// спрашивает он, а отказ по тарифу обязан опережать отказ по кривому запросу.
+	match, err := s.answerMatcher(ctx, workspaceID, vs, scope)
+	if err != nil {
 		return domain.Crosstab{}, err
 	}
 	builder, err := domain.NewCrosstabBuilder(vs, rowID, colID)
-	if err != nil {
-		return domain.Crosstab{}, err
-	}
-	match, err := s.answerMatcher(ctx, userID, formID, vs, scope)
 	if err != nil {
 		return domain.Crosstab{}, err
 	}
@@ -1589,17 +1612,17 @@ func (s *Service) Crosstab(ctx context.Context, userID, formID uuid.UUID, period
 
 // checkSegments — ключ кросс-аналитики analytics_segments; у сегмента по источнику —
 // ещё и analytics_sources (иначе закрытая разбивка источников читалась бы сегментами).
-func (s *Service) checkSegments(ctx context.Context, userID, formID uuid.UUID, seg domain.Segment) error {
-	form, err := s.forms.Get(ctx, userID, formID)
-	if err != nil {
-		return err
-	}
+//
+// Пространство приходит аргументом, а не добывается здесь: чтение формы делает
+// scopeSchemas один раз на запрос, и повторный forms.Get был бы вторым походом за
+// тем же полем (авторизацию он тоже уже сделал).
+func (s *Service) checkSegments(ctx context.Context, workspaceID uuid.UUID, seg domain.Segment) error {
 	keys := []entitlements.Key{entitlements.AnalyticsSegments}
 	if seg.Dim == domain.SegSource {
 		keys = append(keys, entitlements.AnalyticsSources)
 	}
 	for _, key := range keys {
-		d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, key)
+		d, err := s.plans.CheckWorkspace(ctx, workspaceID, key)
 		if err != nil {
 			return err
 		}
@@ -1614,11 +1637,11 @@ func (s *Service) checkSegments(ctx context.Context, userID, formID uuid.UUID, s
 // Выборка — кросс-аналитика (checkSegments, после авторизации, которую уже сделал
 // versionedSchemas). Условия сверяются с моделью вопросов: инертное условие молча дало
 // бы пустую сводку. Без выборки проходит всё, и тариф не спрашивается.
-func (s *Service) answerMatcher(ctx context.Context, userID, formID uuid.UUID, vs []domain.VersionedSchema, scope domain.AnswerScope) (func(sub Submission, answers map[string]json.RawMessage) bool, error) {
+func (s *Service) answerMatcher(ctx context.Context, workspaceID uuid.UUID, vs []domain.VersionedSchema, scope domain.AnswerScope) (func(sub Submission, answers map[string]json.RawMessage) bool, error) {
 	if scope.IsZero() {
 		return func(Submission, map[string]json.RawMessage) bool { return true }, nil
 	}
-	if err := s.checkSegments(ctx, userID, formID, scope.Segment); err != nil {
+	if err := s.checkSegments(ctx, workspaceID, scope.Segment); err != nil {
 		return nil, err
 	}
 	if err := scope.Filter.Check(domain.QuestionOrder(vs)); err != nil {
@@ -1667,11 +1690,11 @@ var errAnswersEnough = errors.New("submissions: answer page is full")
 // порог domain.SegmentK проверяется ДО листания — отдельным подсчётом по окну: иначе
 // первая же страница раскрыла бы ответы выборки из двух человек.
 func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, scope domain.AnswerScope, after *Cursor, limit int) (AnswerPage, error) {
-	vs, err := s.versionedSchemas(ctx, userID, formID)
+	vs, workspaceID, err := s.scopeSchemas(ctx, userID, formID)
 	if err != nil {
 		return AnswerPage{}, err
 	}
-	match, err := s.answerMatcher(ctx, userID, formID, vs, scope)
+	match, err := s.answerMatcher(ctx, workspaceID, vs, scope)
 	if err != nil {
 		return AnswerPage{}, err
 	}

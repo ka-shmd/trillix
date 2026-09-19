@@ -54,3 +54,12 @@ export function filterFromSearch(raw: unknown): string | undefined {
 export function needsValue(op: LogicOperator): boolean {
   return op !== 'answered' && op !== 'empty'
 }
+
+// Чем сужена пустая выборка. Сервер отдаёт `unfiltered` при ЛЮБОЙ непустой выборке
+// (domain.AnswerScope) — и при фильтре, и при одном сегменте, поэтому текст «сбросьте
+// фильтр» при выбранном сегменте отсылал бы к пустой панели условий.
+export function emptyScopeHint(filtered: boolean, segmented: boolean): string {
+  if (filtered && segmented) return 'Измените условия фильтра или выберите другой сегмент.'
+  if (segmented) return 'Выберите другой сегмент или сбросьте его.'
+  return 'Измените условия фильтра или сбросьте его.'
+}

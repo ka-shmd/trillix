@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { decodeFilter, encodeFilter } from './answerFilter'
+import { decodeFilter, emptyScopeHint, encodeFilter } from './answerFilter'
 
 describe('answerFilter', () => {
   // Кириллица в значении: base64url поверх UTF-8, а не поверх строки JS.
@@ -27,5 +27,18 @@ describe('answerFilter', () => {
     expect(encodeFilter([])).toBeUndefined()
     expect(decodeFilter('%%%')).toEqual([])
     expect(decodeFilter(undefined)).toEqual([])
+  })
+})
+
+// Пустая выборка называет то, чем она сужена: сервер отдаёт `unfiltered` и при одном
+// сегменте, и текст про «сбросьте фильтр» отсылал бы к пустой панели условий.
+describe('emptyScopeHint', () => {
+  it('один сегмент — про сегмент, один фильтр — про фильтр, оба — про оба', () => {
+    expect(emptyScopeHint(false, true)).toContain('сегмент')
+    expect(emptyScopeHint(false, true)).not.toContain('фильтр')
+    expect(emptyScopeHint(true, false)).toContain('фильтр')
+    expect(emptyScopeHint(true, false)).not.toContain('сегмент')
+    expect(emptyScopeHint(true, true)).toContain('фильтр')
+    expect(emptyScopeHint(true, true)).toContain('сегмент')
   })
 })
