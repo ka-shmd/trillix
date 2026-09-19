@@ -91,12 +91,20 @@ function Breakdowns({ data }: { data: VisitsBreakdown }) {
                   {
                     value: 'countries',
                     label: 'Страны',
-                    content: <Places rows={data.countries} unknown={data.unknownPlace} />,
+                    content: (
+                      <Places rows={data.countries} label="Страна" unknown={data.unknownPlace} />
+                    ),
                   },
                 ]
               : []),
             ...(data.cities.length > 0 || data.geoConfigured
-              ? [{ value: 'cities', label: 'Города', content: <Places rows={data.cities} /> }]
+              ? [
+                  {
+                    value: 'cities',
+                    label: 'Города',
+                    content: <Places rows={data.cities} label="Город" />,
+                  },
+                ]
               : []),
           ]}
         />
@@ -105,9 +113,21 @@ function Breakdowns({ data }: { data: VisitsBreakdown }) {
       <Section title="С чего смотрят" description="Устройство, браузер и система посетителей.">
         <BreakdownTabs
           panels={[
-            { value: 'devices', label: 'Устройства', content: <Labels rows={data.devices} /> },
-            { value: 'browsers', label: 'Браузеры', content: <Labels rows={data.browsers} /> },
-            { value: 'systems', label: 'Система', content: <Labels rows={data.systems} /> },
+            {
+              value: 'devices',
+              label: 'Устройства',
+              content: <Labels rows={data.devices} label="Устройство" />,
+            },
+            {
+              value: 'browsers',
+              label: 'Браузеры',
+              content: <Labels rows={data.browsers} label="Браузер" />,
+            },
+            {
+              value: 'systems',
+              label: 'Система',
+              content: <Labels rows={data.systems} label="Система" />,
+            },
           ]}
         />
       </Section>
@@ -119,8 +139,14 @@ function Breakdowns({ data }: { data: VisitsBreakdown }) {
   )
 }
 
-function Labels({ rows }: { rows: { label: string; visits: number; submitted: number }[] }) {
-  return <BreakdownList rows={rows.map((r) => ({ ...r, key: r.label }))} />
+function Labels({
+  rows,
+  label,
+}: {
+  rows: { label: string; visits: number; submitted: number }[]
+  label: string
+}) {
+  return <BreakdownList label={label} rows={rows.map((r) => ({ ...r, key: r.label }))} />
 }
 
 // Источники. Закрытая тарифом вкладка показывает НАСТОЯЩЕЕ число визитов с
@@ -146,6 +172,7 @@ function Sources({ data }: { data: VisitsBreakdown }) {
   }
   return (
     <BreakdownList
+      label="Источник"
       rows={data.sources.map((s) => ({
         key: `${s.source}/${s.medium}`,
         label: s.medium === 'Нет' ? s.source : `${s.source} / ${s.medium}`,
@@ -159,7 +186,15 @@ function Sources({ data }: { data: VisitsBreakdown }) {
 // Страны и города. Флаг — эмодзи из кода страны: два региональных индикатора, то
 // есть две буквы кода, сдвинутые в свой блок Unicode. Ни картинок, ни спрайта, ни
 // зависимости — и в списке видно страну, не читая названия.
-function Places({ rows, unknown }: { rows: PlaceCount[]; unknown?: number }) {
+function Places({
+  rows,
+  label,
+  unknown,
+}: {
+  rows: PlaceCount[]
+  label: string
+  unknown?: number
+}) {
   if (rows.length === 0) {
     return (
       <p className="text-sm text-muted-foreground">
@@ -175,7 +210,7 @@ function Places({ rows, unknown }: { rows: PlaceCount[]; unknown?: number }) {
   }))
   return (
     <div className="flex flex-col gap-2">
-      <BreakdownList rows={list} />
+      <BreakdownList label={label} rows={list} />
       {/* Число без объяснения: сколько визитов не попало в список — это данные
           владельца, а ПОЧЕМУ они не попали (IPv6, приватные сети, пробелы
           справочника) — вопрос разработчика, и на экране ему не место. */}

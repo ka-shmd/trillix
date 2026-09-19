@@ -121,50 +121,28 @@ export function dropPercent(row: FunnelRow): number | null {
   return row.reached >= MIN_BASE ? percentOf(row.dropped, row.reached) : null
 }
 
-// Фраза целиком, а не склонение одного слова: числительное и глагол согласуются,
-// и склонять их по отдельности значит рано или поздно получить «1 остановились».
+// Клетка «Ушли здесь»: число и доля от дошедших. Доля называется только над
+// порогом малых выборок (dropPercent) — «ушли 2 из 2» это не сто процентов, а два
+// человека.
 //
-// Коротко («остановились здесь», а не «остановились здесь и дальше не пошли»):
-// строка стоит под КАЖДЫМ шагом, а шагов у формы бывает пятнадцать. Смысл держит
-// соседняя доля — «— 4 % дошедших», — и хвост из четырёх слов её только отодвигал.
-export function droppedPhrase(n: number): string {
-  // 1, 21, 31… — единственное число; 11 — исключение (одиннадцать остановились).
-  const singular = n % 10 === 1 && n % 100 !== 11
-  return singular ? `${n} остановился здесь` : `${n} остановились здесь`
+// Коротко и числами, потому что это ЯЧЕЙКА ТАБЛИЦЫ, а не предложение. Пока потеря
+// жила припиской под строкой, она была фразой («188 остановились здесь и дальше не
+// пошли»); в колонке фраза повторялась бы столько раз, сколько в форме шагов.
+export function droppedPhraseShort(dropped: number, percent: number | null): string {
+  return percent === null ? `${dropped}` : `${dropped} · ${percent} %`
 }
 
-// Потеря на первой ступени: человек открыл форму и ушёл, не тронув ни одного
-// вопроса. Это не отвал на вопросе, и лечится оно другим — заголовком, длиной
-// формы, ожиданиями от ссылки (docs/ANALYTICS.md, LeftBeforeFirst).
-export function leftBeforeFirstPhrase(n: number): string {
-  const singular = n % 10 === 1 && n % 100 !== 11
-  return singular
-    ? `${n} ушёл, не тронув ни одного вопроса`
-    : `${n} ушли, не тронув ни одного вопроса`
-}
-
-// Строка потери под полоской шага: сколько человек здесь остановилось и какая это
-// доля. null — терять было некому.
-//
-// Доля называется только над порогом малых выборок (dropPercent), и знаменатель у
-// первой ступени другой: там «дошедшие» — это все визиты формы, и слово «дошедших»
-// в первой же строке воронки читалось бы как отсылка к чему-то прежде неё.
-export function lossPhrase(row: FunnelRow): string | null {
-  if (row.dropped === 0) return null
-  const first = row.key === OPENED_KEY
-  const phrase = first ? leftBeforeFirstPhrase(row.dropped) : droppedPhrase(row.dropped)
-  const pct = dropPercent(row)
-  if (pct === null) return phrase
-  return `${phrase} — ${pct} % ${first ? 'визитов' : 'дошедших'}`
-}
-
-// Время на шаге готовой строкой: медиана у прошедших дальше и у ушедших. Есть
-// только у шагов-страниц и только когда по ним есть данные.
-export function stepMeta(row: FunnelRow): string | null {
+// Клетка «На странице»: сколько на ней обычно проводят и сколько — те, кто ушёл.
+// Два времени в одной клетке, а не в двух колонках: у них общий предмет, и вторая
+// колонка ради второго числа раздула бы таблицу на всех формах ради многостраничных.
+export function stepTime(row: FunnelRow): string | undefined {
   const parts: string[] = []
-  if (row.timeSec !== undefined) parts.push(`обычно проводят здесь ${formatDuration(row.timeSec)}`)
-  if (row.leftTimeSec !== undefined) parts.push(`ушедшие — ${formatDuration(row.leftTimeSec)}`)
-  return parts.length > 0 ? parts.join(' · ') : null
+  if (row.timeSec !== undefined) parts.push(formatDuration(row.timeSec))
+  // «Ушедшие» — с подписью, потому что рядом стоит время тех, кто пошёл дальше, и
+  // два голых значения в одной клетке не различить. Прочерка перед ним нет: клетка
+  // с одним известным числом не обязана сообщать, что второго не знает.
+  if (row.leftTimeSec !== undefined) parts.push(`ушедшие ${formatDuration(row.leftTimeSec)}`)
+  return parts.length > 0 ? parts.join(' · ') : undefined
 }
 
 // Изменение к прошлому окну (спека design/analytics-v2.md §8). null — строки нет:

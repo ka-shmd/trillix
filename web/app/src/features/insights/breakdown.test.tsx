@@ -22,6 +22,7 @@ describe('BreakdownList', () => {
   it('называет визиты, долю и конверсию строки', () => {
     render(
       <BreakdownList
+        label="Источник"
         rows={[
           { key: 'a', label: 'Прямые заходы', visits: 75, submitted: 30 },
           { key: 'b', label: 'vk.com', visits: 25, submitted: 5 },
@@ -31,7 +32,8 @@ describe('BreakdownList', () => {
     expect(screen.getByText('75 · 75 %')).toBeTruthy()
     expect(screen.getByText('25 · 25 %')).toBeTruthy()
     // Конверсия — своей колонкой с подписью: без неё «40 %» рядом с «75 %» не
-    // отличить от доли.
+    // отличить от доли. Подпись первой колонки называет, что в ней лежит.
+    expect(screen.getByText('Источник')).toBeTruthy()
     expect(screen.getByText('Отправили')).toBeTruthy()
     expect(screen.getByText('40 %')).toBeTruthy()
   })
@@ -39,7 +41,7 @@ describe('BreakdownList', () => {
   // Ниже порога малых выборок конверсия — два числа, а не процент: «100 %» по двум
   // визитам владелец прочтёт закономерностью.
   it('малую выборку показывает числами', () => {
-    render(<BreakdownList rows={[{ key: 'a', label: 'BeOS', visits: 2, submitted: 2 }]} />)
+    render(<BreakdownList label="Источник" rows={[{ key: 'a', label: 'BeOS', visits: 2, submitted: 2 }]} />)
     expect(screen.getByText('2 из 2')).toBeTruthy()
   })
 
@@ -47,18 +49,18 @@ describe('BreakdownList', () => {
   // до десяти знаков («yandex-dire…»), на телефоне до одной буквы.
   it('показывает длинную подпись целиком', () => {
     const long = 'yandex-direct / cpc-поиск-брендовые-запросы'
-    render(<BreakdownList rows={[{ key: 'a', label: long, visits: 30, submitted: 3 }]} />)
+    render(<BreakdownList label="Источник" rows={[{ key: 'a', label: long, visits: 30, submitted: 3 }]} />)
     expect(screen.getByText(long)).toBeTruthy()
   })
 
   it('восемь строк показывает без кнопки', () => {
-    render(<BreakdownList rows={rows(8)} />)
-    expect(screen.getAllByRole('listitem')).toHaveLength(9) // восемь строк и шапка
+    render(<BreakdownList label="Источник" rows={rows(8)} />)
+    expect(screen.getAllByRole('row')).toHaveLength(9) // восемь строк и шапка
     expect(screen.queryByRole('button')).toBeNull()
   })
 
   it('хвост прячет за кнопку и разворачивает по щелчку', async () => {
-    render(<BreakdownList rows={rows(20)} />)
+    render(<BreakdownList label="Источник" rows={rows(20)} />)
     expect(screen.queryByText('Строка 9')).toBeNull()
 
     await act(async () => {
@@ -70,7 +72,7 @@ describe('BreakdownList', () => {
   })
 
   it('пустая разбивка объясняется словом, а не пустотой', () => {
-    render(<BreakdownList rows={[]} />)
+    render(<BreakdownList label="Источник" rows={[]} />)
     expect(screen.getByText('Данных нет.')).toBeTruthy()
   })
 })

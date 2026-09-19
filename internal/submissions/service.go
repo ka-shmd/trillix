@@ -1548,8 +1548,14 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	// с разной сеткой времени читались бы как расхождение данных.
 	builder.Trend(domain.StepFor(period), period.From, period.To)
 	unfiltered := 0
+	// linked — сколько ответов окна вообще знают свой визит. Нужен ровно для одного
+	// ответа экрану: «выборка по визиту дала ноль, потому что сопоставлять не с чем».
+	linked := 0
 	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
 		unfiltered++
+		if sub.Visit != nil {
+			linked++
+		}
 		if !match(sub, answers) {
 			return nil
 		}
@@ -1558,12 +1564,19 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	}); err != nil {
 		return domain.Summary{}, err
 	}
+	noVisitLink := scope.Segment.VisitSegment() && unfiltered > 0 && linked == 0
 	sum := builder.Result()
+	sum.NoVisitLink = noVisitLink
 	if !scope.IsZero() {
 		sum.Unfiltered = &unfiltered
 	}
 	if scope.Withheld(sum.Total) {
-		return domain.Summary{Unfiltered: &unfiltered, Blocks: []domain.BlockSummary{}, Withheld: true}, nil
+		return domain.Summary{
+			Unfiltered:  &unfiltered,
+			Blocks:      []domain.BlockSummary{},
+			Withheld:    true,
+			NoVisitLink: noVisitLink,
+		}, nil
 	}
 	return sum, nil
 }

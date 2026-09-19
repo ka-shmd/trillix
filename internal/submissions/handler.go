@@ -476,6 +476,10 @@ type summaryResponse struct {
 	Unfiltered *int `json:"unfiltered,omitempty"`
 	// withheld — визитная выборка меньше порога: вопросов и чисел нет.
 	Withheld bool `json:"withheld,omitempty"`
+	// noVisitLink — выборка по визиту стоит, но ответы окна визита не знают
+	// (собраны до миграции 0076). Экран обязан сказать это прямо, а не звать
+	// расширить период.
+	NoVisitLink bool `json:"noVisitLink,omitempty"`
 }
 
 // scopeFromRequest — выборка аналитики ответов: `?where` (фильтр по ответам) и
@@ -582,7 +586,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		}
 		blocks[i] = item
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, Unfiltered: sum.Unfiltered, Withheld: sum.Withheld})
+	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, Unfiltered: sum.Unfiltered, Withheld: sum.Withheld, NoVisitLink: sum.NoVisitLink})
 }
 
 type answerResponse struct {

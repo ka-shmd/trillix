@@ -127,6 +127,14 @@ function AnswersPage() {
           />
         ) : summary.isError ? (
           <ErrorState title="Не удалось посчитать сводку." onRetry={() => summary.refetch()} />
+        ) : summary.data.noVisitLink ? (
+          // Важнее порога малых выборок: при нулевой связке «ответ — визит» и
+          // withheld, и «ноль подошло» правдивы формально, но оба зовут менять
+          // период, а период тут ни при чём.
+          <EmptyState
+            title="У этих ответов нет меток визита"
+            description="Мы связываем ответ с визитом, из которого он пришёл, — но только у ответов, собранных после появления этой связи. Ответы за выбранный период пришли раньше, поэтому разрез по устройству, источнику и месту для них не считается. Выберите период поновее или разрез по версии формы."
+          />
         ) : summary.data.withheld ? (
           <EmptyState
             title={`В выборке меньше ${SEGMENT_K} ответов`}
@@ -374,7 +382,7 @@ function Distribution({ block }: { block: BlockSummary }) {
     // осмысленна сама по себе («52 % выбрали Рекламу»).
     share: base > 0 ? b.count / base : 0,
   }))
-  return <BarRows rows={rows} />
+  return <BarRows columns={{ label: 'Вариант', value: 'Ответы' }} rows={rows} />
 }
 
 // Последние ответы под вопросом — вместо доли заполнивших у текстовых типов.
@@ -387,10 +395,11 @@ function Samples({ block }: { block: BlockSummary }) {
   if (block.samples.length === 0) {
     return (
       <BarRows
+        columns={{ label: 'Вопрос', value: 'Заполнили' }}
         rows={[
           {
             key: 'filled',
-            label: 'Заполнили',
+            label: block.label,
             value: `${block.answered} · ${percentText(block.answered, block.asked)}`,
             share: block.asked > 0 ? block.answered / block.asked : 0,
           },

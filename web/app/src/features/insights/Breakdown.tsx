@@ -10,23 +10,27 @@ import { cn } from '@/lib/utils'
 // полоски запрещено: три почти одинаковых вида одного и того же читаются как
 // небрежность, а не как разница смысла.
 //
-// ГЕОМЕТРИЯ: подпись — полоска — числа, тремя колонками в одну строку.
+// ТАБЛИЦА (подача «Б», решение владельца 2026-09-20: три подачи показывались на
+// живых числах, выбрана эта). Что она даёт против прежнего списка:
 //
-// Полоска СПЛОШНАЯ и стоит в своей колонке. Раньше она была заливкой ПОД текстом,
-// и это стоило двух вещей сразу. Во-первых, цвета: под буквами заливка обязана
-// оставаться бледной, иначе текст на ней не читается, — поэтому величина рисовалась
-// пятном в четверть насыщенности и терялась рядом с обычной подсветкой строки.
-// Во-вторых, длины: подпись тянула строку, и полоска мерялась не от одной базы у
-// соседних списков, а от ширины самого длинного варианта ответа.
+//   - у каждой колонки есть ШАПКА. Пока чисел в строке было два, «26 %» рядом с
+//     «2051 · 26 %» не отличалось от доли ничем, кроме порядка;
+//   - вторые величины (ушедшие, конверсия, время) встают своими колонками вместо
+//     серой приписки под каждой строкой. Приписок было столько же, сколько строк,
+//     и они занимали половину высоты раздела мелким серым текстом;
+//   - полоска толще (20 px вместо 10) и работает ячейкой таблицы, а не тонкой
+//     чёрточкой в воздухе.
 //
-// В своей колонке полоска берёт полный тон --chart-1, а подпись остаётся чёрной на
-// белом. Это и есть ответ на «вяло и бледно» (решение владельца 2026-09-19): цвет
-// достался данным, а не фону под буквами.
+// Полоска СПЛОШНАЯ и стоит в своей колонке. Заливкой ПОД текстом она быть не может:
+// под буквами ей приходится оставаться бледной, иначе текст не читается, — и
+// величина рисуется пятном в четверть насыщенности, неотличимым от подсветки строки
+// под курсором. В своей колонке она берёт полный тон --chart-1, а подпись остаётся
+// чёрной на белом: цвет достаётся данным, а не фону под буквами.
 
 export type BarRow = {
   key: string
   label: React.ReactNode
-  // Правая колонка — готовый текст: «613 · 30 %», «4127 · 52 %». Собирает его
+  // Главная колонка — готовый текст: «613 · 30 %», «4127 · 52 %». Собирает его
   // вызывающий, потому что доля у экранов считается от разных баз, и подставлять
   // её здесь значило бы навязать одну базу всем.
   value: React.ReactNode
@@ -36,94 +40,109 @@ export type BarRow = {
   // Хвост заливки, нарисованный светлее: у шага воронки это ушедшие. Доля от той
   // же базы, что share, и всегда его часть.
   lost?: number
-  // Вторая колонка чисел — конверсия строки у разбивок визитов. Своей колонкой, а
-  // не припиской: числа разной природы, и слипшись они читались бы одним составным.
-  extra?: React.ReactNode
-  // Строка под полоской: потеря у шага воронки, время на странице.
-  note?: React.ReactNode
+  // Значения дополнительных колонок — по одному на каждую из columns.extras.
+  // Пусто в клетке — прочерк, а не пустота: пустая ячейка читается как «не
+  // догрузилось».
+  extras?: React.ReactNode[]
   // Подложка строки: худший шаг воронки. Не цвет состояния — это место на графике,
   // а не отказ системы (docs/DESIGN-SYSTEM.md, роли цвета).
   highlight?: boolean
 }
 
-// extraLabel — шапка колонки второго числа. Без подписи «26 %» рядом с «2051 · 26 %»
-// не отличить от доли, а колонок с процентами в строке две.
+// Шапки колонок. value обязателен: без имени главное число строки остаётся
+// безымянным, а их в строке бывает три.
+export type BarColumns = { label: string; value: string; extras?: string[] }
+
 export function BarRows({
   rows,
-  extraLabel,
+  columns,
   className,
 }: {
   rows: BarRow[]
-  extraLabel?: string
+  columns: BarColumns
   className?: string
 }) {
+  const extras = columns.extras ?? []
   return (
-    <ul className={cn('flex flex-col gap-0.5', className)}>
-      {extraLabel && (
-        <li className="hidden justify-end gap-4 px-2 text-sm text-muted-foreground sm:flex">
-          <span className="w-20 shrink-0 text-right">{extraLabel}</span>
-        </li>
-      )}
-      {rows.map((row) => (
-        <Row key={row.key} row={row} />
-      ))}
-    </ul>
+    <table className={cn('w-full text-sm', className)}>
+      <thead>
+        <tr className="border-b">
+          <Th className="text-left">{columns.label}</Th>
+          {/* Колонка полоски — без шапки: величина у неё та же, что в следующей
+              колонке, и второе имя над ней читалось бы как второе число.
+
+              Ширина ДОЛЕЙ, а не `w-full`: с `w-full` полоска забирала всё
+              свободное место, и колонка подписи сжималась до минимума по
+              содержимому — «Открыли форму» переносилось на две строки там, где
+              места хватало с запасом. */}
+          <th className="hidden w-2/5 sm:table-cell" />
+          <Th>{columns.value}</Th>
+          {extras.map((e) => (
+            <Th key={e}>{e}</Th>
+          ))}
+        </tr>
+      </thead>
+      <tbody>
+        {rows.map((row) => (
+          <Row key={row.key} row={row} extras={extras.length} />
+        ))}
+      </tbody>
+    </table>
   )
 }
 
-// Колонки: подпись — полоска — числа. На узком экране грид выключается и строка
-// складывается столбиком: полоска во всю ширину под подписью.
-//
-// Колонка подписи — fit-content с потолком: она сжимается до самой длинной подписи
-// СПИСКА и не шире 15rem. Фиксированная ширина обслуживала бы худший случай всегда,
-// и распределение шкалы («0», «1», … «10») отдавало бы восемь пустых сантиметров
-// перед полоской.
-const GRID = 'sm:grid-cols-[fit-content(15rem)_minmax(0,1fr)_max-content] sm:items-center'
-
-function Row({ row }: { row: BarRow }) {
-  const lost = Math.min(row.lost ?? 0, row.share)
+function Th({ children, className }: { children?: React.ReactNode; className?: string }) {
   return (
-    <li
+    <th
       className={cn(
-        '-mx-2 grid gap-x-4 gap-y-1 rounded-md px-2 py-1.5',
-        GRID,
-        row.highlight && 'bg-muted',
+        'pb-2 pl-4 text-right font-normal whitespace-nowrap text-muted-foreground',
+        className,
       )}
     >
-      <span className="text-sm">{row.label}</span>
+      {children}
+    </th>
+  )
+}
 
-      <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted" aria-hidden="true">
-        <div className="flex h-full rounded-full" style={{ width: `${row.share * 100}%` }}>
-          <div className="h-full flex-1 rounded-l-full bg-chart-1" />
-          {/* Часть целого — тот же тон в меньшей светлоте, а не соседний цвет из
-              категориального набора (docs/DESIGN-SYSTEM.md, «целое и его часть»). */}
-          {lost > 0 && (
-            <div
-              className="h-full rounded-r-full bg-chart-1-soft"
-              style={{ width: `${(lost / row.share) * 100}%` }}
-            />
-          )}
+function Row({ row, extras }: { row: BarRow; extras: number }) {
+  const lost = Math.min(row.lost ?? 0, row.share)
+  const values = row.extras ?? []
+  return (
+    <tr className={cn('border-b border-border/60 last:border-0', row.highlight && 'bg-muted')}>
+      <td className="py-2.5 pr-6 align-middle">{row.label}</td>
+      {/* Полоска скрыта на узком экране: на 375 px ей остаётся полсантиметра, и
+          вместо величины выходит точка. Числа при этом на месте — они и есть
+          содержание, а полоска их только сравнивает. */}
+      <td className="hidden w-2/5 py-2.5 align-middle sm:table-cell">
+        <div className="h-5 w-full overflow-hidden rounded-sm bg-muted" aria-hidden="true">
+          <div className="flex h-full rounded-sm" style={{ width: `${row.share * 100}%` }}>
+            <div className="h-full flex-1 bg-chart-1" />
+            {/* Часть целого — тот же тон в меньшей светлоте, а не соседний цвет из
+                категориального набора (docs/DESIGN-SYSTEM.md, «целое и его часть»). */}
+            {lost > 0 && (
+              <div
+                className="h-full bg-chart-1-soft"
+                style={{ width: `${(lost / row.share) * 100}%` }}
+              />
+            )}
+          </div>
         </div>
-      </div>
-
-      <span className="flex shrink-0 items-baseline gap-4 text-sm tabular-nums">
-        <span className="font-medium">{row.value}</span>
-        {row.extra !== undefined && (
-          <span className="w-20 shrink-0 text-right text-muted-foreground">{row.extra}</span>
-        )}
-      </span>
-
-      {row.note && (
-        <p
+      </td>
+      <td className="py-2.5 pl-4 text-right align-middle font-medium tabular-nums whitespace-nowrap">
+        {row.value}
+      </td>
+      {Array.from({ length: extras }, (_, i) => (
+        <td
+          key={i}
           className={cn(
-            'text-sm sm:col-span-2 sm:col-start-2',
+            'py-2.5 pl-4 text-right align-middle tabular-nums whitespace-nowrap',
             row.highlight ? 'font-medium text-foreground' : 'text-muted-foreground',
           )}
         >
-          {row.note}
-        </p>
-      )}
-    </li>
+          {values[i] ?? '—'}
+        </td>
+      ))}
+    </tr>
   )
 }
 
@@ -141,9 +160,9 @@ export type BreakdownRow = {
   submitted: number
 }
 
-// Разбивка визитов списком: подпись, визиты с долей, конверсия строки.
+// Разбивка визитов таблицей: подпись, визиты с долей, конверсия строки.
 //
-// СПИСКОМ, А НЕ КОЛЬЦОМ. До фазы 30 все шесть разбивок «Визитов» рисовались
+// ТАБЛИЦЕЙ, А НЕ КОЛЬЦОМ. До фазы 30 все шесть разбивок «Визитов» рисовались
 // кольцом с легендой — довод был в том, что вопрос ко всем один: «как поделилось».
 // Довод верен, но подписи у половины разбивок длинные («yandex-direct / cpc»,
 // «Петропавловск-Камчатский»), а легенда рядом с кольцом узкая: на десктопе они
@@ -151,7 +170,7 @@ export type BreakdownRow = {
 // вопрос «как поделилось» ценой того, ЧТО именно поделилось.
 //
 // Доля и ширина полоски считаются от ОДНОЙ базы — суммы визитов разбивки.
-export function BreakdownList({ rows }: { rows: BreakdownRow[] }) {
+export function BreakdownList({ rows, label }: { rows: BreakdownRow[]; label: string }) {
   const [all, setAll] = useState(false)
   if (rows.length === 0) return <p className="text-sm text-muted-foreground">Данных нет.</p>
 
@@ -165,13 +184,13 @@ export function BreakdownList({ rows }: { rows: BreakdownRow[] }) {
   return (
     <div className="flex flex-col gap-2">
       <BarRows
-        extraLabel="Отправили"
+        columns={{ label, value: 'Визиты', extras: ['Отправили'] }}
         rows={shown.map((r) => ({
           key: r.key,
           label: r.label,
           value: `${r.visits} · ${percentText(r.visits, total)}`,
           share: total > 0 ? r.visits / total : 0,
-          extra: conversionText(r.submitted, r.visits),
+          extras: [conversionText(r.submitted, r.visits)],
         }))}
       />
       {(hidden > 0 || all) && (

@@ -90,6 +90,10 @@ export const formSummarySchema = z.object({
   unfiltered: z.number().int().optional(),
   // Сегмент по визиту, в котором меньше 5 ответов: вопросов и чисел нет (ADR §10).
   withheld: z.boolean().default(false),
+  // Сегмент по визиту стоит, но ни один ответ окна визита не знает: связь появилась
+  // миграцией 0076, у ответов старше её нет и не будет. «Ноль» здесь значит «не с
+  // чем сопоставлять», а не «никто не подошёл».
+  noVisitLink: z.boolean().default(false),
 })
 export type FormSummary = z.infer<typeof formSummarySchema>
 

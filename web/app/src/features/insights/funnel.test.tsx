@@ -7,7 +7,7 @@ import { type FunnelRow } from './metrics'
 
 afterEach(cleanup)
 
-// Воронка нарисована разметкой, а не recharts (features/insights/Funnel.tsx),
+// Воронка нарисована таблицей, а не recharts (features/insights/Funnel.tsx),
 // поэтому ей не нужны ни заглушка ResizeObserver, ни ожидание анимации: всё, что
 // видит владелец, лежит в DOM сразу.
 
@@ -21,7 +21,8 @@ const rows: FunnelRow[] = [
 describe('Funnel', () => {
   it('рисует строку на каждый шаг с числом и долей', () => {
     render(<Funnel rows={rows} base={100} />)
-    expect(screen.getAllByRole('listitem')).toHaveLength(4)
+    // Строки тела таблицы: шапка в thead и в счёт не идёт.
+    expect(screen.getAllByRole('row')).toHaveLength(5)
     expect(screen.getByText('100 · 100 %')).toBeTruthy()
     expect(screen.getByText('45 · 45 %')).toBeTruthy()
   })
@@ -35,20 +36,33 @@ describe('Funnel', () => {
     expect(screen.getByText(long)).toBeTruthy()
   })
 
-  // Потеря написана под своей полоской, а не спрятана в тултип: ради неё на экран
-  // и заходят. У первой ступени формулировка своя — там уходят, не начав.
-  it('называет потерю у каждого шага, где она есть', () => {
+  // Потеря — своя КОЛОНКА, а не тултип и не приписка под строкой: ради неё на
+  // экран и заходят.
+  it('даёт потере свою колонку', () => {
     render(<Funnel rows={rows} base={100} />)
-    expect(screen.getByText('25 ушли, не тронув ни одного вопроса — 25 % визитов')).toBeTruthy()
-    expect(screen.getByText('30 остановились здесь — 40 % дошедших')).toBeTruthy()
-    // У последней ступени терять некого — строки нет.
-    expect(screen.queryByText(/Отправили форму.*остановились/)).toBeNull()
+    expect(screen.getByText('Ушли здесь')).toBeTruthy()
+    expect(screen.getByText('25 · 25 %')).toBeTruthy()
+    expect(screen.getByText('30 · 40 %')).toBeTruthy()
+    // У последней ступени терять некого — в клетке прочерк, а не пустота.
+    expect(screen.getAllByText('—').length).toBeGreaterThan(0)
+  })
+
+  // Колонка времени появляется только у формы, где оно собрано: у одностраничной
+  // пустая колонка обещала бы данные, которых не бывает.
+  it('колонку времени рисует только при данных', () => {
+    const { unmount } = render(<Funnel rows={rows} base={100} />)
+    expect(screen.queryByText('На странице')).toBeNull()
+    unmount()
+
+    render(<Funnel rows={[{ ...rows[1]!, timeSec: 80 }]} base={100} />)
+    expect(screen.getByText('На странице')).toBeTruthy()
+    expect(screen.getByText('1 мин 20 с')).toBeTruthy()
   })
 
   it('подсвечивает худший шаг подложкой', () => {
     render(<Funnel rows={rows} base={100} worstKey="page:" />)
-    const worst = screen.getByText('Страница 1').closest('li')
-    const other = screen.getByText('Контакты').closest('li')
+    const worst = screen.getByText('Страница 1').closest('tr')
+    const other = screen.getByText('Контакты').closest('tr')
     expect(worst?.className).toContain('bg-muted')
     expect(other?.className).not.toContain('bg-muted')
   })
