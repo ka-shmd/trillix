@@ -265,8 +265,11 @@ type PublicForm struct {
 // Нужен CSV-экспорту (объединение колонок по версиям, подписи опций из версии
 // ответа). Схема иммутабельна и уже канонизирована при публикации.
 type Version struct {
+	ID     uuid.UUID
 	Number int32
 	Schema json.RawMessage
+	// PublishedAt — момент публикации версии (created_at снапшота).
+	PublishedAt time.Time
 }
 
 // ptrUUID переводит nullable uuid из sqlc (pgtype.UUID) в *uuid.UUID: NULL → nil.
@@ -940,7 +943,7 @@ func (Repo) ListFormVersions(ctx context.Context, db postgres.DBTX, formID uuid.
 	}
 	out := make([]Version, len(rows))
 	for i, r := range rows {
-		out[i] = Version{Number: r.Version, Schema: json.RawMessage(r.Schema)}
+		out[i] = Version{ID: r.ID, Number: r.Version, Schema: json.RawMessage(r.Schema), PublishedAt: r.CreatedAt.Time}
 	}
 	return out, nil
 }

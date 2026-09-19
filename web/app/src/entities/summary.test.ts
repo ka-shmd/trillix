@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 import {
   blockAnswersPageSchema,
+  crosstabSchema,
   formSummarySchema,
   type BlockSummary,
   type FormSummary,
@@ -66,8 +67,12 @@ const realServerPayload = {
         { key: '9', label: '9', count: 0 },
         { key: '10', label: '10', count: 0 },
       ],
+      // scale и trendStep ниже дописаны по DTO (фаза 30): средняя и NPS шкалы 0–10 с
+      // единственным ответом «0» и ряд по суткам.
+      scale: { avg: 0, nps: -100, trend: [{ at: '2026-08-24T00:00:00Z', n: 1, avg: 0 }] },
     },
   ],
+  trendStep: 'day',
 }
 
 describe('formSummarySchema', () => {
@@ -94,11 +99,20 @@ describe('formSummarySchema', () => {
     expect(nps.buckets).toHaveLength(11)
   })
 
+  // Шкала: средняя, NPS и ряд. NPS −100 — законное значение, а не «нет данных».
+  it('разбирает статистику шкалы', () => {
+    const nps = blockAt(formSummarySchema.parse(realServerPayload), 2)
+    expect(nps.scale?.nps).toBe(-100)
+    expect(nps.scale?.trend).toHaveLength(1)
+    expect(blockAt(formSummarySchema.parse(realServerPayload), 0).scale).toBeFalsy()
+  })
+
   // Статистика чисел необязательна: её нет у вопросов другого вида и у числового
   // вопроса, на который никто не ответил.
   it('принимает числовой вопрос со статистикой и без неё', () => {
     const withStats = formSummarySchema.parse({
       total: 1,
+      trendStep: 'day',
       blocks: [
         {
           blockId: 'age',
@@ -115,6 +129,7 @@ describe('formSummarySchema', () => {
 
     const noStats = formSummarySchema.parse({
       total: 1,
+      trendStep: 'day',
       blocks: [
         { blockId: 'age', label: 'Возраст', type: 'number', kind: 'number', asked: 1, answered: 0 },
       ],
@@ -128,6 +143,7 @@ describe('formSummarySchema', () => {
     expect(() =>
       formSummarySchema.parse({
         total: 1,
+        trendStep: 'day',
         blocks: [
           {
             blockId: 'x',
@@ -181,5 +197,18 @@ describe('страница значений одного вопроса', () => 
   it('пустой курсор на последней странице — null, а не отсутствие поля', () => {
     const page = blockAnswersPageSchema.parse({ answers: [], nextCursor: null })
     expect(page.nextCursor).toBeNull()
+  })
+})
+
+describe('crosstabSchema', () => {
+  // Форма ответа — по DTO crosstabResponse (internal/submissions/handler.go).
+  it('разбирает таблицу', () => {
+    const parsed = crosstabSchema.parse({
+      rows: [{ key: 'o1', label: 'Друзья', total: 2 }],
+      cols: [{ key: '5', label: '5', total: 1 }],
+      cells: [[1]],
+      total: 2,
+    })
+    expect(parsed.cells[0]?.[0]).toBe(1)
   })
 })

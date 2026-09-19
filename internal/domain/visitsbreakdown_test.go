@@ -1,6 +1,7 @@
 package domain
 
 import (
+	"reflect"
 	"testing"
 	"time"
 )
@@ -149,5 +150,34 @@ func TestStepFor(t *testing.T) {
 				t.Errorf("шаг = %q, ждали %q", got, tt.want)
 			}
 		})
+	}
+}
+
+// Конверсия строки разбивки: отправившие складываются тем же ключом, что визиты,
+// — «vk.com» из двух разных referer'ов даёт одну строку с общей долей отправивших.
+func TestFoldSources_SumsSubmitted(t *testing.T) {
+	got := FoldSources([]SourceRow{
+		{Referer: "https://vk.com/feed", Visits: 10, Submitted: 3},
+		{Referer: "https://www.vk.com/wall", Visits: 5, Submitted: 2},
+		{UTMSource: "newsletter", UTMMedium: "email", Visits: 4, Submitted: 4},
+	})
+	want := []SourceCount{
+		{Source: "vk.com", Medium: "Нет", Visits: 15, Submitted: 5},
+		{Source: "newsletter", Medium: "email", Visits: 4, Submitted: 4},
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("FoldSources:\n got %+v\nwant %+v", got, want)
+	}
+}
+
+func TestFoldUserAgents_SumsSubmitted(t *testing.T) {
+	const iphone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+	const android = "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Mobile Safari/537.36"
+	devices, _, _ := FoldUserAgents([]UserAgentRow{
+		{UserAgent: iphone, Visits: 6, Submitted: 1},
+		{UserAgent: android, Visits: 4, Submitted: 3},
+	})
+	if len(devices) != 1 || devices[0].Visits != 10 || devices[0].Submitted != 4 {
+		t.Fatalf("устройства: %+v", devices)
 	}
 }

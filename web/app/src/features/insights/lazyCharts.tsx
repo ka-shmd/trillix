@@ -1,7 +1,8 @@
 import { lazy, Suspense } from 'react'
 
-import { type FormFunnel } from '../../entities/funnel'
 import { type BucketStep, type LabelCount, type TimeBucket } from '../../entities/visitsBreakdown'
+import { type FunnelRow } from './metrics'
+import { type ScalePoint } from '../../entities/summary'
 import { Skeleton } from '@/components/ui/skeleton'
 
 // ГРАНИЦА ЗАГРУЗКИ recharts. Библиотека тянет за собой около 116 КиБ gzip — треть
@@ -24,6 +25,9 @@ const FunnelChartImpl = lazy(() =>
   import('./FunnelChart').then((m) => ({ default: m.FunnelChart })),
 )
 const ShareChartImpl = lazy(() => import('./ShareChart').then((m) => ({ default: m.ShareChart })))
+const ScaleTrendChartImpl = lazy(() =>
+  import('./ScaleTrendChart').then((m) => ({ default: m.ScaleTrendChart })),
+)
 
 export function VisitsChart(props: { buckets: TimeBucket[]; step: BucketStep }) {
   return (
@@ -33,11 +37,11 @@ export function VisitsChart(props: { buckets: TimeBucket[]; step: BucketStep }) 
   )
 }
 
-export function FunnelChart(props: { funnel: FormFunnel }) {
-  // Высота воронки считается по числу шагов: две ступени плюс вопросы. Число 26
-  // зеркалит ROW_HEIGHT в FunnelChart.tsx — импортировать его оттуда нельзя,
-  // импорт значения втащил бы модуль с recharts обратно в общий чанк.
-  const height = (props.funnel.steps.length + 2) * 26 + 16
+export function FunnelChart(props: { rows: FunnelRow[]; base: number }) {
+  // Высота воронки считается по числу строк. Число 26 зеркалит ROW_HEIGHT в
+  // FunnelChart.tsx — импортировать его оттуда нельзя, импорт значения втащил бы
+  // модуль с recharts обратно в общий чанк.
+  const height = props.rows.length * 26 + 16
   return (
     <Suspense fallback={<Skeleton className="w-full" style={{ height }} />}>
       <FunnelChartImpl {...props} />
@@ -49,6 +53,19 @@ export function ShareChart(props: { rows: LabelCount[] }) {
   return (
     <Suspense fallback={<Skeleton className="size-32 rounded-full" />}>
       <ShareChartImpl {...props} />
+    </Suspense>
+  )
+}
+
+export function ScaleTrendChart(props: {
+  points: ScalePoint[]
+  step: BucketStep
+  min: number
+  max: number
+}) {
+  return (
+    <Suspense fallback={<Skeleton className="h-40 w-full" />}>
+      <ScaleTrendChartImpl {...props} />
     </Suspense>
   )
 }

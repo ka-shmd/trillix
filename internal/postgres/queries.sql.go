@@ -460,6 +460,75 @@ func (q *Queries) ConsumePasswordResetToken(ctx context.Context, tokenHash []byt
 	return user_id, err
 }
 
+const conversionWindows = `-- name: ConversionWindows :many
+SELECT v.form_id,
+       f.workspace_id,
+       f.slug,
+       f.status,
+       coalesce(nullif(f.name, ''), f.title, '')::text AS form_name,
+       count(*) FILTER (WHERE v.created_at >= $1::timestamptz)::bigint AS recent_visits,
+       count(*) FILTER (WHERE v.created_at >= $1::timestamptz AND v.submitted)::bigint AS recent_submitted,
+       count(*) FILTER (WHERE v.created_at <  $1::timestamptz)::bigint AS base_visits,
+       count(*) FILTER (WHERE v.created_at <  $1::timestamptz AND v.submitted)::bigint AS base_submitted
+FROM form_visits v
+JOIN forms f ON f.id = v.form_id
+WHERE v.created_at >= $2::timestamptz
+GROUP BY v.form_id, f.workspace_id, f.slug, f.status, f.name, f.title
+`
+
+type ConversionWindowsParams struct {
+	RecentFrom pgtype.Timestamptz
+	BaseFrom   pgtype.Timestamptz
+}
+
+type ConversionWindowsRow struct {
+	FormID          uuid.UUID
+	WorkspaceID     uuid.UUID
+	Slug            string
+	Status          string
+	FormName        string
+	RecentVisits    int64
+	RecentSubmitted int64
+	BaseVisits      int64
+	BaseSubmitted   int64
+}
+
+// Суточная проверка падения конверсии (спека design/analytics-v2.md §9): у каждой
+// формы с визитами за последние 35 суток — визиты и отправившие за неделю и за 28
+// суток до неё. Один групповой запрос на все формы, а не запрос на форму.
+//
+// Статус формы едет наружу: у снятой с публикации повод гаснет, а не
+// проверяется. Название — внутреннее имя, иначе заголовок: так форму зовёт кабинет.
+func (q *Queries) ConversionWindows(ctx context.Context, arg ConversionWindowsParams) ([]ConversionWindowsRow, error) {
+	rows, err := q.db.Query(ctx, conversionWindows, arg.RecentFrom, arg.BaseFrom)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConversionWindowsRow
+	for rows.Next() {
+		var i ConversionWindowsRow
+		if err := rows.Scan(
+			&i.FormID,
+			&i.WorkspaceID,
+			&i.Slug,
+			&i.Status,
+			&i.FormName,
+			&i.RecentVisits,
+			&i.RecentSubmitted,
+			&i.BaseVisits,
+			&i.BaseSubmitted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countFutureBookings = `-- name: CountFutureBookings :one
 SELECT count(*)::bigint FROM bookings
 WHERE schedule_id = $1 AND status = 'confirmed' AND starts_at >= $2
@@ -581,16 +650,24 @@ func (q *Queries) CountSubmissionsForCabinet(ctx context.Context, formID uuid.UU
 }
 
 const countSubmissionsInPeriod = `-- name: CountSubmissionsInPeriod :one
-SELECT count(*)::bigint FROM submissions
+SELECT count(*) FILTER (WHERE created_at >= $2::timestamptz)::bigint AS current,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz)::bigint AS previous
+FROM submissions
 WHERE form_id = $1 AND NOT over_quota
-  AND created_at >= $2::timestamptz
-  AND created_at <  $3::timestamptz
+  AND created_at >= $3::timestamptz
+  AND created_at <  $4::timestamptz
 `
 
 type CountSubmissionsInPeriodParams struct {
-	FormID uuid.UUID
-	FromTs pgtype.Timestamptz
-	ToTs   pgtype.Timestamptz
+	FormID     uuid.UUID
+	FromTs     pgtype.Timestamptz
+	PrevFromTs pgtype.Timestamptz
+	ToTs       pgtype.Timestamptz
+}
+
+type CountSubmissionsInPeriodRow struct {
+	Current  int64
+	Previous int64
 }
 
 // Карточка «Ответы» над вкладками Insights (спека §5). Считает ВИДИМЫЕ ответы —
@@ -600,11 +677,20 @@ type CountSubmissionsInPeriodParams struct {
 // Свой запрос, а не поле в счётчиках визитов: ответы и визиты — два независимых
 // множества (ANALYTICS.md §1) и два модуля, и складывать их в одну строку значит
 // однажды поделить одно на другое.
-func (q *Queries) CountSubmissionsInPeriod(ctx context.Context, arg CountSubmissionsInPeriodParams) (int64, error) {
-	row := q.db.QueryRow(ctx, countSubmissionsInPeriod, arg.FormID, arg.FromTs, arg.ToTs)
-	var column_1 int64
-	err := row.Scan(&column_1)
-	return column_1, err
+//
+// Прошлое окно той же длины (сравнение на карточке, спека design/analytics-v2.md §8)
+// считается тем же сканом: выборка начинается с prev_from, текущее окно — FILTER.
+// Без сравнения prev_from = from_ts, и previous равно нулю.
+func (q *Queries) CountSubmissionsInPeriod(ctx context.Context, arg CountSubmissionsInPeriodParams) (CountSubmissionsInPeriodRow, error) {
+	row := q.db.QueryRow(ctx, countSubmissionsInPeriod,
+		arg.FormID,
+		arg.FromTs,
+		arg.PrevFromTs,
+		arg.ToTs,
+	)
+	var i CountSubmissionsInPeriodRow
+	err := row.Scan(&i.Current, &i.Previous)
+	return i, err
 }
 
 const countUnreadNotifications = `-- name: CountUnreadNotifications :one
@@ -623,19 +709,107 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context, userID uuid.UUID
 	return count, err
 }
 
+const countVisitPaths = `-- name: CountVisitPaths :many
+SELECT v.last_block_id, v.submitted, p.blocks::text[] AS blocks, count(*)::bigint AS visits
+FROM (
+    SELECT fp.visit_id, array_agg(fp.block_id ORDER BY fp.block_id) AS blocks
+    FROM form_visit_pages fp
+    WHERE fp.form_id = $1
+      AND fp.visit_created_at >= $2::timestamptz
+      AND fp.visit_created_at <  $3::timestamptz
+    GROUP BY fp.visit_id
+) p
+JOIN form_visits v ON v.id = p.visit_id
+WHERE true
+  AND ($4::text IS NULL OR
+       (CASE $4::text
+            WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
+            WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
+            WHEN 'country' THEN coalesce(v.country_code, '')
+            WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
+            WHEN 'version' THEN v.form_version_id::text
+        END) = ANY($5::text[]))
+GROUP BY v.last_block_id, v.submitted, p.blocks
+`
+
+type CountVisitPathsParams struct {
+	FormID  uuid.UUID
+	FromTs  pgtype.Timestamptz
+	ToTs    pgtype.Timestamptz
+	SegKind pgtype.Text
+	SegKeys []string
+}
+
+type CountVisitPathsRow struct {
+	LastBlockID pgtype.Text
+	Submitted   bool
+	Blocks      []string
+	Visits      int64
+}
+
+// Визиты С ПУТЁМ, сгруппированные по дальней точке, исходу и набору открытых
+// страниц (спека design/analytics-v2.md §4.4). Набор — отсортированный массив
+// block_id; различных наборов у формы столько, сколько в ней веток, поэтому
+// результат размером в «вопросы × исход × ветки», а не в число визитов.
+//
+// Визиты без пути (одностраничная форма, дальше первой страницы не ушли, собраны
+// до 0074) сюда не попадают: Go получает их вычитанием из CountVisitsByLastBlock.
+// Путь группируется по своему индексу; в form_visits идём только за визитами,
+// у которых путь есть.
+func (q *Queries) CountVisitPaths(ctx context.Context, arg CountVisitPathsParams) ([]CountVisitPathsRow, error) {
+	rows, err := q.db.Query(ctx, countVisitPaths,
+		arg.FormID,
+		arg.FromTs,
+		arg.ToTs,
+		arg.SegKind,
+		arg.SegKeys,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountVisitPathsRow
+	for rows.Next() {
+		var i CountVisitPathsRow
+		if err := rows.Scan(
+			&i.LastBlockID,
+			&i.Submitted,
+			&i.Blocks,
+			&i.Visits,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
 SELECT last_block_id, submitted, count(*) AS visits
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
   AND created_at <  $3::timestamptz
+  AND ($4::text IS NULL OR
+       (CASE $4::text
+            WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
+            WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
+            WHEN 'country' THEN coalesce(country_code, '')
+            WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
+            WHEN 'version' THEN form_version_id::text
+        END) = ANY($5::text[]))
 GROUP BY last_block_id, submitted
 `
 
 type CountVisitsByLastBlockParams struct {
-	FormID uuid.UUID
-	FromTs pgtype.Timestamptz
-	ToTs   pgtype.Timestamptz
+	FormID  uuid.UUID
+	FromTs  pgtype.Timestamptz
+	ToTs    pgtype.Timestamptz
+	SegKind pgtype.Text
+	SegKeys []string
 }
 
 type CountVisitsByLastBlockRow struct {
@@ -665,8 +839,20 @@ type CountVisitsByLastBlockRow struct {
 // Границы периода приходят всегда: «всё время» — это ±бесконечность, а не
 // отсутствующее условие. Одна форма запроса вместо двух означает один план и одну
 // ветку кода; бесконечность индексу не мешает (та же диапазонная проверка).
+//
+// Сегмент (seg_kind/seg_keys, спека design/analytics-v2.md §5.4): визиты режутся по
+// СЫРОМУ значению — строке user-agent, тройке меток, стране, городу или версии, —
+// список подходящих значений собирает Go (domain.VisitFilter). Ключ зеркалит
+// domain.SourceKey и domain.CityKey, разделитель — chr(31). Без сегмента оба
+// параметра NULL, и условие не читает meta: запрос остаётся index-only.
 func (q *Queries) CountVisitsByLastBlock(ctx context.Context, arg CountVisitsByLastBlockParams) ([]CountVisitsByLastBlockRow, error) {
-	rows, err := q.db.Query(ctx, countVisitsByLastBlock, arg.FormID, arg.FromTs, arg.ToTs)
+	rows, err := q.db.Query(ctx, countVisitsByLastBlock,
+		arg.FormID,
+		arg.FromTs,
+		arg.ToTs,
+		arg.SegKind,
+		arg.SegKeys,
+	)
 	if err != nil {
 		return nil, err
 	}
@@ -4033,9 +4219,17 @@ func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissio
 }
 
 const getSubmissionForForm = `-- name: GetSubmissionForForm :one
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.id = $1 AND s.form_id = $2
 `
 
@@ -4045,10 +4239,17 @@ type GetSubmissionForFormParams struct {
 }
 
 type GetSubmissionForFormRow struct {
-	ID          uuid.UUID
-	Answers     []byte
-	CreatedAt   pgtype.Timestamptz
-	FormVersion int32
+	ID               uuid.UUID
+	Answers          []byte
+	CreatedAt        pgtype.Timestamptz
+	FormVersion      int32
+	HasVisit         bool
+	VisitUserAgent   string
+	VisitReferer     string
+	VisitUtmSource   string
+	VisitUtmMedium   string
+	VisitCountryCode string
+	VisitCity        string
 }
 
 // Один ответ целиком — окну ответа, открытому не из списка (карточка записи на
@@ -4067,6 +4268,13 @@ func (q *Queries) GetSubmissionForForm(ctx context.Context, arg GetSubmissionFor
 		&i.Answers,
 		&i.CreatedAt,
 		&i.FormVersion,
+		&i.HasVisit,
+		&i.VisitUserAgent,
+		&i.VisitReferer,
+		&i.VisitUtmSource,
+		&i.VisitUtmMedium,
+		&i.VisitCountryCode,
+		&i.VisitCity,
 	)
 	return i, err
 }
@@ -4705,13 +4913,13 @@ func (q *Queries) InsertSheetQueued(ctx context.Context, arg InsertSheetQueuedPa
 const insertSubmission = `-- name: InsertSubmission :execrows
 
 WITH ins AS (
-    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota, consent_revision_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota, consent_revision_id, visit_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     ON CONFLICT (id) DO NOTHING
     RETURNING 1 AS one
 ), counted AS (
     INSERT INTO workspace_usage (workspace_id, period, submissions)
-    SELECT $8::uuid, $9::date, 1 FROM ins
+    SELECT $9::uuid, $10::date, 1 FROM ins
     ON CONFLICT (workspace_id, period)
     DO UPDATE SET submissions = workspace_usage.submissions + 1
     RETURNING 1 AS one
@@ -4750,6 +4958,7 @@ type InsertSubmissionParams struct {
 	Meta              []byte
 	OverQuota         bool
 	ConsentRevisionID pgtype.UUID
+	VisitID           pgtype.UUID
 	WorkspaceID       uuid.UUID
 	Period            pgtype.Date
 }
@@ -4778,6 +4987,7 @@ func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionPara
 		arg.Meta,
 		arg.OverQuota,
 		arg.ConsentRevisionID,
+		arg.VisitID,
 		arg.WorkspaceID,
 		arg.Period,
 	)
@@ -4819,6 +5029,42 @@ func (q *Queries) InsertSubmissionFile(ctx context.Context, arg InsertSubmission
 		arg.OriginalName,
 		arg.SizeBytes,
 		arg.ContentType,
+	)
+	return err
+}
+
+const insertVisitPage = `-- name: InsertVisitPage :exec
+INSERT INTO form_visit_pages (visit_id, block_id, form_id, visit_created_at)
+SELECT v.id, $1::text, v.form_id, v.created_at
+FROM form_visits v
+WHERE v.id = $2
+  AND v.form_id = $3
+  AND (SELECT count(*) FROM form_visit_pages p WHERE p.visit_id = v.id) < $4::int
+ON CONFLICT (visit_id, block_id) DO NOTHING
+`
+
+type InsertVisitPageParams struct {
+	BlockID  string
+	VisitID  uuid.UUID
+	FormID   uuid.UUID
+	MaxPages int32
+}
+
+// Строка пути визита: бикон перехода открыл страницу (миграция 0074). Только
+// вставка — запоминается ПЕРВОЕ открытие страницы; время ставит сервер.
+//
+// Вставка идёт ВЫБОРКОЙ из form_visits по id и form_id, а не значениями: id визита
+// выбирает клиент, и путь визита чужой формы иначе дописывался бы ручкой своей.
+// Нет строки визита (апсерт не прошёл) — нет и строки пути.
+//
+// Потолок строк на визит: ручка публична на запись, и неизвестные block_id на
+// чтении отбрасываются, но копиться бесконечно им нельзя.
+func (q *Queries) InsertVisitPage(ctx context.Context, arg InsertVisitPageParams) error {
+	_, err := q.db.Exec(ctx, insertVisitPage,
+		arg.BlockID,
+		arg.VisitID,
+		arg.FormID,
+		arg.MaxPages,
 	)
 	return err
 }
@@ -5481,21 +5727,24 @@ func (q *Queries) ListFormSubmissionFiles(ctx context.Context, arg ListFormSubmi
 }
 
 const listFormVersions = `-- name: ListFormVersions :many
-SELECT version, schema
+SELECT id, version, schema, created_at
 FROM form_versions
 WHERE form_id = $1
 ORDER BY version
 `
 
 type ListFormVersionsRow struct {
-	Version int32
-	Schema  []byte
+	ID        uuid.UUID
+	Version   int32
+	Schema    []byte
+	CreatedAt pgtype.Timestamptz
 }
 
 // Все опубликованные версии формы (снапшоты схем), по возрастанию номера. Нужен
 // CSV-экспорту (фаза 6): колонки — объединение блоков по всем версиям, а подписи
 // choice-опций берутся из версии, по которой отправлен ответ. Версий на форму
 // немного — грузятся разом. form_versions иммутабельна, порядок стабилен.
+// id и created_at нужны аналитике: сегмент и разрез по версии (фаза 30).
 func (q *Queries) ListFormVersions(ctx context.Context, formID uuid.UUID) ([]ListFormVersionsRow, error) {
 	rows, err := q.db.Query(ctx, listFormVersions, formID)
 	if err != nil {
@@ -5505,7 +5754,12 @@ func (q *Queries) ListFormVersions(ctx context.Context, formID uuid.UUID) ([]Lis
 	var items []ListFormVersionsRow
 	for rows.Next() {
 		var i ListFormVersionsRow
-		if err := rows.Scan(&i.Version, &i.Schema); err != nil {
+		if err := rows.Scan(
+			&i.ID,
+			&i.Version,
+			&i.Schema,
+			&i.CreatedAt,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -6410,9 +6664,17 @@ func (q *Queries) ListSubmissionFiles(ctx context.Context, dollar_1 []uuid.UUID)
 }
 
 const listSubmissionsAfter = `-- name: ListSubmissionsAfter :many
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < $3::uuid
   AND s.created_at >= $4::timestamptz
@@ -6430,10 +6692,17 @@ type ListSubmissionsAfterParams struct {
 }
 
 type ListSubmissionsAfterRow struct {
-	ID          uuid.UUID
-	Answers     []byte
-	CreatedAt   pgtype.Timestamptz
-	FormVersion int32
+	ID               uuid.UUID
+	Answers          []byte
+	CreatedAt        pgtype.Timestamptz
+	FormVersion      int32
+	HasVisit         bool
+	VisitUserAgent   string
+	VisitReferer     string
+	VisitUtmSource   string
+	VisitUtmMedium   string
+	VisitCountryCode string
+	VisitCity        string
 }
 
 // Следующая страница одноколоночным курсором (id): строго «меньше» якоря →
@@ -6458,6 +6727,13 @@ func (q *Queries) ListSubmissionsAfter(ctx context.Context, arg ListSubmissionsA
 			&i.Answers,
 			&i.CreatedAt,
 			&i.FormVersion,
+			&i.HasVisit,
+			&i.VisitUserAgent,
+			&i.VisitReferer,
+			&i.VisitUtmSource,
+			&i.VisitUtmMedium,
+			&i.VisitCountryCode,
+			&i.VisitCity,
 		); err != nil {
 			return nil, err
 		}
@@ -6470,9 +6746,17 @@ func (q *Queries) ListSubmissionsAfter(ctx context.Context, arg ListSubmissionsA
 }
 
 const listSubmissionsFirstPage = `-- name: ListSubmissionsFirstPage :many
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.created_at >= $3::timestamptz
   AND s.created_at <  $4::timestamptz
@@ -6488,12 +6772,24 @@ type ListSubmissionsFirstPageParams struct {
 }
 
 type ListSubmissionsFirstPageRow struct {
-	ID          uuid.UUID
-	Answers     []byte
-	CreatedAt   pgtype.Timestamptz
-	FormVersion int32
+	ID               uuid.UUID
+	Answers          []byte
+	CreatedAt        pgtype.Timestamptz
+	FormVersion      int32
+	HasVisit         bool
+	VisitUserAgent   string
+	VisitReferer     string
+	VisitUtmSource   string
+	VisitUtmMedium   string
+	VisitCountryCode string
+	VisitCity        string
 }
 
+// Метки визита ответа (0076, спека design/analytics-v2.md §6.4) едут рядом: сегмент
+// сводки, колонки «Источник» и «Устройство» в выгрузке и в окне ответа. LEFT JOIN по
+// визиту ЭТОЙ ЖЕ формы: visit_id прислал клиент, и чужой визит меток не даёт. Нет
+// визита — has_visit = false, метки пустые. Разбор меток — в Go (domain.VisitMeta),
+// как у разбивок визитов.
 // Первая страница ответов формы (фаза 6): новые сверху. id (UUIDv7) монотонен по
 // времени → ORDER BY id DESC даёт хронологию без нестабильности created_at. JOIN
 // form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
@@ -6522,6 +6818,13 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 			&i.Answers,
 			&i.CreatedAt,
 			&i.FormVersion,
+			&i.HasVisit,
+			&i.VisitUserAgent,
+			&i.VisitReferer,
+			&i.VisitUtmSource,
+			&i.VisitUtmMedium,
+			&i.VisitCountryCode,
+			&i.VisitCity,
 		); err != nil {
 			return nil, err
 		}
@@ -9463,7 +9766,8 @@ func (q *Queries) UpsertSignupProfile(ctx context.Context, arg UpsertSignupProfi
 }
 
 const visitCities = `-- name: VisitCities :many
-SELECT city, country_code, count(*)::bigint AS visits
+SELECT city, country_code, count(*)::bigint AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -9483,6 +9787,7 @@ type VisitCitiesRow struct {
 	City        pgtype.Text
 	CountryCode pgtype.Text
 	Visits      int64
+	Submitted   int64
 }
 
 // Города за период. Код страны едет рядом с именем: одноимённые города в разных
@@ -9496,7 +9801,12 @@ func (q *Queries) VisitCities(ctx context.Context, arg VisitCitiesParams) ([]Vis
 	var items []VisitCitiesRow
 	for rows.Next() {
 		var i VisitCitiesRow
-		if err := rows.Scan(&i.City, &i.CountryCode, &i.Visits); err != nil {
+		if err := rows.Scan(
+			&i.City,
+			&i.CountryCode,
+			&i.Visits,
+			&i.Submitted,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -9508,7 +9818,8 @@ func (q *Queries) VisitCities(ctx context.Context, arg VisitCitiesParams) ([]Vis
 }
 
 const visitCountries = `-- name: VisitCountries :many
-SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits
+SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -9528,6 +9839,7 @@ type VisitCountriesRow struct {
 	CountryCode pgtype.Text
 	Country     string
 	Visits      int64
+	Submitted   int64
 }
 
 // Страны за период. Визиты без гео (справочника нет, приватный адрес, IPv6) сюда не
@@ -9542,7 +9854,12 @@ func (q *Queries) VisitCountries(ctx context.Context, arg VisitCountriesParams) 
 	var items []VisitCountriesRow
 	for rows.Next() {
 		var i VisitCountriesRow
-		if err := rows.Scan(&i.CountryCode, &i.Country, &i.Visits); err != nil {
+		if err := rows.Scan(
+			&i.CountryCode,
+			&i.Country,
+			&i.Visits,
+			&i.Submitted,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -9554,41 +9871,79 @@ func (q *Queries) VisitCountries(ctx context.Context, arg VisitCountriesParams) 
 }
 
 const visitInsights = `-- name: VisitInsights :one
-SELECT count(*)::bigint                                        AS visits,
-       count(*) FILTER (WHERE submitted)::bigint               AS submitted,
-       count(DISTINCT visitor_key)::bigint                     AS unique_visitors,
-       count(*) FILTER (WHERE updated_at > created_at)::bigint AS timed_visits,
+SELECT
+       count(*) FILTER (WHERE created_at >= $2::timestamptz)::bigint AS visits,
+       count(*) FILTER (WHERE created_at >= $2::timestamptz AND submitted)::bigint AS submitted,
+       count(*) FILTER (WHERE created_at >= $2::timestamptz AND (last_block_id IS NOT NULL OR submitted))::bigint AS started,
+       count(DISTINCT visitor_key) FILTER (WHERE created_at >= $2::timestamptz)::bigint AS unique_visitors,
+       count(*) FILTER (WHERE created_at >= $2::timestamptz AND updated_at > created_at)::bigint AS timed_visits,
        coalesce(
            percentile_cont(0.5) WITHIN GROUP (
                ORDER BY extract(epoch FROM updated_at - created_at)
-           ) FILTER (WHERE updated_at > created_at),
-       0)::float8                                              AS median_duration_sec,
-       count(*) FILTER (WHERE submitted AND updated_at > created_at)::bigint AS timed_completions,
+           ) FILTER (WHERE created_at >= $2::timestamptz AND updated_at > created_at),
+       0)::float8 AS median_duration_sec,
+       count(*) FILTER (WHERE created_at >= $2::timestamptz AND submitted AND updated_at > created_at)::bigint AS timed_completions,
        coalesce(
            percentile_cont(0.5) WITHIN GROUP (
                ORDER BY extract(epoch FROM updated_at - created_at)
-           ) FILTER (WHERE submitted AND updated_at > created_at),
-       0)::float8                                              AS completion_duration_sec
+           ) FILTER (WHERE created_at >= $2::timestamptz AND submitted AND updated_at > created_at),
+       0)::float8 AS completion_duration_sec,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz)::bigint AS visits_prev,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz AND submitted)::bigint AS submitted_prev,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz AND (last_block_id IS NOT NULL OR submitted))::bigint AS started_prev,
+       count(DISTINCT visitor_key) FILTER (WHERE created_at <  $2::timestamptz)::bigint AS unique_visitors_prev,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz AND updated_at > created_at)::bigint AS timed_visits_prev,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE created_at <  $2::timestamptz AND updated_at > created_at),
+       0)::float8 AS median_duration_sec_prev,
+       count(*) FILTER (WHERE created_at <  $2::timestamptz AND submitted AND updated_at > created_at)::bigint AS timed_completions_prev,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE created_at <  $2::timestamptz AND submitted AND updated_at > created_at),
+       0)::float8 AS completion_duration_sec_prev
 FROM form_visits
 WHERE form_id = $1
-  AND created_at >= $2::timestamptz
-  AND created_at <  $3::timestamptz
+  AND created_at >= $3::timestamptz
+  AND created_at <  $4::timestamptz
+  AND ($5::text IS NULL OR
+       (CASE $5::text
+            WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
+            WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
+            WHEN 'country' THEN coalesce(country_code, '')
+            WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
+            WHEN 'version' THEN form_version_id::text
+        END) = ANY($6::text[]))
 `
 
 type VisitInsightsParams struct {
-	FormID uuid.UUID
-	FromTs pgtype.Timestamptz
-	ToTs   pgtype.Timestamptz
+	FormID     uuid.UUID
+	FromTs     pgtype.Timestamptz
+	PrevFromTs pgtype.Timestamptz
+	ToTs       pgtype.Timestamptz
+	SegKind    pgtype.Text
+	SegKeys    []string
 }
 
 type VisitInsightsRow struct {
-	Visits                int64
-	Submitted             int64
-	UniqueVisitors        int64
-	TimedVisits           int64
-	MedianDurationSec     float64
-	TimedCompletions      int64
-	CompletionDurationSec float64
+	Visits                    int64
+	Submitted                 int64
+	Started                   int64
+	UniqueVisitors            int64
+	TimedVisits               int64
+	MedianDurationSec         float64
+	TimedCompletions          int64
+	CompletionDurationSec     float64
+	VisitsPrev                int64
+	SubmittedPrev             int64
+	StartedPrev               int64
+	UniqueVisitorsPrev        int64
+	TimedVisitsPrev           int64
+	MedianDurationSecPrev     float64
+	TimedCompletionsPrev      int64
+	CompletionDurationSecPrev float64
 }
 
 // Карточки над вкладками Insights в части визитов: сколько пришло, сколько из них
@@ -9620,26 +9975,177 @@ type VisitInsightsRow struct {
 //
 // Число ответов формы за период сюда НЕ приезжает: submissions — чужой модуль и
 // второе независимое множество (ANALYTICS.md §1). Его считает свой эндпоинт.
+//
+// Колонки *_prev — прошлое окно той же длины (сравнение на карточках, спека
+// design/analytics-v2.md §8), тем же сканом: выборка начинается с prev_from, окна
+// разводит FILTER. Без сравнения prev_from = from_ts, и *_prev нулевые.
+// started — начали отвечать: тронули вопрос или отправили (верх воронки без
+// ушедших сразу), нужен прошлому окну карточек «Отвалов».
 func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (VisitInsightsRow, error) {
-	row := q.db.QueryRow(ctx, visitInsights, arg.FormID, arg.FromTs, arg.ToTs)
+	row := q.db.QueryRow(ctx, visitInsights,
+		arg.FormID,
+		arg.FromTs,
+		arg.PrevFromTs,
+		arg.ToTs,
+		arg.SegKind,
+		arg.SegKeys,
+	)
 	var i VisitInsightsRow
 	err := row.Scan(
 		&i.Visits,
 		&i.Submitted,
+		&i.Started,
 		&i.UniqueVisitors,
 		&i.TimedVisits,
 		&i.MedianDurationSec,
 		&i.TimedCompletions,
 		&i.CompletionDurationSec,
+		&i.VisitsPrev,
+		&i.SubmittedPrev,
+		&i.StartedPrev,
+		&i.UniqueVisitorsPrev,
+		&i.TimedVisitsPrev,
+		&i.MedianDurationSecPrev,
+		&i.TimedCompletionsPrev,
+		&i.CompletionDurationSecPrev,
 	)
 	return i, err
+}
+
+const visitPageDurations = `-- name: VisitPageDurations :many
+WITH path AS (
+    -- Визит соединяется один раз, здесь, а не в каждой ветке ниже: иначе две ветки
+    -- ходили бы в form_visits точечным чтением на каждую строку пути.
+    SELECT p.visit_id, p.block_id, p.reached_at,
+           v.created_at, v.updated_at, v.submitted,
+           lead(p.reached_at) OVER w AS next_at,
+           row_number() OVER w       AS n
+    FROM form_visit_pages p
+    JOIN form_visits v ON v.id = p.visit_id
+    WHERE p.form_id = $1
+      AND p.visit_created_at >= $2::timestamptz
+      AND p.visit_created_at <  $3::timestamptz
+      AND ($4::text IS NULL OR
+             (CASE $4::text
+                  WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
+                  WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
+                  WHEN 'country' THEN coalesce(v.country_code, '')
+                  WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
+                  WHEN 'version' THEN v.form_version_id::text
+              END) = ANY($5::text[]))
+    WINDOW w AS (PARTITION BY p.visit_id ORDER BY p.reached_at, p.block_id)
+),
+spans AS (
+    SELECT path.block_id AS page_block, ''::text AS last_block, false AS left_here,
+           path.next_at - path.reached_at AS span
+    FROM path
+    WHERE path.next_at IS NOT NULL
+    UNION ALL
+    SELECT '', '', false, path.reached_at - path.created_at
+    FROM path
+    WHERE path.n = 1
+    UNION ALL
+    SELECT path.block_id, '', true, path.updated_at - path.reached_at
+    FROM path
+    WHERE path.next_at IS NULL AND NOT path.submitted
+    UNION ALL
+    SELECT '', v.last_block_id, true, v.updated_at - v.created_at
+    FROM form_visits v
+    WHERE v.form_id = $1
+      AND v.created_at >= $2::timestamptz
+      AND v.created_at <  $3::timestamptz
+      AND NOT v.submitted
+      AND v.last_block_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM form_visit_pages x WHERE x.visit_id = v.id)
+  AND ($4::text IS NULL OR
+         (CASE $4::text
+              WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
+              WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
+              WHEN 'country' THEN coalesce(v.country_code, '')
+              WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
+              WHEN 'version' THEN v.form_version_id::text
+          END) = ANY($5::text[]))
+)
+SELECT page_block::text AS page_block,
+       last_block::text AS last_block,
+       left_here::boolean AS left_here,
+       least(round(extract(epoch FROM span)), 3600)::int AS sec,
+       count(*)::bigint AS visits
+FROM spans
+WHERE span > interval '0'
+GROUP BY 1, 2, 3, 4
+`
+
+type VisitPageDurationsParams struct {
+	FormID  uuid.UUID
+	FromTs  pgtype.Timestamptz
+	ToTs    pgtype.Timestamptz
+	SegKind pgtype.Text
+	SegKeys []string
+}
+
+type VisitPageDurationsRow struct {
+	PageBlock string
+	LastBlock string
+	LeftHere  bool
+	Sec       int32
+	Visits    int64
+}
+
+// Сколько проводят на страницах: гистограмма по целым секундам, медиану по ней
+// считает Go, потому что страницу из block_id выводит только он (у страницы в
+// разных версиях может быть разный первый вопрос — медианы по block_id не
+// складываются, гистограммы складываются).
+//
+// page_block — первый вопрос страницы из пути; пустой — первая страница документа
+// (её открытие — created_at визита, строки пути у неё нет).
+// left_here — «ушли с этой страницы»: от её открытия до последнего бикона визита,
+// только у неотправивших. Последняя страница отправившего не входит никуда — её
+// конец не наблюдается (бикон ухода приходит уже со страницы «Спасибо»).
+// last_block — только у ушедших с первой страницы без пути: визит без пути мог быть
+// собран до 0074 на дальней странице, и отличить его Go может лишь по дальней точке.
+//
+// Нулевые и отрицательные отрезки отброшены: это «доехал один бикон», а не
+// «ноль секунд» — то же правило, что у медианы длительности визита. Верх — час:
+// забытая вкладка медиану не двигает, а гистограмма остаётся короткой.
+func (q *Queries) VisitPageDurations(ctx context.Context, arg VisitPageDurationsParams) ([]VisitPageDurationsRow, error) {
+	rows, err := q.db.Query(ctx, visitPageDurations,
+		arg.FormID,
+		arg.FromTs,
+		arg.ToTs,
+		arg.SegKind,
+		arg.SegKeys,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitPageDurationsRow
+	for rows.Next() {
+		var i VisitPageDurationsRow
+		if err := rows.Scan(
+			&i.PageBlock,
+			&i.LastBlock,
+			&i.LeftHere,
+			&i.Sec,
+			&i.Visits,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const visitSources = `-- name: VisitSources :many
 SELECT coalesce(meta->>'referer', '')::text    AS referer,
        coalesce(meta->>'utm_source', '')::text AS utm_source,
        coalesce(meta->>'utm_medium', '')::text AS utm_medium,
-       count(*)::bigint                        AS visits
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -9658,9 +10164,14 @@ type VisitSourcesRow struct {
 	UtmSource string
 	UtmMedium string
 	Visits    int64
+	Submitted int64
 }
 
-// Сырьё списка источников: тройка меток и счётчик. Семантику («utm_source
+// Сырьё списка источников: тройка меток и счётчик.
+//
+// submitted у этого и соседних разбивок — агрегат, а не измерение группировки:
+// конверсия строки (спека design/analytics-v2.md §5.2) не увеличивает ни результат,
+// ни скан. Семантику («utm_source
 // перебивает хост referer'а», «ни того ни другого — прямой заход») знает Go
 // (domain.FoldSources) — здесь только группировка.
 //
@@ -9681,6 +10192,7 @@ func (q *Queries) VisitSources(ctx context.Context, arg VisitSourcesParams) ([]V
 			&i.UtmSource,
 			&i.UtmMedium,
 			&i.Visits,
+			&i.Submitted,
 		); err != nil {
 			return nil, err
 		}
@@ -9752,7 +10264,8 @@ func (q *Queries) VisitTimeseries(ctx context.Context, arg VisitTimeseriesParams
 
 const visitUserAgents = `-- name: VisitUserAgents :many
 SELECT coalesce(meta->>'user_agent', '')::text AS user_agent,
-       count(*)::bigint                        AS visits
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -9769,6 +10282,7 @@ type VisitUserAgentsParams struct {
 type VisitUserAgentsRow struct {
 	UserAgent string
 	Visits    int64
+	Submitted int64
 }
 
 // Сырьё списков «устройства / браузеры / ОС»: сгруппированные строки user-agent.
@@ -9783,7 +10297,84 @@ func (q *Queries) VisitUserAgents(ctx context.Context, arg VisitUserAgentsParams
 	var items []VisitUserAgentsRow
 	for rows.Next() {
 		var i VisitUserAgentsRow
-		if err := rows.Scan(&i.UserAgent, &i.Visits); err != nil {
+		if err := rows.Scan(&i.UserAgent, &i.Visits, &i.Submitted); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
+const visitVersionStats = `-- name: VisitVersionStats :many
+SELECT form_version_id,
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted,
+       count(*) FILTER (WHERE submitted AND updated_at > created_at)::bigint AS timed_completions,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE submitted AND updated_at > created_at),
+       0)::float8                              AS completion_duration_sec
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= $2::timestamptz
+  AND created_at <  $3::timestamptz
+  AND ($4::text IS NULL OR
+       (CASE $4::text
+            WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
+            WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
+            WHEN 'country' THEN coalesce(country_code, '')
+            WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
+            WHEN 'version' THEN form_version_id::text
+        END) = ANY($5::text[]))
+GROUP BY form_version_id
+`
+
+type VisitVersionStatsParams struct {
+	FormID  uuid.UUID
+	FromTs  pgtype.Timestamptz
+	ToTs    pgtype.Timestamptz
+	SegKind pgtype.Text
+	SegKeys []string
+}
+
+type VisitVersionStatsRow struct {
+	FormVersionID         uuid.UUID
+	Visits                int64
+	Submitted             int64
+	TimedCompletions      int64
+	CompletionDurationSec float64
+}
+
+// Разрез по версиям формы (спека design/analytics-v2.md §5.3): визиты, отправившие
+// и медиана длительности ЗАВЕРШЁННОГО заполнения у каждой версии за окно. Помогла ли
+// правка — видно здесь: версия, на которой человек открыл форму, у визита своя.
+// Сегмент — тем же условием, что у воронки.
+func (q *Queries) VisitVersionStats(ctx context.Context, arg VisitVersionStatsParams) ([]VisitVersionStatsRow, error) {
+	rows, err := q.db.Query(ctx, visitVersionStats,
+		arg.FormID,
+		arg.FromTs,
+		arg.ToTs,
+		arg.SegKind,
+		arg.SegKeys,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitVersionStatsRow
+	for rows.Next() {
+		var i VisitVersionStatsRow
+		if err := rows.Scan(
+			&i.FormVersionID,
+			&i.Visits,
+			&i.Submitted,
+			&i.TimedCompletions,
+			&i.CompletionDurationSec,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

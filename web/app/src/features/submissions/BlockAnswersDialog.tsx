@@ -4,6 +4,7 @@ import { blockAnswersQueryOptions } from './queries'
 import { formatDate, pluralAnswers } from '../../shared/format'
 import { ErrorState, LoadingRows } from '../../shared/page/states'
 import { type Period } from '../../shared/period'
+import { SEGMENT_K } from '../../shared/segment'
 import { Button } from '@/components/ui/button'
 import {
   Dialog,
@@ -52,6 +53,8 @@ export function BlockAnswersDialog({
   label,
   answered,
   period,
+  where,
+  segment,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -60,9 +63,12 @@ export function BlockAnswersDialog({
   label: string
   answered: number
   period: Period
+  // Выборка сводки над окном (фильтр и сегмент): окно показывает те же ответы.
+  where?: string
+  segment?: string
 }) {
   const answers = useInfiniteQuery({
-    ...blockAnswersQueryOptions(formId, blockId, period),
+    ...blockAnswersQueryOptions(formId, blockId, period, where, segment),
     // Запрос уходит только при открытом окне: иначе каждый вопрос сводки тянул бы
     // свою первую страницу заранее — у формы на двадцать вопросов это двадцать
     // запросов за данными, которых никто не просил.
@@ -84,6 +90,10 @@ export function BlockAnswersDialog({
           <LoadingRows rows={4} />
         ) : answers.isError ? (
           <ErrorState title="Не удалось загрузить ответы." onRetry={() => answers.refetch()} />
+        ) : answers.data.pages[0]?.withheld ? (
+          <p className="text-sm text-muted-foreground">
+            В выборке меньше {SEGMENT_K} ответов — сами ответы не показываются.
+          </p>
         ) : (
           <ScrollArea className="max-h-[60vh]">
             <div className="pr-4 pb-2">

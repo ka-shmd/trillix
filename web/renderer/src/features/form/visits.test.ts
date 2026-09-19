@@ -61,6 +61,21 @@ describe('createVisitTracker', () => {
     expect(tracker.id).toBe(first)
   })
 
+  // Путь визита: страницу в него кладёт только бикон перехода. Бикон ухода несёт ту
+  // же дальнюю точку, но страницу не открывал — флага у него нет.
+  it('помечает флагом page только бикон перехода', async () => {
+    const tracker = createVisitTracker('abc', 'tok', 1, '')
+    tracker.start()
+    tracker.reach('b2')
+    const reach = await lastBody(sendBeacon)
+    tracker.leave('b2')
+    const leave = await lastBody(sendBeacon)
+
+    expect(reach.page).toBe(true)
+    expect(reach.last_block_id).toBe('b2')
+    expect(leave).not.toHaveProperty('page')
+  })
+
   it('slug экранируется в адресе', () => {
     createVisitTracker('a/b?c', 'tok', 1, '').start()
     expect(sendBeacon.mock.calls[0]?.[0]).toBe('/public/v1/forms/a%2Fb%3Fc/visits')

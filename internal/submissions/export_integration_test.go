@@ -130,9 +130,10 @@ func TestExportCSV_TwoVersions(t *testing.T) {
 		t.Fatalf("строк CSV = %d, ожидалось 3 (заголовок + 2)", len(rows))
 	}
 
-	// Заголовок: мета + свежая версия слева (b_name, b_src, b_city), затем выбывший b_phone.
+	// Заголовок: мета + свежая версия слева (b_name, b_src, b_city), затем выбывший
+	// b_phone, в конце — колонки визита (фаза 30).
 	header := rows[0]
-	wantHeader := []string{"ID ответа", "Отправлен", "Версия формы", "Имя", "Источник", "Город", "Телефон"}
+	wantHeader := []string{"ID ответа", "Отправлен", "Версия формы", "Имя", "Источник", "Город", "Телефон", "Источник визита", "Устройство визита"}
 	if strings.Join(header, "|") != strings.Join(wantHeader, "|") {
 		t.Fatalf("заголовок = %v, ожидался %v", header, wantHeader)
 	}
@@ -217,7 +218,7 @@ func TestExportCSV_NoVersions_EmptyButValid(t *testing.T) {
 	if err != nil {
 		t.Fatalf("parse csv: %v", err)
 	}
-	if len(rows) != 1 || len(rows[0]) != 3 {
-		t.Fatalf("ожидался только заголовок из 3 метаколонок, получено %v", rows)
+	if len(rows) != 1 || len(rows[0]) != 5 {
+		t.Fatalf("ожидался только заголовок из 3 метаколонок и 2 колонок визита, получено %v", rows)
 	}
 }

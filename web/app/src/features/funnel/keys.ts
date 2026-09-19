@@ -6,5 +6,7 @@ import { type Period } from '../../shared/period'
 export const funnelKeys = {
   all: () => ['funnel'] as const,
   // Период — часть ключа: иначе переключение окна отдаёт кеш предыдущего.
-  detail: (formId: string, period: Period) => ['funnel', formId, period] as const,
+  // Сегмент — тоже: '' — «все визиты».
+  detail: (formId: string, period: Period, segment = '') =>
+    ['funnel', formId, period, segment] as const,
 }

@@ -58,7 +58,9 @@ export function createVisitTracker(
   const utm = readUTM(search)
   let seq = 0
 
-  const send = (lastBlockId: string | null) => {
+  // page — бикон перехода: сервер кладёт страницу в путь визита (какие страницы
+  // человек открывал и когда). У остальных биконов флага нет вовсе.
+  const send = (lastBlockId: string | null, page = false) => {
     const body = JSON.stringify({
       visit_id: id,
       token,
@@ -66,6 +68,7 @@ export function createVisitTracker(
       seq: seq++,
       last_block_id: lastBlockId,
       utm,
+      ...(page && { page: true }),
     })
     // sendBeacon переживает закрытие вкладки, где обычный fetch уже отменяется.
     // Тип Blob задаёт Content-Type: заголовки этому API передать нельзя.
@@ -77,6 +80,6 @@ export function createVisitTracker(
     id,
     start: () => send(null),
     leave: (lastBlockId) => send(lastBlockId),
-    reach: (blockId) => send(blockId),
+    reach: (blockId) => send(blockId, true),
   }
 }

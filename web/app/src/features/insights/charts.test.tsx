@@ -66,39 +66,28 @@ describe('VisitsChart', () => {
 })
 
 describe('FunnelChart', () => {
-  it('рисует ступени и шаги одной полосой каждый', () => {
-    const funnel = {
-      visits: 100,
-      submitted: 20,
-      leftBeforeFirst: 10,
-      steps: [
-        { blockId: 'a', label: 'Имя', reached: 90, droppedHere: 30 },
-        { blockId: 'b', label: 'Телефон', reached: 60, droppedHere: 40 },
-      ],
-    }
-    const { container } = render(<FunnelChart funnel={funnel} />)
-    // Две ступени плюс два вопроса.
+  it('рисует по полоске на строку', () => {
+    const rows = [
+      { key: 'opened', label: 'Открыли форму', reached: 100, dropped: 10 },
+      { key: 'page:', label: 'Страница 1', reached: 90, dropped: 30 },
+      { key: 'page:pb1', label: 'Контакты', reached: 60, dropped: 40 },
+      { key: 'submitted', label: 'Отправили форму', reached: 20, dropped: 0 },
+    ]
+    const { container } = render(<FunnelChart rows={rows} base={100} />)
     expect(container.querySelectorAll('.recharts-bar-rectangle')).toHaveLength(4)
-    // Подписи ступеней и вопросов — ось Y, она рисуется сразу. Числа у концов
-    // полосок (LabelList) появляются вместе с анимацией и в happy-dom не наступают;
-    // сама строка «N · M %» проверена юнитом percentOf в metrics.test.ts.
+    // Подписи — ось Y, она рисуется сразу. Числа у концов полосок (LabelList)
+    // появляются вместе с анимацией и в happy-dom не наступают; сама строка
+    // «N · M %» проверена юнитом percentOf в metrics.test.ts.
     expect(svgText(container)).toContain('Открыли форму')
-    expect(svgText(container)).toContain('2. Телефон')
+    expect(svgText(container)).toContain('Контакты')
     expect(svgText(container)).toContain('Отправили форму')
   })
 
   // Длинная подпись обрезается в оси, а не переносится: это текст внутри SVG.
   it('обрезает длинную подпись вопроса', () => {
-    const long = 'Расскажите, как вы узнали о нашем сервисе и что вас в нём заинтересовало'
+    const long = '1. Расскажите, как вы узнали о нашем сервисе и что вас в нём заинтересовало'
     const { container } = render(
-      <FunnelChart
-        funnel={{
-          visits: 10,
-          submitted: 1,
-          leftBeforeFirst: 0,
-          steps: [{ blockId: 'a', label: long, reached: 9, droppedHere: 8 }],
-        }}
-      />,
+      <FunnelChart rows={[{ key: 'a', label: long, reached: 9, dropped: 8 }]} base={10} />,
     )
     expect(svgText(container).some((t) => /^1\. Расскажите.*…$/.test(t))).toBe(true)
   })
@@ -106,20 +95,34 @@ describe('FunnelChart', () => {
 
 describe('ShareChart', () => {
   function rows(n: number) {
-    return Array.from({ length: n }, (_, i) => ({ label: `Строка ${i + 1}`, visits: n - i }))
+    return Array.from({ length: n }, (_, i) => ({ label: `Строка ${i + 1}`, visits: n - i, submitted: 0 }))
   }
 
   it('называет доли и рисует кольцо', () => {
     const { container, getByText } = render(
       <ShareChart
         rows={[
-          { label: 'Компьютер', visits: 3 },
-          { label: 'Телефон', visits: 1 },
+          { label: 'Компьютер', visits: 3, submitted: 1 },
+          { label: 'Телефон', visits: 1, submitted: 0 },
         ]}
       />,
     )
     expect(container.querySelectorAll('.recharts-pie-sector')).toHaveLength(2)
     expect(getByText('3 · 75 %')).toBeTruthy()
+  })
+
+  // Конверсия строки: над порогом малых выборок — доля, ниже — «N из M».
+  it('показывает, сколько из пришедших отправили', () => {
+    const { getByText } = render(
+      <ShareChart
+        rows={[
+          { label: 'Компьютер', visits: 40, submitted: 10 },
+          { label: 'Телефон', visits: 2, submitted: 2 },
+        ]}
+      />,
+    )
+    expect(getByText('25 %')).toBeTruthy()
+    expect(getByText('2 из 2')).toBeTruthy()
   })
 
   // Восемь строк — потолок секторов. Ровно восемь ещё помещаются целиком, и

@@ -26,6 +26,9 @@ export type AnswerRow = {
   // lastBlockId — вопрос, на котором человек остановился. Только у черновика; у
   // отправленного ответа остановки не было.
   lastBlockId: string
+  // Источник и устройство визита ответа; нет — визита нет или строка из ленты.
+  visitSource?: string
+  visitDevice?: string
 }
 
 // Слова, которыми экран называет строку. Таблицей, а не ветвлением по месту
@@ -72,6 +75,8 @@ export function listRow(s: Submission): AnswerRow {
     at: s.updatedAt ?? s.createdAt,
     answers: s.answers,
     lastBlockId: s.lastBlockId,
+    visitSource: s.visitSource,
+    visitDevice: s.visitDevice,
   }
 }
 

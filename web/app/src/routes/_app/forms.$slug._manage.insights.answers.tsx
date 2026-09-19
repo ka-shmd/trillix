@@ -1,16 +1,30 @@
-import { createFileRoute } from '@tanstack/react-router'
+import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
 import { useState } from 'react'
 
-import { type BlockSummary } from '../../entities/summary'
+import { type BlockSummary, type ScaleStats } from '../../entities/summary'
+import { type BucketStep } from '../../entities/visitsBreakdown'
 import { BarRows, type BarRow } from '../../features/insights/Breakdown'
+import { AnswerFilterBar } from '../../features/insights/AnswerFilterBar'
+import { SegmentPicker } from '../../features/insights/SegmentPicker'
 import { VisitCards } from '../../features/insights/Cards'
-import { percentOf } from '../../features/insights/metrics'
+import { CrosstabDialog } from '../../features/insights/CrosstabDialog'
+import { ScaleTrendChart } from '../../features/insights/lazyCharts'
+import { MIN_BASE, percentOf } from '../../features/insights/metrics'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { BlockAnswersDialog } from '../../features/submissions/BlockAnswersDialog'
 import { submissionsSummaryQueryOptions } from '../../features/submissions/queries'
 import { formatDate, LOCALE, pluralAnswers } from '../../shared/format'
+import {
+  decodeFilter,
+  emptyScopeHint,
+  encodeFilter,
+  filterFromSearch,
+  type FilterCondition,
+} from '../../shared/answerFilter'
+import { ApiError } from '../../shared/api/errors'
 import { type Period } from '../../shared/period'
+import { SEGMENT_K, segmentFromSearch } from '../../shared/segment'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
@@ -25,7 +39,15 @@ import { Button } from '@/components/ui/button'
 // выгружаются). Вопросы идут ОДНОЙ колонкой и без подложки: список вопросов читают
 // сверху вниз, в том порядке, в каком их видел респондент, а вторая колонка ломает
 // этот порядок пополам. Разделяет вопросы воздух, а не коробка.
+//
+// Фильтр (?where=, спека design/analytics-v2.md §6.2) — только этой вкладки: сводка и
+// её окна «все ответы» считаются по ответам, прошедшим условия.
 export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/answers')({
+  validateSearch: (search): { where?: string; segment?: string } => {
+    const where = filterFromSearch(search.where)
+    const segment = segmentFromSearch(search.segment)
+    return { ...(where ? { where } : {}), ...(segment ? { segment } : {}) }
+  },
   component: SummaryPage,
 })
 
@@ -33,32 +55,99 @@ function SummaryPage() {
   // URL адресует форму slug'ом; UUID для запроса сводки берём из загруженной формы —
   // как на странице ответов.
   const { slug } = Route.useParams()
-  const { period } = Route.useSearch()
+  const { period, where, segment } = Route.useSearch()
+  const navigate = Route.useNavigate()
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const summary = useQuery({
+    ...submissionsSummaryQueryOptions(formId ?? '', period, where, segment),
+    enabled: formId !== undefined,
+  })
+  // Вопросы для панели фильтра — из сводки без фильтра: при закрытом тарифе или пустой
+  // выборке отфильтрованной сводки нет, а менять условия всё равно нужно. Запрос тот
+  // же, что без фильтра, и берётся из кеша.
+  const questions = useQuery({
     ...submissionsSummaryQueryOptions(formId ?? '', period),
     enabled: formId !== undefined,
   })
+  const conditions = decodeFilter(where)
+  const setConditions = (next: FilterCondition[]) =>
+    void navigate({ search: (prev) => ({ ...prev, where: encodeFilter(next) }), replace: true })
+  const setSegment = (next: string | undefined) =>
+    void navigate({ search: (prev) => ({ ...prev, segment: next }), replace: true })
 
   const total = summary.data?.total ?? 0
+  const unfiltered = summary.data?.unfiltered
+  const planRequired =
+    summary.isError && summary.error instanceof ApiError && summary.error.code === 'plan_required'
 
   return (
     <div className="flex flex-col gap-12">
-      <VisitCards slug={slug} period={period} />
+      {/* Полоса считает ту же совокупность, что разделы под ней: сегмент режет и её.
+          Число ответов берётся из сводки — она его уже посчитала, и ручка счётчика
+          сегмента всё равно не знает. Скрытая выборка (порог k) даёт прочерк. */}
+      <VisitCards
+        slug={slug}
+        period={period}
+        segment={segment}
+        answers={
+          segment === undefined
+            ? undefined
+            : {
+                value: summary.data && !summary.data.withheld ? summary.data.total : undefined,
+                pending: summary.isPending,
+              }
+        }
+      />
 
       <Section
         title="Ответы по вопросам"
         description={
-          summary.isSuccess && total > 0
-            ? `${total} ${pluralAnswers(total)} за выбранный период`
-            : 'Распределение ответов по каждому вопросу формы.'
+          summary.isSuccess && unfiltered !== undefined
+            ? `Ответов в выборке: ${total} из ${unfiltered}`
+            : summary.isSuccess && total > 0
+              ? `${total} ${pluralAnswers(total)} за выбранный период`
+              : 'Распределение ответов по каждому вопросу формы.'
         }
       >
+        {formId && (
+          <div className="flex flex-col gap-3">
+            {/* Сегмент по визиту — тот же, что на «Отвалах»: ответы, пришедшие из этого
+                источника, с этого устройства, из этой страны или по этой версии. */}
+            <SegmentPicker formId={formId} period={period} segment={segment} onChange={setSegment} />
+            {questions.data && questions.data.blocks.length > 0 && (
+              <AnswerFilterBar
+                blocks={questions.data.blocks}
+                conditions={conditions}
+                onChange={setConditions}
+              />
+            )}
+          </div>
+        )}
         {summary.isPending ? (
           <LoadingRows rows={3} />
+        ) : planRequired ? (
+          <EmptyState
+            title="Фильтры и сегменты закрыты тарифом"
+            description="Сводка по выбранной группе респондентов доступна на тарифе с аналитикой."
+            action={
+              <Button asChild size="sm">
+                <Link to="/settings/plan">Посмотреть тариф</Link>
+              </Button>
+            }
+          />
         ) : summary.isError ? (
           <ErrorState title="Не удалось посчитать сводку." onRetry={() => summary.refetch()} />
+        ) : summary.data.withheld ? (
+          <EmptyState
+            title={`В выборке меньше ${SEGMENT_K} ответов`}
+            description="По узкой группе распределения не показываются: так ответы нельзя связать с конкретным человеком. Расширьте период или выберите другой сегмент."
+          />
+        ) : total === 0 && unfiltered !== undefined ? (
+          <EmptyState
+            title="Под условия не подошёл ни один ответ"
+            description={emptyScopeHint(where !== undefined, segment !== undefined)}
+          />
         ) : total === 0 ? (
           <EmptyState
             title="Ответов пока нет"
@@ -78,8 +167,12 @@ function SummaryPage() {
                 key={b.blockId}
                 block={b}
                 total={total}
+                trendStep={summary.data.trendStep}
                 formId={formId ?? ''}
                 period={period}
+                where={where}
+                segment={segment}
+                closed={summary.data.blocks.filter((o) => o.kind === 'distribution')}
               />
             ))}
           </div>
@@ -92,15 +185,26 @@ function SummaryPage() {
 function BlockCard({
   block,
   total,
+  trendStep,
   formId,
   period,
+  where,
+  segment,
+  closed,
 }: {
   block: BlockSummary
   total: number
+  trendStep: BucketStep
   formId: string
   period: Period
+  where: string | undefined
+  segment: string | undefined
+  // Закрытые вопросы сводки — с ними этот можно сравнить таблицей.
+  closed: BlockSummary[]
 }) {
   const [allOpen, setAllOpen] = useState(false)
+  const [compareOpen, setCompareOpen] = useState(false)
+  const others = block.kind === 'distribution' ? closed.filter((o) => o.blockId !== block.blockId) : []
 
   return (
     <article className="flex flex-col gap-3">
@@ -115,12 +219,35 @@ function BlockCard({
           {block.asked < total && ` — вопрос показали ${block.asked} из ${total}`}
         </p>
       </div>
+      {block.scale && <ScaleSummary block={block} scale={block.scale} step={trendStep} />}
       {block.kind === 'distribution' ? (
         <Distribution block={block} />
       ) : block.kind === 'number' ? (
         <NumberStats block={block} />
       ) : (
         <Samples block={block} />
+      )}
+      {others.length > 0 && block.answered > 0 && (
+        <>
+          <Button
+            variant="link"
+            size="sm"
+            className="h-auto justify-start p-0"
+            onClick={() => setCompareOpen(true)}
+          >
+            Сравнить с другим вопросом
+          </Button>
+          <CrosstabDialog
+            open={compareOpen}
+            onOpenChange={setCompareOpen}
+            formId={formId}
+            period={period}
+            where={where}
+            segment={segment}
+            block={block}
+            others={others}
+          />
+        </>
       )}
       {/* «Все ответы» показывается, только когда показано не всё: сводка отдаёт
           десять последних значений, и у вопроса с девятью ответами кнопка открыла
@@ -143,6 +270,8 @@ function BlockCard({
             label={block.label}
             answered={block.answered}
             period={period}
+            where={where}
+            segment={segment}
           />
         </>
       )}
@@ -230,5 +359,48 @@ function NumberStats({ block }: { block: BlockSummary }) {
         </div>
       ))}
     </dl>
+  )
+}
+
+const signedFmt = new Intl.NumberFormat(LOCALE, { signDisplay: 'exceptZero' })
+
+// Шкала и звёзды: средняя, NPS у шкалы 0–10 и ряд средней. NPS — разность долей,
+// поэтому подчиняется порогу малых выборок: «−100» по одному ответу владелец прочтёт
+// как приговор форме. Ряд рисуется, когда непустых корзин хотя бы две — одна точка
+// не линия.
+function ScaleSummary({
+  block,
+  scale,
+  step,
+}: {
+  block: BlockSummary
+  scale: ScaleStats
+  step: BucketStep
+}) {
+  const marks = block.buckets.map((b) => Number(b.key)).filter((n) => Number.isFinite(n))
+  const min = marks.length > 0 ? Math.min(...marks) : 0
+  const max = marks.length > 0 ? Math.max(...marks) : 5
+  const filled = scale.trend.filter((p) => p.n > 0).length
+  const showNps = scale.nps !== undefined && block.answered >= MIN_BASE
+
+  return (
+    <div className="flex flex-col gap-3">
+      <dl className="grid grid-cols-2 gap-4 sm:grid-cols-3">
+        <div>
+          <dt className="text-sm text-muted-foreground">Средняя</dt>
+          <dd className="mt-0.5 text-xl font-bold tabular-nums">
+            {numberFmt.format(scale.avg)}
+            <span className="text-sm font-normal text-muted-foreground"> из {max}</span>
+          </dd>
+        </div>
+        {showNps && (
+          <div>
+            <dt className="text-sm text-muted-foreground">NPS</dt>
+            <dd className="mt-0.5 text-xl font-bold tabular-nums">{signedFmt.format(scale.nps!)}</dd>
+          </div>
+        )}
+      </dl>
+      {filled >= 2 && <ScaleTrendChart points={scale.trend} step={step} min={min} max={max} />}
+    </div>
   )
 }

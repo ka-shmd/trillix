@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -57,6 +58,97 @@ func (Repo) MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid
 	return n, nil
 }
 
+// InsertPage пишет строку пути визита. Нет визита этой формы или строка уже есть —
+// ноль строк, и это не ошибка: первое открытие страницы уже записано либо визит
+// чужой.
+func (Repo) InsertPage(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID, blockID string) error {
+	err := postgres.New(db).InsertVisitPage(ctx, postgres.InsertVisitPageParams{
+		BlockID:  blockID,
+		VisitID:  visitID,
+		FormID:   formID,
+		MaxPages: domain.MaxBlocks, // страниц не бывает больше, чем блоков
+	})
+	if err != nil {
+		return fmt.Errorf("insert visit page: %w", err)
+	}
+	return nil
+}
+
+// CountPaths — визиты с путём по дальней точке, исходу и набору открытых страниц.
+func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PathCount, error) {
+	from, to := postgres.PeriodBounds(period)
+	kind, keys := segParams(f)
+	rows, err := postgres.New(postgres.CustomPlans(db)).CountVisitPaths(ctx, postgres.CountVisitPathsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	if err != nil {
+		return nil, fmt.Errorf("count visit paths: %w", err)
+	}
+	out := make([]domain.PathCount, len(rows))
+	for i, r := range rows {
+		out[i] = domain.PathCount{
+			LastBlockID: r.LastBlockID.String,
+			Submitted:   r.Submitted,
+			Blocks:      r.Blocks,
+			Visits:      int(r.Visits),
+		}
+	}
+	return out, nil
+}
+
+// PageSpans — гистограммы времени на страницах (см. VisitPageDurations).
+func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PageSpan, error) {
+	from, to := postgres.PeriodBounds(period)
+	kind, keys := segParams(f)
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitPageDurations(ctx, postgres.VisitPageDurationsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	if err != nil {
+		return nil, fmt.Errorf("visit page durations: %w", err)
+	}
+	out := make([]domain.PageSpan, len(rows))
+	for i, r := range rows {
+		out[i] = domain.PageSpan{
+			PageBlock: r.PageBlock,
+			LastBlock: r.LastBlock,
+			Left:      r.LeftHere,
+			Sec:       int(r.Sec),
+			Visits:    int(r.Visits),
+		}
+	}
+	return out, nil
+}
+
+// VersionStats — визиты по версиям формы за окно (спека design/analytics-v2.md §5.3).
+// Ключ карты — id версии: номер и дату публикации знает модуль форм.
+func (Repo) VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error) {
+	from, to := postgres.PeriodBounds(period)
+	kind, keys := segParams(f)
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitVersionStats(ctx, postgres.VisitVersionStatsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	if err != nil {
+		return nil, fmt.Errorf("visit version stats: %w", err)
+	}
+	out := make(map[uuid.UUID]domain.VersionStat, len(rows))
+	for _, r := range rows {
+		out[r.FormVersionID] = domain.VersionStat{
+			Visits:                int(r.Visits),
+			Submitted:             int(r.Submitted),
+			TimedCompletions:      int(r.TimedCompletions),
+			CompletionDurationSec: r.CompletionDurationSec,
+		}
+	}
+	return out, nil
+}
+
+// segParams — сегмент в параметры запроса. Нет сегмента — оба NULL, и условие в SQL
+// отключено; сегмент без подходящих значений — пустой массив, и визитов ноль.
+func segParams(f domain.VisitFilter) (pgtype.Text, []string) {
+	if f.IsZero() {
+		return pgtype.Text{}, nil
+	}
+	keys := f.Keys
+	if keys == nil {
+		keys = []string{}
+	}
+	return pgtype.Text{String: string(f.Kind), Valid: true}, keys
+}
+
 // nullText — пустая строка становится NULL.
 func nullText(s string) pgtype.Text {
 	if s == "" {
@@ -67,12 +159,15 @@ func nullText(s string) pgtype.Text {
 
 // CountByLastBlock — раскладка визитов по самой дальней точке (сырьё воронки).
 // Пустой BlockID — визиты, не тронувшие ни одного вопроса (last_block_id IS NULL).
-func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error) {
+func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.LastBlockCount, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).CountVisitsByLastBlock(ctx, postgres.CountVisitsByLastBlockParams{
-		FormID: formID,
-		FromTs: from,
-		ToTs:   to,
+	kind, keys := segParams(f)
+	rows, err := postgres.New(postgres.CustomPlans(db)).CountVisitsByLastBlock(ctx, postgres.CountVisitsByLastBlockParams{
+		FormID:  formID,
+		FromTs:  from,
+		ToTs:    to,
+		SegKind: kind,
+		SegKeys: keys,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("count visits by last block: %w", err)
@@ -91,32 +186,57 @@ func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.
 // Insights — счётчики визитов для карточек над вкладками Insights: сколько пришло,
 // сколько отправило, медианная длительность и её знаменатель (сколько визитов в
 // медиану вошло — экран обязан отличать «данных нет» от «ноль секунд»).
-func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
+//
+// prev — прошлое окно (domain.PreviousPeriod); nil — сравнения нет. Оба окна —
+// одним сканом (см. VisitInsights в queries.sql).
+func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period, f domain.VisitFilter) (domain.VisitInsights, error) {
 	from, to := postgres.PeriodBounds(period)
-	row, err := postgres.New(db).VisitInsights(ctx, postgres.VisitInsightsParams{
-		FormID: formID,
-		FromTs: from,
-		ToTs:   to,
+	prevFrom := from
+	if prev != nil {
+		prevFrom = pgtype.Timestamptz{Time: prev.From, Valid: true}
+	}
+	kind, keys := segParams(f)
+	row, err := postgres.New(postgres.CustomPlans(db)).VisitInsights(ctx, postgres.VisitInsightsParams{
+		FormID:     formID,
+		FromTs:     from,
+		PrevFromTs: prevFrom,
+		ToTs:       to,
+		SegKind:    kind,
+		SegKeys:    keys,
 	})
 	if err != nil {
 		return domain.VisitInsights{}, fmt.Errorf("visit insights: %w", err)
 	}
-	return domain.VisitInsights{
+	out := domain.VisitInsights{
 		Visits:                int(row.Visits),
 		Submitted:             int(row.Submitted),
+		Started:               int(row.Started),
 		UniqueVisitors:        int(row.UniqueVisitors),
 		TimedVisits:           int(row.TimedVisits),
 		MedianDurationSec:     row.MedianDurationSec,
 		TimedCompletions:      int(row.TimedCompletions),
 		CompletionDurationSec: row.CompletionDurationSec,
-	}, nil
+	}
+	if prev != nil {
+		out.Previous = &domain.VisitInsights{
+			Visits:                int(row.VisitsPrev),
+			Submitted:             int(row.SubmittedPrev),
+			Started:               int(row.StartedPrev),
+			UniqueVisitors:        int(row.UniqueVisitorsPrev),
+			TimedVisits:           int(row.TimedVisitsPrev),
+			MedianDurationSec:     row.MedianDurationSecPrev,
+			TimedCompletions:      int(row.TimedCompletionsPrev),
+			CompletionDurationSec: row.CompletionDurationSecPrev,
+		}
+	}
+	return out, nil
 }
 
 // Timeseries — ряд визитов по времени. Отдаются только непустые корзины: дыры
 // достраивает домен, у которого есть границы периода.
 func (Repo) Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitTimeseries(ctx, postgres.VisitTimeseriesParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitTimeseries(ctx, postgres.VisitTimeseriesParams{
 		FormID: formID,
 		Step:   string(step),
 		FromTs: from,
@@ -140,7 +260,7 @@ func (Repo) Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 // решает домен: здесь только тройки и счётчики.
 func (Repo) Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.SourceRow, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitSources(ctx, postgres.VisitSourcesParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitSources(ctx, postgres.VisitSourcesParams{
 		FormID: formID,
 		FromTs: from,
 		ToTs:   to,
@@ -155,6 +275,7 @@ func (Repo) Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, per
 			UTMSource: r.UtmSource,
 			UTMMedium: r.UtmMedium,
 			Visits:    int(r.Visits),
+			Submitted: int(r.Submitted),
 		}
 	}
 	return out, nil
@@ -163,7 +284,7 @@ func (Repo) Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, per
 // UserAgents — сгруппированные строки user-agent. Разбор — в домене.
 func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.UserAgentRow, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitUserAgents(ctx, postgres.VisitUserAgentsParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitUserAgents(ctx, postgres.VisitUserAgentsParams{
 		FormID: formID,
 		FromTs: from,
 		ToTs:   to,
@@ -173,7 +294,7 @@ func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 	}
 	out := make([]domain.UserAgentRow, len(rows))
 	for i, r := range rows {
-		out[i] = domain.UserAgentRow{UserAgent: r.UserAgent, Visits: int(r.Visits)}
+		out[i] = domain.UserAgentRow{UserAgent: r.UserAgent, Visits: int(r.Visits), Submitted: int(r.Submitted)}
 	}
 	return out, nil
 }
@@ -181,7 +302,7 @@ func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 // Countries — визиты по странам за период. Визиты без гео сюда не попадают.
 func (Repo) Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitCountries(ctx, postgres.VisitCountriesParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitCountries(ctx, postgres.VisitCountriesParams{
 		FormID: formID,
 		FromTs: from,
 		ToTs:   to,
@@ -195,6 +316,7 @@ func (Repo) Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, p
 			Name:        r.Country,
 			CountryCode: r.CountryCode.String,
 			Visits:      int(r.Visits),
+			Submitted:   int(r.Submitted),
 		}
 	}
 	return out, nil
@@ -204,7 +326,7 @@ func (Repo) Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, p
 // разных странах склеивать нельзя.
 func (Repo) Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitCities(ctx, postgres.VisitCitiesParams{
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitCities(ctx, postgres.VisitCitiesParams{
 		FormID: formID,
 		FromTs: from,
 		ToTs:   to,
@@ -218,6 +340,39 @@ func (Repo) Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, peri
 			Name:        r.City.String,
 			CountryCode: r.CountryCode.String,
 			Visits:      int(r.Visits),
+			Submitted:   int(r.Submitted),
+		}
+	}
+	return out, nil
+}
+
+// FormConversion — окна конверсии одной формы для суточной проверки.
+type FormConversion struct {
+	FormID, WorkspaceID uuid.UUID
+	Slug, Name          string
+	Published           bool
+	Window              domain.ConversionWindow
+}
+
+// ConversionWindows — окна конверсии всех форм с визитами с baseFrom; неделя
+// начинается с recentFrom.
+func (Repo) ConversionWindows(ctx context.Context, db postgres.DBTX, baseFrom, recentFrom time.Time) ([]FormConversion, error) {
+	rows, err := postgres.New(postgres.CustomPlans(db)).ConversionWindows(ctx, postgres.ConversionWindowsParams{
+		RecentFrom: pgtype.Timestamptz{Time: recentFrom, Valid: true},
+		BaseFrom:   pgtype.Timestamptz{Time: baseFrom, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("conversion windows: %w", err)
+	}
+	out := make([]FormConversion, len(rows))
+	for i, r := range rows {
+		out[i] = FormConversion{
+			FormID: r.FormID, WorkspaceID: r.WorkspaceID, Slug: r.Slug, Name: r.FormName,
+			Published: r.Status == "published",
+			Window: domain.ConversionWindow{
+				RecentVisits: int(r.RecentVisits), RecentSubmitted: int(r.RecentSubmitted),
+				BaseVisits: int(r.BaseVisits), BaseSubmitted: int(r.BaseSubmitted),
+			},
 		}
 	}
 	return out, nil

@@ -22,11 +22,24 @@ export const DEFAULT_PERIOD: Period = '24h'
 
 export const periodSchema = periodEnum.catch(DEFAULT_PERIOD)
 
+// Свежесть запросов аналитики (TD-79). Каждый из них — полный проход по визитам или
+// ответам формы за окно, поэтому фокус окна их не перезапускает, а повторный заход на
+// вкладку в пределах минуты берёт кеш. Смена окна — другой ключ и новый запрос.
+export const analyticsFreshness = { staleTime: 60 * 1000, refetchOnWindowFocus: false } as const
+
 export const periodLabels: Record<Period, string> = {
   all: 'Всё время',
   '24h': '24 часа',
   '7d': '7 дней',
   '30d': '30 дней',
+}
+
+// С чем сравнивается окно на карточках: с прошлым окном той же длины. У «всего
+// времени» сравнения нет.
+export const previousPeriodLabels: Record<Exclude<Period, 'all'>, string> = {
+  '24h': 'к прошлым суткам',
+  '7d': 'к прошлым 7 дням',
+  '30d': 'к прошлым 30 дням',
 }
 
 const periodHours: Record<Exclude<Period, 'all'>, number> = {

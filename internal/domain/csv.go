@@ -283,3 +283,24 @@ func sanitizeCSVField(s string) string {
 	}
 	return s
 }
+
+// Колонки визита в конце CSV-выгрузки (фаза 30, спека design/analytics-v2.md §6.5):
+// источник и класс устройства — подписями разбивки «Визитов». В названии колонки —
+// «визита»: вопрос формы с подписью «Источник» встречается часто, и две одноимённые
+// колонки в файле неразличимы. Город, браузер и
+// система построчно не выгружаются: узкие метки визита рядом с ответом указывают на
+// человека (ADR §10). Google Таблицы этих колонок не получают — у них своя выдача
+// (SheetColumns, SheetRow), а новая колонка ломала бы связки, где автор держит свою
+// колонку справа.
+var csvVisitHeader = []string{"Источник визита", "Устройство визита"}
+
+// VisitHeader — заголовки колонок визита, после Header.
+func VisitHeader() []string { return sanitizeRecord(csvVisitHeader) }
+
+// VisitCells — ячейки визита ответа; ответ без визита — пустые.
+func VisitCells(v *VisitMeta) []string {
+	if v == nil {
+		return []string{"", ""}
+	}
+	return sanitizeRecord([]string{v.Source(), v.Device()})
+}

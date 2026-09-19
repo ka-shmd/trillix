@@ -39,6 +39,10 @@ const (
 	// устройства и браузеры платными не объявлялись, и 402 на весь запрос унёс бы
 	// их заодно.
 	AnalyticsSources Key = "analytics_sources"
+	// AnalyticsSegments — кросс-аналитика (фаза 30 DEV-PLAN, ADR §10): сегмент
+	// воронки, фильтр сводки, сопряжённость, визитные разрезы ответов. Гейт на
+	// ЧТЕНИИ, как у остальных аналитических ключей: визиты и ответы собираются всем.
+	AnalyticsSegments Key = "analytics_segments"
 	// SubmissionsPartial — сбор и показ ЧАСТИЧНЫХ ответов: того, что респондент
 	// набрал и не отправил.
 	//
@@ -239,6 +243,7 @@ var CatalogOrder = []Key{
 	MembersPerWorkspace,
 	AnalyticsFunnel,
 	AnalyticsSources,
+	AnalyticsSegments,
 	SubmissionsPartial,
 	FormDesignCustom,
 	FormCustomCSS,
@@ -260,6 +265,7 @@ var Catalog = map[Key]Feature{
 	StoragePerWorkspace: {Kind: Quota, Scope: WorkspaceScope, Meter: StorageMeter, Title: "Хранилище файлов"},
 	AnalyticsFunnel:     {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Воронка отвала"},
 	AnalyticsSources:    {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Источники трафика"},
+	AnalyticsSegments:   {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Сегменты и фильтры аналитики"},
 	FormDesignCustom:    {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Своё оформление"},
 	FormCustomCSS:       {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Свой CSS"},
 	FormBranding:        {Kind: Toggle, Scope: WorkspaceScope, Meter: NoMeter, Title: "Без бейджа Trillix"},

@@ -32,9 +32,10 @@ type listService interface {
 	ListForForm(ctx context.Context, userID, formID uuid.UUID, after *Cursor, limit int) (Page, error)
 	ListFeedForForm(ctx context.Context, userID, formID uuid.UUID, after *TimeCursor, limit int) (FeedPage, error)
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
-	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error)
-	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error)
-	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error)
+	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period, scope domain.AnswerScope) (domain.Summary, error)
+	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, scope domain.AnswerScope, after *Cursor, limit int) (AnswerPage, error)
+	Crosstab(ctx context.Context, userID, formID uuid.UUID, period domain.Period, rowID, colID string, scope domain.AnswerScope) (domain.Crosstab, error)
+	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, *int, error)
 	GetForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) (Submission, map[string]domain.AnswerFile, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
 	AuthorizePrint(ctx context.Context, userID, formID, submissionID uuid.UUID) (PrintAccess, error)
@@ -102,6 +103,7 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	// из её строки и живёт по тем же правилам (то же окно наблюдения, тот же рендер).
 	mux.Handle("GET /api/v1/forms/{id}/submissions/summary/{block}", h.requireAuth(http.HandlerFunc(h.blockAnswers)))
 	mux.Handle("GET /api/v1/forms/{id}/submissions/count", h.requireAuth(http.HandlerFunc(h.count)))
+	mux.Handle("GET /api/v1/forms/{id}/submissions/crosstab", h.requireAuth(http.HandlerFunc(h.crosstab)))
 	// Печать — СВОЙ корень, а не подпуть /submissions/{sid}: рядом живёт
 	// /submissions/summary/{block}, и «{sid}/pdf» с ним неразличим для маршрутизатора
 	// (оба матчат .../submissions/summary/pdf). Тот же приём, что у черновиков,
@@ -132,6 +134,19 @@ type submissionResponse struct {
 	UpdatedAt   *time.Time      `json:"updatedAt,omitempty"`
 	LastBlockID string          `json:"lastBlockId,omitempty"`
 	Answers     json.RawMessage `json:"answers"`
+	// Источник и класс устройства визита, из которого пришёл ответ (фаза 30, спека
+	// design/analytics-v2.md §6.5); нет у ответа без визита и в ленте «Все ответы».
+	// Город, браузер и система построчно не отдаются (ADR §10).
+	VisitSource string `json:"visitSource,omitempty"`
+	VisitDevice string `json:"visitDevice,omitempty"`
+}
+
+// withVisit дописывает метки визита ответа.
+func (s submissionResponse) withVisit(v *domain.VisitMeta) submissionResponse {
+	if v != nil {
+		s.VisitSource, s.VisitDevice = v.Source(), v.Device()
+	}
+	return s
 }
 
 type listResponse struct {
@@ -187,7 +202,7 @@ func (h *Handler) get(w http.ResponseWriter, r *http.Request) {
 			FormVersion: row.FormVersion,
 			CreatedAt:   row.CreatedAt,
 			Answers:     row.Answers,
-		},
+		}.withVisit(row.Visit),
 		Files: map[string]fileResponse{},
 	}
 	for id, f := range files {
@@ -241,7 +256,7 @@ func (h *Handler) list(w http.ResponseWriter, r *http.Request) {
 			FormVersion: s.FormVersion,
 			CreatedAt:   s.CreatedAt,
 			Answers:     s.Answers,
-		}
+		}.withVisit(s.Visit)
 	}
 	resp := listResponse{Submissions: items, Total: page.Total, Hidden: page.Hidden}
 	if len(page.Files) > 0 {
@@ -428,15 +443,51 @@ type blockSummaryResponse struct {
 	Answered int                     `json:"answered"`
 	Buckets  []summaryBucketResponse `json:"buckets,omitempty"`
 	Number   *numberStatsResponse    `json:"number,omitempty"`
+	// Scale — средняя, NPS (у шкалы 0–10) и ряд средней; у шкал и звёзд с ответами.
+	Scale *scaleStatsResponse `json:"scale,omitempty"`
 	// Samples — до domain.SamplesLimit последних значений, новыми сверху. Потолок
 	// часть контракта: аналитическая ручка отдаёт счётчики и небольшую выборку, всё
 	// остальное — через листинг ответов со своей пагинацией (ADR §10).
 	Samples []answerSampleResponse `json:"samples,omitempty"`
 }
 
+type scalePointResponse struct {
+	At string `json:"at"`
+	// N = 0 — ответов в корзине не было; avg тогда ноль и ничего не значит.
+	N   int     `json:"n"`
+	Avg float64 `json:"avg"`
+}
+
+type scaleStatsResponse struct {
+	Avg   float64              `json:"avg"`
+	NPS   *int                 `json:"nps,omitempty"`
+	Trend []scalePointResponse `json:"trend"`
+}
+
 type summaryResponse struct {
 	Total  int                    `json:"total"`
 	Blocks []blockSummaryResponse `json:"blocks"`
+	// trendStep — шаг рядов шкал: hour | day, выбирает сервер по окну.
+	TrendStep string `json:"trendStep"`
+	// unfiltered — сколько ответов в окне без выборки; только при выборке.
+	Unfiltered *int `json:"unfiltered,omitempty"`
+	// withheld — визитная выборка меньше порога: вопросов и чисел нет.
+	Withheld bool `json:"withheld,omitempty"`
+}
+
+// scopeFromRequest — выборка аналитики ответов: `?where` (фильтр по ответам) и
+// `?segment` (сегмент по визиту, тот же, что у «Отвалов»).
+func scopeFromRequest(r *http.Request) (domain.AnswerScope, error) {
+	q := r.URL.Query()
+	filter, err := domain.ParseAnswerFilter(q.Get("where"))
+	if err != nil {
+		return domain.AnswerScope{}, err
+	}
+	seg, err := domain.ParseSegment(q.Get("segment"))
+	if err != nil {
+		return domain.AnswerScope{}, err
+	}
+	return domain.AnswerScope{Filter: filter, Segment: seg}, nil
 }
 
 // summary отдаёт агрегат по ответам формы: наружу уходят только счётчики, сырые
@@ -462,8 +513,14 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	scope, err := scopeFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+
 	start := time.Now()
-	sum, err := h.svc.Summary(r.Context(), userID, formID, period)
+	sum, err := h.svc.Summary(r.Context(), userID, formID, period, scope)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -494,6 +551,13 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		if b.Number != nil {
 			item.Number = &numberStatsResponse{Avg: b.Number.Avg, Min: b.Number.Min, Max: b.Number.Max}
 		}
+		if b.Scale != nil {
+			trend := make([]scalePointResponse, len(b.Scale.Trend))
+			for j, p := range b.Scale.Trend {
+				trend[j] = scalePointResponse{At: p.At.UTC().Format(time.RFC3339), N: p.N, Avg: p.Avg}
+			}
+			item.Scale = &scaleStatsResponse{Avg: b.Scale.Avg, NPS: b.Scale.NPS, Trend: trend}
+		}
 		if len(b.Samples) > 0 {
 			item.Samples = make([]answerSampleResponse, len(b.Samples))
 			for j, sm := range b.Samples {
@@ -505,7 +569,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		}
 		blocks[i] = item
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks})
+	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, TrendStep: string(sum.TrendStep), Unfiltered: sum.Unfiltered, Withheld: sum.Withheld})
 }
 
 type answerResponse struct {
@@ -516,6 +580,8 @@ type answerResponse struct {
 type blockAnswersResponse struct {
 	Answers    []answerResponse `json:"answers"`
 	NextCursor *string          `json:"nextCursor"`
+	// withheld — визитная выборка меньше порога: значения не раскрываются.
+	Withheld bool `json:"withheld,omitempty"`
 }
 
 // blockAnswers — все значения ОДНОГО вопроса страницами: окно «все ответы» на
@@ -544,7 +610,12 @@ func (h *Handler) blockAnswers(w http.ResponseWriter, r *http.Request) {
 	}
 	// Окно наблюдения то же, что у сводки, и это несущее: открыв «все ответы» из
 	// строки «Ответили 12 из 34» за неделю, владелец обязан увидеть те же двенадцать.
-	page, err := h.svc.BlockAnswers(r.Context(), userID, formID, r.PathValue("block"), period,
+	scope, err := scopeFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	page, err := h.svc.BlockAnswers(r.Context(), userID, formID, r.PathValue("block"), period, scope,
 		after, parseLimit(r.URL.Query().Get("limit")))
 	if err != nil {
 		httpserver.WriteError(w, r, err)
@@ -555,7 +626,7 @@ func (h *Handler) blockAnswers(w http.ResponseWriter, r *http.Request) {
 	for i, a := range page.Answers {
 		items[i] = answerResponse{Text: a.Text, At: a.At}
 	}
-	resp := blockAnswersResponse{Answers: items}
+	resp := blockAnswersResponse{Answers: items, Withheld: page.Withheld}
 	if page.NextCursor != nil {
 		enc := encodeCursor(*page.NextCursor)
 		resp.NextCursor = &enc
@@ -566,6 +637,8 @@ func (h *Handler) blockAnswers(w http.ResponseWriter, r *http.Request) {
 // countResponse — карточка «Ответы» над вкладками Insights.
 type countResponse struct {
 	Submissions int `json:"submissions"`
+	// Previous — за прошлое окно той же длины; нет у «всего времени».
+	Previous *int `json:"previous,omitempty"`
 }
 
 // count отдаёт число ответов за период. Отдельная ручка, а не поле в счётчиках
@@ -586,12 +659,12 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	n, err := h.svc.CountInPeriod(r.Context(), userID, formID, period)
+	n, prev, err := h.svc.CountInPeriod(r.Context(), userID, formID, period)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, countResponse{Submissions: n})
+	httpserver.WriteJSON(w, r, http.StatusOK, countResponse{Submissions: n, Previous: prev})
 }
 
 // export стримит все ответы формы в CSV (браузерное скачивание, cookie авторизует).
@@ -911,4 +984,72 @@ func decodeTimeCursor(s string) (*TimeCursor, error) {
 		return nil, fmt.Errorf("time cursor: parse id: %w", err)
 	}
 	return &TimeCursor{At: ts, ID: rowID}, nil
+}
+
+type crossAxisResponse struct {
+	Key   string `json:"key"`
+	Label string `json:"label"`
+	// Total — ответов с этим значением в таблице (ответили на оба вопроса).
+	Total int `json:"total"`
+}
+
+type crosstabResponse struct {
+	Rows  []crossAxisResponse `json:"rows"`
+	Cols  []crossAxisResponse `json:"cols"`
+	Cells [][]int             `json:"cells"`
+	Total int                 `json:"total"`
+	// withheld — визитная выборка меньше порога: таблица не раскрывается.
+	Withheld bool `json:"withheld,omitempty"`
+}
+
+// crosstab отдаёт таблицу сопряжённости двух закрытых вопросов (`?rows=&cols=`),
+// с тем же окном наблюдения и фильтром, что у сводки.
+func (h *Handler) crosstab(w http.ResponseWriter, r *http.Request) {
+	userID, ok := currentUserID(w, r)
+	if !ok {
+		return
+	}
+	formID, ok := parseFormID(w, r)
+	if !ok {
+		return
+	}
+	period, err := httpserver.PeriodFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	scope, err := scopeFromRequest(r)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	q := r.URL.Query()
+	start := time.Now()
+	ct, err := h.svc.Crosstab(r.Context(), userID, formID, period, q.Get("rows"), q.Get("cols"), scope)
+	if err != nil {
+		httpserver.WriteError(w, r, err)
+		return
+	}
+	httpserver.LoggerFrom(r.Context()).Info("submissions crosstab",
+		slog.String("form_id", formID.String()),
+		slog.Int("answers", ct.Total),
+		slog.Duration("duration", time.Since(start)),
+	)
+	axis := func(in []domain.SummaryBucket) []crossAxisResponse {
+		out := make([]crossAxisResponse, len(in))
+		for i, b := range in {
+			out[i] = crossAxisResponse{Key: b.Key, Label: b.Label, Total: b.Count}
+		}
+		return out
+	}
+	httpserver.WriteJSON(w, r, http.StatusOK, crosstabResponse{Rows: axis(ct.Rows), Cols: axis(ct.Cols), Cells: nonNilCells(ct.Cells), Total: ct.Total, Withheld: ct.Withheld})
+}
+
+// nonNilCells — клетки всегда массивом: у скрытой таблицы их нет, а null фронт
+// разбирал бы отдельной веткой.
+func nonNilCells(c [][]int) [][]int {
+	if c == nil {
+		return [][]int{}
+	}
+	return c
 }

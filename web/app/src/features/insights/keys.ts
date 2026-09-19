@@ -7,6 +7,12 @@ import { type Period } from '../../shared/period'
 // экран показывал бы числа не того периода, который выбран, — молча.
 export const insightsKeys = {
   all: () => ['insights'] as const,
-  visits: (formId: string, period: Period) => ['insights', 'visits', formId, period] as const,
+  // Сегмент — тоже часть ключа; '' — «все визиты».
+  visits: (formId: string, period: Period, segment = '') =>
+    ['insights', 'visits', formId, period, segment] as const,
+  versions: (formId: string, period: Period, segment = '') =>
+    ['insights', 'versions', formId, period, segment] as const,
   breakdown: (formId: string, period: Period) => ['insights', 'breakdown', formId, period] as const,
+  crosstab: (formId: string, period: Period, rows: string, cols: string, where = '', segment = '') =>
+    ['insights', 'crosstab', formId, period, rows, cols, where, segment] as const,
 }

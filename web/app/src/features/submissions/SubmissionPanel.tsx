@@ -57,6 +57,8 @@ export function SubmissionPanel({
         <DialogDescription>
           Версия формы: {row.formVersion}
           {stoppedAt && ` · остановился на вопросе «${stoppedAt.label}»`}
+          {row.visitSource && ` · источник: ${row.visitSource}`}
+          {row.visitDevice && ` · устройство: ${row.visitDevice}`}
         </DialogDescription>
       </DialogHeader>
 

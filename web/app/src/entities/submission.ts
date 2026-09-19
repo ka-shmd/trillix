@@ -23,6 +23,10 @@ export const submissionSchema = z.object({
   updatedAt: z.string().optional(),
   lastBlockId: z.string().default(''),
   answers: z.record(z.string(), answerValueSchema),
+  // Источник и класс устройства визита, из которого пришёл ответ (фаза 30). Нет у
+  // ответа без визита и в ленте «Все ответы».
+  visitSource: z.string().optional(),
+  visitDevice: z.string().optional(),
 })
 
 export type Submission = z.infer<typeof submissionSchema>
@@ -99,5 +103,7 @@ export type PartialSubmissionsPage = z.infer<typeof partialSubmissionsPageSchema
 // Зеркалит countResponse из internal/submissions/handler.go.
 export const submissionsCountSchema = z.object({
   submissions: z.number().int(),
+  // За прошлое окно той же длины (фаза 30); нет у «всего времени».
+  previous: z.number().int().optional(),
 })
 export type SubmissionsCount = z.infer<typeof submissionsCountSchema>

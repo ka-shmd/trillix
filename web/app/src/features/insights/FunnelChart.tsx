@@ -1,7 +1,7 @@
 import { Bar, BarChart, LabelList, XAxis, YAxis } from 'recharts'
 
-import { type FormFunnel } from '../../entities/funnel'
-import { droppedPhrase, percentOf } from './metrics'
+import { dropPercent, droppedPhrase, type FunnelRow, percentOf } from './metrics'
+import { formatDuration } from '../../shared/format'
 import {
   type ChartConfig,
   ChartContainer,
@@ -9,7 +9,9 @@ import {
   ChartTooltipContent,
 } from '@/components/ui/chart'
 
-// Воронка одним графиком: «Открыли форму» → вопросы по порядку → «Отправили форму».
+// Воронка одним графиком: «Открыли форму» → шаги по порядку → «Отправили форму».
+// Строки собирает вызывающий (metrics.ts: funnelRows, pageQuestionRows) — график не
+// знает, страницы у него в шагах, вопросы или вопросы одной страницы без ступеней.
 // Один жанр разметки на все ступени, 26 пикселей на строку — форма из пятнадцати
 // вопросов помещается на экран целиком. Карточка на вопрос стоила бы вчетверо
 // больше высоты и ничего не добавляла: величина у всех строк одна.
@@ -27,6 +29,11 @@ type Row = {
   full: string
   reached: number
   dropped: number
+  // Доля ушедших среди дошедших; null ниже порога малых выборок.
+  dropPercent: number | null
+  // Время на странице готовой строкой; нет данных — поля нет.
+  time?: string
+  leftTime?: string
   caption: string
 }
 
@@ -39,13 +46,10 @@ function short(label: string): string {
   return label.length > LABEL_LIMIT ? `${label.slice(0, LABEL_LIMIT - 1)}…` : label
 }
 
-export function FunnelChart({ funnel }: { funnel: FormFunnel }) {
-  const { visits, submitted, steps } = funnel
-  const rows: Row[] = [
-    row('Открыли форму', visits, funnel.leftBeforeFirst, visits),
-    ...steps.map((s, i) => row(`${i + 1}. ${s.label}`, s.reached, s.droppedHere, visits)),
-    row('Отправили форму', submitted, 0, visits),
-  ]
+// base — сотня процентов у подписей и ширина оси: визиты формы. У вопросов одной
+// страницы база та же, чтобы полоски двух графиков экрана были соизмеримы.
+export function FunnelChart({ rows: input, base }: { rows: FunnelRow[]; base: number }) {
+  const rows = input.map((r) => row(r, base))
 
   return (
     <ChartContainer
@@ -57,12 +61,12 @@ export function FunnelChart({ funnel }: { funnel: FormFunnel }) {
         accessibilityLayer
         layout="vertical"
         data={rows}
-        margin={{ left: 0, right: 72, top: 4, bottom: 4 }}
+        margin={{ left: 0, right: rows.some((r) => r.time) ? 128 : 72, top: 4, bottom: 4 }}
         barSize={14}
       >
         {/* Ось значений спрятана: числа стоят подписью у конца каждой полоски, и
             вторая шкала внизу читалась бы как отдельная информация. */}
-        <XAxis type="number" dataKey="reached" domain={[0, Math.max(visits, 1)]} hide />
+        <XAxis type="number" dataKey="reached" domain={[0, Math.max(base, 1)]} hide />
         <YAxis
           type="category"
           dataKey="label"
@@ -82,11 +86,23 @@ export function FunnelChart({ funnel }: { funnel: FormFunnel }) {
               }}
               formatter={(value, _name, item) => {
                 const dropped: unknown = item.payload?.dropped
+                const pct: unknown = item.payload?.dropPercent
+                const time: unknown = item.payload?.time
+                const leftTime: unknown = item.payload?.leftTime
                 return (
                   <div className="flex flex-col gap-0.5">
                     <span className="font-medium tabular-nums">Дошли: {String(value)}</span>
                     {typeof dropped === 'number' && dropped > 0 && (
-                      <span className="text-muted-foreground">{droppedPhrase(dropped)}</span>
+                      <span className="text-muted-foreground">
+                        {droppedPhrase(dropped)}
+                        {typeof pct === 'number' && ` — ${pct} % дошедших`}
+                      </span>
+                    )}
+                    {typeof time === 'string' && (
+                      <span className="text-muted-foreground">Обычно проводят здесь {time}</span>
+                    )}
+                    {typeof leftTime === 'string' && (
+                      <span className="text-muted-foreground">Ушедшие провели здесь {leftTime}</span>
                     )}
                   </div>
                 )
@@ -110,7 +126,19 @@ export function FunnelChart({ funnel }: { funnel: FormFunnel }) {
   )
 }
 
-function row(label: string, reached: number, dropped: number, base: number): Row {
-  const pct = percentOf(reached, base)
-  return { label: short(label), full: label, reached, dropped, caption: `${reached} · ${pct} %` }
+// У страницы в подписи полоски — ещё и время на ней: ради него на воронку по
+// страницам и смотрят, и прятать его в тултип значило бы спрятать ответ.
+function row(r: FunnelRow, base: number): Row {
+  const pct = percentOf(r.reached, base)
+  const time = r.timeSec === undefined ? undefined : formatDuration(r.timeSec)
+  return {
+    label: short(r.label),
+    full: r.label,
+    reached: r.reached,
+    dropped: r.dropped,
+    dropPercent: dropPercent(r),
+    ...(time !== undefined && { time }),
+    ...(r.leftTimeSec !== undefined && { leftTime: formatDuration(r.leftTimeSec) }),
+    caption: time === undefined ? `${r.reached} · ${pct} %` : `${r.reached} · ${pct} % · ${time}`,
+  }
 }

@@ -17,7 +17,7 @@ import {
   type SubmissionsKind,
 } from './api'
 import { ApiError } from '../../shared/api/errors'
-import { type Period } from '../../shared/period'
+import { analyticsFreshness, type Period } from '../../shared/period'
 
 // Ответы формы — серверный стейт с курсорной пагинацией (новые сверху), страницы
 // подгружаются через getNextPageParam; курсор непрозрачен для клиента.
@@ -57,20 +57,36 @@ export function partialsListQueryOptions(formId: string) {
 }
 
 // Сводка формы — обычный запрос (не пагинируется: сервер отдаёт готовый итог).
-export function submissionsSummaryQueryOptions(formId: string, period: Period) {
+// Отказ по тарифу (фильтр закрыт) не ретраится: это устойчивый ответ, а не сбой.
+export function submissionsSummaryQueryOptions(
+  formId: string,
+  period: Period,
+  where?: string,
+  segment?: string,
+) {
   return queryOptions({
-    queryKey: submissionKeys.summary(formId, period),
-    queryFn: () => getSummary(formId, period),
+    ...analyticsFreshness,
+    queryKey: submissionKeys.summary(formId, period, where, segment),
+    queryFn: () => getSummary(formId, period, where, segment),
+    retry: (count: number, error: Error) =>
+      !(error instanceof ApiError && error.code === 'plan_required') && count < 3,
   })
 }
 
 // Все значения одного вопроса — курсорная пагинация, как у списка ответов.
 // enabled оставлен вызывающему: запрос уходит только при открытом окне, иначе
 // каждый вопрос сводки тянул бы свою страницу заранее.
-export function blockAnswersQueryOptions(formId: string, blockId: string, period: Period) {
+export function blockAnswersQueryOptions(
+  formId: string,
+  blockId: string,
+  period: Period,
+  where?: string,
+  segment?: string,
+) {
   return infiniteQueryOptions({
-    queryKey: submissionKeys.blockAnswers(formId, period, blockId),
-    queryFn: ({ pageParam }) => listBlockAnswers(formId, blockId, period, pageParam),
+    ...analyticsFreshness,
+    queryKey: submissionKeys.blockAnswers(formId, period, blockId, where, segment),
+    queryFn: ({ pageParam }) => listBlockAnswers(formId, blockId, period, pageParam, where, segment),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   })
@@ -79,6 +95,7 @@ export function blockAnswersQueryOptions(formId: string, blockId: string, period
 // Счётчик ответов за период — карточка над вкладками аналитики.
 export function submissionsCountQueryOptions(formId: string, period: Period) {
   return queryOptions({
+    ...analyticsFreshness,
     queryKey: submissionKeys.count(formId, period),
     queryFn: () => getSubmissionsCount(formId, period),
   })

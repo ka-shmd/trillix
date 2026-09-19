@@ -27,6 +27,17 @@ type Submission struct {
 	// которым оно не нужно, остаётся пустым не по случайности, а потому что его
 	// заполняет только запрос доставки.
 	FormTitle string
+	// Visit — метки визита, из которого пришёл ответ (0076); nil — визита нет или путь
+	// чтения их не берёт (доставка, печать).
+	Visit *domain.VisitMeta
+}
+
+// visitMeta — метки визита из строки обхода ответов.
+func visitMeta(has bool, ua, referer, utmSource, utmMedium, country, city string) *domain.VisitMeta {
+	if !has {
+		return nil
+	}
+	return &domain.VisitMeta{UserAgent: ua, Referer: referer, UTMSource: utmSource, UTMMedium: utmMedium, CountryCode: country, City: city}
 }
 
 // Repo — доступ к данным submissions поверх sqlc. Методы принимают исполнителя
@@ -52,6 +63,8 @@ type NewSubmission struct {
 	// ConsentRevisionID — ревизия согласия, под которой поставлена галочка; nil —
 	// согласия при ответе не было (0069).
 	ConsentRevisionID *uuid.UUID
+	// VisitID — визит, из которого пришёл ответ (0076); nil — визита нет.
+	VisitID *uuid.UUID
 }
 
 // optUUID — необязательный uuid в параметр запроса: nil уходит NULL.
@@ -76,6 +89,7 @@ func (Repo) InsertSubmission(ctx context.Context, db postgres.DBTX, in NewSubmis
 		OverQuota:         in.OverQuota,
 		WorkspaceID:       in.WorkspaceID,
 		ConsentRevisionID: optUUID(in.ConsentRevisionID),
+		VisitID:           optUUID(in.VisitID),
 		Period:            pgtype.Date{Time: in.Period, Valid: true},
 	})
 	if err != nil {
@@ -103,6 +117,7 @@ func (Repo) ListSubmissions(ctx context.Context, db postgres.DBTX, formID uuid.U
 			FormVersion: r.FormVersion,
 			Answers:     json.RawMessage(r.Answers),
 			CreatedAt:   r.CreatedAt.Time,
+			Visit:       visitMeta(r.HasVisit, r.VisitUserAgent, r.VisitReferer, r.VisitUtmSource, r.VisitUtmMedium, r.VisitCountryCode, r.VisitCity),
 		}
 	}
 	return out, nil
@@ -126,6 +141,7 @@ func (Repo) SubmissionByID(ctx context.Context, db postgres.DBTX, id, formID uui
 		FormVersion: row.FormVersion,
 		Answers:     json.RawMessage(row.Answers),
 		CreatedAt:   row.CreatedAt.Time,
+		Visit:       visitMeta(row.HasVisit, row.VisitUserAgent, row.VisitReferer, row.VisitUtmSource, row.VisitUtmMedium, row.VisitCountryCode, row.VisitCity),
 	}, nil
 }
 
@@ -149,6 +165,7 @@ func (Repo) ListSubmissionsAfter(ctx context.Context, db postgres.DBTX, formID, 
 			FormVersion: r.FormVersion,
 			Answers:     json.RawMessage(r.Answers),
 			CreatedAt:   r.CreatedAt.Time,
+			Visit:       visitMeta(r.HasVisit, r.VisitUserAgent, r.VisitReferer, r.VisitUtmSource, r.VisitUtmMedium, r.VisitCountryCode, r.VisitCity),
 		}
 	}
 	return out, nil
@@ -288,17 +305,25 @@ func (Repo) LockFormForSubmit(ctx context.Context, db postgres.DBTX, formID uuid
 // CountInPeriod — сколько ВИДИМЫХ ответов пришло за окно наблюдения (карточка
 // «Ответы» над вкладками Insights). Сверхлимитные не считаются — так же, как их
 // не показывает таблица ответов.
-func (Repo) CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error) {
+//
+// prev — прошлое окно для сравнения на карточке; nil — сравнения нет, и второе число
+// нулевое. Оба окна — одним сканом.
+func (Repo) CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period) (current, previous int64, err error) {
 	from, to := postgres.PeriodBounds(period)
-	n, err := postgres.New(db).CountSubmissionsInPeriod(ctx, postgres.CountSubmissionsInPeriodParams{
-		FormID: formID,
-		FromTs: from,
-		ToTs:   to,
+	prevFrom := from
+	if prev != nil {
+		prevFrom = pgtype.Timestamptz{Time: prev.From, Valid: true}
+	}
+	row, err := postgres.New(db).CountSubmissionsInPeriod(ctx, postgres.CountSubmissionsInPeriodParams{
+		FormID:     formID,
+		FromTs:     from,
+		PrevFromTs: prevFrom,
+		ToTs:       to,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("count submissions in period: %w", err)
+		return 0, 0, fmt.Errorf("count submissions in period: %w", err)
 	}
-	return n, nil
+	return row.Current, row.Previous, nil
 }
 
 // Partial — черновик ответа в проекции кабинета: id визита, набранное, докуда
