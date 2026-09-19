@@ -127,6 +127,9 @@ type Summary struct {
 	Blocks []BlockSummary
 	// TrendStep — шаг рядов шкал (ScaleStats.Trend): от него зависят подписи оси.
 	TrendStep BucketStep
+	// Unfiltered — сколько ответов в окне без фильтра («в выборке 124 из 890»);
+	// nil, если фильтра нет.
+	Unfiltered *int
 }
 
 // SummaryBuilder копит счётчики. Создаётся один раз на запрос, затем Add вызывается

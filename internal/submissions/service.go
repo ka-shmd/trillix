@@ -1507,8 +1507,15 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 //
 // Стоимость линейна по числу ответов формы: см. строку лога в handler.go — по ней
 // видно, во что она обходится на реальных данных.
-func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error) {
+//
+// filter — фильтр ответов (спека design/analytics-v2.md §6.2): сводка по тем, кто
+// ему отвечает; в Unfiltered — сколько ответов в окне без него.
+func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period, filter domain.AnswerFilter) (domain.Summary, error) {
 	vs, err := s.versionedSchemas(ctx, userID, formID)
+	if err != nil {
+		return domain.Summary{}, err
+	}
+	match, err := s.answerMatcher(ctx, userID, formID, vs, filter)
 	if err != nil {
 		return domain.Summary{}, err
 	}
@@ -1517,7 +1524,12 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	// Ряд шкал — тем же шагом, что ряд визитов за это окно: два графика одного экрана
 	// с разной сеткой времени читались бы как расхождение данных.
 	builder.Trend(domain.StepFor(period), period.From, period.To)
+	unfiltered := 0
 	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
+		unfiltered++
+		if !match(int(sub.FormVersion), answers) {
+			return nil
+		}
 		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)
 		return nil
 	}); err != nil {
@@ -1525,7 +1537,41 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	}
 	sum := builder.Result()
 	sum.TrendStep = domain.StepFor(period)
+	if len(filter) > 0 {
+		sum.Unfiltered = &unfiltered
+	}
 	return sum, nil
+}
+
+// answerMatcher — проверка ответа фильтром. Фильтр — кросс-аналитика: ключ тарифа
+// analytics_segments, спрошенный после авторизации (её уже сделал versionedSchemas).
+// Условия сверяются с моделью вопросов: инертное условие молча дало бы пустую сводку.
+// Без фильтра проходит всё, и тариф не спрашивается.
+func (s *Service) answerMatcher(ctx context.Context, userID, formID uuid.UUID, vs []domain.VersionedSchema, filter domain.AnswerFilter) (func(version int, answers map[string]json.RawMessage) bool, error) {
+	if len(filter) == 0 {
+		return func(int, map[string]json.RawMessage) bool { return true }, nil
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return nil, err
+	}
+	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.AnalyticsSegments)
+	if err != nil {
+		return nil, err
+	}
+	if !d.Allowed {
+		return nil, domain.ErrPlanRequired
+	}
+	if err := filter.Check(domain.QuestionOrder(vs)); err != nil {
+		return nil, err
+	}
+	blocks := make(map[int][]domain.Block, len(vs))
+	for _, v := range vs {
+		blocks[v.Version] = v.Schema.Blocks
+	}
+	return func(version int, answers map[string]json.RawMessage) bool {
+		return filter.Match(blocks[version], answers)
+	}, nil
 }
 
 // AnswerPage — страница значений ОДНОГО вопроса, новыми сверху.
@@ -1552,8 +1598,15 @@ var errAnswersEnough = errors.New("submissions: answer page is full")
 // Наружу уходит РЕНДЕР значения, а не сырой ответ: id опции владельцу ничего не
 // говорит, а разбор его на клиенте был бы третьей копией доменных правил после Go и
 // Zod.
-func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error) {
+//
+// filter — тот же фильтр, что у сводки над окном: открыв «все ответы» из
+// отфильтрованной сводки, владелец обязан увидеть те же ответы.
+func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, filter domain.AnswerFilter, after *Cursor, limit int) (AnswerPage, error) {
 	vs, err := s.versionedSchemas(ctx, userID, formID)
+	if err != nil {
+		return AnswerPage{}, err
+	}
+	match, err := s.answerMatcher(ctx, userID, formID, vs, filter)
 	if err != nil {
 		return AnswerPage{}, err
 	}
@@ -1568,8 +1621,11 @@ func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, bl
 	var last uuid.UUID
 	var full bool
 	err = s.eachSubmissionFrom(ctx, formID, period, after, func(sub Submission, answers map[string]json.RawMessage) error {
-		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)
 		last = sub.ID
+		if !match(int(sub.FormVersion), answers) {
+			return nil
+		}
+		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)
 		if builder.SamplesFull(blockID) {
 			full = true
 			return errAnswersEnough

@@ -41,8 +41,9 @@ export type SubmissionsKind = 'all' | 'completed'
 
 // Сводка ответов: агрегат считает сервер, сюда приходят только счётчики. Окно
 // наблюдения режет ответы по времени приёма — как и все экраны аналитики.
-export function getSummary(formId: string, period: Period): Promise<FormSummary> {
-  const query = new URLSearchParams(periodRange(period)).toString()
+// where — фильтр ответов (shared/answerFilter): сводка по прошедшим его.
+export function getSummary(formId: string, period: Period, where?: string): Promise<FormSummary> {
+  const query = new URLSearchParams({ ...periodRange(period), ...(where ? { where } : {}) }).toString()
   return apiRequest(`/forms/${formId}/submissions/summary${query ? `?${query}` : ''}`, {
     schema: formSummarySchema,
   })
@@ -56,9 +57,11 @@ export function listBlockAnswers(
   blockId: string,
   period: Period,
   cursor?: string,
+  where?: string,
 ): Promise<BlockAnswersPage> {
   const params = new URLSearchParams(periodRange(period))
   if (cursor) params.set('cursor', cursor)
+  if (where) params.set('where', where)
   const query = params.toString()
   return apiRequest(
     `/forms/${formId}/submissions/summary/${encodeURIComponent(blockId)}${query ? `?${query}` : ''}`,
