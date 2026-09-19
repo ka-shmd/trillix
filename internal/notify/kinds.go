@@ -20,6 +20,11 @@ const (
 	// KindOverQuota — ответы пошли сверх лимита тарифа. Препятствие, но чинится
 	// не кнопкой, а новым периодом либо тарифом.
 	KindOverQuota Kind = "over_quota"
+	// KindConversionDrop — конверсия формы за неделю заметно и не случайно ниже,
+	// чем за четыре недели до неё (фаза 30, спека design/analytics-v2.md §9).
+	// Препятствие: гаснет, когда суточная проверка больше его не видит, либо когда
+	// форма снята с публикации.
+	KindConversionDrop Kind = "conversion_drop"
 )
 
 // Payload — снимок, из которого собираются текст и ссылка. Хранится в JSONB.
@@ -35,6 +40,9 @@ type Payload struct {
 	TargetName string `json:"targetName,omitempty"` // имя цели, данное автором
 	Reason     string `json:"reason,omitempty"`     // причина отказа — ТА ЖЕ, что у цели и в журнале доставок
 	Period     string `json:"period,omitempty"`     // YYYY-MM у over_quota: по нему рвётся склейка на границе месяца
+	// Конверсия недели и базовых четырёх недель, в процентах, у conversion_drop.
+	RecentRate int `json:"recentRate,omitempty"`
+	BaseRate   int `json:"baseRate,omitempty"`
 }
 
 // spec — описание повода в реестре.
@@ -83,12 +91,21 @@ var registry = map[Kind]spec{
 		},
 		link: func(_ Payload, workspaceSlug string) string { return "/w/" + workspaceSlug + "/plan" },
 	},
+	KindConversionDrop: {
+		action:   domain.ActionFormRead,
+		obstacle: true,
+		text: func(p Payload, _ int32) string {
+			return fmt.Sprintf("%s — конверсия упала: %d %% за неделю против %d %% раньше", formTitle(p), p.RecentRate, p.BaseRate)
+		},
+		// Отвалы за неделю: там видно, на каком шаге теряют, и сравнение с прошлой.
+		link: func(p Payload, _ string) string { return "/forms/" + p.FormSlug + "/insights/drop-offs?period=7d" },
+	},
 }
 
 // AllKinds — все поводы, которые обязан называть реестр. Молчание реестра должно
 // краснеть тестом, а не оборачиваться уведомлением без текста (тот же приём, что
 // у workspaces.AllActions и каталога тарифов).
-var AllKinds = []Kind{KindNewSubmissions, KindIntegrationBroken, KindOverQuota}
+var AllKinds = []Kind{KindNewSubmissions, KindIntegrationBroken, KindOverQuota, KindConversionDrop}
 
 // formTitle — название формы для текста повода. Пустое имя показывается тем же
 // словом, что и в списке форм кабинета: строка «— 3 новых ответа» без

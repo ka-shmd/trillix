@@ -240,6 +240,9 @@ const (
 
 	// Периодическая чистка истёкших сессий (ARCHITECTURE §4.4).
 	sessionCleanupInterval = time.Hour
+	// conversionDropInterval — суточная проверка падения конверсии (спека
+	// design/analytics-v2.md §9): окна меряются сутками, чаще смотреть незачем.
+	conversionDropInterval = 24 * time.Hour
 	sessionCleanupTimeout  = 30 * time.Second
 
 	// Чистка истёкших токенов сброса пароля (живут 30 мин; часового прогона хватает).
@@ -697,7 +700,7 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	// Секрет аналитики выводится из секрета токена формы (см. deriveVisitorSecret):
 	// своей переменной окружения у неё нет — платить настройкой за одну карточку
 	// владельцу не за что.
-	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{}, geoSvc, cfg.FormTokenSecret)
+	visitsSvc := visits.NewService(pool, formsSvc, entitlementsSvc, visits.Repo{}, geoSvc, cfg.FormTokenSecret).WithNotes(notifySvc)
 	visitsPublic := visits.NewPublicHandler(visitsSvc, visitLimiter, cfg.FormTokenSecret, cfg.TrustedProxy)
 	visitsHandler := visits.NewHandler(visitsSvc, authHandler.RequireAuth)
 	// Лента уведомлений кабинета. Только чтение и отметка прочтения: ставят и
@@ -953,6 +956,20 @@ func runServer(cfg config.Config, log *slog.Logger) error {
 	})
 	// Черновики ответов старше срока хранения (спека §10.5): черновик — наблюдение,
 	// а не документ, и копить чужой неотправленный текст без причины нельзя.
+	tasks.Start(ctx, periodic.Task{
+		Name:     "conversion-drop-check",
+		Interval: conversionDropInterval,
+		Run: func(ctx context.Context) error {
+			n, err := visitsSvc.CheckConversionDrops(ctx, log)
+			if err != nil {
+				return err
+			}
+			if n > 0 {
+				log.Info("forms with conversion drop", slog.Int("count", n))
+			}
+			return nil
+		},
+	})
 	tasks.Start(ctx, periodic.Task{
 		Name:     "partial-cleanup",
 		Interval: sessionCleanupInterval,

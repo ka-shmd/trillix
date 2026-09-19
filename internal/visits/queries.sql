@@ -405,3 +405,24 @@ WHERE form_id = $1
   AND city IS NOT NULL AND city <> ''
 GROUP BY city, country_code
 ORDER BY visits DESC, city;
+
+-- name: ConversionWindows :many
+-- Суточная проверка падения конверсии (спека design/analytics-v2.md §9): у каждой
+-- формы с визитами за последние 35 суток — визиты и отправившие за неделю и за 28
+-- суток до неё. Один групповой запрос на все формы, а не запрос на форму.
+--
+-- Статус формы едет наружу: у снятой с публикации повод гаснет, а не
+-- проверяется. Название — внутреннее имя, иначе заголовок: так форму зовёт кабинет.
+SELECT v.form_id,
+       f.workspace_id,
+       f.slug,
+       f.status,
+       coalesce(nullif(f.name, ''), f.title, '')::text AS form_name,
+       count(*) FILTER (WHERE v.created_at >= sqlc.arg(recent_from)::timestamptz)::bigint AS recent_visits,
+       count(*) FILTER (WHERE v.created_at >= sqlc.arg(recent_from)::timestamptz AND v.submitted)::bigint AS recent_submitted,
+       count(*) FILTER (WHERE v.created_at <  sqlc.arg(recent_from)::timestamptz)::bigint AS base_visits,
+       count(*) FILTER (WHERE v.created_at <  sqlc.arg(recent_from)::timestamptz AND v.submitted)::bigint AS base_submitted
+FROM form_visits v
+JOIN forms f ON f.id = v.form_id
+WHERE v.created_at >= sqlc.arg(base_from)::timestamptz
+GROUP BY v.form_id, f.workspace_id, f.slug, f.status, f.name, f.title;

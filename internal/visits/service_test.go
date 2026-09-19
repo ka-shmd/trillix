@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"strings"
 	"testing"
 	"time"
@@ -14,6 +15,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/geo"
+	"github.com/ka-shmd/trillix/internal/notify"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -71,6 +73,7 @@ type fakeStore struct {
 	spans       []domain.PageSpan
 	filter      domain.VisitFilter // фильтр сегмента, с которым сервис пришёл в стор
 	prev        *domain.Period     // прошлое окно карточек
+	conversions []FormConversion
 	versionStat map[uuid.UUID]domain.VersionStat
 	marked      []uuid.UUID
 	byLastBlock []domain.LastBlockCount
@@ -119,6 +122,10 @@ func (s *fakeStore) PageSpans(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _
 func (s *fakeStore) VersionStats(_ context.Context, _ postgres.DBTX, _ uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error) {
 	s.period, s.filter = period, f
 	return s.versionStat, nil
+}
+
+func (s *fakeStore) ConversionWindows(_ context.Context, _ postgres.DBTX, _, _ time.Time) ([]FormConversion, error) {
+	return s.conversions, nil
 }
 
 func (s *fakeStore) MarkSubmitted(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID) (int64, error) {
@@ -848,5 +855,47 @@ func TestInsights_PreviousWindow(t *testing.T) {
 	}
 	if store.prev != nil {
 		t.Errorf("у всего времени прошлое окно: %+v", store.prev)
+	}
+}
+
+type fakeNotes struct {
+	notified []notify.Event
+	cleared  []uuid.UUID
+}
+
+func (n *fakeNotes) Notify(_ context.Context, _ postgres.DBTX, ev notify.Event) error {
+	n.notified = append(n.notified, ev)
+	return nil
+}
+
+func (n *fakeNotes) Clear(_ context.Context, _ postgres.DBTX, _ notify.Kind, subjectID uuid.UUID) error {
+	n.cleared = append(n.cleared, subjectID)
+	return nil
+}
+
+// Суточная проверка: опубликованная форма в просадке получает повод с процентами,
+// остальные — отбой; снятая с публикации гасится даже в просадке.
+func TestCheckConversionDrops(t *testing.T) {
+	drop := domain.ConversionWindow{RecentVisits: 150, RecentSubmitted: 18, BaseVisits: 600, BaseSubmitted: 186}
+	fine := domain.ConversionWindow{RecentVisits: 150, RecentSubmitted: 45, BaseVisits: 600, BaseSubmitted: 186}
+	falling, steady, closed := uuid.New(), uuid.New(), uuid.New()
+	store := &fakeStore{conversions: []FormConversion{
+		{FormID: falling, Slug: "a", Name: "Анкета", Published: true, Window: drop},
+		{FormID: steady, Slug: "b", Published: true, Window: fine},
+		{FormID: closed, Slug: "c", Published: false, Window: drop},
+	}}
+	notes := &fakeNotes{}
+	svc := segmentSvc(openPlans(), store, nil).WithNotes(notes)
+
+	n, err := svc.CheckConversionDrops(context.Background(), slog.New(slog.DiscardHandler))
+	if err != nil || n != 1 {
+		t.Fatalf("в просадке %d, ошибка %v; ждали 1", n, err)
+	}
+	if len(notes.notified) != 1 || notes.notified[0].SubjectID != falling ||
+		notes.notified[0].Payload.RecentRate != 12 || notes.notified[0].Payload.BaseRate != 31 {
+		t.Errorf("повод: %+v", notes.notified)
+	}
+	if len(notes.cleared) != 2 {
+		t.Errorf("отбой: %v, ждали две формы", notes.cleared)
 	}
 }
