@@ -367,6 +367,7 @@ type Submission struct {
 	CreatedAt         pgtype.Timestamptz
 	OverQuota         bool
 	ConsentRevisionID pgtype.UUID
+	VisitID           pgtype.UUID
 }
 
 type SubmissionFile struct {

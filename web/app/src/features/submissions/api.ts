@@ -15,6 +15,7 @@ import {
 } from '../../entities/summary'
 import { submissionsCountSchema, type SubmissionsCount } from '../../entities/submission'
 import { periodRange, type Period } from '../../shared/period'
+import { segmentParams } from '../../shared/segment'
 
 // Транспорт submissions: страница ответов парсится Zod-схемой на границе.
 //
@@ -42,8 +43,17 @@ export type SubmissionsKind = 'all' | 'completed'
 // Сводка ответов: агрегат считает сервер, сюда приходят только счётчики. Окно
 // наблюдения режет ответы по времени приёма — как и все экраны аналитики.
 // where — фильтр ответов (shared/answerFilter): сводка по прошедшим его.
-export function getSummary(formId: string, period: Period, where?: string): Promise<FormSummary> {
-  const query = new URLSearchParams({ ...periodRange(period), ...(where ? { where } : {}) }).toString()
+export function getSummary(
+  formId: string,
+  period: Period,
+  where?: string,
+  segment?: string,
+): Promise<FormSummary> {
+  const query = new URLSearchParams({
+    ...periodRange(period),
+    ...(where ? { where } : {}),
+    ...segmentParams(segment),
+  }).toString()
   return apiRequest(`/forms/${formId}/submissions/summary${query ? `?${query}` : ''}`, {
     schema: formSummarySchema,
   })
@@ -58,10 +68,12 @@ export function listBlockAnswers(
   period: Period,
   cursor?: string,
   where?: string,
+  segment?: string,
 ): Promise<BlockAnswersPage> {
   const params = new URLSearchParams(periodRange(period))
   if (cursor) params.set('cursor', cursor)
   if (where) params.set('where', where)
+  if (segment) params.set('segment', segment)
   const query = params.toString()
   return apiRequest(
     `/forms/${formId}/submissions/summary/${encodeURIComponent(blockId)}${query ? `?${query}` : ''}`,

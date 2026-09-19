@@ -4150,9 +4150,17 @@ func (q *Queries) GetSubmissionForDelivery(ctx context.Context, arg GetSubmissio
 }
 
 const getSubmissionForForm = `-- name: GetSubmissionForForm :one
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.id = $1 AND s.form_id = $2
 `
 
@@ -4162,10 +4170,17 @@ type GetSubmissionForFormParams struct {
 }
 
 type GetSubmissionForFormRow struct {
-	ID          uuid.UUID
-	Answers     []byte
-	CreatedAt   pgtype.Timestamptz
-	FormVersion int32
+	ID               uuid.UUID
+	Answers          []byte
+	CreatedAt        pgtype.Timestamptz
+	FormVersion      int32
+	HasVisit         bool
+	VisitUserAgent   string
+	VisitReferer     string
+	VisitUtmSource   string
+	VisitUtmMedium   string
+	VisitCountryCode string
+	VisitCity        string
 }
 
 // Один ответ целиком — окну ответа, открытому не из списка (карточка записи на
@@ -4184,6 +4199,13 @@ func (q *Queries) GetSubmissionForForm(ctx context.Context, arg GetSubmissionFor
 		&i.Answers,
 		&i.CreatedAt,
 		&i.FormVersion,
+		&i.HasVisit,
+		&i.VisitUserAgent,
+		&i.VisitReferer,
+		&i.VisitUtmSource,
+		&i.VisitUtmMedium,
+		&i.VisitCountryCode,
+		&i.VisitCity,
 	)
 	return i, err
 }
@@ -4822,13 +4844,13 @@ func (q *Queries) InsertSheetQueued(ctx context.Context, arg InsertSheetQueuedPa
 const insertSubmission = `-- name: InsertSubmission :execrows
 
 WITH ins AS (
-    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota, consent_revision_id)
-    VALUES ($1, $2, $3, $4, $5, $6, $7)
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota, consent_revision_id, visit_id)
+    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
     ON CONFLICT (id) DO NOTHING
     RETURNING 1 AS one
 ), counted AS (
     INSERT INTO workspace_usage (workspace_id, period, submissions)
-    SELECT $8::uuid, $9::date, 1 FROM ins
+    SELECT $9::uuid, $10::date, 1 FROM ins
     ON CONFLICT (workspace_id, period)
     DO UPDATE SET submissions = workspace_usage.submissions + 1
     RETURNING 1 AS one
@@ -4867,6 +4889,7 @@ type InsertSubmissionParams struct {
 	Meta              []byte
 	OverQuota         bool
 	ConsentRevisionID pgtype.UUID
+	VisitID           pgtype.UUID
 	WorkspaceID       uuid.UUID
 	Period            pgtype.Date
 }
@@ -4895,6 +4918,7 @@ func (q *Queries) InsertSubmission(ctx context.Context, arg InsertSubmissionPara
 		arg.Meta,
 		arg.OverQuota,
 		arg.ConsentRevisionID,
+		arg.VisitID,
 		arg.WorkspaceID,
 		arg.Period,
 	)
@@ -6571,9 +6595,17 @@ func (q *Queries) ListSubmissionFiles(ctx context.Context, dollar_1 []uuid.UUID)
 }
 
 const listSubmissionsAfter = `-- name: ListSubmissionsAfter :many
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < $3::uuid
   AND s.created_at >= $4::timestamptz
@@ -6591,10 +6623,17 @@ type ListSubmissionsAfterParams struct {
 }
 
 type ListSubmissionsAfterRow struct {
-	ID          uuid.UUID
-	Answers     []byte
-	CreatedAt   pgtype.Timestamptz
-	FormVersion int32
+	ID               uuid.UUID
+	Answers          []byte
+	CreatedAt        pgtype.Timestamptz
+	FormVersion      int32
+	HasVisit         bool
+	VisitUserAgent   string
+	VisitReferer     string
+	VisitUtmSource   string
+	VisitUtmMedium   string
+	VisitCountryCode string
+	VisitCity        string
 }
 
 // Следующая страница одноколоночным курсором (id): строго «меньше» якоря →
@@ -6619,6 +6658,13 @@ func (q *Queries) ListSubmissionsAfter(ctx context.Context, arg ListSubmissionsA
 			&i.Answers,
 			&i.CreatedAt,
 			&i.FormVersion,
+			&i.HasVisit,
+			&i.VisitUserAgent,
+			&i.VisitReferer,
+			&i.VisitUtmSource,
+			&i.VisitUtmMedium,
+			&i.VisitCountryCode,
+			&i.VisitCity,
 		); err != nil {
 			return nil, err
 		}
@@ -6631,9 +6677,17 @@ func (q *Queries) ListSubmissionsAfter(ctx context.Context, arg ListSubmissionsA
 }
 
 const listSubmissionsFirstPage = `-- name: ListSubmissionsFirstPage :many
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.created_at >= $3::timestamptz
   AND s.created_at <  $4::timestamptz
@@ -6649,12 +6703,24 @@ type ListSubmissionsFirstPageParams struct {
 }
 
 type ListSubmissionsFirstPageRow struct {
-	ID          uuid.UUID
-	Answers     []byte
-	CreatedAt   pgtype.Timestamptz
-	FormVersion int32
+	ID               uuid.UUID
+	Answers          []byte
+	CreatedAt        pgtype.Timestamptz
+	FormVersion      int32
+	HasVisit         bool
+	VisitUserAgent   string
+	VisitReferer     string
+	VisitUtmSource   string
+	VisitUtmMedium   string
+	VisitCountryCode string
+	VisitCity        string
 }
 
+// Метки визита ответа (0076, спека design/analytics-v2.md §6.4) едут рядом: сегмент
+// сводки, колонки «Источник» и «Устройство» в выгрузке и в окне ответа. LEFT JOIN по
+// визиту ЭТОЙ ЖЕ формы: visit_id прислал клиент, и чужой визит меток не даёт. Нет
+// визита — has_visit = false, метки пустые. Разбор меток — в Go (domain.VisitMeta),
+// как у разбивок визитов.
 // Первая страница ответов формы (фаза 6): новые сверху. id (UUIDv7) монотонен по
 // времени → ORDER BY id DESC даёт хронологию без нестабильности created_at. JOIN
 // form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
@@ -6683,6 +6749,13 @@ func (q *Queries) ListSubmissionsFirstPage(ctx context.Context, arg ListSubmissi
 			&i.Answers,
 			&i.CreatedAt,
 			&i.FormVersion,
+			&i.HasVisit,
+			&i.VisitUserAgent,
+			&i.VisitReferer,
+			&i.VisitUtmSource,
+			&i.VisitUtmMedium,
+			&i.VisitCountryCode,
+			&i.VisitCity,
 		); err != nil {
 			return nil, err
 		}

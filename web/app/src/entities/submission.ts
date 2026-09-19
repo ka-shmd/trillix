@@ -23,6 +23,10 @@ export const submissionSchema = z.object({
   updatedAt: z.string().optional(),
   lastBlockId: z.string().default(''),
   answers: z.record(z.string(), answerValueSchema),
+  // Источник и класс устройства визита, из которого пришёл ответ (фаза 30). Нет у
+  // ответа без визита и в ленте «Все ответы».
+  visitSource: z.string().optional(),
+  visitDevice: z.string().optional(),
 })
 
 export type Submission = z.infer<typeof submissionSchema>

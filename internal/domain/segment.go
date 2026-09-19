@@ -154,3 +154,63 @@ func PlaceFilter(seg Segment) VisitFilter {
 	}
 	return VisitFilter{Kind: FilterCountry, Keys: []string{seg.Value}}
 }
+
+// VisitMeta — сырые метки визита, из которого пришёл ответ (спека
+// design/analytics-v2.md §6.4). Разбираются теми же правилами, что разбивки визитов.
+type VisitMeta struct {
+	UserAgent   string
+	Referer     string
+	UTMSource   string
+	UTMMedium   string
+	CountryCode string
+	City        string
+}
+
+// Source — источник визита подписью разбивки («vk.com», «Прямые заходы»).
+func (m VisitMeta) Source() string {
+	return sourceName(SourceRow{Referer: m.Referer, UTMSource: m.UTMSource, UTMMedium: m.UTMMedium})
+}
+
+// Device — класс устройства подписью разбивки («Компьютер», «Телефон»).
+func (m VisitMeta) Device() string { return DeviceLabel(ParseUserAgent(m.UserAgent).Device) }
+
+// MatchesSegment — подходит ли ответ сегменту. visit nil — ответ без визита: в
+// визитный сегмент он не попадает. Версия — своя у ответа (номер версии, по которой он
+// отправлен), визит для неё не нужен.
+func MatchesSegment(seg Segment, visit *VisitMeta, version int) bool {
+	if seg.IsZero() {
+		return true
+	}
+	if seg.Dim == SegVersion {
+		return strconv.Itoa(version) == seg.Value
+	}
+	if visit == nil {
+		return false
+	}
+	ua := ParseUserAgent(visit.UserAgent)
+	switch seg.Dim {
+	case SegDevice:
+		return DeviceLabel(ua.Device) == seg.Value
+	case SegBrowser:
+		return orUnknown(ua.Browser) == seg.Value
+	case SegOS:
+		return orUnknown(ua.OS) == seg.Value
+	case SegSource:
+		return visit.Source() == seg.Value
+	case SegCountry:
+		return visit.CountryCode == seg.Value
+	case SegCity:
+		code, name, _ := strings.Cut(seg.Value, ":")
+		return visit.CountryCode == code && visit.City == name
+	default:
+		return false
+	}
+}
+
+// SegmentK — меньше скольких ответов визитный сегмент не раскрывается (ADR §10, спека
+// §7): узкий разрез ответов по месту и устройству указывает на человека. Сегмент по
+// версии визитным не считается — версия своя у ответа.
+const SegmentK = 5
+
+// VisitSegment — сегмент, раскрытие которого ограничено SegmentK.
+func (s Segment) VisitSegment() bool { return !s.IsZero() && s.Dim != SegVersion }

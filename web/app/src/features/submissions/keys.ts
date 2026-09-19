@@ -15,8 +15,8 @@ export const submissionKeys = {
   listAllKinds: (formId: string) => ['submissions', 'list', formId] as const,
   summaryAllPeriods: (formId: string) => ['submissions', 'summary', formId] as const,
   // Фильтр — часть ключа; '' — без фильтра.
-  summary: (formId: string, period: Period, where = '') =>
-    ['submissions', 'summary', formId, period, where] as const,
+  summary: (formId: string, period: Period, where = '', segment = '') =>
+    ['submissions', 'summary', formId, period, where, segment] as const,
   countAllPeriods: (formId: string) => ['submissions', 'count', formId] as const,
   count: (formId: string, period: Period) => ['submissions', 'count', formId, period] as const,
   // Один ответ по id — окну, открытому не из списка (карточка записи на полотне
@@ -31,6 +31,6 @@ export const submissionKeys = {
   // Значения одного вопроса лежат ПОД ключом сводки: удаление ответа инвалидирует
   // сводку префиксом, и окно «все ответы» обязано перечитаться вместе с ней —
   // иначе в нём останется ответ, которого уже нет в распределении над ним.
-  blockAnswers: (formId: string, period: Period, blockId: string, where = '') =>
-    ['submissions', 'summary', formId, period, where, 'answers', blockId] as const,
+  blockAnswers: (formId: string, period: Period, blockId: string, where = '', segment = '') =>
+    ['submissions', 'summary', formId, period, where, segment, 'answers', blockId] as const,
 }

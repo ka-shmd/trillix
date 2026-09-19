@@ -474,6 +474,12 @@ func (s *Service) Submit(ctx context.Context, slug string, id uuid.UUID, answers
 		// на форме с включённым согласием не бывает (design/privacy-consent.md §3.4).
 		ConsentRevisionID: consentRevision,
 	}
+	// Визит сохраняется как прислан: без FK, неизвестный id просто не даст меток
+	// (читается LEFT JOIN по визиту этой же формы).
+	if meta.VisitID != uuid.Nil {
+		vid := meta.VisitID
+		in.VisitID = &vid
+	}
 	if d, e := s.plans.CheckWorkspace(ctx, pf.WorkspaceID, entitlements.SubmissionsPerMonth); e != nil {
 		httpserver.LoggerFrom(ctx).Error("quota not checked, submission accepted as within quota",
 			slog.String("workspace_id", pf.WorkspaceID.String()),
@@ -1490,13 +1496,13 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 		}
 		builder.WithFiles(files)
 	}
-	if err := emit(builder.Header()); err != nil {
+	if err := emit(append(builder.Header(), domain.VisitHeader()...)); err != nil {
 		return err
 	}
 	// Выгрузка периодом не режется: CSV — документ «все ответы формы», и молчаливое
 	// урезание его окном экрана владелец заметил бы уже в чужой таблице.
 	return s.eachSubmission(ctx, formID, domain.Period{}, func(sub Submission, answers map[string]json.RawMessage) error {
-		return emit(builder.Row(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers))
+		return emit(append(builder.Row(sub.ID.String(), sub.CreatedAt, int(sub.FormVersion), answers), domain.VisitCells(sub.Visit)...))
 	})
 }
 
@@ -1508,14 +1514,15 @@ func (s *Service) ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit 
 // Стоимость линейна по числу ответов формы: см. строку лога в handler.go — по ней
 // видно, во что она обходится на реальных данных.
 //
-// filter — фильтр ответов (спека design/analytics-v2.md §6.2): сводка по тем, кто
-// ему отвечает; в Unfiltered — сколько ответов в окне без него.
-func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period, filter domain.AnswerFilter) (domain.Summary, error) {
+// scope — выборка (спека design/analytics-v2.md §6.2, §6.4): фильтр по ответам и
+// сегмент по визиту. При выборке в Unfiltered — сколько ответов в окне без неё;
+// визитная выборка меньше domain.SegmentK не раскрывается (Withheld, без вопросов).
+func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period, scope domain.AnswerScope) (domain.Summary, error) {
 	vs, err := s.versionedSchemas(ctx, userID, formID)
 	if err != nil {
 		return domain.Summary{}, err
 	}
-	match, err := s.answerMatcher(ctx, userID, formID, vs, filter)
+	match, err := s.answerMatcher(ctx, userID, formID, vs, scope)
 	if err != nil {
 		return domain.Summary{}, err
 	}
@@ -1527,7 +1534,7 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	unfiltered := 0
 	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
 		unfiltered++
-		if !match(int(sub.FormVersion), answers) {
+		if !match(sub, answers) {
 			return nil
 		}
 		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)
@@ -1537,78 +1544,94 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	}
 	sum := builder.Result()
 	sum.TrendStep = domain.StepFor(period)
-	if len(filter) > 0 {
+	if !scope.IsZero() {
 		sum.Unfiltered = &unfiltered
+	}
+	if scope.Withheld(sum.Total) {
+		return domain.Summary{TrendStep: sum.TrendStep, Unfiltered: &unfiltered, Blocks: []domain.BlockSummary{}, Withheld: true}, nil
 	}
 	return sum, nil
 }
 
 // Crosstab — таблица сопряжённости двух закрытых вопросов (спека design/analytics-v2.md
-// §6.3) за окно, с фильтром сводки. Кросс-аналитика: ключ analytics_segments, после
-// авторизации; фильтр проверяется тем же answerMatcher.
-func (s *Service) Crosstab(ctx context.Context, userID, formID uuid.UUID, period domain.Period, rowID, colID string, filter domain.AnswerFilter) (domain.Crosstab, error) {
+// §6.3) за окно, с выборкой сводки. Кросс-аналитика: ключ analytics_segments, после
+// авторизации, — даже без выборки.
+func (s *Service) Crosstab(ctx context.Context, userID, formID uuid.UUID, period domain.Period, rowID, colID string, scope domain.AnswerScope) (domain.Crosstab, error) {
 	vs, err := s.versionedSchemas(ctx, userID, formID)
 	if err != nil {
 		return domain.Crosstab{}, err
 	}
-	form, err := s.forms.Get(ctx, userID, formID)
-	if err != nil {
+	if err := s.checkSegments(ctx, userID, formID, domain.Segment{}); err != nil {
 		return domain.Crosstab{}, err
-	}
-	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.AnalyticsSegments)
-	if err != nil {
-		return domain.Crosstab{}, err
-	}
-	if !d.Allowed {
-		return domain.Crosstab{}, domain.ErrPlanRequired
 	}
 	builder, err := domain.NewCrosstabBuilder(vs, rowID, colID)
 	if err != nil {
 		return domain.Crosstab{}, err
 	}
-	match, err := s.answerMatcher(ctx, userID, formID, vs, filter)
+	match, err := s.answerMatcher(ctx, userID, formID, vs, scope)
 	if err != nil {
 		return domain.Crosstab{}, err
 	}
 	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
-		if match(int(sub.FormVersion), answers) {
+		if match(sub, answers) {
 			builder.Add(int(sub.FormVersion), answers)
 		}
 		return nil
 	}); err != nil {
 		return domain.Crosstab{}, err
 	}
-	return builder.Result(), nil
+	ct := builder.Result()
+	if scope.Withheld(ct.Total) {
+		return domain.Crosstab{Withheld: true}, nil
+	}
+	return ct, nil
 }
 
-// answerMatcher — проверка ответа фильтром. Фильтр — кросс-аналитика: ключ тарифа
-// analytics_segments, спрошенный после авторизации (её уже сделал versionedSchemas).
-// Условия сверяются с моделью вопросов: инертное условие молча дало бы пустую сводку.
-// Без фильтра проходит всё, и тариф не спрашивается.
-func (s *Service) answerMatcher(ctx context.Context, userID, formID uuid.UUID, vs []domain.VersionedSchema, filter domain.AnswerFilter) (func(version int, answers map[string]json.RawMessage) bool, error) {
-	if len(filter) == 0 {
-		return func(int, map[string]json.RawMessage) bool { return true }, nil
-	}
+// checkSegments — ключ кросс-аналитики analytics_segments; у сегмента по источнику —
+// ещё и analytics_sources (иначе закрытая разбивка источников читалась бы сегментами).
+func (s *Service) checkSegments(ctx context.Context, userID, formID uuid.UUID, seg domain.Segment) error {
 	form, err := s.forms.Get(ctx, userID, formID)
 	if err != nil {
+		return err
+	}
+	keys := []entitlements.Key{entitlements.AnalyticsSegments}
+	if seg.Dim == domain.SegSource {
+		keys = append(keys, entitlements.AnalyticsSources)
+	}
+	for _, key := range keys {
+		d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, key)
+		if err != nil {
+			return err
+		}
+		if !d.Allowed {
+			return domain.ErrPlanRequired
+		}
+	}
+	return nil
+}
+
+// answerMatcher — проверка ответа выборкой: фильтром по ответам и сегментом по визиту.
+// Выборка — кросс-аналитика (checkSegments, после авторизации, которую уже сделал
+// versionedSchemas). Условия сверяются с моделью вопросов: инертное условие молча дало
+// бы пустую сводку. Без выборки проходит всё, и тариф не спрашивается.
+func (s *Service) answerMatcher(ctx context.Context, userID, formID uuid.UUID, vs []domain.VersionedSchema, scope domain.AnswerScope) (func(sub Submission, answers map[string]json.RawMessage) bool, error) {
+	if scope.IsZero() {
+		return func(Submission, map[string]json.RawMessage) bool { return true }, nil
+	}
+	if err := s.checkSegments(ctx, userID, formID, scope.Segment); err != nil {
 		return nil, err
 	}
-	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.AnalyticsSegments)
-	if err != nil {
-		return nil, err
-	}
-	if !d.Allowed {
-		return nil, domain.ErrPlanRequired
-	}
-	if err := filter.Check(domain.QuestionOrder(vs)); err != nil {
+	if err := scope.Filter.Check(domain.QuestionOrder(vs)); err != nil {
 		return nil, err
 	}
 	blocks := make(map[int][]domain.Block, len(vs))
 	for _, v := range vs {
 		blocks[v.Version] = v.Schema.Blocks
 	}
-	return func(version int, answers map[string]json.RawMessage) bool {
-		return filter.Match(blocks[version], answers)
+	return func(sub Submission, answers map[string]json.RawMessage) bool {
+		version := int(sub.FormVersion)
+		return domain.MatchesSegment(scope.Segment, sub.Visit, version) &&
+			scope.Filter.Match(blocks[version], answers)
 	}, nil
 }
 
@@ -1619,6 +1642,8 @@ type AnswerPage struct {
 	// вопрос за условием даёт пустые страницы посреди формы, и остановка по их
 	// длине обрезала бы список на первом же таком месте.
 	NextCursor *Cursor
+	// Withheld — визитная выборка меньше domain.SegmentK: значения не раскрываются.
+	Withheld bool
 }
 
 // errAnswersEnough — сигнал остановить обход: страница набрана. Ошибкой, потому что
@@ -1637,16 +1662,32 @@ var errAnswersEnough = errors.New("submissions: answer page is full")
 // говорит, а разбор его на клиенте был бы третьей копией доменных правил после Go и
 // Zod.
 //
-// filter — тот же фильтр, что у сводки над окном: открыв «все ответы» из
-// отфильтрованной сводки, владелец обязан увидеть те же ответы.
-func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, filter domain.AnswerFilter, after *Cursor, limit int) (AnswerPage, error) {
+// scope — та же выборка, что у сводки над окном: открыв «все ответы» из
+// отфильтрованной сводки, владелец обязан увидеть те же ответы. У визитной выборки
+// порог domain.SegmentK проверяется ДО листания — отдельным подсчётом по окну: иначе
+// первая же страница раскрыла бы ответы выборки из двух человек.
+func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, scope domain.AnswerScope, after *Cursor, limit int) (AnswerPage, error) {
 	vs, err := s.versionedSchemas(ctx, userID, formID)
 	if err != nil {
 		return AnswerPage{}, err
 	}
-	match, err := s.answerMatcher(ctx, userID, formID, vs, filter)
+	match, err := s.answerMatcher(ctx, userID, formID, vs, scope)
 	if err != nil {
 		return AnswerPage{}, err
+	}
+	if scope.Segment.VisitSegment() {
+		matched := 0
+		if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
+			if match(sub, answers) {
+				matched++
+			}
+			return nil
+		}); err != nil {
+			return AnswerPage{}, err
+		}
+		if scope.Withheld(matched) {
+			return AnswerPage{Withheld: true}, nil
+		}
 	}
 	limit = clampLimit(limit)
 
@@ -1660,7 +1701,7 @@ func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, bl
 	var full bool
 	err = s.eachSubmissionFrom(ctx, formID, period, after, func(sub Submission, answers map[string]json.RawMessage) error {
 		last = sub.ID
-		if !match(int(sub.FormVersion), answers) {
+		if !match(sub, answers) {
 			return nil
 		}
 		builder.Add(int(sub.FormVersion), sub.CreatedAt, answers)

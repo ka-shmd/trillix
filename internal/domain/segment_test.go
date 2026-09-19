@@ -72,3 +72,29 @@ func TestPlaceFilter(t *testing.T) {
 		t.Errorf("страна: %+v", got)
 	}
 }
+
+func TestMatchesSegment(t *testing.T) {
+	const phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+	v := &VisitMeta{UserAgent: phone, Referer: "https://vk.com/x", CountryCode: "RU", City: "Москва"}
+	for raw, want := range map[string]bool{
+		"device:Телефон":   true,
+		"device:Компьютер": false,
+		"source:vk.com":    true,
+		"country:RU":       true,
+		"city:RU:Москва":   true,
+		"city:BY:Москва":   false,
+		"version:2":        true,
+		"version:1":        false,
+	} {
+		seg, _ := ParseSegment(raw)
+		if got := MatchesSegment(seg, v, 2); got != want {
+			t.Errorf("%s: %v, ждали %v", raw, got, want)
+		}
+	}
+	// Ответ без визита в визитный сегмент не попадает, в сегмент версии — да.
+	dev, _ := ParseSegment("device:Телефон")
+	ver, _ := ParseSegment("version:2")
+	if MatchesSegment(dev, nil, 2) || !MatchesSegment(ver, nil, 2) {
+		t.Error("ответ без визита")
+	}
+}

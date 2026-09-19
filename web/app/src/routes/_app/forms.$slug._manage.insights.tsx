@@ -62,12 +62,13 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       className="inline-flex h-9 items-center gap-0.5 rounded-lg bg-muted p-[3px]"
       aria-label="Разделы аналитики"
     >
-      {/* Сегмент — параметр одних «Отвалов», фильтр ответов — одной «Сводки»: на других
-          вкладках они ничего не режут и, оставшись в адресе, выглядели бы действующими. */}
+      {/* Сегмент режет «Сводку» и «Отвалы», фильтр ответов — одну «Сводку»; «Визиты» не
+          режет ни то ни другое, и оставшись в адресе, они выглядели бы там действующими.
+          Между «Сводкой» и «Отвалами» сегмент переходит вместе с адресом. */}
       <Link
         to="/forms/$slug/insights/answers"
         params={{ slug }}
-        search={(prev) => ({ ...prev, period, segment: undefined })}
+        search={(prev) => ({ ...prev, period })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}

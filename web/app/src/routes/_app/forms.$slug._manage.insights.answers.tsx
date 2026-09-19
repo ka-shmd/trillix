@@ -6,6 +6,7 @@ import { type BlockSummary, type ScaleStats } from '../../entities/summary'
 import { type BucketStep } from '../../entities/visitsBreakdown'
 import { BarRows, type BarRow } from '../../features/insights/Breakdown'
 import { AnswerFilterBar } from '../../features/insights/AnswerFilterBar'
+import { SegmentPicker } from '../../features/insights/SegmentPicker'
 import { VisitCards } from '../../features/insights/Cards'
 import { CrosstabDialog } from '../../features/insights/CrosstabDialog'
 import { ScaleTrendChart } from '../../features/insights/lazyCharts'
@@ -17,6 +18,7 @@ import { formatDate, LOCALE, pluralAnswers } from '../../shared/format'
 import { decodeFilter, encodeFilter, filterFromSearch, type FilterCondition } from '../../shared/answerFilter'
 import { ApiError } from '../../shared/api/errors'
 import { type Period } from '../../shared/period'
+import { segmentFromSearch } from '../../shared/segment'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
@@ -35,9 +37,10 @@ import { Button } from '@/components/ui/button'
 // Фильтр (?where=, спека design/analytics-v2.md §6.2) — только этой вкладки: сводка и
 // её окна «все ответы» считаются по ответам, прошедшим условия.
 export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/answers')({
-  validateSearch: (search): { where?: string } => {
+  validateSearch: (search): { where?: string; segment?: string } => {
     const where = filterFromSearch(search.where)
-    return where ? { where } : {}
+    const segment = segmentFromSearch(search.segment)
+    return { ...(where ? { where } : {}), ...(segment ? { segment } : {}) }
   },
   component: SummaryPage,
 })
@@ -46,12 +49,12 @@ function SummaryPage() {
   // URL адресует форму slug'ом; UUID для запроса сводки берём из загруженной формы —
   // как на странице ответов.
   const { slug } = Route.useParams()
-  const { period, where } = Route.useSearch()
+  const { period, where, segment } = Route.useSearch()
   const navigate = Route.useNavigate()
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const summary = useQuery({
-    ...submissionsSummaryQueryOptions(formId ?? '', period, where),
+    ...submissionsSummaryQueryOptions(formId ?? '', period, where, segment),
     enabled: formId !== undefined,
   })
   // Вопросы для панели фильтра — из сводки без фильтра: при закрытом тарифе или пустой
@@ -64,6 +67,8 @@ function SummaryPage() {
   const conditions = decodeFilter(where)
   const setConditions = (next: FilterCondition[]) =>
     void navigate({ search: (prev) => ({ ...prev, where: encodeFilter(next) }), replace: true })
+  const setSegment = (next: string | undefined) =>
+    void navigate({ search: (prev) => ({ ...prev, segment: next }), replace: true })
 
   const total = summary.data?.total ?? 0
   const unfiltered = summary.data?.unfiltered
@@ -84,18 +89,25 @@ function SummaryPage() {
               : 'Распределение ответов по каждому вопросу формы.'
         }
       >
-        {questions.data && questions.data.blocks.length > 0 && (
-          <AnswerFilterBar
-            blocks={questions.data.blocks}
-            conditions={conditions}
-            onChange={setConditions}
-          />
+        {formId && (
+          <div className="flex flex-col gap-3">
+            {/* Сегмент по визиту — тот же, что на «Отвалах»: ответы, пришедшие из этого
+                источника, с этого устройства, из этой страны или по этой версии. */}
+            <SegmentPicker formId={formId} period={period} segment={segment} onChange={setSegment} />
+            {questions.data && questions.data.blocks.length > 0 && (
+              <AnswerFilterBar
+                blocks={questions.data.blocks}
+                conditions={conditions}
+                onChange={setConditions}
+              />
+            )}
+          </div>
         )}
         {summary.isPending ? (
           <LoadingRows rows={3} />
         ) : planRequired ? (
           <EmptyState
-            title="Фильтры закрыты тарифом"
+            title="Фильтры и сегменты закрыты тарифом"
             description="Сводка по выбранной группе респондентов доступна на тарифе с аналитикой."
             action={
               <Button asChild size="sm">
@@ -105,6 +117,11 @@ function SummaryPage() {
           />
         ) : summary.isError ? (
           <ErrorState title="Не удалось посчитать сводку." onRetry={() => summary.refetch()} />
+        ) : summary.data.withheld ? (
+          <EmptyState
+            title="В выборке меньше 5 ответов"
+            description="По узкой группе распределения не показываются: так ответы нельзя связать с конкретным человеком. Расширьте период или выберите другой сегмент."
+          />
         ) : total === 0 && unfiltered !== undefined ? (
           <EmptyState
             title="Под условия не подошёл ни один ответ"
@@ -133,6 +150,7 @@ function SummaryPage() {
                 formId={formId ?? ''}
                 period={period}
                 where={where}
+                segment={segment}
                 closed={summary.data.blocks.filter((o) => o.kind === 'distribution')}
               />
             ))}
@@ -150,6 +168,7 @@ function BlockCard({
   formId,
   period,
   where,
+  segment,
   closed,
 }: {
   block: BlockSummary
@@ -158,6 +177,7 @@ function BlockCard({
   formId: string
   period: Period
   where: string | undefined
+  segment: string | undefined
   // Закрытые вопросы сводки — с ними этот можно сравнить таблицей.
   closed: BlockSummary[]
 }) {
@@ -202,6 +222,7 @@ function BlockCard({
             formId={formId}
             period={period}
             where={where}
+            segment={segment}
             block={block}
             others={others}
           />
@@ -229,6 +250,7 @@ function BlockCard({
             answered={block.answered}
             period={period}
             where={where}
+            segment={segment}
           />
         </>
       )}
