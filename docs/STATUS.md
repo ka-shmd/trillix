@@ -63,7 +63,7 @@ prod-local (зелёный на слайсах D–E, после них не г�
 
 - **Go-API** — Go 1.26, 28 модулей в `internal/` (перечень и назначение каждого —
   [`ARCHITECTURE.md`](ARCHITECTURE.md) §4.2, сверяется машиной).
-- **PostgreSQL 16** — 75 миграций (`0001`…`0075_analytics_segments`; `0074`–`0075` — на ветке фазы 30, в `main` не влиты). Таблицы — [`SCHEMA.md`](SCHEMA.md).
+- **PostgreSQL 16** — 76 миграций (`0001`…`0076_submission_visit`; `0074`–`0076` — на ветке фазы 30, в `main` не влиты). Таблицы — [`SCHEMA.md`](SCHEMA.md).
 - **web/app** — кабинет: React + TanStack + Tailwind v4 + shadcn/ui; графики аналитики —
   recharts за ленивой загрузкой, в общий чанк не входят.
 - **web/renderer** — preact/compat + zod, **бюджет 60 КиБ gzip** (сейчас **47.94**, числа

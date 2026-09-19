@@ -16,8 +16,8 @@
 -- advisory-lock): на границе возможен ±1 ответ, и цена advisory-lock на всём
 -- приёме ради точности «101-го против 100-го» не окупается ничем (ADR §10).
 WITH ins AS (
-    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota, consent_revision_id)
-    VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(consent_revision_id))
+    INSERT INTO submissions (id, form_id, form_version_id, answers, meta, over_quota, consent_revision_id, visit_id)
+    VALUES ($1, $2, $3, $4, $5, $6, sqlc.narg(consent_revision_id), sqlc.narg(visit_id))
     ON CONFLICT (id) DO NOTHING
     RETURNING 1 AS one
 ), counted AS (
@@ -53,6 +53,11 @@ WITH ins AS (
 SELECT one FROM ins;
 
 -- name: ListSubmissionsFirstPage :many
+-- Метки визита ответа (0076, спека design/analytics-v2.md §6.4) едут рядом: сегмент
+-- сводки, колонки «Источник» и «Устройство» в выгрузке и в окне ответа. LEFT JOIN по
+-- визиту ЭТОЙ ЖЕ формы: visit_id прислал клиент, и чужой визит меток не даёт. Нет
+-- визита — has_visit = false, метки пустые. Разбор меток — в Go (domain.VisitMeta),
+-- как у разбивок визитов.
 -- Первая страница ответов формы (фаза 6): новые сверху. id (UUIDv7) монотонен по
 -- времени → ORDER BY id DESC даёт хронологию без нестабильности created_at. JOIN
 -- form_versions отдаёт номер версии, по которой ответ отправлен (form_version_id —
@@ -62,9 +67,17 @@ SELECT one FROM ins;
 -- шлёт ±бесконечность, у сводки — выбранное владельцем окно (спека
 -- design/analytics-tally.md §4). Одна форма запроса вместо двух: копия отличалась
 -- бы одной строкой WHERE, а расходиться начала бы во всём остальном.
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.created_at >= sqlc.arg(from_ts)::timestamptz
   AND s.created_at <  sqlc.arg(to_ts)::timestamptz
@@ -74,9 +87,17 @@ LIMIT $2;
 -- name: ListSubmissionsAfter :many
 -- Следующая страница одноколоночным курсором (id): строго «меньше» якоря →
 -- стабильно, ответы иммутабельны. Тот же индекс и порядок.
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.form_id = $1 AND NOT s.over_quota
   AND s.id < sqlc.arg(cursor_id)::uuid
   AND s.created_at >= sqlc.arg(from_ts)::timestamptz
@@ -93,9 +114,17 @@ LIMIT $2;
 -- Сверхлимитные (over_quota) отдаются: список их прячет, потому что это витрина
 -- тарифа, а здесь спрашивают КОНКРЕТНЫЙ ответ по ссылке из записи — и «нет такого»
 -- на существующий ответ было бы враньём.
-SELECT s.id, s.answers, s.created_at, fv.version AS form_version
+SELECT s.id, s.answers, s.created_at, fv.version AS form_version,
+       (v.id IS NOT NULL)::boolean AS has_visit,
+       coalesce(v.meta->>'user_agent', '')::text AS visit_user_agent,
+       coalesce(v.meta->>'referer', '')::text AS visit_referer,
+       coalesce(v.meta->>'utm_source', '')::text AS visit_utm_source,
+       coalesce(v.meta->>'utm_medium', '')::text AS visit_utm_medium,
+       coalesce(v.country_code, '')::text AS visit_country_code,
+       coalesce(v.city, '')::text AS visit_city
 FROM submissions s
 JOIN form_versions fv ON fv.id = s.form_version_id
+LEFT JOIN form_visits v ON v.id = s.visit_id AND v.form_id = s.form_id
 WHERE s.id = $1 AND s.form_id = $2;
 
 -- name: DeleteSubmission :execrows

@@ -122,3 +122,19 @@ func EncodeAnswerFilter(f AnswerFilter) string {
 	body, _ := json.Marshal(f)
 	return base64.RawURLEncoding.EncodeToString(body)
 }
+
+// AnswerScope — выборка ответов аналитики: фильтр по ответам и сегмент по визиту
+// (спека design/analytics-v2.md §6.2, §6.4). Нулевая — все ответы окна.
+type AnswerScope struct {
+	Filter  AnswerFilter
+	Segment Segment
+}
+
+func (s AnswerScope) IsZero() bool { return len(s.Filter) == 0 && s.Segment.IsZero() }
+
+// Withheld — выборку нельзя раскрыть: визитный сегмент, и в ней меньше SegmentK
+// ответов. Фильтр только по ответам порогом не закрывается — эти ответы владелец и так
+// видит в таблице; сегмент по визиту привязывает ответы к месту и устройству.
+func (s AnswerScope) Withheld(matched int) bool {
+	return s.Segment.VisitSegment() && matched < SegmentK
+}

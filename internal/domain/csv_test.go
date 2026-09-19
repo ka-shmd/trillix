@@ -311,3 +311,17 @@ func TestCSVBuilder_SheetRowKeepsRawValues(t *testing.T) {
 		t.Errorf("ячейка для CSV = %q, ожидалась с префиксом", got)
 	}
 }
+
+func TestVisitCells(t *testing.T) {
+	const phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+	if got := VisitCells(&VisitMeta{UserAgent: phone, UTMSource: "newsletter"}); got[0] != "newsletter" || got[1] != "Телефон" {
+		t.Errorf("ячейки визита: %v", got)
+	}
+	if got := VisitCells(nil); got[0] != "" || got[1] != "" {
+		t.Errorf("ответ без визита: %v", got)
+	}
+	// Метка источника — ввод посетителя: формула в ней не должна исполниться в Excel.
+	if got := VisitCells(&VisitMeta{UTMSource: "=HYPERLINK(1)"}); got[0][0] == '=' {
+		t.Errorf("формула в источнике не обезврежена: %q", got[0])
+	}
+}

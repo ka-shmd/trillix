@@ -22,6 +22,8 @@ type Crosstab struct {
 	Cells [][]int // [строка][столбец]
 	// Total — ответов в таблице: оба вопроса показаны и отвечены.
 	Total int
+	// Withheld — визитная выборка меньше SegmentK: таблица не раскрывается.
+	Withheld bool
 }
 
 // CrosstabBuilder копит таблицу. Создаётся на запрос, Add — на каждый ответ.

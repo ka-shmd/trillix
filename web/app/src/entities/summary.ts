@@ -82,6 +82,8 @@ export const formSummarySchema = z.object({
   trendStep: bucketStepSchema,
   // Сколько ответов в окне без фильтра («в выборке N из M»); только при фильтре.
   unfiltered: z.number().int().optional(),
+  // Сегмент по визиту, в котором меньше 5 ответов: вопросов и чисел нет (ADR §10).
+  withheld: z.boolean().default(false),
 })
 export type FormSummary = z.infer<typeof formSummarySchema>
 
@@ -96,6 +98,7 @@ export const blockAnswersPageSchema = z.object({
   // null — ответы формы кончились. Не «страница неполная»: вопрос за условием даёт
   // пустые страницы посреди формы.
   nextCursor: z.string().nullable(),
+  withheld: z.boolean().default(false),
 })
 export type BlockAnswersPage = z.infer<typeof blockAnswersPageSchema>
 
@@ -109,5 +112,6 @@ export const crosstabSchema = z.object({
   cols: z.array(crossAxisSchema),
   cells: z.array(z.array(z.number().int())),
   total: z.number().int(),
+  withheld: z.boolean().default(false),
 })
 export type Crosstab = z.infer<typeof crosstabSchema>

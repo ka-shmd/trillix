@@ -41,11 +41,12 @@ export function crosstabQueryOptions(
   rows: string,
   cols: string,
   where?: string,
+  segment?: string,
 ) {
   return queryOptions({
     ...analyticsFreshness,
-    queryKey: insightsKeys.crosstab(formId, period, rows, cols, where),
-    queryFn: () => getCrosstab(formId, period, rows, cols, where),
+    queryKey: insightsKeys.crosstab(formId, period, rows, cols, where, segment),
+    queryFn: () => getCrosstab(formId, period, rows, cols, where, segment),
     retry: (count: number, error: Error) =>
       !(error instanceof ApiError && error.code === 'plan_required') && count < 3,
   })

@@ -154,3 +154,101 @@ func TestCrosstab_EndToEnd(t *testing.T) {
 		t.Errorf("закрытый тариф: статус %d, ждали 402", r.StatusCode)
 	}
 }
+
+// Ответ знает свой визит (0076) и получает разрез по нему: приём сохраняет visit_id,
+// сегмент по устройству режет сводку, выборка меньше domain.SegmentK не раскрывается
+// ни в сводке, ни в окне «все ответы», ни в таблице; ответ без визита в визитный
+// сегмент не попадает, в сегмент версии — попадает.
+func TestSummary_VisitSegment(t *testing.T) {
+	resetDB(t)
+	srv := fullStack(t)
+	owner, ownerID := authedClient(t, srv, "owner-"+uuid.NewString()[:8]+"@example.com")
+	formID := publishSummaryForm(t, ownerID)
+	v1 := versionID(t, formID, 1)
+	ctx := context.Background()
+	var slug string
+	if err := testPool.QueryRow(ctx, `SELECT slug FROM forms WHERE id = $1`, formID).Scan(&slug); err != nil {
+		t.Fatal(err)
+	}
+	const phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+	const desktop = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+	answer := func(ua string) {
+		t.Helper()
+		visit := domain.NewID()
+		if _, err := testPool.Exec(ctx, `INSERT INTO form_visits (id, form_id, form_version_id, seq, meta) VALUES ($1, $2, $3, 0, jsonb_build_object('user_agent', $4::text))`,
+			visit, formID, v1, ua); err != nil {
+			t.Fatal(err)
+		}
+		body := `{"submission_id":"` + domain.NewID().String() + `","token":"` + freshToken() + `","answers":{"b_rate":"5"},"visit_id":"` + visit.String() + `"}`
+		if resp := postSubmission(t, srv, slug, body); resp.StatusCode != http.StatusCreated {
+			t.Fatalf("приём ответа: %d", resp.StatusCode)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		answer(phone)
+	}
+	answer(desktop)
+	insertAnswer(t, formID, v1, `{"b_rate":"3"}`) // без визита
+
+	var linked int
+	if err := testPool.QueryRow(ctx, `SELECT count(*) FROM submissions WHERE form_id = $1 AND visit_id IS NOT NULL`, formID).Scan(&linked); err != nil || linked != 6 {
+		t.Fatalf("ответов с визитом %d, ждали 6 (%v)", linked, err)
+	}
+
+	type summaryResp struct {
+		Total      int  `json:"total"`
+		Unfiltered *int `json:"unfiltered"`
+		Withheld   bool `json:"withheld"`
+		Blocks     []struct {
+			BlockID string `json:"blockId"`
+		} `json:"blocks"`
+	}
+	get := func(path, segment string, out any) {
+		t.Helper()
+		resp, err := owner.Get(srv.URL + "/api/v1/forms/" + formID.String() + path + "segment=" + segment)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s %s: статус %d", path, segment, resp.StatusCode)
+		}
+		if err := json.NewDecoder(resp.Body).Decode(out); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var phones summaryResp
+	get("/submissions/summary?", "device:%D0%A2%D0%B5%D0%BB%D0%B5%D1%84%D0%BE%D0%BD", &phones)
+	if phones.Withheld || phones.Total != 5 || phones.Unfiltered == nil || *phones.Unfiltered != 7 {
+		t.Errorf("телефоны: %+v", phones)
+	}
+	var desktops summaryResp
+	get("/submissions/summary?", "device:%D0%9A%D0%BE%D0%BC%D0%BF%D1%8C%D1%8E%D1%82%D0%B5%D1%80", &desktops)
+	if !desktops.Withheld || desktops.Total != 0 || len(desktops.Blocks) != 0 {
+		t.Errorf("один компьютер раскрыт: %+v", desktops)
+	}
+	var version summaryResp
+	get("/submissions/summary?", "version:1", &version)
+	if version.Withheld || version.Total != 7 {
+		t.Errorf("версия 1 (ответ без визита входит): %+v", version)
+	}
+
+	var page struct {
+		Answers  []any `json:"answers"`
+		Withheld bool  `json:"withheld"`
+	}
+	get("/submissions/summary/b_rate?", "device:%D0%9A%D0%BE%D0%BC%D0%BF%D1%8C%D1%8E%D1%82%D0%B5%D1%80", &page)
+	if !page.Withheld || len(page.Answers) != 0 {
+		t.Errorf("окно «все ответы» раскрыло малую выборку: %+v", page)
+	}
+	var table struct {
+		Total    int  `json:"total"`
+		Withheld bool `json:"withheld"`
+	}
+	get("/submissions/crosstab?rows=b_src&cols=b_rate&", "device:%D0%9A%D0%BE%D0%BC%D0%BF%D1%8C%D1%8E%D1%82%D0%B5%D1%80", &table)
+	if !table.Withheld {
+		t.Errorf("таблица раскрыла малую выборку: %+v", table)
+	}
+}

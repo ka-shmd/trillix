@@ -49,7 +49,14 @@ export function getCrosstab(
   rows: string,
   cols: string,
   where?: string,
+  segment?: string,
 ): Promise<Crosstab> {
-  const query = new URLSearchParams({ ...periodRange(period), rows, cols, ...(where ? { where } : {}) })
+  const query = new URLSearchParams({
+    ...periodRange(period),
+    rows,
+    cols,
+    ...(where ? { where } : {}),
+    ...segmentParams(segment),
+  })
   return apiRequest(`/forms/${formId}/submissions/crosstab?${query.toString()}`, { schema: crosstabSchema })
 }

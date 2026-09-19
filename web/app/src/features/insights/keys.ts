@@ -13,6 +13,6 @@ export const insightsKeys = {
   versions: (formId: string, period: Period, segment = '') =>
     ['insights', 'versions', formId, period, segment] as const,
   breakdown: (formId: string, period: Period) => ['insights', 'breakdown', formId, period] as const,
-  crosstab: (formId: string, period: Period, rows: string, cols: string, where = '') =>
-    ['insights', 'crosstab', formId, period, rows, cols, where] as const,
+  crosstab: (formId: string, period: Period, rows: string, cols: string, where = '', segment = '') =>
+    ['insights', 'crosstab', formId, period, rows, cols, where, segment] as const,
 }

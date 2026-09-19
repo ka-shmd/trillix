@@ -26,6 +26,7 @@ export function CrosstabDialog({
   formId,
   period,
   where,
+  segment,
   block,
   others,
 }: {
@@ -34,12 +35,13 @@ export function CrosstabDialog({
   formId: string
   period: Period
   where?: string
+  segment?: string
   block: BlockSummary
   others: BlockSummary[]
 }) {
   const [colId, setColId] = useState('')
   const table = useQuery({
-    ...crosstabQueryOptions(formId, period, block.blockId, colId, where),
+    ...crosstabQueryOptions(formId, period, block.blockId, colId, where, segment),
     enabled: open && colId !== '',
   })
   const planRequired =
@@ -70,6 +72,8 @@ export function CrosstabDialog({
           <p className="text-sm text-muted-foreground">Сравнение вопросов доступно на тарифе с аналитикой.</p>
         ) : table.isError ? (
           <p className="text-sm text-muted-foreground">Не удалось посчитать таблицу.</p>
+        ) : table.data.withheld ? (
+          <p className="text-sm text-muted-foreground">В выборке меньше 5 ответов — таблица не показывается.</p>
         ) : table.data.total === 0 ? (
           <p className="text-sm text-muted-foreground">Никто не ответил на оба вопроса.</p>
         ) : (
