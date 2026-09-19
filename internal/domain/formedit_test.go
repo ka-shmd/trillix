@@ -657,3 +657,115 @@ func TestApplyChatOps_KeepsRichCaption(t *testing.T) {
 		t.Errorf("курсив потерялся при перекраске: %+v", got[1])
 	}
 }
+
+// Модель заливает обложку только цветом и обязана видеть картинку автора, чтобы не
+// заменить её цветом без прямой просьбы: без проекции «сделай ярче» снимало бы её.
+func TestProjectFormShowsCover(t *testing.T) {
+	y := 30.0
+	cases := map[string]struct {
+		cover *FormCover
+		want  string
+	}{
+		"обложки нет": {nil, ""},
+		"цвет":        {&FormCover{Color: "#fecaca"}, "#fecaca"},
+		"картинка":    {&FormCover{ImageKey: "ws/cover.png", Y: &y}, ChatCoverImage},
+	}
+	for name, c := range cases {
+		t.Run(name, func(t *testing.T) {
+			form := sampleForm()
+			form.Cover = c.cover
+			if got := ProjectForm(form).Cover; got != c.want {
+				t.Errorf("обложка в проекции = %q, ожидалось %q", got, c.want)
+			}
+		})
+	}
+}
+
+func TestApplyChatDesign_Cover(t *testing.T) {
+	t.Run("цвет заливает обложку и не заводит оформления", func(t *testing.T) {
+		patch := ChatDesignEmpty()
+		patch.Cover = "#FECACA"
+		out, err := ApplyChatDesign(sampleForm(), patch)
+		if err != nil {
+			t.Fatalf("ApplyChatDesign() вернул ошибку: %v", err)
+		}
+		if out.Cover == nil || out.Cover.Color != "#fecaca" || out.Cover.ImageKey != "" {
+			t.Errorf("обложка = %+v", out.Cover)
+		}
+		// Пустой `design: {}` в документе — отличие от исходного при том же виде.
+		if out.Design != nil {
+			t.Errorf("правка одной обложки завела оформление: %+v", out.Design)
+		}
+	})
+
+	t.Run("цвет меняется, высота полосы остаётся", func(t *testing.T) {
+		height := 40
+		form := sampleForm()
+		form.Cover = &FormCover{Color: "#fecaca", Height: &height}
+		patch := ChatDesignEmpty()
+		patch.Cover = "#dbeafe"
+
+		out, err := ApplyChatDesign(form, patch)
+		if err != nil {
+			t.Fatalf("ApplyChatDesign() вернул ошибку: %v", err)
+		}
+		c := out.Cover
+		if c.Color != "#dbeafe" || c.Height == nil || *c.Height != 40 {
+			t.Errorf("обложка = %+v — ожидался новый цвет с прежней высотой", c)
+		}
+		if form.Cover.Color != "#fecaca" || c.Height == form.Cover.Height {
+			t.Error("правка обложки написала в документ автора")
+		}
+		if _, err := ValidateSchema(mustJSON(t, out)); err != nil {
+			t.Errorf("документ не проходит ValidateSchema: %v", err)
+		}
+	})
+
+	// Замер 2026-09-19: на «сделай форму ярче» модель в одном прогоне из четырёх
+	// заливала цветом картинку автора, хотя инструкция это запрещала.
+	t.Run("картинку автора цвет не заменяет", func(t *testing.T) {
+		form := sampleForm()
+		form.Cover = &FormCover{ImageKey: "ws/cover.png"}
+		patch := ChatDesignEmpty()
+		patch.Cover = "#dbeafe"
+		if _, err := ApplyChatDesign(form, patch); !errors.Is(err, ErrValidation) {
+			t.Errorf("ошибка = %v, ожидалась ErrValidation", err)
+		}
+	})
+
+	t.Run("негодный цвет — ошибка проверки", func(t *testing.T) {
+		patch := ChatDesignEmpty()
+		patch.Cover = "розовый"
+		if _, err := ApplyChatDesign(sampleForm(), patch); !errors.Is(err, ErrValidation) {
+			t.Errorf("ошибка = %v, ожидалась ErrValidation", err)
+		}
+	})
+}
+
+func mustJSON(t *testing.T, s FormSchema) json.RawMessage {
+	t.Helper()
+	raw, err := json.Marshal(s)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// Модель пишет ответ в порядке полей схемы. reply после правок описывает сделанное;
+// стоя вторым, он обещал «обложку поставить не могу», а следом шла поставленная обложка.
+func TestChatJSONSchema_ReplyAfterEdits(t *testing.T) {
+	for _, withCover := range []bool{false, true} {
+		schema := string(ChatJSONSchema(withCover))
+		design, reply := strings.Index(schema, `"design"`), strings.Index(schema, `"reply"`)
+		if design < 0 || reply < design {
+			t.Errorf("withCover=%v: reply стоит раньше design в схеме ответа", withCover)
+		}
+		if got := strings.Contains(schema, `"cover"`); got != withCover {
+			t.Errorf("withCover=%v: поле обложки в схеме = %v", withCover, got)
+		}
+		var v any
+		if err := json.Unmarshal([]byte(schema), &v); err != nil {
+			t.Errorf("withCover=%v: схема не разбирается: %v", withCover, err)
+		}
+	}
+}

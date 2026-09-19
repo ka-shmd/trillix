@@ -318,9 +318,9 @@ func TestChat(t *testing.T) {
 // Оформление через чат (слайс F). Гейт стоит НА ВХОДЕ, а не на публикации: покрасить
 // форму, чтобы автор упёрся в 402 при попытке её опубликовать, — худший из вариантов.
 func TestChat_Design(t *testing.T) {
-	const dark = `{"action":"design","reply":"Сделал тёмную тему.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+	const dark = `{"action":"edit_form","reply":"Сделал тёмную тему.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 	 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
-	const blue = `{"action":"design","reply":"Покрасил в синий.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+	const blue = `{"action":"edit_form","reply":"Покрасил в синий.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 	 "design":{"theme":"","font":"","accent":"#2563eb","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 
 	t.Run("тема ложится на документ", func(t *testing.T) {
@@ -370,7 +370,7 @@ func TestChat_Design(t *testing.T) {
 	// бесплатное делается, платное отсекается, а ответ ассистента заменяется нашим —
 	// свой он написал про обе правки сразу.
 	t.Run("тема с цветом на закрытом тарифе: тема встаёт, цвет объясняется", func(t *testing.T) {
-		const both = `{"action":"design","reply":"Сделал тёмной и покрасил в синий.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		const both = `{"action":"edit_form","reply":"Сделал тёмной и покрасил в синий.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"dark","font":"","accent":"#2563eb","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
 		svc, store := chatService(ai.NewFake(both), plans)
@@ -442,6 +442,56 @@ func TestChat_Design(t *testing.T) {
 		}
 	})
 
+	// Обложку ставят только по прямой просьбе: указание об этом модель не держала и
+	// ставила её на любую просьбу про вид, поэтому без слова «обложка» поля нет в схеме
+	// ответа, а присланное всё равно — отвергается.
+	t.Run("обложка без просьбы не ставится", func(t *testing.T) {
+		const cover = `{"action":"edit_form","reply":"Сделал ярче.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"#db2777","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1,"cover":"#fecaca"}}`
+		fake := ai.NewFake(cover, cover)
+		svc, store := chatService(fake, &fakePlans{allowed: true})
+
+		_, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай форму ярче", nil, nil)
+		if !errors.Is(err, domain.ErrUnavailable) {
+			t.Fatalf("ошибка = %v, ожидался отказ: обложку не просили", err)
+		}
+		if strings.Contains(string(fake.Requests()[0].Schema), `"cover"`) {
+			t.Error("поле обложки есть в схеме ответа, хотя автор её не просил")
+		}
+
+		asked := ai.NewFake(cover)
+		svc, store = chatService(asked, &fakePlans{allowed: true})
+		if _, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "сделай ярче и добавь Обложку", nil, nil); err != nil {
+			t.Fatalf("обложку по просьбе не пустили: %v", err)
+		}
+		if !strings.Contains(string(asked.Requests()[0].Schema), `"cover"`) {
+			t.Error("автор просит обложку, а поля в схеме ответа нет")
+		}
+	})
+
+	// Обложка — хром страницы, и гейта тарифа у неё нет ни в панели, ни здесь.
+	t.Run("обложка цветом бесплатна и на закрытом тарифе", func(t *testing.T) {
+		const cover = `{"action":"edit_form","reply":"Добавил розовую обложку.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1,"cover":"#fecaca"}}`
+		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
+		svc, store := chatService(ai.NewFake(cover), plans)
+
+		res, err := svc.Chat(context.Background(), domain.NewID(), store.form.ID, "добавь розовую обложку", nil, nil)
+		if err != nil {
+			t.Fatalf("Chat() вернул ошибку: %v", err)
+		}
+		if res.PlanRequired {
+			t.Error("бесплатная обложка помечена как упёршаяся в тариф")
+		}
+		schema, err := domain.ValidateSchema(res.Schema)
+		if err != nil {
+			t.Fatalf("документ не проходит ValidateSchema: %v", err)
+		}
+		if schema.Cover == nil || schema.Cover.Color != "#fecaca" {
+			t.Errorf("обложка = %+v", schema.Cover)
+		}
+	})
+
 	t.Run("цвет на открытом тарифе применяется", func(t *testing.T) {
 		plans := &fakePlans{allowed: true}
 		svc, store := chatService(ai.NewFake(blue), plans)
@@ -479,9 +529,14 @@ func TestChat_Design(t *testing.T) {
 
 	t.Run("несогласованные ответы про оформление отвергаются", func(t *testing.T) {
 		cases := map[string]string{
-			"оформление без настроек": `{"action":"design","reply":"покрасил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+			"правка без настроек": `{"action":"edit_form","reply":"покрасил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 			 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
-			"оформление с вопросами": `{"action":"design","reply":"и то и то","title":{"text":"Другое","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+			"ответ словами с оформлением": `{"action":"answer","reply":"покрасил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+			 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
+			// Отдельного действия «только вид» нет: оно было способом выполнить половину
+			// просьбы «собери форму и сделай красивой» (история — JOURNAL, «Ассистент
+			// делает половину просьбы»).
+			"действие только про вид": `{"action":"design","reply":"покрасил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 			 "design":{"theme":"dark","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`,
 		}
 		for name, answer := range cases {
@@ -502,7 +557,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// нижний регистр. Приводим сами: вторая попытка из-за регистра букв — трата
 	// ожидания автора и денег.
 	t.Run("цвет заглавными принимается", func(t *testing.T) {
-		const upper = `{"action":"design","reply":"Сделал фон жёлтым.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		const upper = `{"action":"edit_form","reply":"Сделал фон жёлтым.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"","canvas":"#FFFF00","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		fake := ai.NewFake(upper)
 		svc, store := chatService(fake, &fakePlans{allowed: true})
@@ -525,7 +580,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 
 	// Ширина колонки просится словами («сделай пошире»), поэтому она в словаре чата.
 	t.Run("ширина колонки применяется", func(t *testing.T) {
-		const wide = `{"action":"design","reply":"Сделал колонку шире.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		const wide = `{"action":"edit_form","reply":"Сделал колонку шире.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":1200,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		svc, store := chatService(ai.NewFake(wide), &fakePlans{allowed: true})
 
@@ -546,9 +601,9 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// применения: пока проверка цикла смотрела только на правку вопросов, кривой
 	// цвет доживал до применения и показывался автору внутренностями валидатора.
 	t.Run("негодное оформление чинится второй попыткой", func(t *testing.T) {
-		const bad = `{"action":"design","reply":"покрасил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		const bad = `{"action":"edit_form","reply":"покрасил","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"зелёный","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
-		const good = `{"action":"design","reply":"Покрасил акцент в зелёный.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		const good = `{"action":"edit_form","reply":"Покрасил акцент в зелёный.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"#16a34a","canvas":"","textColor":"","buttonColor":"","width":-1,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		fake := ai.NewFake(bad, good)
 		svc, store := chatService(fake, &fakePlans{allowed: true})
@@ -572,7 +627,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 	// Ширина — платная настройка (ширина колонки), значит на закрытом тарифе она
 	// отсекается так же, как цвет.
 	t.Run("ширина на закрытом тарифе — платная", func(t *testing.T) {
-		const wide = `{"action":"design","reply":"Сделал шире.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
+		const wide = `{"action":"edit_form","reply":"Сделал шире.","title":{"text":"","bold":false,"color":"","bg":""},"add":[],"update":[],"remove":[],"move":[],
 		 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"","width":1200,"fontSize":-1,"density":"","align":"","radius":-1,"borderWidth":-1,"outline":"","buttonVariant":"","buttonWidth":"","buttonAlign":"","buttonRadius":-1}}`
 		plans := &fakePlans{allowed: true, deny: map[entitlements.Key]bool{entitlements.FormDesignCustom: true}}
 		svc, store := chatService(ai.NewFake(wide), plans)
@@ -591,7 +646,7 @@ func TestChat_DesignRegressions(t *testing.T) {
 // толщина края, плотность, выравнивание, вид кнопки. Заодно проверяется сентинел:
 // ноль у скругления значит «убрать скругления», а не «не трогать».
 func TestChat_DesignVocabulary(t *testing.T) {
-	const rich = `{"action":"design","reply":"Убрал скругления и сделал форму просторнее.","title":{"text":"","bold":false,"color":"","bg":""},
+	const rich = `{"action":"edit_form","reply":"Убрал скругления и сделал форму просторнее.","title":{"text":"","bold":false,"color":"","bg":""},
 	 "add":[],"update":[],"remove":[],"move":[],
 	 "design":{"theme":"","font":"","accent":"","canvas":"","textColor":"","buttonColor":"",
 	  "width":-1,"fontSize":-1,"density":"roomy","align":"","radius":0,"borderWidth":2,
@@ -679,13 +734,30 @@ func TestChatInstructions_FreeDesignFields(t *testing.T) {
 		Width: 800, FontSize: 18, Density: "cozy", Align: "center",
 		Radius: 8, BorderWidth: 2, Outline: "full",
 		ButtonVariant: "solid", ButtonWidth: "full", ButtonAlign: "center", ButtonRadius: 8,
+		Cover: "#fecaca",
 	}
 	free := domain.ChatDesignFree(full)
-	if free.Theme != "dark" || free.BorderWidth != 2 || free.ButtonRadius != 8 {
+	if free.Theme != "dark" || free.BorderWidth != 2 || free.ButtonRadius != 8 || free.Cover != "#fecaca" {
 		t.Errorf("бесплатное поле стало платным: %+v", free)
 	}
-	free.Theme, free.BorderWidth, free.ButtonRadius = "", domain.ChatDesignKeep, domain.ChatDesignKeep
+	free.Theme, free.BorderWidth, free.ButtonRadius, free.Cover = "", domain.ChatDesignKeep, domain.ChatDesignKeep, ""
 	if !free.Empty() {
 		t.Errorf("бесплатных полей стало больше (%+v) — поправь фразу про тариф в chatInstructions", free)
+	}
+}
+
+// Недоступная часть просьбы («побольше декора», «добавь логотип») не должна снимать
+// всю просьбу: пока инструкция отправляла такое в ответ словами, модель на «собери
+// форму и сделай красивой» отказывалась целиком. И называет, ГДЕ автор сделает
+// недоступное сам: без адреса модель его выдумывала («настройки аккаунта»).
+func TestChatInstructions_WholeRequest(t *testing.T) {
+	text := chatInstructions(domain.ProjectForm(domain.FormSchema{}), true, false)
+	for _, want := range []string{
+		"сделай ВСЁ ОСТАЛЬНОЕ",
+		"«Добавить логотип»",
+	} {
+		if !strings.Contains(text, want) {
+			t.Errorf("в инструкции нет %q", want)
+		}
 	}
 }

@@ -41,9 +41,16 @@ type ChatForm struct {
 	// состояние целиком, и модель, не видя нынешнего, отвечала эхом с `bold: false` —
 	// посторонняя просьба («сделай телефон необязательным») снимала жирность заголовка
 	// формы. Замер 2026-09-02: один прогон из трёх.
-	Title ChatTitle  `json:"title"`
+	Title ChatTitle `json:"title"`
+	// Cover — чем залита обложка: "" — обложки нет, "#rrggbb" — цветом,
+	// ChatCoverImage — картинкой автора. Модель заливает обложку только цветом и
+	// должна видеть картинку, чтобы не заменить её цветом без прямой просьбы.
+	Cover string     `json:"cover"`
 	Items []ChatItem `json:"items"`
 }
+
+// ChatCoverImage — обложка-картинка в проекции формы. Ключ объекта модели не нужен.
+const ChatCoverImage = "image"
 
 // ChatOp — одна правка формы.
 type ChatOp struct {
@@ -94,7 +101,15 @@ func ProjectForm(s FormSchema) ChatForm {
 	for _, u := range units {
 		items = append(items, u.item)
 	}
-	return ChatForm{Title: title, Items: items}
+	var cover string
+	switch {
+	case s.Cover == nil:
+	case s.Cover.ImageKey != "":
+		cover = ChatCoverImage
+	default:
+		cover = s.Cover.Color
+	}
+	return ChatForm{Title: title, Cover: cover, Items: items}
 }
 
 // formUnits режет документ на пункты. Группа блоков (подпись + контент + поле) —
@@ -619,7 +634,15 @@ const (
 // Все поля обязательны (строгий режим провайдера иначе не работает), поэтому
 // «ничего не меняем» выражается пустыми списками и пустым заголовком, а не
 // отсутствием ключей.
-func ChatJSONSchema() json.RawMessage {
+//
+// ПОРЯДОК ПОЛЕЙ — ПОРЯДОК, в котором модель пишет ответ: reply и planBlocked стоят
+// ПОСЛЕ правок, чтобы ответ описывал сделанное. Пока reply шёл вторым, модель писала
+// «обложку поставить не могу» и следом ставила её.
+//
+// withCover — есть ли в правке вида поле обложки. Его дают, только когда автор
+// просит обложку: модель, заполняя блок design, заполняла его целиком и ставила
+// обложку на любую просьбу про вид, указание «только по прямой просьбе» не держала.
+func ChatJSONSchema(withCover bool) json.RawMessage {
 	item := planItemJSONSchema()
 	// Каждое перечисление получает пустую строку: в строгом режиме поле обязано
 	// присутствовать, и «не трогать» выражается ею.
@@ -632,12 +655,15 @@ func ChatJSONSchema() json.RawMessage {
 	outlines := withEmpty(designOutlines)
 	btnVariants, btnWidths := withEmpty(designButtonVariant), withEmpty(designButtonWidth)
 	btnAligns := withEmpty(designButtonAligns)
+	coverProp, coverReq := "", ""
+	if withCover {
+		coverProp, coverReq = `
+        "cover": {"type": "string"},`, `"cover", `
+	}
 	return json.RawMessage(fmt.Sprintf(`{
   "type": "object",
   "properties": {
-    "action": {"type": "string", "enum": [%q, %q, %q]},
-    "reply": {"type": "string"},
-    "planBlocked": {"type": "boolean"},
+    "action": {"type": "string", "enum": [%q, %q]},
     "title": {
       "type": "object",
       "properties": {
@@ -679,7 +705,7 @@ func ChatJSONSchema() json.RawMessage {
     },
     "design": {
       "type": "object",
-      "properties": {
+      "properties": {%s
         "theme": {"type": "string", "enum": %s},
         "font": {"type": "string", "enum": %s},
         "accent": {"type": "string"},
@@ -698,20 +724,19 @@ func ChatJSONSchema() json.RawMessage {
         "buttonAlign": {"type": "string", "enum": %s},
         "buttonRadius": {"type": "integer"}
       },
-      "required": ["theme", "font", "accent", "canvas", "textColor", "buttonColor",
+      "required": [%s"theme", "font", "accent", "canvas", "textColor", "buttonColor",
         "width", "fontSize", "density", "align", "radius", "borderWidth", "outline",
         "buttonVariant", "buttonWidth", "buttonAlign", "buttonRadius"],
       "additionalProperties": false
-    }
+    },
+    "reply": {"type": "string"},
+    "planBlocked": {"type": "boolean"}
   },
   "required": ["action", "reply", "planBlocked", "title", "add", "update", "remove", "move", "design"],
   "additionalProperties": false
-}`, ActionEdit, ActionAnswer, ActionDesign, item, item, themes, fonts,
-		densities, aligns, outlines, btnVariants, btnWidths, btnAligns))
+}`, ActionEdit, ActionAnswer, item, item, coverProp, themes, fonts,
+		densities, aligns, outlines, btnVariants, btnWidths, btnAligns, coverReq))
 }
-
-// ActionDesign — третье намерение: оформление страницы формы (фаза 26, слайс F).
-const ActionDesign = "design"
 
 // ChatDesign — оформление глазами модели: узкий срез FormDesign, а не он целиком.
 //
@@ -719,9 +744,11 @@ const ActionDesign = "design"
 // раскладка, контролы, кнопка, свой CSS), и просить у модели документ целиком значит
 // получать обратно то, чего автор не просил. Разговор оперирует семнадцатью
 // настройками (слайс F): тема, шрифт, четыре цвета, ширина и кегль, плотность и
-// выравнивание, скругление и край поля, вид контура, четыре свойства кнопки. Свой CSS,
-// обложка и тонкая настройка размеров остаются панели оформления, где у каждой
-// настройки свой контрол и видно, что меняется.
+// выравнивание, скругление и край поля, вид контура, четыре свойства кнопки, — и
+// заливкой обложки цветом. Обложка — не часть FormDesign (cover.go), но автор просит
+// её теми же словами, что и цвета, поэтому в правке вида она соседнее поле. Свой CSS,
+// обложка-картинка, логотип и тонкая настройка размеров остаются панели оформления:
+// картинку модели подставить нечем.
 //
 // Пустая строка значит «не трогать»: своего «сбросить» у чата нет — сброс живёт
 // кнопкой в панели, и путать «поставь светлую тему» со «сними всё оформление»
@@ -756,6 +783,11 @@ type ChatDesign struct {
 	ButtonWidth   string `json:"buttonWidth"`
 	ButtonAlign   string `json:"buttonAlign"`
 	ButtonRadius  int    `json:"buttonRadius"`
+
+	// Cover — залить обложку этим цветом (#rrggbb); пусто — не трогать. Обложку-
+	// картинку правка отвергает (ApplyChatDesign). В схеме ответа поле есть, только
+	// когда автор просит обложку (ChatJSONSchema).
+	Cover string `json:"cover"`
 }
 
 // ChatDesignEmpty — правка оформления, которая ничего не меняет.
@@ -821,8 +853,13 @@ func (d ChatDesign) chatDesignForm() FormDesign {
 	return out
 }
 
-// Empty — правка оформления ничего не меняет.
+// Empty — правка вида ничего не меняет: ни оформления, ни обложки.
 func (d ChatDesign) Empty() bool {
+	return d.designEmpty() && d.Cover == ""
+}
+
+// designEmpty — правка не называет ни одного ключа FormDesign (обложка живёт вне его).
+func (d ChatDesign) designEmpty() bool {
 	form := d.chatDesignForm()
 	return form.Theme == "" && form.Font == "" && form.Palette == nil &&
 		form.Layout == nil && form.Controls == nil && form.Button == nil
@@ -846,18 +883,45 @@ func ApplyChatDesign(s FormSchema, patch ChatDesign) (FormSchema, error) {
 	// лежала бы в схеме, которую кабинет сохранит автосейвом. Тот же довод, что у
 	// копии блоков в ApplyChatOps, и та же цена ошибки: отвергнутая первая попытка
 	// модели отравляла бы вторую.
-	design, err := cloneDesign(s.Design)
-	if err != nil {
-		return FormSchema{}, err
-	}
-	mergeDesign(&design, patch.chatDesignForm())
-
-	if err := validateDesign(&design); err != nil {
-		return FormSchema{}, fmt.Errorf("%w: %v", ErrValidation, err)
-	}
 	out := s
-	out.Design = &design
+	if !patch.designEmpty() {
+		design, err := cloneDesign(s.Design)
+		if err != nil {
+			return FormSchema{}, err
+		}
+		mergeDesign(&design, patch.chatDesignForm())
+		if err := validateDesign(&design); err != nil {
+			return FormSchema{}, fmt.Errorf("%w: %v", ErrValidation, err)
+		}
+		out.Design = &design
+	}
+	if patch.Cover != "" {
+		// Картинку автора чат цветом не заменяет: модель делала это и на постороннюю
+		// просьбу («сделай ярче»), а вернуть картинку разговором нечем. Отказ уезжает
+		// модели на вторую попытку; заменить её автор может в окне обложки.
+		if s.Cover != nil && s.Cover.ImageKey != "" {
+			return FormSchema{}, opErr("обложка формы — картинка автора, цветом её не заменяй: оставь cover пустым " +
+				"и, если просили именно обложку, скажи, что картинку меняют в окне обложки на полотне")
+		}
+		cover := coverColor(s.Cover, normalizeHex(patch.Cover))
+		if err := validateCover(cover); err != nil {
+			return FormSchema{}, fmt.Errorf("%w: %v", ErrValidation, err)
+		}
+		out.Cover = cover
+	}
 	return out, nil
+}
+
+// coverColor — обложка, залитая цветом. Высота полосы сохраняется. Зеркалит coverFill в
+// web/app/src/features/forms/builder/designEdit.ts. Новый объект, а не правка старого:
+// старый принадлежит документу автора (та же мина, что у копии оформления выше).
+func coverColor(old *FormCover, color string) *FormCover {
+	out := &FormCover{Color: color}
+	if old != nil && old.Height != nil {
+		height := *old.Height
+		out.Height = &height
+	}
+	return out
 }
 
 // cloneDesign — глубокая копия оформления, ЧЕРЕЗ JSON, а не по полям.
@@ -975,6 +1039,7 @@ func ChatDesignFree(patch ChatDesign) ChatDesign {
 		{&free.ButtonVariant, &patch.ButtonVariant},
 		{&free.ButtonWidth, &patch.ButtonWidth},
 		{&free.ButtonAlign, &patch.ButtonAlign},
+		{&free.Cover, &patch.Cover},
 	}
 	for _, k := range keepString {
 		if *k.src == "" {
