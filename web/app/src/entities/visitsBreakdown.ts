@@ -15,10 +15,13 @@ export const timeBucketSchema = z.object({
 })
 export type TimeBucket = z.infer<typeof timeBucketSchema>
 
+// submitted у строк разбивок — сколько визитов строки закончились ответом:
+// конверсия строки (спека design/analytics-v2.md §5.2).
 export const sourceCountSchema = z.object({
   source: z.string(),
   medium: z.string(),
   visits: z.number().int(),
+  submitted: z.number().int(),
 })
 export type SourceCount = z.infer<typeof sourceCountSchema>
 
@@ -29,12 +32,14 @@ export const placeCountSchema = z.object({
   name: z.string(),
   countryCode: z.string(),
   visits: z.number().int(),
+  submitted: z.number().int(),
 })
 export type PlaceCount = z.infer<typeof placeCountSchema>
 
 export const labelCountSchema = z.object({
   label: z.string(),
   visits: z.number().int(),
+  submitted: z.number().int(),
 })
 export type LabelCount = z.infer<typeof labelCountSchema>
 

@@ -9560,7 +9560,8 @@ func (q *Queries) UpsertSignupProfile(ctx context.Context, arg UpsertSignupProfi
 }
 
 const visitCities = `-- name: VisitCities :many
-SELECT city, country_code, count(*)::bigint AS visits
+SELECT city, country_code, count(*)::bigint AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -9580,6 +9581,7 @@ type VisitCitiesRow struct {
 	City        pgtype.Text
 	CountryCode pgtype.Text
 	Visits      int64
+	Submitted   int64
 }
 
 // Города за период. Код страны едет рядом с именем: одноимённые города в разных
@@ -9593,7 +9595,12 @@ func (q *Queries) VisitCities(ctx context.Context, arg VisitCitiesParams) ([]Vis
 	var items []VisitCitiesRow
 	for rows.Next() {
 		var i VisitCitiesRow
-		if err := rows.Scan(&i.City, &i.CountryCode, &i.Visits); err != nil {
+		if err := rows.Scan(
+			&i.City,
+			&i.CountryCode,
+			&i.Visits,
+			&i.Submitted,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -9605,7 +9612,8 @@ func (q *Queries) VisitCities(ctx context.Context, arg VisitCitiesParams) ([]Vis
 }
 
 const visitCountries = `-- name: VisitCountries :many
-SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits
+SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -9625,6 +9633,7 @@ type VisitCountriesRow struct {
 	CountryCode pgtype.Text
 	Country     string
 	Visits      int64
+	Submitted   int64
 }
 
 // Страны за период. Визиты без гео (справочника нет, приватный адрес, IPv6) сюда не
@@ -9639,7 +9648,12 @@ func (q *Queries) VisitCountries(ctx context.Context, arg VisitCountriesParams) 
 	var items []VisitCountriesRow
 	for rows.Next() {
 		var i VisitCountriesRow
-		if err := rows.Scan(&i.CountryCode, &i.Country, &i.Visits); err != nil {
+		if err := rows.Scan(
+			&i.CountryCode,
+			&i.Country,
+			&i.Visits,
+			&i.Submitted,
+		); err != nil {
 			return nil, err
 		}
 		items = append(items, i)
@@ -9836,7 +9850,8 @@ const visitSources = `-- name: VisitSources :many
 SELECT coalesce(meta->>'referer', '')::text    AS referer,
        coalesce(meta->>'utm_source', '')::text AS utm_source,
        coalesce(meta->>'utm_medium', '')::text AS utm_medium,
-       count(*)::bigint                        AS visits
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -9855,9 +9870,14 @@ type VisitSourcesRow struct {
 	UtmSource string
 	UtmMedium string
 	Visits    int64
+	Submitted int64
 }
 
-// Сырьё списка источников: тройка меток и счётчик. Семантику («utm_source
+// Сырьё списка источников: тройка меток и счётчик.
+//
+// submitted у этого и соседних разбивок — агрегат, а не измерение группировки:
+// конверсия строки (спека design/analytics-v2.md §5.2) не увеличивает ни результат,
+// ни скан. Семантику («utm_source
 // перебивает хост referer'а», «ни того ни другого — прямой заход») знает Go
 // (domain.FoldSources) — здесь только группировка.
 //
@@ -9878,6 +9898,7 @@ func (q *Queries) VisitSources(ctx context.Context, arg VisitSourcesParams) ([]V
 			&i.UtmSource,
 			&i.UtmMedium,
 			&i.Visits,
+			&i.Submitted,
 		); err != nil {
 			return nil, err
 		}
@@ -9949,7 +9970,8 @@ func (q *Queries) VisitTimeseries(ctx context.Context, arg VisitTimeseriesParams
 
 const visitUserAgents = `-- name: VisitUserAgents :many
 SELECT coalesce(meta->>'user_agent', '')::text AS user_agent,
-       count(*)::bigint                        AS visits
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
@@ -9966,6 +9988,7 @@ type VisitUserAgentsParams struct {
 type VisitUserAgentsRow struct {
 	UserAgent string
 	Visits    int64
+	Submitted int64
 }
 
 // Сырьё списков «устройства / браузеры / ОС»: сгруппированные строки user-agent.
@@ -9980,7 +10003,7 @@ func (q *Queries) VisitUserAgents(ctx context.Context, arg VisitUserAgentsParams
 	var items []VisitUserAgentsRow
 	for rows.Next() {
 		var i VisitUserAgentsRow
-		if err := rows.Scan(&i.UserAgent, &i.Visits); err != nil {
+		if err := rows.Scan(&i.UserAgent, &i.Visits, &i.Submitted); err != nil {
 			return nil, err
 		}
 		items = append(items, i)

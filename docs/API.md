@@ -1120,19 +1120,20 @@ PDF одного ответа: та же форма, которую видел �
       { "at": "2026-08-25T00:00:00Z", "visits": 0, "submitted": 0 }
     ],
     "sources": [
-      { "source": "newsletter", "medium": "email", "visits": 3 },
-      { "source": "vk.com", "medium": "Нет", "visits": 2 }
+      { "source": "newsletter", "medium": "email", "visits": 3, "submitted": 2 },
+      { "source": "vk.com", "medium": "Нет", "visits": 2, "submitted": 0 }
     ],
     "sourcesLocked": false,                // true = разбивка закрыта тарифом, sources пуст
     "knownSources": 5,                     // визитов с известным источником — настоящее число и под замком
-    "countries": [{ "name": "Россия", "countryCode": "RU", "visits": 4 }],
-    "cities":    [{ "name": "Москва", "countryCode": "RU", "visits": 4 }],
+    "countries": [{ "name": "Россия", "countryCode": "RU", "visits": 4, "submitted": 1 }],
+    "cities":    [{ "name": "Москва", "countryCode": "RU", "visits": 4, "submitted": 1 }],
     "unknownPlace": 2,                     // визитов без определённого места
-    "devices":  [{ "label": "Компьютер", "visits": 4 }],
-    "browsers": [{ "label": "Chrome", "visits": 5 }],
-    "systems":  [{ "label": "Windows", "visits": 4 }]
+    "devices":  [{ "label": "Компьютер", "visits": 4, "submitted": 1 }],
+    "browsers": [{ "label": "Chrome", "visits": 5, "submitted": 2 }],
+    "systems":  [{ "label": "Windows", "visits": 4, "submitted": 1 }]
   }
   ```
+  - **`submitted`** у каждой строки разбивок — сколько её визитов закончились ответом (фаза 30): конверсия строки. Считается агрегатом того же скана, а не отдельной группировкой, поэтому размер ответа не растёт. Экран показывает долю при знаменателе от 20, ниже — «N из M».
   - **Шаг ряда** — решение сервера (`domain.StepFor`): окно до двух суток — часы, дальше — сутки, «всё время» — сутки. Копия этого правила на клиенте разъехалась бы с запросом молча.
   - **Пустые корзины достроены** (`domain.FillBuckets`): дыра в ряду читается как «данных нет», хотя означает «ноль визитов». Ряд целиком пуст только если визитов за период не было вовсе.
   - **Источник** = `utm_source`, иначе хост `referer` без `www.`, иначе `Прямые заходы`; `medium` = `utm_medium`, иначе `Нет`. Неразбираемый referer уходит в прямые заходы, а не в источник с именем-мусором.

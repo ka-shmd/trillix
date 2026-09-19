@@ -210,6 +210,7 @@ func (Repo) Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, per
 			UTMSource: r.UtmSource,
 			UTMMedium: r.UtmMedium,
 			Visits:    int(r.Visits),
+			Submitted: int(r.Submitted),
 		}
 	}
 	return out, nil
@@ -228,7 +229,7 @@ func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 	}
 	out := make([]domain.UserAgentRow, len(rows))
 	for i, r := range rows {
-		out[i] = domain.UserAgentRow{UserAgent: r.UserAgent, Visits: int(r.Visits)}
+		out[i] = domain.UserAgentRow{UserAgent: r.UserAgent, Visits: int(r.Visits), Submitted: int(r.Submitted)}
 	}
 	return out, nil
 }
@@ -250,6 +251,7 @@ func (Repo) Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, p
 			Name:        r.Country,
 			CountryCode: r.CountryCode.String,
 			Visits:      int(r.Visits),
+			Submitted:   int(r.Submitted),
 		}
 	}
 	return out, nil
@@ -273,6 +275,7 @@ func (Repo) Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, peri
 			Name:        r.City.String,
 			CountryCode: r.CountryCode.String,
 			Visits:      int(r.Visits),
+			Submitted:   int(r.Submitted),
 		}
 	}
 	return out, nil

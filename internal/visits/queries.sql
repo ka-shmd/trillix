@@ -242,7 +242,11 @@ GROUP BY bucket
 ORDER BY bucket;
 
 -- name: VisitSources :many
--- Сырьё списка источников: тройка меток и счётчик. Семантику («utm_source
+-- Сырьё списка источников: тройка меток и счётчик.
+--
+-- submitted у этого и соседних разбивок — агрегат, а не измерение группировки:
+-- конверсия строки (спека design/analytics-v2.md §5.2) не увеличивает ни результат,
+-- ни скан. Семантику («utm_source
 -- перебивает хост referer'а», «ни того ни другого — прямой заход») знает Go
 -- (domain.FoldSources) — здесь только группировка.
 --
@@ -252,7 +256,8 @@ ORDER BY bucket;
 SELECT coalesce(meta->>'referer', '')::text    AS referer,
        coalesce(meta->>'utm_source', '')::text AS utm_source,
        coalesce(meta->>'utm_medium', '')::text AS utm_medium,
-       count(*)::bigint                        AS visits
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
@@ -264,7 +269,8 @@ GROUP BY 1, 2, 3;
 -- Разбор — в Go (domain.ParseUserAgent): здесь нет и не должно быть знания о том,
 -- что Edge представляется Chrome'ом.
 SELECT coalesce(meta->>'user_agent', '')::text AS user_agent,
-       count(*)::bigint                        AS visits
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
@@ -275,7 +281,8 @@ GROUP BY 1;
 -- Страны за период. Визиты без гео (справочника нет, приватный адрес, IPv6) сюда не
 -- попадают: их число считается отдельно, из общего числа визитов, — иначе строка
 -- «Не определено» конкурировала бы со странами в одном списке и притворялась местом.
-SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits
+SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
@@ -287,7 +294,8 @@ ORDER BY visits DESC, country;
 -- name: VisitCities :many
 -- Города за период. Код страны едет рядом с именем: одноимённые города в разных
 -- странах — обычное дело, и склеивать их в одну строку значило бы врать.
-SELECT city, country_code, count(*)::bigint AS visits
+SELECT city, country_code, count(*)::bigint AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz

@@ -206,15 +206,19 @@ type timeBucketResponse struct {
 	Submitted int    `json:"submitted"`
 }
 
+// submitted у строк разбивок — сколько визитов строки закончились ответом:
+// конверсия строки (спека design/analytics-v2.md §5.2).
 type sourceResponse struct {
-	Source string `json:"source"`
-	Medium string `json:"medium"`
-	Visits int    `json:"visits"`
+	Source    string `json:"source"`
+	Medium    string `json:"medium"`
+	Visits    int    `json:"visits"`
+	Submitted int    `json:"submitted"`
 }
 
 type labelCountResponse struct {
-	Label  string `json:"label"`
-	Visits int    `json:"visits"`
+	Label     string `json:"label"`
+	Visits    int    `json:"visits"`
+	Submitted int    `json:"submitted"`
 }
 
 // placeResponse — строка стран или городов. countryCode едет рядом с названием
@@ -223,6 +227,7 @@ type placeResponse struct {
 	Name        string `json:"name"`
 	CountryCode string `json:"countryCode"`
 	Visits      int    `json:"visits"`
+	Submitted   int    `json:"submitted"`
 }
 
 type breakdownResponse struct {
@@ -290,7 +295,7 @@ func (h *Handler) breakdown(w http.ResponseWriter, r *http.Request) {
 	}
 	sources := make([]sourceResponse, len(b.Sources))
 	for i, s := range b.Sources {
-		sources[i] = sourceResponse{Source: s.Source, Medium: s.Medium, Visits: s.Visits}
+		sources[i] = sourceResponse{Source: s.Source, Medium: s.Medium, Visits: s.Visits, Submitted: s.Submitted}
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, breakdownResponse{
 		Step:          string(b.Step),
@@ -311,7 +316,7 @@ func (h *Handler) breakdown(w http.ResponseWriter, r *http.Request) {
 func labelCounts(in []domain.LabelCount) []labelCountResponse {
 	out := make([]labelCountResponse, len(in))
 	for i, l := range in {
-		out[i] = labelCountResponse{Label: l.Label, Visits: l.Visits}
+		out[i] = labelCountResponse{Label: l.Label, Visits: l.Visits, Submitted: l.Submitted}
 	}
 	return out
 }
@@ -319,7 +324,7 @@ func labelCounts(in []domain.LabelCount) []labelCountResponse {
 func places(in []domain.PlaceCount) []placeResponse {
 	out := make([]placeResponse, len(in))
 	for i, p := range in {
-		out[i] = placeResponse{Name: p.Name, CountryCode: p.CountryCode, Visits: p.Visits}
+		out[i] = placeResponse{Name: p.Name, CountryCode: p.CountryCode, Visits: p.Visits, Submitted: p.Submitted}
 	}
 	return out
 }

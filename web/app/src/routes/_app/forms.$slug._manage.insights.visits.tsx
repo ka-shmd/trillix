@@ -163,6 +163,7 @@ function Sources({ data }: { data: VisitsBreakdown }) {
       rows={data.sources.map((s) => ({
         label: s.medium === 'Нет' ? s.source : `${s.source} / ${s.medium}`,
         visits: s.visits,
+        submitted: s.submitted,
       }))}
     />
   )
@@ -185,6 +186,7 @@ function Places({ rows, unknown }: { rows: PlaceCount[]; unknown?: number }) {
         rows={rows.map((r) => ({
           label: `${flag(r.countryCode)} ${r.name}`.trim(),
           visits: r.visits,
+          submitted: r.submitted,
         }))}
       />
       {/* Число без объяснения: сколько визитов не попало в список — это данные
