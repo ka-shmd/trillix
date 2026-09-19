@@ -5,7 +5,7 @@ import { useState } from 'react'
 import { type FormFunnel } from '../../entities/funnel'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { funnelQueryOptions } from '../../features/funnel/queries'
-import { CompletionCards } from '../../features/insights/Cards'
+import { InsightCards } from '../../features/insights/Cards'
 import { SegmentPicker } from '../../features/insights/SegmentPicker'
 import { VersionsTable } from '../../features/insights/VersionsTable'
 import { versionStatsQueryOptions } from '../../features/insights/queries'
@@ -71,23 +71,18 @@ function FunnelPage() {
     <SegmentPicker formId={formId} period={period} segment={segment} onChange={setSegment} />
   )
 
-  // Карточки здесь СВОИ: вкладка про прохождение формы, а не про трафик. «Начали
-  // отвечать» и «Завершили» — это верх воронки, поэтому они и приезжают из неё.
-  const cards = (
-    <CompletionCards
-      slug={slug}
-      period={period}
-      segment={segment}
-      started={funnel.data ? funnel.data.visits - funnel.data.leftBeforeFirst : undefined}
-      completed={funnel.data?.submitted}
-      pending={funnel.isPending}
-    />
-  )
+  // Полоса та же, что на «Сводке» и «Визитах» (спека design/analytics-v3.md §3):
+  // её числа — Визиты → Начали → Отправили → Конверсия — это верх той же воронки,
+  // что нарисована ниже, и они обязаны совпадать с ней, а не спорить.
+  const cards = <InsightCards slug={slug} period={period} segment={segment} />
 
   // Воронка закрыта тарифом. Показываем НАСТОЯЩЕЕ число не дошедших — оно уже
   // загружено вместе с формой (визиты собираются для всех планов, гейт стоит на
-  // показе разбивки). Плашка, рекламирующая пустоту, не продаёт ничего. Карточек
-  // над ней нет: они считаются из воронки, которой мы не получили.
+  // показе разбивки). Плашка, рекламирующая пустоту, не продаёт ничего.
+  //
+  // Полоса карточек над плашкой ОСТАЁТСЯ: её четыре числа бесплатны на всех планах
+  // (docs/ANALYTICS.md §9) и больше не считаются из воронки. Гейт закрывает разбор
+  // по шагам, а не экран целиком.
   const planRequired =
     funnel.isError && funnel.error instanceof ApiError && funnel.error.code === 'plan_required'
 
@@ -113,23 +108,26 @@ function FunnelPage() {
   if (planRequired) {
     const notFinished = (form.data?.visitCount ?? 0) - (form.data?.visitSubmittedCount ?? 0)
     return (
-      <EmptyState
-        title={
-          notFinished > 0
-            ? `Не дошли до конца формы: ${notFinished} ${pluralPeople(notFinished)}`
-            : 'Воронка отвала'
-        }
-        description={
-          notFinished > 0
-            ? 'Откройте тариф с аналитикой, чтобы увидеть, на каких именно вопросах они уходят.'
-            : 'Разбивка по вопросам доступна на тарифе с аналитикой. Визиты уже собираются — данные копятся и никуда не денутся.'
-        }
-        action={
-          <Button asChild size="sm">
-            <Link to="/settings/plan">Посмотреть тариф</Link>
-          </Button>
-        }
-      />
+      <div className="flex flex-col gap-12">
+        {cards}
+        <EmptyState
+          title={
+            notFinished > 0
+              ? `Не дошли до конца формы: ${notFinished} ${pluralPeople(notFinished)}`
+              : 'Воронка отвала'
+          }
+          description={
+            notFinished > 0
+              ? 'Откройте тариф с аналитикой, чтобы увидеть, на каких именно вопросах они уходят.'
+              : 'Разбивка по вопросам доступна на тарифе с аналитикой. Визиты уже собираются — данные копятся и никуда не денутся.'
+          }
+          action={
+            <Button asChild size="sm">
+              <Link to="/settings/plan">Посмотреть тариф</Link>
+            </Button>
+          }
+        />
+      </div>
     )
   }
 

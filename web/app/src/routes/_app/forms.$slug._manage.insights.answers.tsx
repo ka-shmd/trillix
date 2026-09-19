@@ -7,7 +7,7 @@ import { type BucketStep } from '../../entities/visitsBreakdown'
 import { BarRows, type BarRow } from '../../features/insights/Breakdown'
 import { AnswerFilterBar } from '../../features/insights/AnswerFilterBar'
 import { SegmentPicker } from '../../features/insights/SegmentPicker'
-import { VisitCards } from '../../features/insights/Cards'
+import { InsightCards } from '../../features/insights/Cards'
 import { CrosstabDialog } from '../../features/insights/CrosstabDialog'
 import { ScaleTrendChart } from '../../features/insights/lazyCharts'
 import { MIN_BASE, percentOf } from '../../features/insights/metrics'
@@ -84,21 +84,10 @@ function SummaryPage() {
   return (
     <div className="flex flex-col gap-12">
       {/* Полоса считает ту же совокупность, что разделы под ней: сегмент режет и её.
-          Число ответов берётся из сводки — она его уже посчитала, и ручка счётчика
-          сегмента всё равно не знает. Скрытая выборка (порог k) даёт прочерк. */}
-      <VisitCards
-        slug={slug}
-        period={period}
-        segment={segment}
-        answers={
-          segment === undefined
-            ? undefined
-            : {
-                value: summary.data && !summary.data.withheld ? summary.data.total : undefined,
-                pending: summary.isPending,
-              }
-        }
-      />
+          Числа ответов на полосе нет — оно в пояснении раздела ниже: полоса говорит
+          о визитах, и submissions рядом с «Отправили» читались бы как расхождение
+          (спека design/analytics-v3.md §3). */}
+      <InsightCards slug={slug} period={period} segment={segment} />
 
       <Section
         title="Ответы по вопросам"

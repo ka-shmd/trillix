@@ -8,7 +8,7 @@ import {
 } from '../../entities/visitsBreakdown'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { BreakdownTabs } from '../../features/insights/Breakdown'
-import { VisitCards } from '../../features/insights/Cards'
+import { InsightCards } from '../../features/insights/Cards'
 import { visitsBreakdownQueryOptions } from '../../features/insights/queries'
 import { ShareChart, VisitsChart } from '../../features/insights/lazyCharts'
 import { pluralViews } from '../../shared/format'
@@ -38,7 +38,7 @@ function VisitsPage() {
 
   return (
     <div className="flex flex-col gap-12">
-      <VisitCards slug={slug} period={period} />
+      <InsightCards slug={slug} period={period} />
 
       {breakdown.isPending ? (
         <LoadingRows rows={2} />

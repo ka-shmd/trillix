@@ -1,18 +1,34 @@
 import { useQuery } from '@tanstack/react-query'
 
 import { formDetailQueryOptions } from '../forms/queries'
-import { submissionsCountQueryOptions } from '../submissions/queries'
 import { visitInsightsQueryOptions } from './queries'
-import { conversionText, countDelta, durationDelta, rateDelta } from './metrics'
-import { formatDuration } from '../../shared/format'
+import { conversionText, countDelta, rateDelta } from './metrics'
 import { previousPeriodLabels, type Period } from '../../shared/period'
 
-// Полоса карточек над вкладками аналитики.
+// Полоса карточек над вкладками аналитики — ОДНА на все три (спека
+// design/analytics-v3.md §3, решение владельца 2026-09-19).
 //
-// Наборов ДВА, и они не пересекаются: «Ответы» и «Визиты» смотрят на трафик
-// (сколько пришло и кто), «Отвалы» — на прохождение формы (сколько начали и
-// дошли). Общая полоса на все три вкладки означала бы, что на «Отвалах» половина
-// чисел не о том, на что человек пришёл смотреть.
+// Прежде полос было две: «трафик» на «Сводке» и «Визитах», «прохождение» на
+// «Отвалах». Довод был в том, что вкладки отвечают на разные вопросы. Цена
+// оказалась выше довода, и обе половины цены видел владелец:
+//
+//   - конверсия не попала НИКУДА. На «Отвалах» стояла «доля завершивших» (от
+//     начавших), в списке форм — конверсия (от визитов), и два разных числа об
+//     одном и том же противоречили друг другу: 35 % против 26 %;
+//   - «Ответы» (submissions) и «Завершили» (визиты с отметкой отправки) — разные
+//     множества (docs/ANALYTICS.md §1) — стояли соседними карточками под похожими
+//     подписями. На демо-форме это читалось как «341 просмотр, 10000 ответов,
+//     конверсия 31 %».
+//
+// Отсюда состав: Визиты → Начали → Отправили → Конверсия. Это ОДНА воронка в
+// четырёх числах, и каждое следующее — подмножество предыдущего. Все четыре
+// приезжают одним запросом счётчиков визитов, поэтому разойтись между собой не
+// могут в принципе.
+//
+// Числа ответов на полосе НЕТ. Оно живёт там, где на него смотрят: в пояснении
+// раздела «Ответы по вопросам» и в таблице ответов. Асимметрия «ответы из
+// submissions, процент по визитам» от этого не исчезает и остаётся верной — она
+// просто перестаёт выноситься на экран двумя соседними карточками.
 //
 // Границы метрик на экран не выносятся (docs/ANALYTICS.md §8.8): владелец читает
 // свои данные, а не отчёт об устройстве счётчика. Отличие «данных нет» от нуля
@@ -28,30 +44,37 @@ import { previousPeriodLabels, type Period } from '../../shared/period'
 // имя величины, а не раздел страницы. Заголовком она попадала в оглавление
 // скринридера вперемешку с настоящими разделами.
 //
-// delta — изменение к прошлому окну той же длины (metrics.ts: countDelta и соседи),
-// compareLabel — с чем сравнили («к прошлым 7 дням»). Нет изменения — нет и строки.
+// ПОДПИСЬ — В ОДНУ СТРОКУ, и это требование к слову, а не к вёрстке. Перенос
+// подписи опускает число ниже соседних, и ряд из четырёх величин перестаёт
+// читаться как ряд: так «Длительность заполнения» роняла своё число на строку
+// вниз. Не влезает — переименовать.
+//
+// delta — изменение к прошлому окну той же длины (metrics.ts: countDelta и
+// соседи). Нет изменения — нет и приписки.
+//
+// Изменение стоит В СТРОКУ с числом, а с чем сравнили — ОДНОЙ подписью под всей
+// полосой. Раньше «к прошлым 7 дням» повторялось в каждой из четырёх карточек:
+// на 12-м кегле оно помещалось, на положенном шкалой 14-м стало переноситься, и
+// полоса из четырёх величин превратилась в четыре двухстрочных абзаца об одном и
+// том же. Повторять базу сравнения четыре раза незачем — она одна.
 export function Card({
   title,
   value,
   pending,
   delta,
-  compareLabel,
 }: {
   title: string
   value: number | string | undefined
   pending: boolean
   delta?: string | null
-  compareLabel?: string
 }) {
   return (
     <div className="rounded-lg bg-muted/50 px-4 py-3">
-      <dt className="text-sm text-muted-foreground">{title}</dt>
-      <dd className="mt-0.5 text-xl font-bold tabular-nums">
-        {pending ? <span className="text-muted-foreground">…</span> : (value ?? '—')}
-        {!pending && delta && compareLabel && (
-          <span className="mt-0.5 block text-xs font-normal text-muted-foreground">
-            {delta} {compareLabel}
-          </span>
+      <dt className="truncate text-sm text-muted-foreground">{title}</dt>
+      <dd className="mt-0.5 flex flex-wrap items-baseline gap-x-2 text-xl font-bold tabular-nums">
+        <span>{pending ? <span className="text-muted-foreground">…</span> : (value ?? '—')}</span>
+        {!pending && delta && (
+          <span className="text-sm font-normal text-muted-foreground">{delta}</span>
         )}
       </dd>
     </div>
@@ -62,29 +85,25 @@ function compareLabelFor(period: Period): string | undefined {
   return period === 'all' ? undefined : previousPeriodLabels[period]
 }
 
-// VisitCards — трафик: вкладки «Ответы» и «Визиты».
+// Подпись под полосой: с чем сравнены приписки у чисел. Рисуется, только когда
+// сравнение есть, — у «всего времени» прошлого окна не бывает.
+function CompareNote({ label }: { label: string }) {
+  return <p className="text-sm text-muted-foreground">Изменение — {label}.</p>
+}
+
+// InsightCards — полоса всех вкладок аналитики.
 //
-// Числа приезжают ДВУМЯ запросами, и это не недосмотр: визиты и ответы —
-// независимые множества из разных модулей (docs/ANALYTICS.md §1), а сведение их в
-// один ответ рано или поздно кончилось бы делением одного на другое.
-//
-// segment — сегмент визита «Сводки»: полоса обязана считать ту же совокупность, что
-// разделы под ней. Без него полоса над сегментированной сводкой говорила бы о всём
-// трафике формы, стоя в тридцати пикселях от чисел по сегменту.
-//
-// answers — число ответов, когда сегмент выбран: ручка счётчика ответов сегмента не
-// знает, а «Сводка» это число уже получила со сводкой и второй скан ради одной
-// карточки не нужен. undefined — «неизвестно» (выборка ниже порога k), прочерк.
-export function VisitCards({
+// segment режет полосу так же, как разделы под ней: полоса над сегментированным
+// экраном обязана считать ту же совокупность, иначе она говорит о всём трафике
+// формы, стоя в тридцати пикселях от чисел по сегменту.
+export function InsightCards({
   slug,
   period,
   segment,
-  answers,
 }: {
   slug: string
   period: Period
   segment?: string
-  answers?: { value: number | undefined; pending: boolean }
 }) {
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
@@ -92,143 +111,55 @@ export function VisitCards({
     ...visitInsightsQueryOptions(formId ?? '', period, segment),
     enabled: formId !== undefined,
   })
-  const count = useQuery({
-    ...submissionsCountQueryOptions(formId ?? '', period),
-    enabled: formId !== undefined && answers === undefined,
-  })
-  const measured = visits.data !== undefined && visits.data.timedVisits > 0
   const v = visits.data
   const prev = v?.previous
   const label = compareLabelFor(period)
 
-  return (
-    <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Card
-        title="Визиты"
-        value={v?.visits}
-        pending={visits.isPending}
-        delta={v && countDelta(v.visits, prev?.visits)}
-        compareLabel={label}
-      />
-      <Card
-        title="Ответы"
-        value={answers ? answers.value : count.data?.submissions}
-        pending={answers ? answers.pending : count.isPending}
-        // Сравнения с прошлым окном у числа из сводки нет: сводка считает одно окно.
-        delta={answers ? undefined : count.data && countDelta(count.data.submissions, count.data.previous)}
-        compareLabel={label}
-      />
-      <Card
-        title="Уникальные"
-        value={v?.uniqueVisitors}
-        pending={visits.isPending}
-        delta={v && countDelta(v.uniqueVisitors, prev?.uniqueVisitors)}
-        compareLabel={label}
-      />
-      <Card
-        title="Длительность визита"
-        value={measured ? formatDuration(visits.data.medianDurationSec) : undefined}
-        pending={visits.isPending}
-        delta={
-          v &&
-          durationDelta(
-            { sec: v.medianDurationSec, samples: v.timedVisits },
-            prev && { sec: prev.medianDurationSec, samples: prev.timedVisits },
-          )
-        }
-        compareLabel={label}
-      />
-    </dl>
-  )
-}
-
-// CompletionCards — прохождение формы: вкладка «Отвалы».
-//
-// «Начали отвечать» и «Завершили» приходят из воронки (это её же верх), а
-// длительность завершения — из счётчиков визитов: там она считается тем же сканом,
-// что и остальные, и отдельный запрос был бы походом за числом из той же выборки.
-//
-// segment — сегмент «Отвалов»: длительность считается по тем же визитам, что воронка.
-export function CompletionCards({
-  slug,
-  period,
-  segment,
-  started,
-  completed,
-  pending,
-}: {
-  slug: string
-  period: Period
-  segment?: string
-  started: number | undefined
-  completed: number | undefined
-  pending: boolean
-}) {
-  const form = useQuery(formDetailQueryOptions(slug))
-  const formId = form.data?.id
-  const visits = useQuery({
-    ...visitInsightsQueryOptions(formId ?? '', period, segment),
-    enabled: formId !== undefined,
-  })
-  const measured = visits.data !== undefined && visits.data.timedCompletions > 0
-
-  // Доля считается от НАЧАВШИХ, а не от всех визитов: «дошли до конца» отвечает на
-  // вопрос про форму, а не про трафик. Нулевой знаменатель даёт прочерк, а не 0 %:
-  // «никто не начинал» и «никто не дошёл» — разные новости. Ниже порога малых выборок
-  // — «N из M», а не процент.
-  const rate =
-    started !== undefined && completed !== undefined && started > 0
-      ? conversionText(completed, started)
-      : undefined
-
-  // Прошлое окно — из счётчиков визитов: воронку за прошлое окно ради четырёх чисел
-  // никто не считает, а «начали» и «отправили» там те же.
-  const prev = visits.data?.previous
-  const label = compareLabelFor(period)
+  // Конверсия = отправившие / визиты — ОДНО определение на весь продукт, то же
+  // число, что в списке форм (решение владельца 2026-09-19). Ниже порога малых
+  // выборок это «N из M», а не процент: «100 %» по двум визитам владелец прочтёт
+  // закономерностью. Нулевой знаменатель даёт прочерк, а не «0 %»: «никто не
+  // приходил» и «никто не отправил» — разные новости.
+  const rate = v && v.visits > 0 ? conversionText(v.submitted, v.visits) : undefined
 
   return (
-    <dl className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
-      <Card
-        title="Начали отвечать"
-        value={started}
-        pending={pending}
-        delta={started === undefined ? null : countDelta(started, prev?.started)}
-        compareLabel={label}
-      />
-      <Card
-        title="Завершили"
-        value={completed}
-        pending={pending}
-        delta={completed === undefined ? null : countDelta(completed, prev?.submitted)}
-        compareLabel={label}
-      />
-      <Card
-        title="Доля завершивших"
-        value={rate}
-        pending={pending}
-        delta={
-          started === undefined || completed === undefined
-            ? null
-            : rateDelta(
-                { part: completed, base: started },
-                prev && { part: prev.submitted, base: prev.started },
-              )
-        }
-        compareLabel={label}
-      />
-      <Card
-        title="Длительность заполнения"
-        value={measured ? formatDuration(visits.data.completionDurationSec) : undefined}
-        pending={visits.isPending}
-        delta={
-          visits.data &&
-          durationDelta(
-            { sec: visits.data.completionDurationSec, samples: visits.data.timedCompletions },
-            prev && { sec: prev.completionDurationSec, samples: prev.timedCompletions },
-          )
-        }
-        compareLabel={label}
-      />
-    </dl>
+    <div className="flex flex-col gap-2">
+      <dl className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+        <Card
+          title="Визиты"
+          value={v?.visits}
+          pending={visits.isPending}
+          delta={v && countDelta(v.visits, prev?.visits)}
+        />
+        {/* «Начали» — тронули хотя бы один вопрос. Между «Визитами» и «Отправили»
+            она стоит не для симметрии: без неё уход со страницы формы, которую даже
+            не начали заполнять, неотличим от ухода с середины. */}
+        <Card
+          title="Начали"
+          value={v?.started}
+          pending={visits.isPending}
+          delta={v && countDelta(v.started, prev?.started)}
+        />
+        <Card
+          title="Отправили"
+          value={v?.submitted}
+          pending={visits.isPending}
+          delta={v && countDelta(v.submitted, prev?.submitted)}
+        />
+        <Card
+          title="Конверсия"
+          value={rate}
+          pending={visits.isPending}
+          delta={
+            v &&
+            rateDelta(
+              { part: v.submitted, base: v.visits },
+              prev && { part: prev.submitted, base: prev.visits },
+            )
+          }
+        />
+      </dl>
+      {label && v && <CompareNote label={label} />}
+    </div>
   )
 }
