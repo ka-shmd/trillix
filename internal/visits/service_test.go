@@ -59,6 +59,9 @@ type upsertCall struct {
 
 type fakeStore struct {
 	upserts     []upsertCall
+	pages       []string // block_id вставленных строк пути
+	paths       []domain.PathCount
+	spans       []domain.PageSpan
 	marked      []uuid.UUID
 	byLastBlock []domain.LastBlockCount
 	insights    domain.VisitInsights
@@ -88,6 +91,19 @@ func (fakeGeo) Lookup(ip string) geo.Place {
 		return geo.Place{CountryCode: "RU", Country: "Россия", City: "Москва"}
 	}
 	return geo.Place{}
+}
+
+func (s *fakeStore) InsertPage(_ context.Context, _ postgres.DBTX, _, _ uuid.UUID, blockID string) error {
+	s.pages = append(s.pages, blockID)
+	return nil
+}
+
+func (s *fakeStore) CountPaths(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ domain.Period) ([]domain.PathCount, error) {
+	return s.paths, nil
+}
+
+func (s *fakeStore) PageSpans(_ context.Context, _ postgres.DBTX, _ uuid.UUID, _ domain.Period) ([]domain.PageSpan, error) {
+	return s.spans, nil
 }
 
 func (s *fakeStore) MarkSubmitted(_ context.Context, _ postgres.DBTX, id, _ uuid.UUID) (int64, error) {
@@ -165,6 +181,38 @@ func TestRecord_WritesVisitOfPublishedVersion(t *testing.T) {
 	got := store.upserts[0]
 	if got.formID != form.FormID || got.versionID != form.VersionID {
 		t.Errorf("визит привязан к form=%v version=%v, ждали %v/%v", got.formID, got.versionID, form.FormID, form.VersionID)
+	}
+}
+
+// Бикон перехода (page) пишет строку пути после апсерта; обычный бикон — нет, как и
+// переход без блока (флаг от клиента, блока нет — писать нечего).
+func TestRecord_PageBeaconWritesPath(t *testing.T) {
+	store := &fakeStore{}
+	svc := newSvc(openForm(), store)
+
+	v := validVisit()
+	if err := svc.Record(context.Background(), "abc", v); err != nil {
+		t.Fatalf("Record: %v", err)
+	}
+	page := validVisit()
+	page.Page = true
+	block := "q_page2"
+	page.LastBlockID = &block
+	if err := svc.Record(context.Background(), "abc", page); err != nil {
+		t.Fatalf("Record page: %v", err)
+	}
+	empty := validVisit()
+	empty.Page = true
+	empty.LastBlockID = nil
+	if err := svc.Record(context.Background(), "abc", empty); err != nil {
+		t.Fatalf("Record page without block: %v", err)
+	}
+
+	if len(store.upserts) != 3 {
+		t.Fatalf("апсертов = %d, ждали 3: путь не отменяет запись визита", len(store.upserts))
+	}
+	if len(store.pages) != 1 || store.pages[0] != block {
+		t.Errorf("строки пути = %v, ждали [%s]", store.pages, block)
 	}
 }
 

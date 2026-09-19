@@ -623,6 +623,67 @@ func (q *Queries) CountUnreadNotifications(ctx context.Context, userID uuid.UUID
 	return count, err
 }
 
+const countVisitPaths = `-- name: CountVisitPaths :many
+SELECT v.last_block_id, v.submitted, p.blocks::text[] AS blocks, count(*)::bigint AS visits
+FROM (
+    SELECT fp.visit_id, array_agg(fp.block_id ORDER BY fp.block_id) AS blocks
+    FROM form_visit_pages fp
+    WHERE fp.form_id = $1
+      AND fp.visit_created_at >= $2::timestamptz
+      AND fp.visit_created_at <  $3::timestamptz
+    GROUP BY fp.visit_id
+) p
+JOIN form_visits v ON v.id = p.visit_id
+GROUP BY v.last_block_id, v.submitted, p.blocks
+`
+
+type CountVisitPathsParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type CountVisitPathsRow struct {
+	LastBlockID pgtype.Text
+	Submitted   bool
+	Blocks      []string
+	Visits      int64
+}
+
+// Визиты С ПУТЁМ, сгруппированные по дальней точке, исходу и набору открытых
+// страниц (спека design/analytics-v2.md §4.4). Набор — отсортированный массив
+// block_id; различных наборов у формы столько, сколько в ней веток, поэтому
+// результат размером в «вопросы × исход × ветки», а не в число визитов.
+//
+// Визиты без пути (одностраничная форма, дальше первой страницы не ушли, собраны
+// до 0074) сюда не попадают: Go получает их вычитанием из CountVisitsByLastBlock.
+// Путь группируется по своему индексу; в form_visits идём только за визитами,
+// у которых путь есть.
+func (q *Queries) CountVisitPaths(ctx context.Context, arg CountVisitPathsParams) ([]CountVisitPathsRow, error) {
+	rows, err := q.db.Query(ctx, countVisitPaths, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []CountVisitPathsRow
+	for rows.Next() {
+		var i CountVisitPathsRow
+		if err := rows.Scan(
+			&i.LastBlockID,
+			&i.Submitted,
+			&i.Blocks,
+			&i.Visits,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countVisitsByLastBlock = `-- name: CountVisitsByLastBlock :many
 SELECT last_block_id, submitted, count(*) AS visits
 FROM form_visits
@@ -4819,6 +4880,42 @@ func (q *Queries) InsertSubmissionFile(ctx context.Context, arg InsertSubmission
 		arg.OriginalName,
 		arg.SizeBytes,
 		arg.ContentType,
+	)
+	return err
+}
+
+const insertVisitPage = `-- name: InsertVisitPage :exec
+INSERT INTO form_visit_pages (visit_id, block_id, form_id, visit_created_at)
+SELECT v.id, $1::text, v.form_id, v.created_at
+FROM form_visits v
+WHERE v.id = $2
+  AND v.form_id = $3
+  AND (SELECT count(*) FROM form_visit_pages p WHERE p.visit_id = v.id) < $4::int
+ON CONFLICT (visit_id, block_id) DO NOTHING
+`
+
+type InsertVisitPageParams struct {
+	BlockID  string
+	VisitID  uuid.UUID
+	FormID   uuid.UUID
+	MaxPages int32
+}
+
+// Строка пути визита: бикон перехода открыл страницу (миграция 0074). Только
+// вставка — запоминается ПЕРВОЕ открытие страницы; время ставит сервер.
+//
+// Вставка идёт ВЫБОРКОЙ из form_visits по id и form_id, а не значениями: id визита
+// выбирает клиент, и путь визита чужой формы иначе дописывался бы ручкой своей.
+// Нет строки визита (апсерт не прошёл) — нет и строки пути.
+//
+// Потолок строк на визит: ручка публична на запись, и неизвестные block_id на
+// чтении отбрасываются, но копиться бесконечно им нельзя.
+func (q *Queries) InsertVisitPage(ctx context.Context, arg InsertVisitPageParams) error {
+	_, err := q.db.Exec(ctx, insertVisitPage,
+		arg.BlockID,
+		arg.VisitID,
+		arg.FormID,
+		arg.MaxPages,
 	)
 	return err
 }
@@ -9633,6 +9730,106 @@ func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (V
 		&i.CompletionDurationSec,
 	)
 	return i, err
+}
+
+const visitPageDurations = `-- name: VisitPageDurations :many
+WITH path AS (
+    SELECT p.visit_id, p.block_id, p.reached_at,
+           lead(p.reached_at) OVER w AS next_at,
+           row_number() OVER w       AS n
+    FROM form_visit_pages p
+    WHERE p.form_id = $1
+      AND p.visit_created_at >= $2::timestamptz
+      AND p.visit_created_at <  $3::timestamptz
+    WINDOW w AS (PARTITION BY p.visit_id ORDER BY p.reached_at, p.block_id)
+),
+spans AS (
+    SELECT path.block_id AS page_block, ''::text AS last_block, false AS left_here,
+           path.next_at - path.reached_at AS span
+    FROM path
+    WHERE path.next_at IS NOT NULL
+    UNION ALL
+    SELECT '', '', false, path.reached_at - v.created_at
+    FROM path JOIN form_visits v ON v.id = path.visit_id
+    WHERE path.n = 1
+    UNION ALL
+    SELECT path.block_id, '', true, v.updated_at - path.reached_at
+    FROM path JOIN form_visits v ON v.id = path.visit_id
+    WHERE path.next_at IS NULL AND NOT v.submitted
+    UNION ALL
+    SELECT '', v.last_block_id, true, v.updated_at - v.created_at
+    FROM form_visits v
+    WHERE v.form_id = $1
+      AND v.created_at >= $2::timestamptz
+      AND v.created_at <  $3::timestamptz
+      AND NOT v.submitted
+      AND v.last_block_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM form_visit_pages x WHERE x.visit_id = v.id)
+)
+SELECT page_block::text AS page_block,
+       last_block::text AS last_block,
+       left_here::boolean AS left_here,
+       least(round(extract(epoch FROM span)), 3600)::int AS sec,
+       count(*)::bigint AS visits
+FROM spans
+WHERE span > interval '0'
+GROUP BY 1, 2, 3, 4
+`
+
+type VisitPageDurationsParams struct {
+	FormID uuid.UUID
+	FromTs pgtype.Timestamptz
+	ToTs   pgtype.Timestamptz
+}
+
+type VisitPageDurationsRow struct {
+	PageBlock string
+	LastBlock string
+	LeftHere  bool
+	Sec       int32
+	Visits    int64
+}
+
+// Сколько проводят на страницах: гистограмма по целым секундам, медиану по ней
+// считает Go, потому что страницу из block_id выводит только он (у страницы в
+// разных версиях может быть разный первый вопрос — медианы по block_id не
+// складываются, гистограммы складываются).
+//
+// page_block — первый вопрос страницы из пути; пустой — первая страница документа
+// (её открытие — created_at визита, строки пути у неё нет).
+// left_here — «ушли с этой страницы»: от её открытия до последнего бикона визита,
+// только у неотправивших. Последняя страница отправившего не входит никуда — её
+// конец не наблюдается (бикон ухода приходит уже со страницы «Спасибо»).
+// last_block — только у ушедших с первой страницы без пути: визит без пути мог быть
+// собран до 0074 на дальней странице, и отличить его Go может лишь по дальней точке.
+//
+// Нулевые и отрицательные отрезки отброшены: это «доехал один бикон», а не
+// «ноль секунд» — то же правило, что у медианы длительности визита. Верх — час:
+// забытая вкладка медиану не двигает, а гистограмма остаётся короткой.
+func (q *Queries) VisitPageDurations(ctx context.Context, arg VisitPageDurationsParams) ([]VisitPageDurationsRow, error) {
+	rows, err := q.db.Query(ctx, visitPageDurations, arg.FormID, arg.FromTs, arg.ToTs)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []VisitPageDurationsRow
+	for rows.Next() {
+		var i VisitPageDurationsRow
+		if err := rows.Scan(
+			&i.PageBlock,
+			&i.LastBlock,
+			&i.LeftHere,
+			&i.Sec,
+			&i.Visits,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
 }
 
 const visitSources = `-- name: VisitSources :many

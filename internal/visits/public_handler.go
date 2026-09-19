@@ -67,6 +67,9 @@ type visitRequest struct {
 	LastBlockID *string           `json:"last_block_id"`
 	Seq         int16             `json:"seq"`
 	UTM         map[string]string `json:"utm"`
+	// Page — бикон перехода на страницу (фаза 30): last_block_id — первый вопрос
+	// открытой страницы, и она ложится в путь визита. Необязателен.
+	Page bool `json:"page"`
 }
 
 func (h *PublicHandler) record(w http.ResponseWriter, r *http.Request) {
@@ -107,6 +110,7 @@ func (h *PublicHandler) record(w http.ResponseWriter, r *http.Request) {
 		Version:     req.Version,
 		LastBlockID: req.LastBlockID,
 		Seq:         req.Seq,
+		Page:        req.Page,
 		UserAgent:   r.UserAgent(),
 		Referer:     r.Referer(),
 		UTM:         req.UTM,

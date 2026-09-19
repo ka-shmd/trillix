@@ -188,7 +188,7 @@ func TestBuildFunnel_Pages(t *testing.T) {
 		{BlockID: "q3", Visits: 3},
 		{BlockID: "q3", Submitted: true, Visits: 20},
 	}
-	f := BuildFunnel(QuestionOrder(versions), PageOrder(versions), counts)
+	f := BuildFunnel(QuestionOrder(versions), PageOrder(versions), FunnelData{Counts: counts})
 
 	var order []string
 	for _, s := range f.Steps {
@@ -207,7 +207,7 @@ func TestBuildFunnel_Pages(t *testing.T) {
 }
 
 func TestBuildFunnel_SinglePageHasNoPages(t *testing.T) {
-	f := BuildFunnel(threeQuestions(), nil, []LastBlockCount{{BlockID: "b1", Visits: 3}})
+	f := BuildFunnel(threeQuestions(), nil, FunnelData{Counts: []LastBlockCount{{BlockID: "b1", Visits: 3}}})
 	if f.Pages != nil {
 		t.Fatalf("у одностраничной формы страницы: %+v", f.Pages)
 	}
@@ -215,5 +215,118 @@ func TestBuildFunnel_SinglePageHasNoPages(t *testing.T) {
 		if s.Page != "" {
 			t.Fatalf("у шага одностраничной формы страница %q", s.Page)
 		}
+	}
+}
+
+func threePages() []VersionedSchema {
+	return []VersionedSchema{vs(1,
+		Block{ID: "q1", Type: BlockShortText},
+		pb("pb1", "Ветка"),
+		Block{ID: "q2", Type: BlockShortText},
+		pb("pb2", "Контакты"),
+		Block{ID: "q3", Type: BlockShortText},
+	)}
+}
+
+// Прыгнувший логикой с первой страницы на третью вторую не проходил: она считает
+// только открывавших её. Визиты без пути — по порядку документа.
+func TestBuildFunnel_PathSkipsPages(t *testing.T) {
+	versions := threePages()
+	d := FunnelData{
+		Counts: []LastBlockCount{
+			{BlockID: "q1", Visits: 5},                   // ушли с первой (без пути)
+			{BlockID: "q3", Visits: 4},                   // двое прыгнули, двое прошли всё
+			{BlockID: "q3", Submitted: true, Visits: 10}, // шестеро прыгнули, четверо прошли всё
+			{BlockID: "q2", Visits: 3},                   // собраны до пути: без строк пути
+		},
+		Paths: []PathCount{
+			{LastBlockID: "q3", Blocks: []string{"q3"}, Visits: 2},
+			{LastBlockID: "q3", Blocks: []string{"q2", "q3"}, Visits: 2},
+			{LastBlockID: "q3", Submitted: true, Blocks: []string{"q3"}, Visits: 6},
+			{LastBlockID: "q3", Submitted: true, Blocks: []string{"q2", "q3"}, Visits: 4},
+		},
+	}
+	f := BuildFunnel(QuestionOrder(versions), PageOrder(versions), d)
+
+	want := []struct{ reached, dropped int }{
+		{22, 5}, // первую видели все начавшие
+		{9, 3},  // вторую: двое и четверо с путём + трое без пути
+		{14, 4}, // третью: все, кто на ней закончил
+	}
+	for i, w := range want {
+		if f.Pages[i].Reached != w.reached || f.Pages[i].DroppedHere != w.dropped {
+			t.Errorf("страница %d: reached=%d dropped=%d, ждали %d/%d",
+				i, f.Pages[i].Reached, f.Pages[i].DroppedHere, w.reached, w.dropped)
+		}
+	}
+	// Вопросы идут тем же правилом: q2 — на перепрыгнутой странице.
+	if got := []int{f.Steps[0].Reached, f.Steps[1].Reached, f.Steps[2].Reached}; !reflect.DeepEqual(got, []int{22, 9, 14}) {
+		t.Errorf("reached вопросов = %v, ждали [22 9 14]", got)
+	}
+	if f.Visits != 22 || f.Submitted != 10 {
+		t.Errorf("верх воронки %d/%d, ждали 22/10", f.Visits, f.Submitted)
+	}
+}
+
+// Путь с неизвестным блоком (ручка публична на запись) страниц не добавляет.
+func TestBuildFunnel_PathIgnoresUnknownBlocks(t *testing.T) {
+	versions := threePages()
+	d := FunnelData{
+		Counts: []LastBlockCount{{BlockID: "q3", Visits: 1}},
+		Paths:  []PathCount{{LastBlockID: "q3", Blocks: []string{"forged", "q3"}, Visits: 1}},
+	}
+	f := BuildFunnel(QuestionOrder(versions), PageOrder(versions), d)
+	if f.Pages[1].Reached != 0 {
+		t.Errorf("вторая страница: reached=%d, ждали 0", f.Pages[1].Reached)
+	}
+}
+
+func TestBuildFunnel_PageTimes(t *testing.T) {
+	versions := threePages()
+	d := FunnelData{
+		Counts: []LastBlockCount{{BlockID: "q1", Visits: 1}},
+		Spans: []PageSpan{
+			// первая страница: 10, 20, 30, 40 с у прошедших → нижняя медиана 20
+			{PageBlock: "", Sec: 10, Visits: 1},
+			{PageBlock: "", Sec: 20, Visits: 1},
+			{PageBlock: "", Sec: 30, Visits: 1},
+			{PageBlock: "", Sec: 40, Visits: 1},
+			// вторая: трое по 60 с
+			{PageBlock: "q2", Sec: 60, Visits: 3},
+			// ушли с третьей
+			{PageBlock: "q3", Left: true, Sec: 90, Visits: 2},
+			// ушли с первой без пути: дальняя точка на первой — верим
+			{PageBlock: "", LastBlock: "q1", Left: true, Sec: 7, Visits: 1},
+			// без пути, но дальняя точка на третьей — визит до пути, не первая страница
+			{PageBlock: "", LastBlock: "q3", Left: true, Sec: 500, Visits: 5},
+			// неизвестный блок
+			{PageBlock: "forged", Sec: 1, Visits: 9},
+		},
+	}
+	f := BuildFunnel(QuestionOrder(versions), PageOrder(versions), d)
+	got := [][4]int{}
+	for _, p := range f.Pages {
+		got = append(got, [4]int{p.TimeSec, p.TimeSamples, p.LeftTimeSec, p.LeftSamples})
+	}
+	want := [][4]int{{20, 4, 7, 1}, {60, 3, 0, 0}, {0, 0, 90, 2}}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("время на страницах %v, ждали %v", got, want)
+	}
+}
+
+// Первая страница документа без вопросов (вступление) — не шаг, её время никуда не
+// ложится.
+func TestBuildFunnel_PageTimesSkipIntro(t *testing.T) {
+	versions := []VersionedSchema{vs(1,
+		Block{ID: "t1", Type: BlockText},
+		pb("pb1", ""),
+		Block{ID: "q1", Type: BlockShortText},
+		pb("pb2", ""),
+		Block{ID: "q2", Type: BlockShortText},
+	)}
+	d := FunnelData{Spans: []PageSpan{{PageBlock: "", Sec: 5, Visits: 3}, {PageBlock: "q1", Sec: 8, Visits: 1}}}
+	f := BuildFunnel(QuestionOrder(versions), PageOrder(versions), d)
+	if f.Pages[0].TimeSamples != 1 || f.Pages[0].TimeSec != 8 {
+		t.Errorf("первая страница-шаг: %+v", f.Pages[0])
 	}
 }

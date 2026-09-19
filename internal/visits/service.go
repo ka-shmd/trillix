@@ -68,7 +68,10 @@ type Geo interface {
 type Store interface {
 	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place, visitorKey []byte) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
+	InsertPage(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID, blockID string) error
 	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error)
+	CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PathCount, error)
+	PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PageSpan, error)
 	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
 	Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error)
 	Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
@@ -88,9 +91,12 @@ type Visit struct {
 	Version     int32
 	LastBlockID *string
 	Seq         int16
-	UserAgent   string
-	Referer     string
-	UTM         map[string]string
+	// Page — бикон перехода: LastBlockID — первый вопрос открытой страницы, и она
+	// ложится в путь визита. Старые бандлы рендерера флага не шлют — визит без пути.
+	Page      bool
+	UserAgent string
+	Referer   string
+	UTM       map[string]string
 	// IP нужен РОВНО для одного: определить страну и город по локальному
 	// справочнику. Дальше сервиса он не уходит — ни в БД, ни в лог, ни в хеше
 	// (ADR §10). Поле не сериализуется и в теле бикона его нет: адрес берётся из
@@ -180,7 +186,16 @@ func (s *Service) Record(ctx context.Context, slug string, v Visit) error {
 		}
 		key = visitorKey(s.visitorSecret, pf.FormID, v.IP, v.UserAgent, s.now())
 	}
-	return s.repo.UpsertVisit(ctx, s.db, v.ID, pf.FormID, pf.VersionID, v.LastBlockID, v.Seq, metaJSON, place, key)
+	if err := s.repo.UpsertVisit(ctx, s.db, v.ID, pf.FormID, pf.VersionID, v.LastBlockID, v.Seq, metaJSON, place, key); err != nil {
+		return err
+	}
+	// Строка пути — после апсерта: вставка берёт визит выборкой по id и форме, и без
+	// строки визита её не будет. Существование блока, как и у last_block_id, не
+	// проверяется — неизвестный блок воронка на чтении отбрасывает.
+	if v.Page && v.LastBlockID != nil {
+		return s.repo.InsertPage(ctx, s.db, v.ID, pf.FormID, *v.LastBlockID)
+	}
+	return nil
 }
 
 func (s *Service) buildMeta(v Visit) map[string]string {
@@ -249,13 +264,23 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period d
 		schemas = append(schemas, domain.VersionedSchema{Version: int(v.Number), Schema: schema})
 	}
 
-	// Один счётный запрос на всю воронку: верх (визиты и конверсия) выводится из той
-	// же разбивки, что и шаги, — см. BuildFunnel.
-	counts, err := s.repo.CountByLastBlock(ctx, s.db, formID, period)
-	if err != nil {
+	// Верх воронки (визиты и конверсия) выводится из той же разбивки, что и шаги, —
+	// см. BuildFunnel. Путь и время на страницах читаются только у многостраничной
+	// формы: у одностраничной строк пути нет, и два запроса были бы вхолостую.
+	var data domain.FunnelData
+	if data.Counts, err = s.repo.CountByLastBlock(ctx, s.db, formID, period); err != nil {
 		return domain.Funnel{}, err
 	}
-	return domain.BuildFunnel(domain.QuestionOrder(schemas), domain.PageOrder(schemas), counts), nil
+	pages := domain.PageOrder(schemas)
+	if pages != nil {
+		if data.Paths, err = s.repo.CountPaths(ctx, s.db, formID, period); err != nil {
+			return domain.Funnel{}, err
+		}
+		if data.Spans, err = s.repo.PageSpans(ctx, s.db, formID, period); err != nil {
+			return domain.Funnel{}, err
+		}
+	}
+	return domain.BuildFunnel(domain.QuestionOrder(schemas), pages, data), nil
 }
 
 // Insights — счётчики визитов за период для карточек над вкладками Insights.
