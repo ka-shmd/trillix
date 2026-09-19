@@ -1543,6 +1543,44 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	return sum, nil
 }
 
+// Crosstab — таблица сопряжённости двух закрытых вопросов (спека design/analytics-v2.md
+// §6.3) за окно, с фильтром сводки. Кросс-аналитика: ключ analytics_segments, после
+// авторизации; фильтр проверяется тем же answerMatcher.
+func (s *Service) Crosstab(ctx context.Context, userID, formID uuid.UUID, period domain.Period, rowID, colID string, filter domain.AnswerFilter) (domain.Crosstab, error) {
+	vs, err := s.versionedSchemas(ctx, userID, formID)
+	if err != nil {
+		return domain.Crosstab{}, err
+	}
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return domain.Crosstab{}, err
+	}
+	d, err := s.plans.CheckWorkspace(ctx, form.WorkspaceID, entitlements.AnalyticsSegments)
+	if err != nil {
+		return domain.Crosstab{}, err
+	}
+	if !d.Allowed {
+		return domain.Crosstab{}, domain.ErrPlanRequired
+	}
+	builder, err := domain.NewCrosstabBuilder(vs, rowID, colID)
+	if err != nil {
+		return domain.Crosstab{}, err
+	}
+	match, err := s.answerMatcher(ctx, userID, formID, vs, filter)
+	if err != nil {
+		return domain.Crosstab{}, err
+	}
+	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
+		if match(int(sub.FormVersion), answers) {
+			builder.Add(int(sub.FormVersion), answers)
+		}
+		return nil
+	}); err != nil {
+		return domain.Crosstab{}, err
+	}
+	return builder.Result(), nil
+}
+
 // answerMatcher — проверка ответа фильтром. Фильтр — кросс-аналитика: ключ тарифа
 // analytics_segments, спрошенный после авторизации (её уже сделал versionedSchemas).
 // Условия сверяются с моделью вопросов: инертное условие молча дало бы пустую сводку.

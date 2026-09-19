@@ -98,3 +98,16 @@ export const blockAnswersPageSchema = z.object({
   nextCursor: z.string().nullable(),
 })
 export type BlockAnswersPage = z.infer<typeof blockAnswersPageSchema>
+
+// Таблица сопряжённости двух закрытых вопросов (спека design/analytics-v2.md §6.3).
+// Зеркалит crosstabResponse из internal/submissions/handler.go. total у строки и
+// столбца — ответов с этим значением в таблице; у множественного выбора сумма клеток
+// строки бывает больше её итога.
+const crossAxisSchema = z.object({ key: z.string(), label: z.string(), total: z.number().int() })
+export const crosstabSchema = z.object({
+  rows: z.array(crossAxisSchema),
+  cols: z.array(crossAxisSchema),
+  cells: z.array(z.array(z.number().int())),
+  total: z.number().int(),
+})
+export type Crosstab = z.infer<typeof crosstabSchema>
