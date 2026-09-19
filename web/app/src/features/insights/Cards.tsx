@@ -67,16 +67,34 @@ function compareLabelFor(period: Period): string | undefined {
 // Числа приезжают ДВУМЯ запросами, и это не недосмотр: визиты и ответы —
 // независимые множества из разных модулей (docs/ANALYTICS.md §1), а сведение их в
 // один ответ рано или поздно кончилось бы делением одного на другое.
-export function VisitCards({ slug, period }: { slug: string; period: Period }) {
+//
+// segment — сегмент визита «Сводки»: полоса обязана считать ту же совокупность, что
+// разделы под ней. Без него полоса над сегментированной сводкой говорила бы о всём
+// трафике формы, стоя в тридцати пикселях от чисел по сегменту.
+//
+// answers — число ответов, когда сегмент выбран: ручка счётчика ответов сегмента не
+// знает, а «Сводка» это число уже получила со сводкой и второй скан ради одной
+// карточки не нужен. undefined — «неизвестно» (выборка ниже порога k), прочерк.
+export function VisitCards({
+  slug,
+  period,
+  segment,
+  answers,
+}: {
+  slug: string
+  period: Period
+  segment?: string
+  answers?: { value: number | undefined; pending: boolean }
+}) {
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const visits = useQuery({
-    ...visitInsightsQueryOptions(formId ?? '', period),
+    ...visitInsightsQueryOptions(formId ?? '', period, segment),
     enabled: formId !== undefined,
   })
-  const answers = useQuery({
+  const count = useQuery({
     ...submissionsCountQueryOptions(formId ?? '', period),
-    enabled: formId !== undefined,
+    enabled: formId !== undefined && answers === undefined,
   })
   const measured = visits.data !== undefined && visits.data.timedVisits > 0
   const v = visits.data
@@ -94,9 +112,10 @@ export function VisitCards({ slug, period }: { slug: string; period: Period }) {
       />
       <Card
         title="Ответы"
-        value={answers.data?.submissions}
-        pending={answers.isPending}
-        delta={answers.data && countDelta(answers.data.submissions, answers.data.previous)}
+        value={answers ? answers.value : count.data?.submissions}
+        pending={answers ? answers.pending : count.isPending}
+        // Сравнения с прошлым окном у числа из сводки нет: сводка считает одно окно.
+        delta={answers ? undefined : count.data && countDelta(count.data.submissions, count.data.previous)}
         compareLabel={label}
       />
       <Card

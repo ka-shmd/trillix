@@ -86,3 +86,63 @@ func TestSummary_ScaleTrendOnlyWhenAsked(t *testing.T) {
 		t.Fatalf("ряд без заказа: %+v", tr)
 	}
 }
+
+// Диапазон сменили после сбора ответов: средняя и NPS считаются только по ответам
+// действующей шкалы, распределение — по всем.
+//
+// Без этого отбора все ответы старой пятибалльной уезжали в критики NPS (n <= 6), и
+// форма со сплошными «отлично» показывала NPS 0 при фактическом +100.
+func TestSummary_ScaleRangeChanged(t *testing.T) {
+	versions := []VersionedSchema{
+		vs(1, scaleBlock("q", "", 1, 5)),
+		vs(2, scaleBlock("q", "", 0, 10)),
+	}
+	b := NewSummaryBuilder(versions)
+	for _, v := range []string{"4", "5"} { // старая шкала: «хорошо» и «отлично»
+		b.Add(1, time.Now(), answer("q", v))
+	}
+	for _, v := range []string{"9", "10"} { // действующая шкала
+		b.Add(2, time.Now(), answer("q", v))
+	}
+
+	blk := b.Result().Blocks[0]
+	s := blk.Scale
+	if s == nil {
+		t.Fatal("шкалы нет")
+	}
+	if s.Avg != 9.5 {
+		t.Errorf("средняя = %v, ждали 9.5 (только ответы шкалы 0–10)", s.Avg)
+	}
+	if s.NPS == nil || *s.NPS != 100 {
+		t.Errorf("NPS = %v, ждали 100: ответы шкалы 1–5 в формулу не входят", s.NPS)
+	}
+	// Распределение считает все четыре: деление стоит на своём месте по числу.
+	total := 0
+	for _, bk := range blk.Buckets {
+		total += bk.Count
+	}
+	if total != 4 {
+		t.Errorf("в распределении %d ответов, ждали все 4", total)
+	}
+	if blk.Answered != 4 {
+		t.Errorf("answered = %d, ждали 4: отбор диапазона знаменатель вопроса не трогает", blk.Answered)
+	}
+}
+
+// Действующей шкалы не видел ни один респондент (диапазон сменили после сбора):
+// средней и NPS нет вовсе, а не «средняя 0».
+func TestSummary_ScaleRangeChanged_NoCurrentAnswers(t *testing.T) {
+	b := NewSummaryBuilder([]VersionedSchema{
+		vs(1, scaleBlock("q", "", 1, 5)),
+		vs(2, scaleBlock("q", "", 0, 10)),
+	})
+	b.Add(1, time.Now(), answer("q", "5"))
+
+	blk := b.Result().Blocks[0]
+	if blk.Scale != nil {
+		t.Errorf("шкала = %+v, ждали nil", blk.Scale)
+	}
+	if blk.Answered != 1 {
+		t.Errorf("answered = %d, ждали 1", blk.Answered)
+	}
+}

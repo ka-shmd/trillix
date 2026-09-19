@@ -69,6 +69,10 @@ type NumberStats struct {
 }
 
 // ScaleStats — средняя и NPS шкалы или звёзд (спека design/analytics-v2.md §6.1).
+//
+// Считаются по ответам ДЕЙСТВУЮЩЕГО диапазона: ответы, пришедшие по версии с другой
+// шкалой, сюда не входят (в распределение — входят). Весь блок nil, если таких
+// ответов нет вовсе.
 type ScaleStats struct {
 	// Avg — средняя по ответившим, в делениях шкалы (у звёзд — в звёздах).
 	Avg float64
@@ -144,7 +148,11 @@ type SummaryBuilder struct {
 	// ВИДИМЫМ вопросам, а видимость знает только вычислитель, и ему нужны блоки с их
 	// правилами, а не карта типов.
 	blocksByVer map[int][]Block
-	total       int
+	// scaleByVer — диапазон шкалы в КАЖДОЙ версии: версия → block_id → [min, max].
+	// Нужен средней и NPS: они считаются только по ответам с действующим диапазоном
+	// (см. Add), а диапазон ответа знает только его версия.
+	scaleByVer map[int]map[string][2]int
+	total      int
 	// Ряд шкал по времени (Trend): шаг и границы окна. Пустой шаг — ряда нет.
 	trendStep          BucketStep
 	trendFrom, trendTo time.Time
@@ -166,12 +174,15 @@ type summaryAcc struct {
 	asked    int
 	answered int
 	// Диапазон шкалы из свежайшей версии: деления с нулём ответов обязаны быть в
-	// распределении, иначе бары врут о форме шкалы.
+	// распределении, иначе бары врут о форме шкалы. Он же отбирает ответы для
+	// средней и NPS — см. Add.
 	scaleMin, scaleMax int
 	// Числа: сумма и границы по ответившим.
 	sum, min, max float64
 	numCount      int
 	// Шкалы и звёзды: сумма делений, промоутеры (9–10) и критики (0–6) для NPS, ряд.
+	// Копятся только по ответам действующего диапазона, поэтому scaleN не равен
+	// answered у вопроса, которому меняли шкалу.
 	scaleSum              float64
 	scaleN                int
 	promoters, detractors int
@@ -228,15 +239,22 @@ func NewSummaryBuilder(versions []VersionedSchema) *SummaryBuilder {
 		acc:         make(map[string]*summaryAcc),
 		byVer:       make(map[int]map[string]BlockType, len(versions)),
 		blocksByVer: make(map[int][]Block, len(versions)),
+		scaleByVer:  make(map[int]map[string][2]int, len(versions)),
 	}
 
 	for _, v := range versions {
 		types := make(map[string]BlockType, len(v.Schema.Blocks))
+		scales := make(map[string][2]int)
 		for _, blk := range v.Schema.Blocks {
 			types[blk.ID] = blk.Type
+			if blk.Type.isScaleLike() {
+				min, max := scaleRange(blk)
+				scales[blk.ID] = [2]int{min, max}
+			}
 		}
 		b.byVer[v.Version] = types
 		b.blocksByVer[v.Version] = v.Schema.Blocks
+		b.scaleByVer[v.Version] = scales
 	}
 
 	// Вопросы и их порядок — общая модель по всем версиям (questions.go): сводка,
@@ -316,7 +334,12 @@ func (b *SummaryBuilder) Add(version int, at time.Time, answers map[string]json.
 		// Тип берётся из версии ответа, а не из свежей: смена типа блока владельцем
 		// не должна заставлять разбирать старый ответ по новым правилам.
 		a.add(typ, raw)
-		if typ.isScaleLike() {
+		if typ.isScaleLike() && b.scaleByVer[version][id] == [2]int{a.scaleMin, a.scaleMax} {
+			// Средняя, NPS и ряд — только по ответам с ДЕЙСТВУЮЩИМ диапазоном
+			// (решение владельца). Диапазон меняют вместе со смыслом делений:
+			// «4» по шкале 1–5 это «хорошо», а в формуле NPS, определённой для
+			// 0–10, то же число — критик. Распределение при этом считает ВСЕ
+			// ответы: там деление стоит на своём месте по числу (scaleBuckets).
 			a.addScale(raw, at, b.trendStep)
 		}
 		a.addSample(typ, raw, at)
