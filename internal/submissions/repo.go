@@ -288,17 +288,25 @@ func (Repo) LockFormForSubmit(ctx context.Context, db postgres.DBTX, formID uuid
 // CountInPeriod — сколько ВИДИМЫХ ответов пришло за окно наблюдения (карточка
 // «Ответы» над вкладками Insights). Сверхлимитные не считаются — так же, как их
 // не показывает таблица ответов.
-func (Repo) CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (int64, error) {
+//
+// prev — прошлое окно для сравнения на карточке; nil — сравнения нет, и второе число
+// нулевое. Оба окна — одним сканом.
+func (Repo) CountInPeriod(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period) (current, previous int64, err error) {
 	from, to := postgres.PeriodBounds(period)
-	n, err := postgres.New(db).CountSubmissionsInPeriod(ctx, postgres.CountSubmissionsInPeriodParams{
-		FormID: formID,
-		FromTs: from,
-		ToTs:   to,
+	prevFrom := from
+	if prev != nil {
+		prevFrom = pgtype.Timestamptz{Time: prev.From, Valid: true}
+	}
+	row, err := postgres.New(db).CountSubmissionsInPeriod(ctx, postgres.CountSubmissionsInPeriodParams{
+		FormID:     formID,
+		FromTs:     from,
+		PrevFromTs: prevFrom,
+		ToTs:       to,
 	})
 	if err != nil {
-		return 0, fmt.Errorf("count submissions in period: %w", err)
+		return 0, 0, fmt.Errorf("count submissions in period: %w", err)
 	}
-	return n, nil
+	return row.Current, row.Previous, nil
 }
 
 // Partial — черновик ответа в проекции кабинета: id визита, набранное, докуда

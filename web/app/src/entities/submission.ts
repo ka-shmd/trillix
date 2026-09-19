@@ -99,5 +99,7 @@ export type PartialSubmissionsPage = z.infer<typeof partialSubmissionsPageSchema
 // Зеркалит countResponse из internal/submissions/handler.go.
 export const submissionsCountSchema = z.object({
   submissions: z.number().int(),
+  // За прошлое окно той же длины (фаза 30); нет у «всего времени».
+  previous: z.number().int().optional(),
 })
 export type SubmissionsCount = z.infer<typeof submissionsCountSchema>

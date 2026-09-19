@@ -738,6 +738,40 @@ func TestSegment_EndToEnd(t *testing.T) {
 	}
 }
 
+// Прошлое окно тем же сканом: визит суточной давности не попадает в текущие сутки,
+// но попадает в прошлые; «начали» — тронули вопрос или отправили.
+func TestInsights_PreviousWindowSQL(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedForm(t)
+	formID, userID := formOwner(t, slug)
+	ctx := context.Background()
+
+	fresh := domain.NewID().String()
+	beacon(t, srv, slug, fresh, 0, "")
+	beacon(t, srv, slug, fresh, 1, "b1")
+	for i := 0; i < 2; i++ {
+		old := domain.NewID().String()
+		beacon(t, srv, slug, old, 0, "")
+		if _, err := testPool.Exec(ctx, `UPDATE form_visits SET created_at = now() - interval '30 hours', updated_at = now() - interval '30 hours' WHERE id = $1`, old); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	day := domain.Period{From: time.Now().Add(-24 * time.Hour)}
+	in, err := funnelService().Insights(ctx, userID, formID, day, domain.Segment{})
+	if err != nil {
+		t.Fatalf("Insights: %v", err)
+	}
+	if in.Visits != 1 || in.Started != 1 || in.Previous == nil || in.Previous.Visits != 2 || in.Previous.Started != 0 {
+		t.Errorf("сутки: %+v, прошлые: %+v", in, in.Previous)
+	}
+	all, err := funnelService().Insights(ctx, userID, formID, domain.Period{}, domain.Segment{})
+	if err != nil || all.Visits != 3 || all.Previous != nil {
+		t.Errorf("всё время: %+v, %v", all, err)
+	}
+}
+
 // Воронка чужой формы недоступна — 404, существование формы не раскрывается.
 func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	resetDB(t)

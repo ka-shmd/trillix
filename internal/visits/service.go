@@ -73,7 +73,7 @@ type Store interface {
 	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.LastBlockCount, error)
 	CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PathCount, error)
 	PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PageSpan, error)
-	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (domain.VisitInsights, error)
+	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period, f domain.VisitFilter) (domain.VisitInsights, error)
 	VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error)
 	Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error)
 	Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
@@ -307,7 +307,13 @@ func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period
 	if err != nil {
 		return domain.VisitInsights{}, err
 	}
-	return s.repo.Insights(ctx, s.db, formID, period, filter)
+	// Прошлое окно той же длины — ради сравнения на карточках (спека
+	// design/analytics-v2.md §8); у «всего времени» его нет.
+	var prev *domain.Period
+	if p, ok := domain.PreviousPeriod(period, s.now()); ok {
+		prev = &p
+	}
+	return s.repo.Insights(ctx, s.db, formID, period, prev, filter)
 }
 
 // Versions — разрез по версиям формы за окно: визиты, конверсия и время заполнения

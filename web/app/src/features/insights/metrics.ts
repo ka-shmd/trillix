@@ -110,3 +110,36 @@ export function droppedPhrase(n: number): string {
     ? `${n} остановился здесь и дальше не пошёл`
     : `${n} остановились здесь и дальше не пошли`
 }
+
+// Изменение к прошлому окну (спека design/analytics-v2.md §8). null — строки нет:
+// прошлого окна нет или сравнивать нечестно.
+
+const signed = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `−${Math.abs(n)}` : '±0')
+
+// Счётчик: от порога малых выборок — в процентах, ниже — разницей: «+3» по трём
+// визитам прошлой недели понятнее, чем «+100 %».
+export function countDelta(current: number, previous: number | undefined): string | null {
+  if (previous === undefined) return null
+  if (previous < MIN_BASE) return signed(current - previous)
+  return `${signed(Math.round(((current - previous) / previous) * 100))} %`
+}
+
+// Доля: разница в процентных пунктах, и только когда оба знаменателя над порогом —
+// иначе сравнивались бы две случайности.
+export function rateDelta(
+  current: { part: number; base: number },
+  previous: { part: number; base: number } | undefined,
+): string | null {
+  if (!previous || current.base < MIN_BASE || previous.base < MIN_BASE) return null
+  const diff = Math.round((current.part / current.base) * 100 - (previous.part / previous.base) * 100)
+  return `${signed(diff)} п.п.`
+}
+
+// Медиана длительности: относительное изменение, если обе медианы измерены.
+export function durationDelta(
+  current: { sec: number; samples: number },
+  previous: { sec: number; samples: number } | undefined,
+): string | null {
+  if (!previous || current.samples === 0 || previous.samples === 0 || previous.sec <= 0) return null
+  return `${signed(Math.round(((current.sec - previous.sec) / previous.sec) * 100))} %`
+}

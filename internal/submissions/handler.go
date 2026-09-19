@@ -34,7 +34,7 @@ type listService interface {
 	ExportCSV(ctx context.Context, userID, formID uuid.UUID, emit func(record []string) error) error
 	Summary(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Summary, error)
 	BlockAnswers(ctx context.Context, userID, formID uuid.UUID, blockID string, period domain.Period, after *Cursor, limit int) (AnswerPage, error)
-	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, error)
+	CountInPeriod(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (int, *int, error)
 	GetForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) (Submission, map[string]domain.AnswerFile, error)
 	DeleteForForm(ctx context.Context, userID, formID, submissionID uuid.UUID) error
 	AuthorizePrint(ctx context.Context, userID, formID, submissionID uuid.UUID) (PrintAccess, error)
@@ -590,6 +590,8 @@ func (h *Handler) blockAnswers(w http.ResponseWriter, r *http.Request) {
 // countResponse — карточка «Ответы» над вкладками Insights.
 type countResponse struct {
 	Submissions int `json:"submissions"`
+	// Previous — за прошлое окно той же длины; нет у «всего времени».
+	Previous *int `json:"previous,omitempty"`
 }
 
 // count отдаёт число ответов за период. Отдельная ручка, а не поле в счётчиках
@@ -610,12 +612,12 @@ func (h *Handler) count(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	n, err := h.svc.CountInPeriod(r.Context(), userID, formID, period)
+	n, prev, err := h.svc.CountInPeriod(r.Context(), userID, formID, period)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, countResponse{Submissions: n})
+	httpserver.WriteJSON(w, r, http.StatusOK, countResponse{Submissions: n, Previous: prev})
 }
 
 // export стримит все ответы формы в CSV (браузерное скачивание, cookie авторизует).

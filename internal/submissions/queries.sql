@@ -127,9 +127,15 @@ FROM submissions WHERE form_id = $1;
 -- Свой запрос, а не поле в счётчиках визитов: ответы и визиты — два независимых
 -- множества (ANALYTICS.md §1) и два модуля, и складывать их в одну строку значит
 -- однажды поделить одно на другое.
-SELECT count(*)::bigint FROM submissions
+--
+-- Прошлое окно той же длины (сравнение на карточке, спека design/analytics-v2.md §8)
+-- считается тем же сканом: выборка начинается с prev_from, текущее окно — FILTER.
+-- Без сравнения prev_from = from_ts, и previous равно нулю.
+SELECT count(*) FILTER (WHERE created_at >= sqlc.arg(from_ts)::timestamptz)::bigint AS current,
+       count(*) FILTER (WHERE created_at <  sqlc.arg(from_ts)::timestamptz)::bigint AS previous
+FROM submissions
 WHERE form_id = $1 AND NOT over_quota
-  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at >= sqlc.arg(prev_from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz;
 
 -- name: RevealHiddenSubmissions :execrows

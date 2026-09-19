@@ -42,3 +42,21 @@ func ParsePeriod(from, to string) (Period, error) {
 	}
 	return p, nil
 }
+
+// PreviousPeriod — окно той же длины сразу перед p (спека design/analytics-v2.md §8):
+// с ним карточки сравнивают «эту неделю» с прошлой. У «всего времени» прошлого окна
+// нет — ok = false. Открытая верхняя граница означает «сейчас».
+func PreviousPeriod(p Period, now time.Time) (Period, bool) {
+	if p.From.IsZero() {
+		return Period{}, false
+	}
+	to := p.To
+	if to.IsZero() {
+		to = now
+	}
+	width := to.Sub(p.From)
+	if width <= 0 {
+		return Period{}, false
+	}
+	return Period{From: p.From.Add(-width), To: p.From}, true
+}

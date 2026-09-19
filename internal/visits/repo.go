@@ -185,28 +185,50 @@ func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.
 // Insights — счётчики визитов для карточек над вкладками Insights: сколько пришло,
 // сколько отправило, медианная длительность и её знаменатель (сколько визитов в
 // медиану вошло — экран обязан отличать «данных нет» от «ноль секунд»).
-func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (domain.VisitInsights, error) {
+//
+// prev — прошлое окно (domain.PreviousPeriod); nil — сравнения нет. Оба окна —
+// одним сканом (см. VisitInsights в queries.sql).
+func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period, f domain.VisitFilter) (domain.VisitInsights, error) {
 	from, to := postgres.PeriodBounds(period)
+	prevFrom := from
+	if prev != nil {
+		prevFrom = pgtype.Timestamptz{Time: prev.From, Valid: true}
+	}
 	kind, keys := segParams(f)
 	row, err := postgres.New(db).VisitInsights(ctx, postgres.VisitInsightsParams{
-		FormID:  formID,
-		FromTs:  from,
-		ToTs:    to,
-		SegKind: kind,
-		SegKeys: keys,
+		FormID:     formID,
+		FromTs:     from,
+		PrevFromTs: prevFrom,
+		ToTs:       to,
+		SegKind:    kind,
+		SegKeys:    keys,
 	})
 	if err != nil {
 		return domain.VisitInsights{}, fmt.Errorf("visit insights: %w", err)
 	}
-	return domain.VisitInsights{
+	out := domain.VisitInsights{
 		Visits:                int(row.Visits),
 		Submitted:             int(row.Submitted),
+		Started:               int(row.Started),
 		UniqueVisitors:        int(row.UniqueVisitors),
 		TimedVisits:           int(row.TimedVisits),
 		MedianDurationSec:     row.MedianDurationSec,
 		TimedCompletions:      int(row.TimedCompletions),
 		CompletionDurationSec: row.CompletionDurationSec,
-	}, nil
+	}
+	if prev != nil {
+		out.Previous = &domain.VisitInsights{
+			Visits:                int(row.VisitsPrev),
+			Submitted:             int(row.SubmittedPrev),
+			Started:               int(row.StartedPrev),
+			UniqueVisitors:        int(row.UniqueVisitorsPrev),
+			TimedVisits:           int(row.TimedVisitsPrev),
+			MedianDurationSec:     row.MedianDurationSecPrev,
+			TimedCompletions:      int(row.TimedCompletionsPrev),
+			CompletionDurationSec: row.CompletionDurationSecPrev,
+		}
+	}
+	return out, nil
 }
 
 // Timeseries — ряд визитов по времени. Отдаются только непустые корзины: дыры

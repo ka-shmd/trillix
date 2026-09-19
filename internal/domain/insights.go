@@ -34,6 +34,12 @@ type VisitInsights struct {
 	// длительности визита, в которую входят ушедшие через три секунды.
 	TimedCompletions      int
 	CompletionDurationSec float64
+	// Started — начали отвечать: тронули вопрос или отправили. Верх воронки без
+	// ушедших сразу; нужен прошлому окну карточек «Отвалов».
+	Started int
+	// Previous — то же за прошлое окно той же длины (PreviousPeriod); nil у «всего
+	// времени», где сравнивать не с чем.
+	Previous *VisitInsights
 }
 
 // VersionStat — визиты одной опубликованной версии за окно наблюдения (спека

@@ -2,7 +2,10 @@ import { describe, expect, it } from 'vitest'
 
 import { type FormFunnel } from '../../entities/funnel'
 import {
+  countDelta,
   dropPercent,
+  durationDelta,
+  rateDelta,
   droppedPhrase,
   funnelRows,
   type FunnelRow,
@@ -150,5 +153,27 @@ describe('droppedPhrase', () => {
   // 11 — исключение из правила «оканчивается на 1»: одиннадцать остановились.
   it('одиннадцать во множественном числе', () => {
     expect(droppedPhrase(11)).toBe('11 остановились здесь и дальше не пошли')
+  })
+})
+
+describe('изменение к прошлому окну', () => {
+  it('счётчик: от порога — проценты, ниже — разница, без прошлого окна — ничего', () => {
+    expect(countDelta(120, 100)).toBe('+20 %')
+    expect(countDelta(80, 100)).toBe('−20 %')
+    expect(countDelta(5, 3)).toBe('+2')
+    expect(countDelta(3, 3)).toBe('±0')
+    expect(countDelta(5, undefined)).toBeNull()
+  })
+
+  // Доля — в процентных пунктах, и только когда оба знаменателя над порогом.
+  it('доля: процентные пункты при двух знаменателях от порога', () => {
+    expect(rateDelta({ part: 30, base: 100 }, { part: 20, base: 80 })).toBe('+5 п.п.')
+    expect(rateDelta({ part: 3, base: 10 }, { part: 20, base: 80 })).toBeNull()
+    expect(rateDelta({ part: 30, base: 100 }, undefined)).toBeNull()
+  })
+
+  it('длительность: относительно, если обе медианы измерены', () => {
+    expect(durationDelta({ sec: 90, samples: 5 }, { sec: 60, samples: 3 })).toBe('+50 %')
+    expect(durationDelta({ sec: 90, samples: 5 }, { sec: 0, samples: 0 })).toBeNull()
   })
 })
