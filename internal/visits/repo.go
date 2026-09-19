@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5/pgtype"
@@ -340,6 +341,38 @@ func (Repo) Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, peri
 			CountryCode: r.CountryCode.String,
 			Visits:      int(r.Visits),
 			Submitted:   int(r.Submitted),
+		}
+	}
+	return out, nil
+}
+
+// FormConversion — окна конверсии одной формы для суточной проверки.
+type FormConversion struct {
+	FormID, WorkspaceID uuid.UUID
+	Slug, Name          string
+	Published           bool
+	Window              domain.ConversionWindow
+}
+
+// ConversionWindows — окна конверсии всех форм с визитами с baseFrom; неделя
+// начинается с recentFrom.
+func (Repo) ConversionWindows(ctx context.Context, db postgres.DBTX, baseFrom, recentFrom time.Time) ([]FormConversion, error) {
+	rows, err := postgres.New(db).ConversionWindows(ctx, postgres.ConversionWindowsParams{
+		RecentFrom: pgtype.Timestamptz{Time: recentFrom, Valid: true},
+		BaseFrom:   pgtype.Timestamptz{Time: baseFrom, Valid: true},
+	})
+	if err != nil {
+		return nil, fmt.Errorf("conversion windows: %w", err)
+	}
+	out := make([]FormConversion, len(rows))
+	for i, r := range rows {
+		out[i] = FormConversion{
+			FormID: r.FormID, WorkspaceID: r.WorkspaceID, Slug: r.Slug, Name: r.FormName,
+			Published: r.Status == "published",
+			Window: domain.ConversionWindow{
+				RecentVisits: int(r.RecentVisits), RecentSubmitted: int(r.RecentSubmitted),
+				BaseVisits: int(r.BaseVisits), BaseSubmitted: int(r.BaseSubmitted),
+			},
 		}
 	}
 	return out, nil

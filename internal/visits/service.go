@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"strconv"
 	"time"
 	"unicode/utf8"
@@ -14,6 +15,7 @@ import (
 	"github.com/ka-shmd/trillix/internal/entitlements"
 	"github.com/ka-shmd/trillix/internal/forms"
 	"github.com/ka-shmd/trillix/internal/geo"
+	"github.com/ka-shmd/trillix/internal/notify"
 	"github.com/ka-shmd/trillix/internal/postgres"
 )
 
@@ -75,6 +77,7 @@ type Store interface {
 	PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PageSpan, error)
 	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period, f domain.VisitFilter) (domain.VisitInsights, error)
 	VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error)
+	ConversionWindows(ctx context.Context, db postgres.DBTX, baseFrom, recentFrom time.Time) ([]FormConversion, error)
 	Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error)
 	Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
 	Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
@@ -106,6 +109,13 @@ type Visit struct {
 	IP string
 }
 
+// Notes — уведомления кабинета (реализация — *notify.Service): повод о падении
+// конверсии ставится и гасится суточной проверкой.
+type Notes interface {
+	Notify(ctx context.Context, db postgres.DBTX, ev notify.Event) error
+	Clear(ctx context.Context, db postgres.DBTX, kind notify.Kind, subjectID uuid.UUID) error
+}
+
 // Service — запись визитов и чтение воронки.
 type Service struct {
 	db    postgres.DBTX
@@ -118,6 +128,54 @@ type Service struct {
 	// (deriveVisitorSecret) — своей переменной у аналитики нет намеренно.
 	visitorSecret []byte
 	now           func() time.Time // подменяется в тестах (проверка даты закрытия)
+	notes         Notes            // nil — уведомлений о падении конверсии нет
+}
+
+// WithNotes подключает уведомления (повод о падении конверсии).
+func (s *Service) WithNotes(n Notes) *Service {
+	s.notes = n
+	return s
+}
+
+// CheckConversionDrops — суточная проверка (спека design/analytics-v2.md §9): у
+// опубликованной формы, чья конверсия за неделю упала заметно и не случайно
+// (domain.ConversionWindow.Dropped), ставит повод; у остальных — гасит. Повтор
+// склеивается в непрочитанную строку, поэтому каждодневная постановка при длящейся
+// просадке новых строк не плодит. Возвращает, сколько форм сейчас в просадке.
+//
+// Сбой одной формы не останавливает остальные: он логируется, проверка идёт дальше.
+func (s *Service) CheckConversionDrops(ctx context.Context, log *slog.Logger) (int, error) {
+	if s.notes == nil {
+		return 0, nil
+	}
+	now := s.now()
+	recentFrom := now.AddDate(0, 0, -domain.DropRecentDays)
+	baseFrom := recentFrom.AddDate(0, 0, -domain.DropBaseDays)
+	forms, err := s.repo.ConversionWindows(ctx, s.db, baseFrom, recentFrom)
+	if err != nil {
+		return 0, err
+	}
+	dropped := 0
+	for _, f := range forms {
+		var err error
+		if f.Published && f.Window.Dropped() {
+			dropped++
+			recent, base := f.Window.Rates()
+			err = s.notes.Notify(ctx, s.db, notify.Event{
+				WorkspaceID: f.WorkspaceID,
+				Kind:        notify.KindConversionDrop,
+				FormID:      f.FormID,
+				SubjectID:   f.FormID,
+				Payload:     notify.Payload{FormTitle: f.Name, FormSlug: f.Slug, RecentRate: recent, BaseRate: base},
+			})
+		} else {
+			err = s.notes.Clear(ctx, s.db, notify.KindConversionDrop, f.FormID)
+		}
+		if err != nil {
+			log.Warn("conversion drop check failed", slog.String("form_id", f.FormID.String()), slog.String("error", err.Error()))
+		}
+	}
+	return dropped, nil
 }
 
 // NewService принимает секрет токена формы (тот же, что у публичных ручек): из него

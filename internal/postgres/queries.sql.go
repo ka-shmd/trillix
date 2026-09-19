@@ -460,6 +460,75 @@ func (q *Queries) ConsumePasswordResetToken(ctx context.Context, tokenHash []byt
 	return user_id, err
 }
 
+const conversionWindows = `-- name: ConversionWindows :many
+SELECT v.form_id,
+       f.workspace_id,
+       f.slug,
+       f.status,
+       coalesce(nullif(f.name, ''), f.title, '')::text AS form_name,
+       count(*) FILTER (WHERE v.created_at >= $1::timestamptz)::bigint AS recent_visits,
+       count(*) FILTER (WHERE v.created_at >= $1::timestamptz AND v.submitted)::bigint AS recent_submitted,
+       count(*) FILTER (WHERE v.created_at <  $1::timestamptz)::bigint AS base_visits,
+       count(*) FILTER (WHERE v.created_at <  $1::timestamptz AND v.submitted)::bigint AS base_submitted
+FROM form_visits v
+JOIN forms f ON f.id = v.form_id
+WHERE v.created_at >= $2::timestamptz
+GROUP BY v.form_id, f.workspace_id, f.slug, f.status, f.name, f.title
+`
+
+type ConversionWindowsParams struct {
+	RecentFrom pgtype.Timestamptz
+	BaseFrom   pgtype.Timestamptz
+}
+
+type ConversionWindowsRow struct {
+	FormID          uuid.UUID
+	WorkspaceID     uuid.UUID
+	Slug            string
+	Status          string
+	FormName        string
+	RecentVisits    int64
+	RecentSubmitted int64
+	BaseVisits      int64
+	BaseSubmitted   int64
+}
+
+// Суточная проверка падения конверсии (спека design/analytics-v2.md §9): у каждой
+// формы с визитами за последние 35 суток — визиты и отправившие за неделю и за 28
+// суток до неё. Один групповой запрос на все формы, а не запрос на форму.
+//
+// Статус формы едет наружу: у снятой с публикации повод гаснет, а не
+// проверяется. Название — внутреннее имя, иначе заголовок: так форму зовёт кабинет.
+func (q *Queries) ConversionWindows(ctx context.Context, arg ConversionWindowsParams) ([]ConversionWindowsRow, error) {
+	rows, err := q.db.Query(ctx, conversionWindows, arg.RecentFrom, arg.BaseFrom)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	var items []ConversionWindowsRow
+	for rows.Next() {
+		var i ConversionWindowsRow
+		if err := rows.Scan(
+			&i.FormID,
+			&i.WorkspaceID,
+			&i.Slug,
+			&i.Status,
+			&i.FormName,
+			&i.RecentVisits,
+			&i.RecentSubmitted,
+			&i.BaseVisits,
+			&i.BaseSubmitted,
+		); err != nil {
+			return nil, err
+		}
+		items = append(items, i)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+	return items, nil
+}
+
 const countFutureBookings = `-- name: CountFutureBookings :one
 SELECT count(*)::bigint FROM bookings
 WHERE schedule_id = $1 AND status = 'confirmed' AND starts_at >= $2
