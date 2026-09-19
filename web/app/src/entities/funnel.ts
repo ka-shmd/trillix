@@ -27,6 +27,12 @@ export const funnelPageSchema = z.object({
   reached: z.number().int(),
   // Остановились на её вопросах и форму НЕ отправили.
   droppedHere: z.number().int(),
+  // Медиана времени на странице у пошедших дальше и у ушедших с неё. Знаменатель 0 —
+  // данных нет, а не «ноль секунд».
+  timeSec: z.number().int(),
+  timeSamples: z.number().int(),
+  leftTimeSec: z.number().int(),
+  leftSamples: z.number().int(),
 })
 
 export const formFunnelSchema = z.object({

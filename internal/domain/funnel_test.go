@@ -22,7 +22,7 @@ func TestBuildFunnel_ReachedAndDropped(t *testing.T) {
 		{BlockID: "b3", Visits: 5},                   // бросили на «Комментарии»
 		{BlockID: "b3", Submitted: true, Visits: 10}, // отправили
 	}
-	f := BuildFunnel(threeQuestions(), nil, counts)
+	f := BuildFunnel(threeQuestions(), nil, FunnelData{Counts: counts})
 
 	if f.LeftBeforeFirst != 20 {
 		t.Errorf("LeftBeforeFirst = %d, ждали 20", f.LeftBeforeFirst)
@@ -57,7 +57,7 @@ func TestBuildFunnel_TotalsDerivedFromCounts(t *testing.T) {
 		{BlockID: "b3", Visits: 5},
 		{BlockID: "b3", Submitted: true, Visits: 10},
 	}
-	f := BuildFunnel(threeQuestions(), nil, counts)
+	f := BuildFunnel(threeQuestions(), nil, FunnelData{Counts: counts})
 
 	if f.Visits != 100 {
 		t.Errorf("Visits = %d, ждали 100 (сумма всех групп)", f.Visits)
@@ -72,7 +72,7 @@ func TestBuildFunnel_TotalsDerivedFromCounts(t *testing.T) {
 // именно тот, который люди успешно проходят.
 func TestBuildFunnel_SubmittedIsNotADrop(t *testing.T) {
 	counts := []LastBlockCount{{BlockID: "b3", Submitted: true, Visits: 40}}
-	f := BuildFunnel(threeQuestions(), nil, counts)
+	f := BuildFunnel(threeQuestions(), nil, FunnelData{Counts: counts})
 
 	if f.Steps[2].DroppedHere != 0 {
 		t.Fatalf("DroppedHere последнего вопроса = %d, ждали 0: все 40 отправили форму, "+
@@ -91,7 +91,7 @@ func TestBuildFunnel_SubmittedWithoutTouchingIsNotLeft(t *testing.T) {
 		{BlockID: "", Submitted: true, Visits: 7},
 		{BlockID: "", Visits: 3},
 	}
-	f := BuildFunnel(threeQuestions(), nil, counts)
+	f := BuildFunnel(threeQuestions(), nil, FunnelData{Counts: counts})
 
 	if f.LeftBeforeFirst != 3 {
 		t.Fatalf("LeftBeforeFirst = %d, ждали 3: отправившие без касаний не ушли", f.LeftBeforeFirst)
@@ -105,7 +105,7 @@ func TestBuildFunnel_UnknownBlockIsNotAttributed(t *testing.T) {
 		{BlockID: "b1", Visits: 5},
 		{BlockID: "подделка", Visits: 999},
 	}
-	f := BuildFunnel(threeQuestions(), nil, counts)
+	f := BuildFunnel(threeQuestions(), nil, FunnelData{Counts: counts})
 
 	if f.Steps[0].Reached != 5 || f.Steps[0].DroppedHere != 5 {
 		t.Fatalf("шаг b1: reached=%d dropped=%d, ждали 5/5 — чужой id подмешался",
@@ -124,7 +124,7 @@ func TestBuildFunnel_KeepsStepForRemovedQuestion(t *testing.T) {
 		vsg(1, grp("Имя", Block{ID: "b1", Type: BlockShortText}), grp("Паспорт", Block{ID: "old", Type: BlockShortText})),
 		vsg(2, grp("Имя", Block{ID: "b1", Type: BlockShortText})),
 	})
-	f := BuildFunnel(questions, nil, []LastBlockCount{{BlockID: "old", Visits: 9}})
+	f := BuildFunnel(questions, nil, FunnelData{Counts: []LastBlockCount{{BlockID: "old", Visits: 9}}})
 
 	if len(f.Steps) != 2 || f.Steps[1].BlockID != "old" {
 		t.Fatalf("шаги = %+v, ждали сохранённый вопрос old", f.Steps)
@@ -137,7 +137,7 @@ func TestBuildFunnel_KeepsStepForRemovedQuestion(t *testing.T) {
 // Форму открывали, но ни одного визита не записалось (все ушли до бикона ухода):
 // воронка не падает и не делит на ноль.
 func TestBuildFunnel_NoCounts(t *testing.T) {
-	f := BuildFunnel(threeQuestions(), nil, nil)
+	f := BuildFunnel(threeQuestions(), nil, FunnelData{})
 
 	if len(f.Steps) != 3 {
 		t.Fatalf("шагов = %d, ждали 3 (вопросы известны и без визитов)", len(f.Steps))
@@ -152,7 +152,7 @@ func TestBuildFunnel_NoCounts(t *testing.T) {
 // У формы без вопросов (все удалены после сбора) воронка пуста, но счётчики верхнего
 // уровня остаются — экран покажет их, а не пустоту.
 func TestBuildFunnel_NoQuestions(t *testing.T) {
-	f := BuildFunnel(nil, nil, []LastBlockCount{{BlockID: "", Visits: 4}})
+	f := BuildFunnel(nil, nil, FunnelData{Counts: []LastBlockCount{{BlockID: "", Visits: 4}}})
 
 	if len(f.Steps) != 0 {
 		t.Fatalf("шагов = %d, ждали 0", len(f.Steps))

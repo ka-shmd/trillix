@@ -54,6 +54,12 @@ type funnelPageResponse struct {
 	Label       string `json:"label"`
 	Reached     int    `json:"reached"`
 	DroppedHere int    `json:"droppedHere"`
+	// Медианы времени на странице и их знаменатели: 0 в знаменателе — данных нет, а
+	// не «ноль секунд».
+	TimeSec     int `json:"timeSec"`
+	TimeSamples int `json:"timeSamples"`
+	LeftTimeSec int `json:"leftTimeSec"`
+	LeftSamples int `json:"leftSamples"`
 }
 
 type funnelResponse struct {
@@ -119,7 +125,10 @@ func (h *Handler) funnel(w http.ResponseWriter, r *http.Request) {
 	}
 	pages := make([]funnelPageResponse, len(f.Pages))
 	for i, p := range f.Pages {
-		pages[i] = funnelPageResponse{Key: p.Key, Label: p.Label, Reached: p.Reached, DroppedHere: p.DroppedHere}
+		pages[i] = funnelPageResponse{
+			Key: p.Key, Label: p.Label, Reached: p.Reached, DroppedHere: p.DroppedHere,
+			TimeSec: p.TimeSec, TimeSamples: p.TimeSamples, LeftTimeSec: p.LeftTimeSec, LeftSamples: p.LeftSamples,
+		}
 	}
 	httpserver.WriteJSON(w, r, http.StatusOK, funnelResponse{
 		Visits:          f.Visits,

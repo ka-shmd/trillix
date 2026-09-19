@@ -57,6 +57,61 @@ func (Repo) MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid
 	return n, nil
 }
 
+// InsertPage пишет строку пути визита. Нет визита этой формы или строка уже есть —
+// ноль строк, и это не ошибка: первое открытие страницы уже записано либо визит
+// чужой.
+func (Repo) InsertPage(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID, blockID string) error {
+	err := postgres.New(db).InsertVisitPage(ctx, postgres.InsertVisitPageParams{
+		BlockID:  blockID,
+		VisitID:  visitID,
+		FormID:   formID,
+		MaxPages: domain.MaxBlocks, // страниц не бывает больше, чем блоков
+	})
+	if err != nil {
+		return fmt.Errorf("insert visit page: %w", err)
+	}
+	return nil
+}
+
+// CountPaths — визиты с путём по дальней точке, исходу и набору открытых страниц.
+func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PathCount, error) {
+	from, to := postgres.PeriodBounds(period)
+	rows, err := postgres.New(db).CountVisitPaths(ctx, postgres.CountVisitPathsParams{FormID: formID, FromTs: from, ToTs: to})
+	if err != nil {
+		return nil, fmt.Errorf("count visit paths: %w", err)
+	}
+	out := make([]domain.PathCount, len(rows))
+	for i, r := range rows {
+		out[i] = domain.PathCount{
+			LastBlockID: r.LastBlockID.String,
+			Submitted:   r.Submitted,
+			Blocks:      r.Blocks,
+			Visits:      int(r.Visits),
+		}
+	}
+	return out, nil
+}
+
+// PageSpans — гистограммы времени на страницах (см. VisitPageDurations).
+func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PageSpan, error) {
+	from, to := postgres.PeriodBounds(period)
+	rows, err := postgres.New(db).VisitPageDurations(ctx, postgres.VisitPageDurationsParams{FormID: formID, FromTs: from, ToTs: to})
+	if err != nil {
+		return nil, fmt.Errorf("visit page durations: %w", err)
+	}
+	out := make([]domain.PageSpan, len(rows))
+	for i, r := range rows {
+		out[i] = domain.PageSpan{
+			PageBlock: r.PageBlock,
+			LastBlock: r.LastBlock,
+			Left:      r.LeftHere,
+			Sec:       int(r.Sec),
+			Visits:    int(r.Visits),
+		}
+	}
+	return out, nil
+}
+
 // nullText — пустая строка становится NULL.
 func nullText(s string) pgtype.Text {
 	if s == "" {

@@ -21,6 +21,10 @@ export type FunnelRow = {
   label: string
   reached: number
   dropped: number
+  // Медианы времени на странице в секундах; есть только у страниц и только когда по
+  // ним есть данные.
+  timeSec?: number
+  leftTimeSec?: number
 }
 
 // Шаги воронки: страницы у многостраничной формы, вопросы — у одностраничной. Номер
@@ -33,6 +37,8 @@ export function funnelSteps(funnel: FormFunnel): FunnelRow[] {
       label: p.label,
       reached: p.reached,
       dropped: p.droppedHere,
+      ...(p.timeSamples > 0 && { timeSec: p.timeSec }),
+      ...(p.leftSamples > 0 && { leftTimeSec: p.leftTimeSec }),
     }))
   }
   return funnel.steps.map((s, i) => questionRow(s, i))

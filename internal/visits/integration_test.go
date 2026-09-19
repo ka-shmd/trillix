@@ -138,6 +138,38 @@ func beacon(t *testing.T, srv *httptest.Server, slug, visitID string, seq int, l
 	return resp.StatusCode
 }
 
+// pageBeacon — бикон перехода на страницу: тот же, что beacon, с флагом page.
+func pageBeacon(t *testing.T, srv *httptest.Server, slug, visitID string, seq int, blockID string) int {
+	t.Helper()
+	body := `{"visit_id":"` + visitID + `","token":"` + freshToken() + `","version":1,"seq":` +
+		strconv.Itoa(seq) + `,"last_block_id":"` + blockID + `","page":true}`
+	resp, err := http.Post(srv.URL+"/public/v1/forms/"+slug+"/visits", "application/json", strings.NewReader(body))
+	if err != nil {
+		t.Fatalf("post page visit: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	return resp.StatusCode
+}
+
+func pathRows(t *testing.T, visitID string) []string {
+	t.Helper()
+	rows, err := testPool.Query(context.Background(),
+		`SELECT block_id FROM form_visit_pages WHERE visit_id = $1 ORDER BY block_id`, visitID)
+	if err != nil {
+		t.Fatalf("read path: %v", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var b string
+		if err := rows.Scan(&b); err != nil {
+			t.Fatalf("scan path: %v", err)
+		}
+		out = append(out, b)
+	}
+	return out
+}
+
 func jsonBlock(id string) string {
 	if id == "" {
 		return "null"
@@ -508,12 +540,111 @@ func TestFunnel_Pages(t *testing.T) {
 		t.Fatalf("страниц %d, ждали %d: %+v", len(f.Pages), len(want), f.Pages)
 	}
 	for i, w := range want {
-		if f.Pages[i] != w {
-			t.Errorf("страница %d = %+v, ждали %+v", i, f.Pages[i], w)
+		got := f.Pages[i]
+		if got.Key != w.Key || got.Label != w.Label || got.Reached != w.Reached || got.DroppedHere != w.DroppedHere {
+			t.Errorf("страница %d = %+v, ждали %+v", i, got, w)
 		}
 	}
 	if len(f.Steps) != 2 || f.Steps[1].BlockID != "b2" || f.Steps[1].Page != "pb1" {
 		t.Errorf("шаги-вопросы: %+v", f.Steps)
+	}
+}
+
+// Бикон перехода пишет строку пути; повтор той же страницы второй строки не даёт,
+// обычный бикон строк не пишет вовсе.
+func TestPath_PageBeaconWritesOneRow(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedFormWith(t, twoPageSchema)
+
+	id := domain.NewID().String()
+	for i, send := range []func() int{
+		func() int { return beacon(t, srv, slug, id, 0, "") },
+		func() int { return beacon(t, srv, slug, id, 1, "b1") },
+		func() int { return pageBeacon(t, srv, slug, id, 2, "b2") },
+		func() int { return pageBeacon(t, srv, slug, id, 3, "b2") },
+		func() int { return beacon(t, srv, slug, id, 4, "b2") },
+	} {
+		if code := send(); code != http.StatusNoContent {
+			t.Fatalf("бикон %d: статус %d, ждали 204", i, code)
+		}
+	}
+	if got := pathRows(t, id); len(got) != 1 || got[0] != "b2" {
+		t.Errorf("путь = %v, ждали [b2]", got)
+	}
+}
+
+// id визита выбирает клиент: бикон перехода ручкой ДРУГОЙ формы с чужим visit_id
+// строку пути к чужому визиту не дописывает.
+func TestPath_ForeignVisitGetsNoRow(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	victim := publishedFormWith(t, twoPageSchema)
+	attacker := publishedFormWith(t, twoPageSchema)
+
+	id := domain.NewID().String()
+	beacon(t, srv, victim, id, 0, "")
+	pageBeacon(t, srv, attacker, id, 5, "b2")
+
+	if got := pathRows(t, id); len(got) != 0 {
+		t.Errorf("к чужому визиту дописан путь %v", got)
+	}
+}
+
+// Воронка по пути и время на странице — через настоящий SQL. Время бикона ставит
+// сервер, поэтому отрезки задаются правкой меток после записи.
+func TestFunnel_PathAndPageTimes(t *testing.T) {
+	resetDB(t)
+	srv := newServer(t)
+	slug := publishedFormWith(t, twoPageSchema)
+	formID, userID := formOwner(t, slug)
+	ctx := context.Background()
+
+	// Двое перешли на вторую страницу за 30 и 50 секунд и ушли с неё через 20.
+	for _, firstPage := range []int{30, 50} {
+		id := domain.NewID().String()
+		beacon(t, srv, slug, id, 0, "")
+		pageBeacon(t, srv, slug, id, 1, "b2")
+		if _, err := testPool.Exec(ctx, `
+			UPDATE form_visits SET created_at = now() - make_interval(secs => $2 + 20),
+			                       updated_at = now() WHERE id = $1`, id, firstPage); err != nil {
+			t.Fatalf("shift visit: %v", err)
+		}
+		if _, err := testPool.Exec(ctx, `
+			UPDATE form_visit_pages SET reached_at = now() - interval '20 seconds',
+			       visit_created_at = (SELECT created_at FROM form_visits WHERE id = $1)
+			WHERE visit_id = $1`, id); err != nil {
+			t.Fatalf("shift path: %v", err)
+		}
+	}
+	// Один ушёл с первой страницы через 7 секунд, пути нет.
+	id := domain.NewID().String()
+	beacon(t, srv, slug, id, 0, "")
+	beacon(t, srv, slug, id, 1, "b1")
+	if _, err := testPool.Exec(ctx, `
+		UPDATE form_visits SET created_at = now() - interval '7 seconds', updated_at = now() WHERE id = $1`, id); err != nil {
+		t.Fatalf("shift visit: %v", err)
+	}
+
+	f, err := funnelService().Funnel(ctx, userID, formID, domain.Period{})
+	if err != nil {
+		t.Fatalf("Funnel: %v", err)
+	}
+	if len(f.Pages) != 2 {
+		t.Fatalf("страниц %d, ждали 2", len(f.Pages))
+	}
+	first, second := f.Pages[0], f.Pages[1]
+	if first.Reached != 3 || first.DroppedHere != 1 || second.Reached != 2 || second.DroppedHere != 2 {
+		t.Errorf("страницы: %+v / %+v", first, second)
+	}
+	if first.TimeSec != 30 || first.TimeSamples != 2 {
+		t.Errorf("время первой страницы %d с по %d, ждали 30 по 2 (нижняя медиана 30 и 50)", first.TimeSec, first.TimeSamples)
+	}
+	if first.LeftTimeSec != 7 || first.LeftSamples != 1 {
+		t.Errorf("ушедшие с первой: %d с по %d, ждали 7 по 1", first.LeftTimeSec, first.LeftSamples)
+	}
+	if second.LeftTimeSec != 20 || second.LeftSamples != 2 {
+		t.Errorf("ушедшие со второй: %d с по %d, ждали 20 по 2", second.LeftTimeSec, second.LeftSamples)
 	}
 }
 

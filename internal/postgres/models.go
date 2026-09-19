@@ -169,6 +169,14 @@ type FormVisit struct {
 	VisitorKey    []byte
 }
 
+type FormVisitPage struct {
+	VisitID        uuid.UUID
+	BlockID        string
+	ReachedAt      pgtype.Timestamptz
+	FormID         uuid.UUID
+	VisitCreatedAt pgtype.Timestamptz
+}
+
 type FormWebhook struct {
 	ID                  uuid.UUID
 	FormID              uuid.UUID

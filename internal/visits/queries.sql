@@ -36,6 +36,24 @@ SET last_block_id = EXCLUDED.last_block_id,
 WHERE form_visits.form_id = EXCLUDED.form_id
   AND form_visits.seq < EXCLUDED.seq;
 
+-- name: InsertVisitPage :exec
+-- Строка пути визита: бикон перехода открыл страницу (миграция 0074). Только
+-- вставка — запоминается ПЕРВОЕ открытие страницы; время ставит сервер.
+--
+-- Вставка идёт ВЫБОРКОЙ из form_visits по id и form_id, а не значениями: id визита
+-- выбирает клиент, и путь визита чужой формы иначе дописывался бы ручкой своей.
+-- Нет строки визита (апсерт не прошёл) — нет и строки пути.
+--
+-- Потолок строк на визит: ручка публична на запись, и неизвестные block_id на
+-- чтении отбрасываются, но копиться бесконечно им нельзя.
+INSERT INTO form_visit_pages (visit_id, block_id, form_id, visit_created_at)
+SELECT v.id, sqlc.arg(block_id)::text, v.form_id, v.created_at
+FROM form_visits v
+WHERE v.id = sqlc.arg(visit_id)
+  AND v.form_id = sqlc.arg(form_id)
+  AND (SELECT count(*) FROM form_visit_pages p WHERE p.visit_id = v.id) < sqlc.arg(max_pages)::int
+ON CONFLICT (visit_id, block_id) DO NOTHING;
+
 -- name: MarkVisitSubmitted :execrows
 -- Отметка конверсии при приёме ответа. Ограничено form_id: визит чужой формы по
 -- угаданному id не пометить. 0 строк — не ошибка: визита нет (бикон потерялся,
@@ -72,6 +90,87 @@ WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz
 GROUP BY last_block_id, submitted;
+
+-- name: CountVisitPaths :many
+-- Визиты С ПУТЁМ, сгруппированные по дальней точке, исходу и набору открытых
+-- страниц (спека design/analytics-v2.md §4.4). Набор — отсортированный массив
+-- block_id; различных наборов у формы столько, сколько в ней веток, поэтому
+-- результат размером в «вопросы × исход × ветки», а не в число визитов.
+--
+-- Визиты без пути (одностраничная форма, дальше первой страницы не ушли, собраны
+-- до 0074) сюда не попадают: Go получает их вычитанием из CountVisitsByLastBlock.
+-- Путь группируется по своему индексу; в form_visits идём только за визитами,
+-- у которых путь есть.
+SELECT v.last_block_id, v.submitted, p.blocks::text[] AS blocks, count(*)::bigint AS visits
+FROM (
+    SELECT fp.visit_id, array_agg(fp.block_id ORDER BY fp.block_id) AS blocks
+    FROM form_visit_pages fp
+    WHERE fp.form_id = $1
+      AND fp.visit_created_at >= sqlc.arg(from_ts)::timestamptz
+      AND fp.visit_created_at <  sqlc.arg(to_ts)::timestamptz
+    GROUP BY fp.visit_id
+) p
+JOIN form_visits v ON v.id = p.visit_id
+GROUP BY v.last_block_id, v.submitted, p.blocks;
+
+-- name: VisitPageDurations :many
+-- Сколько проводят на страницах: гистограмма по целым секундам, медиану по ней
+-- считает Go, потому что страницу из block_id выводит только он (у страницы в
+-- разных версиях может быть разный первый вопрос — медианы по block_id не
+-- складываются, гистограммы складываются).
+--
+-- page_block — первый вопрос страницы из пути; пустой — первая страница документа
+-- (её открытие — created_at визита, строки пути у неё нет).
+-- left_here — «ушли с этой страницы»: от её открытия до последнего бикона визита,
+-- только у неотправивших. Последняя страница отправившего не входит никуда — её
+-- конец не наблюдается (бикон ухода приходит уже со страницы «Спасибо»).
+-- last_block — только у ушедших с первой страницы без пути: визит без пути мог быть
+-- собран до 0074 на дальней странице, и отличить его Go может лишь по дальней точке.
+--
+-- Нулевые и отрицательные отрезки отброшены: это «доехал один бикон», а не
+-- «ноль секунд» — то же правило, что у медианы длительности визита. Верх — час:
+-- забытая вкладка медиану не двигает, а гистограмма остаётся короткой.
+WITH path AS (
+    SELECT p.visit_id, p.block_id, p.reached_at,
+           lead(p.reached_at) OVER w AS next_at,
+           row_number() OVER w       AS n
+    FROM form_visit_pages p
+    WHERE p.form_id = $1
+      AND p.visit_created_at >= sqlc.arg(from_ts)::timestamptz
+      AND p.visit_created_at <  sqlc.arg(to_ts)::timestamptz
+    WINDOW w AS (PARTITION BY p.visit_id ORDER BY p.reached_at, p.block_id)
+),
+spans AS (
+    SELECT path.block_id AS page_block, ''::text AS last_block, false AS left_here,
+           path.next_at - path.reached_at AS span
+    FROM path
+    WHERE path.next_at IS NOT NULL
+    UNION ALL
+    SELECT '', '', false, path.reached_at - v.created_at
+    FROM path JOIN form_visits v ON v.id = path.visit_id
+    WHERE path.n = 1
+    UNION ALL
+    SELECT path.block_id, '', true, v.updated_at - path.reached_at
+    FROM path JOIN form_visits v ON v.id = path.visit_id
+    WHERE path.next_at IS NULL AND NOT v.submitted
+    UNION ALL
+    SELECT '', v.last_block_id, true, v.updated_at - v.created_at
+    FROM form_visits v
+    WHERE v.form_id = $1
+      AND v.created_at >= sqlc.arg(from_ts)::timestamptz
+      AND v.created_at <  sqlc.arg(to_ts)::timestamptz
+      AND NOT v.submitted
+      AND v.last_block_id IS NOT NULL
+      AND NOT EXISTS (SELECT 1 FROM form_visit_pages x WHERE x.visit_id = v.id)
+)
+SELECT page_block::text AS page_block,
+       last_block::text AS last_block,
+       left_here::boolean AS left_here,
+       least(round(extract(epoch FROM span)), 3600)::int AS sec,
+       count(*)::bigint AS visits
+FROM spans
+WHERE span > interval '0'
+GROUP BY 1, 2, 3, 4;
 
 -- name: VisitInsights :one
 -- Карточки над вкладками Insights в части визитов: сколько пришло, сколько из них

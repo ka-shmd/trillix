@@ -6,6 +6,7 @@ import {
   droppedPhrase,
   funnelRows,
   type FunnelRow,
+  funnelSteps,
   pageQuestionRows,
   percentOf,
   worstStep,
@@ -25,8 +26,26 @@ const multipage: FormFunnel = {
     { blockId: 'q3', label: 'Адрес', page: 'pb1', reached: 45, droppedHere: 15 },
   ],
   pages: [
-    { key: '', label: 'Страница 1', reached: 90, droppedHere: 20 },
-    { key: 'pb1', label: 'Контакты', reached: 70, droppedHere: 40 },
+    {
+      key: '',
+      label: 'Страница 1',
+      reached: 90,
+      droppedHere: 20,
+      timeSec: 42,
+      timeSamples: 60,
+      leftTimeSec: 0,
+      leftSamples: 0,
+    },
+    {
+      key: 'pb1',
+      label: 'Контакты',
+      reached: 70,
+      droppedHere: 40,
+      timeSec: 0,
+      timeSamples: 0,
+      leftTimeSec: 95,
+      leftSamples: 40,
+    },
   ],
 }
 
@@ -62,6 +81,17 @@ describe('funnelRows', () => {
       '3. Адрес',
       'Отправили форму',
     ])
+  })
+})
+
+describe('funnelSteps', () => {
+  // Знаменатель 0 — данных нет, и «0 с» на экране было бы неправдой.
+  it('берёт время страницы, только если по нему есть данные', () => {
+    const [first, second] = funnelSteps(multipage)
+    expect(first).toMatchObject({ timeSec: 42 })
+    expect(first).not.toHaveProperty('leftTimeSec')
+    expect(second).not.toHaveProperty('timeSec')
+    expect(second).toMatchObject({ leftTimeSec: 95 })
   })
 })
 

@@ -1,6 +1,7 @@
 import { Bar, BarChart, LabelList, XAxis, YAxis } from 'recharts'
 
 import { dropPercent, droppedPhrase, type FunnelRow, percentOf } from './metrics'
+import { formatDuration } from '../../shared/format'
 import {
   type ChartConfig,
   ChartContainer,
@@ -30,6 +31,9 @@ type Row = {
   dropped: number
   // Доля ушедших среди дошедших; null ниже порога малых выборок.
   dropPercent: number | null
+  // Время на странице готовой строкой; нет данных — поля нет.
+  time?: string
+  leftTime?: string
   caption: string
 }
 
@@ -57,7 +61,7 @@ export function FunnelChart({ rows: input, base }: { rows: FunnelRow[]; base: nu
         accessibilityLayer
         layout="vertical"
         data={rows}
-        margin={{ left: 0, right: 72, top: 4, bottom: 4 }}
+        margin={{ left: 0, right: rows.some((r) => r.time) ? 128 : 72, top: 4, bottom: 4 }}
         barSize={14}
       >
         {/* Ось значений спрятана: числа стоят подписью у конца каждой полоски, и
@@ -83,6 +87,8 @@ export function FunnelChart({ rows: input, base }: { rows: FunnelRow[]; base: nu
               formatter={(value, _name, item) => {
                 const dropped: unknown = item.payload?.dropped
                 const pct: unknown = item.payload?.dropPercent
+                const time: unknown = item.payload?.time
+                const leftTime: unknown = item.payload?.leftTime
                 return (
                   <div className="flex flex-col gap-0.5">
                     <span className="font-medium tabular-nums">Дошли: {String(value)}</span>
@@ -91,6 +97,12 @@ export function FunnelChart({ rows: input, base }: { rows: FunnelRow[]; base: nu
                         {droppedPhrase(dropped)}
                         {typeof pct === 'number' && ` — ${pct} % дошедших`}
                       </span>
+                    )}
+                    {typeof time === 'string' && (
+                      <span className="text-muted-foreground">Обычно проводят здесь {time}</span>
+                    )}
+                    {typeof leftTime === 'string' && (
+                      <span className="text-muted-foreground">Ушедшие провели здесь {leftTime}</span>
                     )}
                   </div>
                 )
@@ -114,14 +126,19 @@ export function FunnelChart({ rows: input, base }: { rows: FunnelRow[]; base: nu
   )
 }
 
+// У страницы в подписи полоски — ещё и время на ней: ради него на воронку по
+// страницам и смотрят, и прятать его в тултип значило бы спрятать ответ.
 function row(r: FunnelRow, base: number): Row {
   const pct = percentOf(r.reached, base)
+  const time = r.timeSec === undefined ? undefined : formatDuration(r.timeSec)
   return {
     label: short(r.label),
     full: r.label,
     reached: r.reached,
     dropped: r.dropped,
     dropPercent: dropPercent(r),
-    caption: `${r.reached} · ${pct} %`,
+    ...(time !== undefined && { time }),
+    ...(r.leftTimeSec !== undefined && { leftTime: formatDuration(r.leftTimeSec) }),
+    caption: time === undefined ? `${r.reached} · ${pct} %` : `${r.reached} · ${pct} % · ${time}`,
   }
 }
