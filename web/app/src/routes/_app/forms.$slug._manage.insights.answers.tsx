@@ -83,7 +83,22 @@ function SummaryPage() {
 
   return (
     <div className="flex flex-col gap-12">
-      <VisitCards slug={slug} period={period} />
+      {/* Полоса считает ту же совокупность, что разделы под ней: сегмент режет и её.
+          Число ответов берётся из сводки — она его уже посчитала, и ручка счётчика
+          сегмента всё равно не знает. Скрытая выборка (порог k) даёт прочерк. */}
+      <VisitCards
+        slug={slug}
+        period={period}
+        segment={segment}
+        answers={
+          segment === undefined
+            ? undefined
+            : {
+                value: summary.data && !summary.data.withheld ? summary.data.total : undefined,
+                pending: summary.isPending,
+              }
+        }
+      />
 
       <Section
         title="Ответы по вопросам"
