@@ -46,10 +46,12 @@ type TimeBucket struct {
 	Submitted int
 }
 
-// LabelCount — строка списка (устройство, браузер, ОС): подпись и число визитов.
+// LabelCount — строка списка (устройство, браузер, ОС): подпись, число визитов и
+// сколько из них закончились ответом.
 type LabelCount struct {
-	Label  string
-	Visits int
+	Label     string
+	Visits    int
+	Submitted int
 }
 
 // SourceRow — сырьё источников из SQL: тройка меток и счётчик.
@@ -58,13 +60,15 @@ type SourceRow struct {
 	UTMSource string
 	UTMMedium string
 	Visits    int
+	Submitted int
 }
 
 // SourceCount — строка списка источников: откуда пришли и каким каналом.
 type SourceCount struct {
-	Source string
-	Medium string
-	Visits int
+	Source    string
+	Medium    string
+	Visits    int
+	Submitted int
 }
 
 // PlaceCount — строка списка стран или городов: название, код страны (для флага) и
@@ -73,6 +77,7 @@ type PlaceCount struct {
 	Name        string
 	CountryCode string
 	Visits      int
+	Submitted   int
 }
 
 // UserAgentRow — сырьё разбора: строка user-agent и сколько визитов с ней пришло.
@@ -81,6 +86,7 @@ type PlaceCount struct {
 type UserAgentRow struct {
 	UserAgent string
 	Visits    int
+	Submitted int
 }
 
 const (
@@ -98,15 +104,21 @@ const (
 // Приоритет именно такой, потому что utm_source ставит автор рассылки, а referer —
 // браузер: когда автор разметил ссылку, он и знает, как называется его канал.
 func FoldSources(rows []SourceRow) []SourceCount {
-	byKey := map[SourceCount]int{}
+	type channel struct{ source, medium string }
+	byKey := map[channel]*SourceCount{}
 	for _, r := range rows {
-		key := SourceCount{Source: sourceName(r), Medium: mediumName(r)}
-		byKey[key] += r.Visits
+		key := channel{sourceName(r), mediumName(r)}
+		c := byKey[key]
+		if c == nil {
+			c = &SourceCount{Source: key.source, Medium: key.medium}
+			byKey[key] = c
+		}
+		c.Visits += r.Visits
+		c.Submitted += r.Submitted
 	}
 	out := make([]SourceCount, 0, len(byKey))
-	for key, visits := range byKey {
-		key.Visits = visits
-		out = append(out, key)
+	for _, c := range byKey {
+		out = append(out, *c)
 	}
 	sortByVisits(out, func(i int) (int, string) { return out[i].Visits, out[i].Source + out[i].Medium })
 	return out
@@ -148,14 +160,24 @@ func refererHost(referer string) string {
 // Неопознанное не приписывается к соседнему значению, а собирается в «Не
 // определено»: строка с честным именем лучше, чем завышенный Chrome.
 func FoldUserAgents(rows []UserAgentRow) (devices, browsers, systems []LabelCount) {
-	dev, br, os := map[string]int{}, map[string]int{}, map[string]int{}
+	dev, br, os := map[string]*LabelCount{}, map[string]*LabelCount{}, map[string]*LabelCount{}
 	for _, r := range rows {
 		ua := ParseUserAgent(r.UserAgent)
-		dev[DeviceLabel(ua.Device)] += r.Visits
-		br[orUnknown(ua.Browser)] += r.Visits
-		os[orUnknown(ua.OS)] += r.Visits
+		addLabel(dev, DeviceLabel(ua.Device), r)
+		addLabel(br, orUnknown(ua.Browser), r)
+		addLabel(os, orUnknown(ua.OS), r)
 	}
 	return toLabelCounts(dev), toLabelCounts(br), toLabelCounts(os)
+}
+
+func addLabel(m map[string]*LabelCount, label string, r UserAgentRow) {
+	c := m[label]
+	if c == nil {
+		c = &LabelCount{Label: label}
+		m[label] = c
+	}
+	c.Visits += r.Visits
+	c.Submitted += r.Submitted
 }
 
 func orUnknown(s string) string {
@@ -165,10 +187,10 @@ func orUnknown(s string) string {
 	return s
 }
 
-func toLabelCounts(m map[string]int) []LabelCount {
+func toLabelCounts(m map[string]*LabelCount) []LabelCount {
 	out := make([]LabelCount, 0, len(m))
-	for label, visits := range m {
-		out = append(out, LabelCount{Label: label, Visits: visits})
+	for _, c := range m {
+		out = append(out, *c)
 	}
 	sortByVisits(out, func(i int) (int, string) { return out[i].Visits, out[i].Label })
 	return out

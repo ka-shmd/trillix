@@ -5,7 +5,8 @@ import { visitsBreakdownSchema } from './visitsBreakdown'
 // Фикстура снята с РЕАЛЬНОГО ответа: JSON сериализован тем самым Go-DTO
 // (breakdownResponse из internal/visits/handler.go), а не написан по памяти.
 // Выдуманная фикстура проверяла бы схему саму против себя и разошлась бы с
-// сервером молча — экран получил бы undefined там, где ждал число.
+// сервером молча — экран получил бы undefined там, где ждал число. Пересериализована
+// тем же DTO после появления submitted у строк разбивок (фаза 30).
 const realResponse = {
   step: 'day',
   timeseries: [
@@ -13,25 +14,25 @@ const realResponse = {
     { at: '2026-08-25T00:00:00Z', visits: 0, submitted: 0 },
   ],
   sources: [
-    { source: 'newsletter', medium: 'email', visits: 3 },
-    { source: 'vk.com', medium: 'Нет', visits: 2 },
+    { source: 'newsletter', medium: 'email', visits: 3, submitted: 2 },
+    { source: 'vk.com', medium: 'Нет', visits: 2, submitted: 0 },
   ],
   sourcesLocked: false,
   knownSources: 5,
   devices: [
-    { label: 'Компьютер', visits: 4 },
-    { label: 'Телефон', visits: 1 },
+    { label: 'Компьютер', visits: 4, submitted: 2 },
+    { label: 'Телефон', visits: 1, submitted: 0 },
   ],
-  browsers: [{ label: 'Chrome', visits: 5 }],
+  browsers: [{ label: 'Chrome', visits: 5, submitted: 2 }],
   systems: [
-    { label: 'Windows', visits: 4 },
-    { label: 'Не определено', visits: 1 },
+    { label: 'Windows', visits: 4, submitted: 2 },
+    { label: 'Не определено', visits: 1, submitted: 0 },
   ],
   countries: [
-    { name: 'Россия', countryCode: 'RU', visits: 4 },
-    { name: 'США', countryCode: 'US', visits: 1 },
+    { name: 'Россия', countryCode: 'RU', visits: 4, submitted: 2 },
+    { name: 'США', countryCode: 'US', visits: 1, submitted: 0 },
   ],
-  cities: [{ name: 'Москва', countryCode: 'RU', visits: 4 }],
+  cities: [{ name: 'Москва', countryCode: 'RU', visits: 4, submitted: 2 }],
   unknownPlace: 2,
   geoConfigured: true,
 }

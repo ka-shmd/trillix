@@ -88,6 +88,13 @@ export function worstStep(steps: FunnelRow[]): (FunnelRow & { percent: number })
   return worst && { ...worst, percent: percentOf(worst.dropped, worst.reached) }
 }
 
+// Сколько отправили из пришедших — строкой для разбивок. Над порогом малых выборок
+// это доля, ниже — два числа: «2 из 2» владелец прочтёт сам, а «100 %» он прочтёт
+// как закономерность.
+export function conversionText(submitted: number, visits: number): string {
+  return visits >= MIN_BASE ? `${percentOf(submitted, visits)} %` : `${submitted} из ${visits}`
+}
+
 // Доля ушедших среди дошедших — только над порогом малых выборок.
 export function dropPercent(row: FunnelRow): number | null {
   return row.reached >= MIN_BASE ? percentOf(row.dropped, row.reached) : null

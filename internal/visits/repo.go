@@ -74,9 +74,10 @@ func (Repo) InsertPage(ctx context.Context, db postgres.DBTX, visitID, formID uu
 }
 
 // CountPaths — визиты с путём по дальней точке, исходу и набору открытых страниц.
-func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PathCount, error) {
+func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PathCount, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).CountVisitPaths(ctx, postgres.CountVisitPathsParams{FormID: formID, FromTs: from, ToTs: to})
+	kind, keys := segParams(f)
+	rows, err := postgres.New(db).CountVisitPaths(ctx, postgres.CountVisitPathsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("count visit paths: %w", err)
 	}
@@ -93,9 +94,10 @@ func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 }
 
 // PageSpans — гистограммы времени на страницах (см. VisitPageDurations).
-func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PageSpan, error) {
+func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PageSpan, error) {
 	from, to := postgres.PeriodBounds(period)
-	rows, err := postgres.New(db).VisitPageDurations(ctx, postgres.VisitPageDurationsParams{FormID: formID, FromTs: from, ToTs: to})
+	kind, keys := segParams(f)
+	rows, err := postgres.New(db).VisitPageDurations(ctx, postgres.VisitPageDurationsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("visit page durations: %w", err)
 	}
@@ -112,6 +114,40 @@ func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, p
 	return out, nil
 }
 
+// VersionStats — визиты по версиям формы за окно (спека design/analytics-v2.md §5.3).
+// Ключ карты — id версии: номер и дату публикации знает модуль форм.
+func (Repo) VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error) {
+	from, to := postgres.PeriodBounds(period)
+	kind, keys := segParams(f)
+	rows, err := postgres.New(db).VisitVersionStats(ctx, postgres.VisitVersionStatsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	if err != nil {
+		return nil, fmt.Errorf("visit version stats: %w", err)
+	}
+	out := make(map[uuid.UUID]domain.VersionStat, len(rows))
+	for _, r := range rows {
+		out[r.FormVersionID] = domain.VersionStat{
+			Visits:                int(r.Visits),
+			Submitted:             int(r.Submitted),
+			TimedCompletions:      int(r.TimedCompletions),
+			CompletionDurationSec: r.CompletionDurationSec,
+		}
+	}
+	return out, nil
+}
+
+// segParams — сегмент в параметры запроса. Нет сегмента — оба NULL, и условие в SQL
+// отключено; сегмент без подходящих значений — пустой массив, и визитов ноль.
+func segParams(f domain.VisitFilter) (pgtype.Text, []string) {
+	if f.IsZero() {
+		return pgtype.Text{}, nil
+	}
+	keys := f.Keys
+	if keys == nil {
+		keys = []string{}
+	}
+	return pgtype.Text{String: string(f.Kind), Valid: true}, keys
+}
+
 // nullText — пустая строка становится NULL.
 func nullText(s string) pgtype.Text {
 	if s == "" {
@@ -122,12 +158,15 @@ func nullText(s string) pgtype.Text {
 
 // CountByLastBlock — раскладка визитов по самой дальней точке (сырьё воронки).
 // Пустой BlockID — визиты, не тронувшие ни одного вопроса (last_block_id IS NULL).
-func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error) {
+func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.LastBlockCount, error) {
 	from, to := postgres.PeriodBounds(period)
+	kind, keys := segParams(f)
 	rows, err := postgres.New(db).CountVisitsByLastBlock(ctx, postgres.CountVisitsByLastBlockParams{
-		FormID: formID,
-		FromTs: from,
-		ToTs:   to,
+		FormID:  formID,
+		FromTs:  from,
+		ToTs:    to,
+		SegKind: kind,
+		SegKeys: keys,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("count visits by last block: %w", err)
@@ -146,12 +185,15 @@ func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.
 // Insights — счётчики визитов для карточек над вкладками Insights: сколько пришло,
 // сколько отправило, медианная длительность и её знаменатель (сколько визитов в
 // медиану вошло — экран обязан отличать «данных нет» от «ноль секунд»).
-func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
+func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (domain.VisitInsights, error) {
 	from, to := postgres.PeriodBounds(period)
+	kind, keys := segParams(f)
 	row, err := postgres.New(db).VisitInsights(ctx, postgres.VisitInsightsParams{
-		FormID: formID,
-		FromTs: from,
-		ToTs:   to,
+		FormID:  formID,
+		FromTs:  from,
+		ToTs:    to,
+		SegKind: kind,
+		SegKeys: keys,
 	})
 	if err != nil {
 		return domain.VisitInsights{}, fmt.Errorf("visit insights: %w", err)
@@ -210,6 +252,7 @@ func (Repo) Sources(ctx context.Context, db postgres.DBTX, formID uuid.UUID, per
 			UTMSource: r.UtmSource,
 			UTMMedium: r.UtmMedium,
 			Visits:    int(r.Visits),
+			Submitted: int(r.Submitted),
 		}
 	}
 	return out, nil
@@ -228,7 +271,7 @@ func (Repo) UserAgents(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 	}
 	out := make([]domain.UserAgentRow, len(rows))
 	for i, r := range rows {
-		out[i] = domain.UserAgentRow{UserAgent: r.UserAgent, Visits: int(r.Visits)}
+		out[i] = domain.UserAgentRow{UserAgent: r.UserAgent, Visits: int(r.Visits), Submitted: int(r.Submitted)}
 	}
 	return out, nil
 }
@@ -250,6 +293,7 @@ func (Repo) Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, p
 			Name:        r.Country,
 			CountryCode: r.CountryCode.String,
 			Visits:      int(r.Visits),
+			Submitted:   int(r.Submitted),
 		}
 	}
 	return out, nil
@@ -273,6 +317,7 @@ func (Repo) Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, peri
 			Name:        r.City.String,
 			CountryCode: r.CountryCode.String,
 			Visits:      int(r.Visits),
+			Submitted:   int(r.Submitted),
 		}
 	}
 	return out, nil

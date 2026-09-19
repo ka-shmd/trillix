@@ -1,7 +1,7 @@
 import { Cell, Pie, PieChart } from 'recharts'
 
 import { type LabelCount } from '../../entities/visitsBreakdown'
-import { percentOf } from './metrics'
+import { conversionText, percentOf } from './metrics'
 import { type ChartConfig, ChartContainer, ChartTooltip } from '@/components/ui/chart'
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/components/ui/tooltip'
 
@@ -9,7 +9,8 @@ import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from '@/comp
 // страны, города, устройства, браузеры, системы. Вопрос ко всем один и тот же:
 // «как поделилось», и отвечает на него доля целого, а не сравнение строк.
 //
-// Строка — та же LabelCount, что у остальных разбивок: подпись и число визитов.
+// Строка — та же LabelCount, что у остальных разбивок: подпись, число визитов и
+// сколько из них отправили форму.
 // Своего типа у кольца нет намеренно — заведи его, и границу ленивой загрузки
 // пришлось бы пересекать импортом типа отсюда.
 //
@@ -64,8 +65,11 @@ export function ShareChart({ rows }: { rows: LabelCount[] }) {
   const head = rows.slice(0, TOP)
   const tail = rows.slice(TOP)
   const tailTotal = tail.reduce((sum, r) => sum + r.visits, 0)
+  const tailSubmitted = tail.reduce((sum, r) => sum + r.submitted, 0)
   const slices: LabelCount[] =
-    tail.length > 0 ? [...head, { label: OTHER, visits: tailTotal }] : head
+    tail.length > 0
+      ? [...head, { label: OTHER, visits: tailTotal, submitted: tailSubmitted }]
+      : head
 
   // Конфиг собирается из данных: подписи приходят с сервера, и перечислять их
   // здесь второй раз значило бы завести список, который молчит при появлении
@@ -109,6 +113,12 @@ export function ShareChart({ rows }: { rows: LabelCount[] }) {
           Radix разрешает. */}
       <TooltipProvider>
         <ul className="flex min-w-0 flex-1 flex-col gap-1.5 text-sm">
+          {/* Шапка колонок: у числа строки две величины — сколько пришло и какая их
+              часть отправила форму, — и без подписи вторую не отличить от доли. */}
+          <li className="flex items-center gap-2 text-xs text-muted-foreground" aria-hidden="true">
+            <span className="ml-auto shrink-0">Визиты</span>
+            <span className="w-16 shrink-0 text-right">Отправили</span>
+          </li>
           {slices.map((r, i) => (
             <li key={r.label} className="flex min-w-0 items-center gap-2">
               <span
@@ -138,6 +148,9 @@ export function ShareChart({ rows }: { rows: LabelCount[] }) {
               )}
               <span className="ml-auto shrink-0 tabular-nums text-muted-foreground">
                 {r.visits} · {percentOf(r.visits, total)} %
+              </span>
+              <span className="w-16 shrink-0 text-right tabular-nums text-muted-foreground">
+                {conversionText(r.submitted, r.visits)}
               </span>
             </li>
           ))}
@@ -173,12 +186,18 @@ function ShareTooltip({
       {row.label === OTHER ? (
         <TailList rows={tail} total={total} />
       ) : (
-        <div className="flex items-center justify-between gap-4">
-          <span className="text-muted-foreground">{row.label}</span>
-          <span className="font-medium tabular-nums">
-            {row.visits} · {percentOf(row.visits, total)} %
-          </span>
-        </div>
+        <>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-muted-foreground">{row.label}</span>
+            <span className="font-medium tabular-nums">
+              {row.visits} · {percentOf(row.visits, total)} %
+            </span>
+          </div>
+          <div className="flex items-center justify-between gap-4">
+            <span className="text-muted-foreground">Отправили</span>
+            <span className="tabular-nums">{conversionText(row.submitted, row.visits)}</span>
+          </div>
+        </>
       )}
     </div>
   )

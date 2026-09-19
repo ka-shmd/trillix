@@ -84,11 +84,25 @@ WHERE id = $1 AND form_id = $2;
 -- Границы периода приходят всегда: «всё время» — это ±бесконечность, а не
 -- отсутствующее условие. Одна форма запроса вместо двух означает один план и одну
 -- ветку кода; бесконечность индексу не мешает (та же диапазонная проверка).
+--
+-- Сегмент (seg_kind/seg_keys, спека design/analytics-v2.md §5.4): визиты режутся по
+-- СЫРОМУ значению — строке user-agent, тройке меток, стране, городу или версии, —
+-- список подходящих значений собирает Go (domain.VisitFilter). Ключ зеркалит
+-- domain.SourceKey и domain.CityKey, разделитель — chr(31). Без сегмента оба
+-- параметра NULL, и условие не читает meta: запрос остаётся index-only.
 SELECT last_block_id, submitted, count(*) AS visits
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz
+  AND (sqlc.narg(seg_kind)::text IS NULL OR
+       (CASE sqlc.narg(seg_kind)::text
+            WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
+            WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
+            WHEN 'country' THEN coalesce(country_code, '')
+            WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
+            WHEN 'version' THEN form_version_id::text
+        END) = ANY(sqlc.narg(seg_keys)::text[]))
 GROUP BY last_block_id, submitted;
 
 -- name: CountVisitPaths :many
@@ -111,6 +125,15 @@ FROM (
     GROUP BY fp.visit_id
 ) p
 JOIN form_visits v ON v.id = p.visit_id
+WHERE true
+  AND (sqlc.narg(seg_kind)::text IS NULL OR
+       (CASE sqlc.narg(seg_kind)::text
+            WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
+            WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
+            WHEN 'country' THEN coalesce(v.country_code, '')
+            WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
+            WHEN 'version' THEN v.form_version_id::text
+        END) = ANY(sqlc.narg(seg_keys)::text[]))
 GROUP BY v.last_block_id, v.submitted, p.blocks;
 
 -- name: VisitPageDurations :many
@@ -138,6 +161,17 @@ WITH path AS (
     WHERE p.form_id = $1
       AND p.visit_created_at >= sqlc.arg(from_ts)::timestamptz
       AND p.visit_created_at <  sqlc.arg(to_ts)::timestamptz
+      AND (sqlc.narg(seg_kind)::text IS NULL OR EXISTS (
+          SELECT 1 FROM form_visits sv WHERE sv.id = p.visit_id
+        AND (sqlc.narg(seg_kind)::text IS NULL OR
+             (CASE sqlc.narg(seg_kind)::text
+                  WHEN 'ua'      THEN coalesce(sv.meta->>'user_agent', '')
+                  WHEN 'source'  THEN coalesce(sv.meta->>'referer', '') || chr(31) || coalesce(sv.meta->>'utm_source', '') || chr(31) || coalesce(sv.meta->>'utm_medium', '')
+                  WHEN 'country' THEN coalesce(sv.country_code, '')
+                  WHEN 'city'    THEN coalesce(sv.city, '') || chr(31) || coalesce(sv.country_code, '')
+                  WHEN 'version' THEN sv.form_version_id::text
+              END) = ANY(sqlc.narg(seg_keys)::text[]))
+      ))
     WINDOW w AS (PARTITION BY p.visit_id ORDER BY p.reached_at, p.block_id)
 ),
 spans AS (
@@ -162,6 +196,14 @@ spans AS (
       AND NOT v.submitted
       AND v.last_block_id IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM form_visit_pages x WHERE x.visit_id = v.id)
+    AND (sqlc.narg(seg_kind)::text IS NULL OR
+         (CASE sqlc.narg(seg_kind)::text
+              WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
+              WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
+              WHEN 'country' THEN coalesce(v.country_code, '')
+              WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
+              WHEN 'version' THEN v.form_version_id::text
+          END) = ANY(sqlc.narg(seg_keys)::text[]))
 )
 SELECT page_block::text AS page_block,
        last_block::text AS last_block,
@@ -220,7 +262,43 @@ SELECT count(*)::bigint                                        AS visits,
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
-  AND created_at <  sqlc.arg(to_ts)::timestamptz;
+  AND created_at <  sqlc.arg(to_ts)::timestamptz
+  AND (sqlc.narg(seg_kind)::text IS NULL OR
+       (CASE sqlc.narg(seg_kind)::text
+            WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
+            WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
+            WHEN 'country' THEN coalesce(country_code, '')
+            WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
+            WHEN 'version' THEN form_version_id::text
+        END) = ANY(sqlc.narg(seg_keys)::text[]));
+
+-- name: VisitVersionStats :many
+-- Разрез по версиям формы (спека design/analytics-v2.md §5.3): визиты, отправившие
+-- и медиана длительности ЗАВЕРШЁННОГО заполнения у каждой версии за окно. Помогла ли
+-- правка — видно здесь: версия, на которой человек открыл форму, у визита своя.
+-- Сегмент — тем же условием, что у воронки.
+SELECT form_version_id,
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted,
+       count(*) FILTER (WHERE submitted AND updated_at > created_at)::bigint AS timed_completions,
+       coalesce(
+           percentile_cont(0.5) WITHIN GROUP (
+               ORDER BY extract(epoch FROM updated_at - created_at)
+           ) FILTER (WHERE submitted AND updated_at > created_at),
+       0)::float8                              AS completion_duration_sec
+FROM form_visits
+WHERE form_id = $1
+  AND created_at >= sqlc.arg(from_ts)::timestamptz
+  AND created_at <  sqlc.arg(to_ts)::timestamptz
+  AND (sqlc.narg(seg_kind)::text IS NULL OR
+       (CASE sqlc.narg(seg_kind)::text
+            WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
+            WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
+            WHEN 'country' THEN coalesce(country_code, '')
+            WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
+            WHEN 'version' THEN form_version_id::text
+        END) = ANY(sqlc.narg(seg_keys)::text[]))
+GROUP BY form_version_id;
 
 -- name: VisitTimeseries :many
 -- Ряд визитов по времени для вкладки «Визиты» (спека design/analytics-tally.md §8).
@@ -242,7 +320,11 @@ GROUP BY bucket
 ORDER BY bucket;
 
 -- name: VisitSources :many
--- Сырьё списка источников: тройка меток и счётчик. Семантику («utm_source
+-- Сырьё списка источников: тройка меток и счётчик.
+--
+-- submitted у этого и соседних разбивок — агрегат, а не измерение группировки:
+-- конверсия строки (спека design/analytics-v2.md §5.2) не увеличивает ни результат,
+-- ни скан. Семантику («utm_source
 -- перебивает хост referer'а», «ни того ни другого — прямой заход») знает Go
 -- (domain.FoldSources) — здесь только группировка.
 --
@@ -252,7 +334,8 @@ ORDER BY bucket;
 SELECT coalesce(meta->>'referer', '')::text    AS referer,
        coalesce(meta->>'utm_source', '')::text AS utm_source,
        coalesce(meta->>'utm_medium', '')::text AS utm_medium,
-       count(*)::bigint                        AS visits
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
@@ -264,7 +347,8 @@ GROUP BY 1, 2, 3;
 -- Разбор — в Go (domain.ParseUserAgent): здесь нет и не должно быть знания о том,
 -- что Edge представляется Chrome'ом.
 SELECT coalesce(meta->>'user_agent', '')::text AS user_agent,
-       count(*)::bigint                        AS visits
+       count(*)::bigint                        AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
@@ -275,7 +359,8 @@ GROUP BY 1;
 -- Страны за период. Визиты без гео (справочника нет, приватный адрес, IPv6) сюда не
 -- попадают: их число считается отдельно, из общего числа визитов, — иначе строка
 -- «Не определено» конкурировала бы со странами в одном списке и притворялась местом.
-SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits
+SELECT country_code, coalesce(country, '')::text AS country, count(*)::bigint AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
@@ -287,7 +372,8 @@ ORDER BY visits DESC, country;
 -- name: VisitCities :many
 -- Города за период. Код страны едет рядом с именем: одноимённые города в разных
 -- странах — обычное дело, и склеивать их в одну строку значило бы врать.
-SELECT city, country_code, count(*)::bigint AS visits
+SELECT city, country_code, count(*)::bigint AS visits,
+       count(*) FILTER (WHERE submitted)::bigint AS submitted
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz

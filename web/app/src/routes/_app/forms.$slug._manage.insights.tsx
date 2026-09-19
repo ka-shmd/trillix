@@ -62,10 +62,12 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       className="inline-flex h-9 items-center gap-0.5 rounded-lg bg-muted p-[3px]"
       aria-label="Разделы аналитики"
     >
+      {/* Сегмент — параметр одних «Отвалов»: на других вкладках он ничего не режет, и
+          оставшись в адресе, выглядел бы действующим. */}
       <Link
         to="/forms/$slug/insights/answers"
         params={{ slug }}
-        search={(prev) => ({ ...prev, period })}
+        search={(prev) => ({ ...prev, period, segment: undefined })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
@@ -75,7 +77,7 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       <Link
         to="/forms/$slug/insights/visits"
         params={{ slug }}
-        search={(prev) => ({ ...prev, period })}
+        search={(prev) => ({ ...prev, period, segment: undefined })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}

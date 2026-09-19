@@ -95,20 +95,34 @@ describe('FunnelChart', () => {
 
 describe('ShareChart', () => {
   function rows(n: number) {
-    return Array.from({ length: n }, (_, i) => ({ label: `Строка ${i + 1}`, visits: n - i }))
+    return Array.from({ length: n }, (_, i) => ({ label: `Строка ${i + 1}`, visits: n - i, submitted: 0 }))
   }
 
   it('называет доли и рисует кольцо', () => {
     const { container, getByText } = render(
       <ShareChart
         rows={[
-          { label: 'Компьютер', visits: 3 },
-          { label: 'Телефон', visits: 1 },
+          { label: 'Компьютер', visits: 3, submitted: 1 },
+          { label: 'Телефон', visits: 1, submitted: 0 },
         ]}
       />,
     )
     expect(container.querySelectorAll('.recharts-pie-sector')).toHaveLength(2)
     expect(getByText('3 · 75 %')).toBeTruthy()
+  })
+
+  // Конверсия строки: над порогом малых выборок — доля, ниже — «N из M».
+  it('показывает, сколько из пришедших отправили', () => {
+    const { getByText } = render(
+      <ShareChart
+        rows={[
+          { label: 'Компьютер', visits: 40, submitted: 10 },
+          { label: 'Телефон', visits: 2, submitted: 2 },
+        ]}
+      />,
+    )
+    expect(getByText('25 %')).toBeTruthy()
+    expect(getByText('2 из 2')).toBeTruthy()
   })
 
   // Восемь строк — потолок секторов. Ровно восемь ещё помещаются целиком, и

@@ -1,0 +1,12 @@
+-- 0075: ключ тарифа analytics_segments — кросс-аналитика (фаза 30 DEV-PLAN, спека
+-- design/analytics-v2.md §13, ADR §10): сегмент воронки, фильтр сводки,
+-- сопряжённость, визитные разрезы ответов.
+--
+-- Ключ в лимитах ВСЕХ планов: молчание плана про известный ключ — ошибка
+-- конфигурации (TestPlansCoverCatalog). Открыт всем, как два прежних аналитических:
+-- пока платить нечем, закрытие отняло бы возможность без пути её вернуть.
+-- Закрытие — один UPDATE без выкатки:
+--
+--   UPDATE plans SET limits = jsonb_set(limits, '{analytics_segments}', 'false')
+--    WHERE code IN ('free', 'legacy_free');
+UPDATE plans SET limits = limits || '{"analytics_segments": true}'::jsonb;

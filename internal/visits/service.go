@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strconv"
 	"time"
 	"unicode/utf8"
 
@@ -69,10 +70,11 @@ type Store interface {
 	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place, visitorKey []byte) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	InsertPage(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID, blockID string) error
-	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.LastBlockCount, error)
-	CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PathCount, error)
-	PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PageSpan, error)
-	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error)
+	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.LastBlockCount, error)
+	CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PathCount, error)
+	PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PageSpan, error)
+	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (domain.VisitInsights, error)
+	VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error)
 	Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error)
 	Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
 	Cities(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
@@ -227,7 +229,7 @@ func (s *Service) MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) 
 //
 // Модель вопросов — общая с выгрузкой и сводкой (domain.QuestionOrder): три экрана
 // обязаны показывать один и тот же список вопросов.
-func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.Funnel, error) {
+func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) (domain.Funnel, error) {
 	// Порядок обязателен: сначала АВТОРИЗАЦИЯ (чужая форма → 404, приватное не
 	// раскрывается), только потом тариф (→ 402). Наоборот — и посторонний узнавал
 	// бы по коду ответа, существует ли форма и какой у чужого воркспейса план.
@@ -267,16 +269,20 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period d
 	// Верх воронки (визиты и конверсия) выводится из той же разбивки, что и шаги, —
 	// см. BuildFunnel. Путь и время на страницах читаются только у многостраничной
 	// формы: у одностраничной строк пути нет, и два запроса были бы вхолостую.
+	filter, err := s.segmentFilter(ctx, userID, form.WorkspaceID, formID, period, seg, versions)
+	if err != nil {
+		return domain.Funnel{}, err
+	}
 	var data domain.FunnelData
-	if data.Counts, err = s.repo.CountByLastBlock(ctx, s.db, formID, period); err != nil {
+	if data.Counts, err = s.repo.CountByLastBlock(ctx, s.db, formID, period, filter); err != nil {
 		return domain.Funnel{}, err
 	}
 	pages := domain.PageOrder(schemas)
 	if pages != nil {
-		if data.Paths, err = s.repo.CountPaths(ctx, s.db, formID, period); err != nil {
+		if data.Paths, err = s.repo.CountPaths(ctx, s.db, formID, period, filter); err != nil {
 			return domain.Funnel{}, err
 		}
-		if data.Spans, err = s.repo.PageSpans(ctx, s.db, formID, period); err != nil {
+		if data.Spans, err = s.repo.PageSpans(ctx, s.db, formID, period, filter); err != nil {
 			return domain.Funnel{}, err
 		}
 	}
@@ -288,13 +294,110 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period d
 // Гейта тарифа здесь НЕТ, и это не упущение: карточки — первое, что владелец видит
 // после публикации формы, и замок на них рекламировал бы Pro вместо продукта.
 // Платным остаётся разбор (воронка, источники), а не сам факт «сколько людей».
-func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitInsights, error) {
+//
+// С сегментом (карточки «Отвалов») — гейт analytics_segments, как у сегмента воронки.
+func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) (domain.VisitInsights, error) {
 	// Авторизация — тем же способом, что у воронки: чужая или несуществующая форма
 	// даёт 404 (инвариант 1, id из URL правом доступа не является).
-	if _, err := s.forms.Get(ctx, userID, formID); err != nil {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
 		return domain.VisitInsights{}, err
 	}
-	return s.repo.Insights(ctx, s.db, formID, period)
+	filter, err := s.segmentFilter(ctx, userID, form.WorkspaceID, formID, period, seg, nil)
+	if err != nil {
+		return domain.VisitInsights{}, err
+	}
+	return s.repo.Insights(ctx, s.db, formID, period, filter)
+}
+
+// Versions — разрез по версиям формы за окно: визиты, конверсия и время заполнения
+// каждой опубликованной версии, свежие сверху. Версии без визитов в окне не
+// показываются. Гейта нет (спека design/analytics-v2.md §13); с сегментом —
+// analytics_segments.
+func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) ([]domain.VersionStat, error) {
+	form, err := s.forms.Get(ctx, userID, formID)
+	if err != nil {
+		return nil, err
+	}
+	versions, err := s.forms.Versions(ctx, userID, formID)
+	if err != nil {
+		return nil, err
+	}
+	filter, err := s.segmentFilter(ctx, userID, form.WorkspaceID, formID, period, seg, versions)
+	if err != nil {
+		return nil, err
+	}
+	stats, err := s.repo.VersionStats(ctx, s.db, formID, period, filter)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]domain.VersionStat, 0, len(stats))
+	for i := len(versions) - 1; i >= 0; i-- {
+		v := versions[i]
+		st, ok := stats[v.ID]
+		if !ok {
+			continue
+		}
+		st.Number, st.PublishedAt = int(v.Number), v.PublishedAt
+		out = append(out, st)
+	}
+	return out, nil
+}
+
+// segmentFilter сводит сегмент к фильтру по сырым значениям визита (domain.VisitFilter).
+// Тариф спрашивается здесь же и ПОСЛЕ авторизации, которую вызывающий уже сделал:
+// сегмент — ключ analytics_segments, сегмент по источнику — ещё и analytics_sources
+// (иначе закрытая разбивка источников читалась бы сегментами по одному).
+//
+// versions нужны только сегменту по версии; nil — загрузить при надобности.
+func (s *Service) segmentFilter(ctx context.Context, userID, workspaceID, formID uuid.UUID, period domain.Period, seg domain.Segment, versions []forms.Version) (domain.VisitFilter, error) {
+	if seg.IsZero() {
+		return domain.VisitFilter{}, nil
+	}
+	keys := []entitlements.Key{entitlements.AnalyticsSegments}
+	if seg.Dim == domain.SegSource {
+		keys = append(keys, entitlements.AnalyticsSources)
+	}
+	for _, key := range keys {
+		d, err := s.plans.CheckWorkspace(ctx, workspaceID, key)
+		if err != nil {
+			return domain.VisitFilter{}, err
+		}
+		if !d.Allowed {
+			return domain.VisitFilter{}, domain.ErrPlanRequired
+		}
+	}
+
+	switch seg.Dim {
+	case domain.SegDevice, domain.SegBrowser, domain.SegOS:
+		rows, err := s.repo.UserAgents(ctx, s.db, formID, period)
+		if err != nil {
+			return domain.VisitFilter{}, err
+		}
+		return domain.UserAgentFilter(seg, rows), nil
+	case domain.SegSource:
+		rows, err := s.repo.Sources(ctx, s.db, formID, period)
+		if err != nil {
+			return domain.VisitFilter{}, err
+		}
+		return domain.SourceFilter(seg, rows), nil
+	case domain.SegVersion:
+		if versions == nil {
+			var err error
+			if versions, err = s.forms.Versions(ctx, userID, formID); err != nil {
+				return domain.VisitFilter{}, err
+			}
+		}
+		f := domain.VisitFilter{Kind: domain.FilterVersion, Keys: []string{}}
+		for _, v := range versions {
+			if strconv.Itoa(int(v.Number)) == seg.Value {
+				f.Keys = append(f.Keys, v.ID.String())
+			}
+		}
+		return f, nil
+	default:
+		return domain.PlaceFilter(seg), nil
+	}
 }
 
 // Breakdown — вкладка «Визиты» целиком: ряд по времени, источники, устройства,
