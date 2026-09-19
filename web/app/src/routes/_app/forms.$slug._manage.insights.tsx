@@ -9,8 +9,8 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 
-// Раздел «Аналитика» (/forms/$slug/insights): оболочка вкладок «Сводка», «Визиты» и
-// «Отвалы» (спека design/analytics-tally.md §3). Держит одно общее — окно
+// Раздел «Аналитика» (/forms/$slug/insights): оболочка вкладок «Обзор», «Визиты» и
+// «Ответы» (спека design/analytics-v3.md §2). Держит одно общее — окно
 // наблюдения: три копии периода на одном экране разъехались бы на первой правке.
 //
 // Полоса карточек с фазы 30 одна на все вкладки (features/insights/Cards.tsx), но
@@ -64,18 +64,25 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
       className="inline-flex h-9 items-center gap-0.5 rounded-lg bg-muted p-[3px]"
       aria-label="Разделы аналитики"
     >
-      {/* Сегмент режет «Сводку» и «Отвалы», фильтр ответов — одну «Сводку»; «Визиты» не
+      {/* Сегмент режет «Обзор» и «Ответы», фильтр ответов — одни «Ответы»; «Визиты» не
           режет ни то ни другое, и оставшись в адресе, они выглядели бы там действующими.
-          Между «Сводкой» и «Отвалами» сегмент переходит вместе с адресом. */}
+          Между «Обзором» и «Ответами» сегмент переходит вместе с адресом.
+
+          Порядок вкладок — порядок вопросов владельца: как работает форма → кто
+          приходит → что отвечают. */}
+      {/* «Обзор» живёт на index раздела, поэтому его адрес — префикс адресов соседей,
+          и без activeOptions.exact роутер считал бы его активным на всех трёх
+          вкладках сразу. */}
       <Link
-        to="/forms/$slug/insights/answers"
+        to="/forms/$slug/insights"
         params={{ slug }}
-        search={(prev) => ({ ...prev, period })}
+        search={(prev) => ({ ...prev, period, where: undefined })}
         className={base}
+        activeOptions={{ exact: true }}
         activeProps={active}
         inactiveProps={inactive}
       >
-        Сводка
+        Обзор
       </Link>
       <Link
         to="/forms/$slug/insights/visits"
@@ -88,14 +95,14 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
         Визиты
       </Link>
       <Link
-        to="/forms/$slug/insights/drop-offs"
+        to="/forms/$slug/insights/answers"
         params={{ slug }}
-        search={(prev) => ({ ...prev, period, where: undefined })}
+        search={(prev) => ({ ...prev, period })}
         className={base}
         activeProps={active}
         inactiveProps={inactive}
       >
-        Отвалы
+        Ответы
       </Link>
     </nav>
   )
@@ -104,9 +111,9 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
 function PeriodSelect() {
   // navigate РОУТЕРА, а не маршрута (Route.useNavigate). Разница несущая: у
   // маршрутного navigate базой служит сам маршрут, то есть оболочка раздела, и
-  // переход без `to` уходил на /forms/{slug}/insights — а его index редиректит на
-  // «Сводку». Со стороны это выглядело так: меняешь период на вкладке «Визиты» и
-  // оказываешься на «Сводке». Роутерный navigate базой берёт ТЕКУЩИЙ адрес,
+  // переход без `to` уходил бы на /forms/{slug}/insights — то есть на «Обзор».
+  // Со стороны это выглядит так: меняешь период на вкладке «Визиты» и
+  // оказываешься на «Обзоре». Роутерный navigate базой берёт ТЕКУЩИЙ адрес,
   // поэтому вкладка остаётся той же, какой была.
   const navigate = useNavigate()
   const { period } = Route.useSearch()

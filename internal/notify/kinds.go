@@ -97,8 +97,9 @@ var registry = map[Kind]spec{
 		text: func(p Payload, _ int32) string {
 			return fmt.Sprintf("%s — конверсия упала: %d %% за неделю против %d %% раньше", formTitle(p), p.RecentRate, p.BaseRate)
 		},
-		// Отвалы за неделю: там видно, на каком шаге теряют, и сравнение с прошлой.
-		link: func(p Payload, _ string) string { return "/forms/" + p.FormSlug + "/insights/drop-offs?period=7d" },
+		// «Обзор» за неделю: там воронка — видно, на каком шаге теряют, — и карточки
+		// со сравнением с прошлой неделей.
+		link: func(p Payload, _ string) string { return "/forms/" + p.FormSlug + "/insights?period=7d" },
 	},
 }
 
