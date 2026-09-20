@@ -27,10 +27,6 @@ export const periodSchema = periodEnum.catch(DEFAULT_PERIOD)
 // вкладку в пределах минуты берёт кеш. Смена окна — другой ключ и новый запрос.
 export const analyticsFreshness = { staleTime: 60 * 1000, refetchOnWindowFocus: false } as const
 
-// Порядок окон на экране: от узкого к широкому. У объекта подписей он другой (ключи
-// схемы), и ряд переключателя открывался бы «Всем временем».
-export const PERIODS: readonly Period[] = ['24h', '7d', '30d', 'all']
-
 export const periodLabels: Record<Period, string> = {
   all: 'Всё время',
   '24h': '24 часа',

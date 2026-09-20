@@ -64,8 +64,9 @@ function renderInsights(initial: string) {
   return router
 }
 
-// PeriodSwitcher повторяет то, что делает настоящий переключатель периода: тот же
-// вызов navigate с той же кнопки. Предмет проверки — переход, а не контрол.
+// PeriodSwitcher повторяет то, что делает настоящий селектор: тот же вызов navigate.
+// Radix Select в happy-dom не открывается вовсе (web/CLAUDE.md), поэтому здесь
+// кнопка — предмет проверки не в контроле, а в переходе.
 function PeriodSwitcher() {
   const navigate = useNavigate()
   return (
