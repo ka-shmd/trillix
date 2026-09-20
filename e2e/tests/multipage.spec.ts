@@ -186,11 +186,18 @@ test('форма из трёх страниц: шаги, пошаговая ва
   // касался только первого. Это и есть обещанное ADR §10 уточнение — «переход на
   // страницу» вместо «касания поля», и проверить его можно только здесь: бикон
   // подчиняется прод-CSP, а в dev её нет вовсе.
+  //
+  // Воронка многостраничной формы — про СТРАНИЦЫ; вопросы страницы лежат внутри её
+  // строки и раскрываются щелчком по ней (фаза 30, редизайн). Колонки строки:
+  // шаг, полоска, «Дошли», «Ушли здесь», «На странице».
   await page.goto(`/forms/${form.slug}/funnel`)
-  const secondStep = page.getByRole('listitem').filter({ hasText: Q2 })
+  await page.getByRole('button', { name: 'Страница 2' }).click()
+  const secondStep = page.getByRole('row').filter({ hasText: Q2 })
   await expect(secondStep).toContainText('1')
-  const firstStep = page.getByRole('listitem').filter({ hasText: Q1 })
-  await expect(firstStep).toContainText('Здесь никто не остановился.')
+
+  await page.getByRole('button', { name: 'Страница 1' }).click()
+  const firstStep = page.getByRole('row').filter({ hasText: Q1 })
+  await expect(firstStep.getByRole('cell').nth(3)).toHaveText('—')
 
   // 9. Настройка «Возврат на прошлые страницы» (0055) — та же форма, тот же
   // опубликованный документ. Колонка живая: PATCH без перепубликации, и следующий

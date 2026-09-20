@@ -1,6 +1,6 @@
 // @vitest-environment happy-dom
 import { afterEach, describe, expect, it } from 'vitest'
-import { cleanup, render, screen } from '@testing-library/react'
+import { act, cleanup, render, screen } from '@testing-library/react'
 
 import { Funnel } from './Funnel'
 import { type FunnelRow } from './metrics'
@@ -65,6 +65,32 @@ describe('Funnel', () => {
     const other = screen.getByText('Контакты').closest('tr')
     expect(worst?.className).toContain('bg-muted')
     expect(other?.className).not.toContain('bg-muted')
+  })
+
+  // Вопросы страницы живут ВНУТРИ её строки, а не в отдельном разделе с выбором
+  // страницы: список страниц уже стоит в этой же таблице.
+  it('раскрывает страницу в её вопросы', async () => {
+    const page: FunnelRow = {
+      key: 'page:pb1',
+      label: 'Контакты',
+      reached: 45,
+      dropped: 5,
+      children: [
+        { key: 'q1', label: '2. Телефон', reached: 45, dropped: 30 },
+        { key: 'q2', label: '3. Почта', reached: 15, dropped: 1 },
+      ],
+    }
+    render(<Funnel rows={[page]} base={100} />)
+    expect(screen.queryByText('2. Телефон')).toBeNull()
+
+    await act(async () => {
+      screen.getByRole('button', { name: 'Контакты' }).click()
+    })
+
+    expect(screen.getByText('2. Телефон')).toBeTruthy()
+    // Внутри страницы подсвечен свой худший вопрос: 30 из 45 против 1 из 15.
+    expect(screen.getByText('2. Телефон').closest('tr')?.className).toContain('bg-muted')
+    expect(screen.getByText('3. Почта').closest('tr')?.className).not.toContain('bg-muted')
   })
 
   // Нулевая база бывает у формы без визитов за окно. Ширина полоски считается

@@ -233,9 +233,12 @@ test('ветвление: скрытый вопрос, скрытый вариа
 
   // ── Сводка: знаменатель «вопрос показали» ────────────────────────────────────
   await page.goto(`/forms/${form.slug}/summary`)
-  const kindCard = page.getByRole('article').filter({ hasText: KIND })
-  // Вопрос показали одному из трёх — и на карточке это сказано прямым текстом, иначе
-  // «1 из 1» рядом с «3 ответа» читается как поломка.
-  await expect(kindCard).toContainText('Ответили 1 из 1')
-  await expect(kindCard).toContainText('вопрос показали 1 из 3')
+  // Вопросы сводки свёрнуты в список (фаза 30, редизайн): знаменатель живёт внутри
+  // вопроса и появляется, когда строку раскрыли.
+  const kindItem = page.getByRole('listitem').filter({ hasText: KIND })
+  await kindItem.getByRole('button').first().click()
+  // Вопрос показали одному из трёх — и это сказано прямым текстом, иначе «1 из 1»
+  // рядом с «3 ответа» читается как поломка.
+  await expect(kindItem).toContainText('Ответили 1 из 1')
+  await expect(kindItem).toContainText('вопрос показали 1 из 3')
 })

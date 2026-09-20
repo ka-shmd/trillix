@@ -1,21 +1,15 @@
 import { createFileRoute, Link } from '@tanstack/react-router'
 import { useQuery } from '@tanstack/react-query'
-import { useState } from 'react'
 
 import { type FormFunnel } from '../../entities/funnel'
 import { formDetailQueryOptions } from '../../features/forms/queries'
 import { funnelQueryOptions } from '../../features/funnel/queries'
 import { InsightCards } from '../../features/insights/Cards'
-import { SegmentPicker } from '../../features/insights/SegmentPicker'
+import { ScopeBar } from '../../features/insights/ScopeBar'
 import { VersionsTable } from '../../features/insights/VersionsTable'
 import { versionStatsQueryOptions } from '../../features/insights/queries'
 import { Funnel } from '../../features/insights/Funnel'
-import {
-  funnelRows,
-  funnelSteps,
-  pageQuestionRows,
-  worstStep,
-} from '../../features/insights/metrics'
+import { funnelRows, funnelSteps, worstStep } from '../../features/insights/metrics'
 import { pluralPeople } from '../../shared/format'
 import { type Period } from '../../shared/period'
 import { segmentFromSearch } from '../../shared/segment'
@@ -23,13 +17,6 @@ import { ApiError } from '../../shared/api/errors'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
 
 // Вкладка «Обзор» (/forms/$slug/insights) — ПЕРВЫЙ экран аналитики: как работает
 // форма и где она теряет людей (спека design/analytics-v3.md §2, §4).
@@ -38,14 +25,14 @@ import {
 // теряет людей, но молчит, где. Этот экран отвечает на «где» — и из него следует
 // конкретное действие: убрать вопрос или сделать необязательным.
 //
-// Раньше это была третья вкладка «Отвалы», а раздел открывался распределениями
-// ответов. Порядок перевёрнут решением владельца 2026-09-19: пока форма теряет
-// людей, содержание ответов вторично. Старый адрес /insights/drop-offs редиректит
-// сюда — у владельца на него закладки.
+// Воронка открывает раздел, а распределения ответов идут третьей вкладкой
+// (решение владельца 2026-09-19): пока форма теряет людей, содержание ответов
+// вторично. Адрес /insights/drop-offs редиректит сюда — у владельца на него
+// закладки.
 //
 // Экран стоит на INDEX-маршруте раздела, а не на своём пути: у «Обзора» нет адреса
-// отдельно от «Аналитики». Прежде index редиректил на вкладку — то есть у раздела
-// не было собственного экрана вовсе.
+// отдельно от «Аналитики». Index, редиректящий на вкладку, — это раздел вовсе без
+// собственного экрана.
 //
 // Сегмент (?segment=device:Телефон) — этой вкладки и «Ответов»: воронка, карточки и
 // разрез версий считаются по визитам сегмента (спека design/analytics-v2.md §5.4).
@@ -73,8 +60,10 @@ function OverviewPage() {
   })
   const setSegment = (next: string | undefined) =>
     void navigate({ search: (prev) => ({ ...prev, segment: next }), replace: true })
+  // Выборка «Обзора» — только по визиту: воронку сервер по ответам не режет, и
+  // предлагать здесь условия по ответам значило бы обещать несуществующее.
   const picker = formId && (
-    <SegmentPicker formId={formId} period={period} segment={segment} onChange={setSegment} />
+    <ScopeBar formId={formId} period={period} segment={segment} onSegment={setSegment} />
   )
 
   // Полоса та же, что на «Сводке» и «Визитах» (спека design/analytics-v3.md §3):
@@ -177,10 +166,6 @@ function OverviewPage() {
         )}
       </Section>
 
-      {funnel.data && funnel.data.visits > 0 && funnel.data.pages.length > 0 && (
-        <PageQuestions funnel={funnel.data} />
-      )}
-
       {formId && <Versions formId={formId} period={period} segment={segment} />}
     </div>
   )
@@ -209,45 +194,6 @@ function Versions({
   )
 }
 
-// Вопросы одной страницы многостраничной формы. Выбор страницы — список, а не щелчок
-// по полоске графика: полоска не кнопка, и с клавиатуры до неё не добраться. Сначала
-// открыта страница, названная в пояснении воронки, — ради неё сюда и спускаются.
-function PageQuestions({ funnel }: { funnel: FormFunnel }) {
-  const [chosen, setChosen] = useState<string | null>(null)
-  const worst = worstStep(funnelSteps(funnel))
-  const fallback = worst ? worst.key : `page:${funnel.pages[0]!.key}`
-  // Выбранной страницы может не оказаться в новом окне наблюдения — тогда снова
-  // страница по умолчанию, а не пустой список.
-  const value = chosen !== null && funnel.pages.some((p) => `page:${p.key}` === chosen) ? chosen : fallback
-  // Ключ страницы '' (первая) Select не принимает — пустое значение у него значит
-  // «ничего не выбрано». Отсюда префикс page: — тот же, что у строк воронки.
-  const pageKey = value.slice('page:'.length)
-  const rows = pageQuestionRows(funnel, pageKey)
-
-  return (
-    <Section
-      title="Вопросы страницы"
-      description="Где останавливаются внутри выбранной страницы."
-      action={
-        <Select value={value} onValueChange={setChosen}>
-          <SelectTrigger className="w-[220px]" aria-label="Страница">
-            <SelectValue />
-          </SelectTrigger>
-          <SelectContent>
-            {funnel.pages.map((p) => (
-              <SelectItem key={p.key} value={`page:${p.key}`}>
-                {p.label}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-      }
-    >
-      <Funnel rows={rows} base={funnel.visits} worstKey={worstStep(rows)?.key} />
-    </Section>
-  )
-}
-
 // Пояснение раздела называет САМЫЙ ПРОБЛЕМНЫЙ шаг — то, ради чего на экран и
 // заходят. ЧИСЛА оно не повторяет: шаг подсвечен в самой воронке, и его потеря
 // написана под его же полоской. Пока их печатали и здесь, одна и та же дробь
@@ -256,10 +202,14 @@ function funnelHint(funnel: FormFunnel | undefined): string {
   const general = 'Сколько человек дошло до каждого шага и где они останавливаются.'
   if (!funnel) return general
   const steps = funnelSteps(funnel)
+  // У многостраничной формы шаг — страница, и внутри неё есть свои вопросы.
+  // Раскрытие строки ничем, кроме шеврона, себя не выдаёт, поэтому о нём сказано
+  // словом: это единственный путь к разбору страницы.
+  const inside = funnel.pages.length > 0 ? ' Страница раскрывается щелчком — внутри её вопросы.' : ''
   const worst = worstStep(steps)
-  if (worst) return `Чаще всего уходят на шаге «${worst.label}» — он выделен ниже.`
+  if (worst) return `Чаще всего уходят на шаге «${worst.label}» — он выделен ниже.${inside}`
   // Отвалы есть, но все на шагах ниже порога малых выборок: назвать худший нельзя, а
   // «никто не останавливался» было бы неправдой.
-  if (steps.some((s) => s.dropped > 0)) return general
-  return 'Ни на одном шаге люди пока не останавливались.'
+  if (steps.some((s) => s.dropped > 0)) return general + inside
+  return 'Ни на одном шаге люди пока не останавливались.' + inside
 }

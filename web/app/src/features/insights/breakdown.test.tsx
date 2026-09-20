@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { act, cleanup, render, screen } from '@testing-library/react'
 
-import { BreakdownList, type BreakdownRow } from './Breakdown'
+import { BarRows, BreakdownList, type BreakdownRow } from './Breakdown'
 
 afterEach(cleanup)
 
@@ -74,5 +74,75 @@ describe('BreakdownList', () => {
   it('пустая разбивка объясняется словом, а не пустотой', () => {
     render(<BreakdownList label="Источник" rows={[]} />)
     expect(screen.getByText('Данных нет.')).toBeTruthy()
+  })
+})
+
+// Строка-полоска умеет две вещи сверх показа величины: раскрываться в свои
+// подстроки (страница воронки — в вопросы) и применять себя к выборке экрана
+// (вариант ответа — в условие фильтра).
+describe('BarRows', () => {
+  const page = {
+    key: 'page:p1',
+    label: 'Страница 1',
+    value: '75 · 75 %',
+    share: 0.75,
+    children: [
+      { key: 'q1', label: '1. Имя', value: '70 · 70 %', share: 0.7 },
+      { key: 'q2', label: '2. Почта', value: '50 · 50 %', share: 0.5 },
+    ],
+  }
+
+  it('вложенные строки прячет до щелчка', async () => {
+    render(<BarRows columns={{ label: 'Шаг', value: 'Дошли' }} rows={[page]} />)
+    expect(screen.queryByText('1. Имя')).toBeNull()
+
+    const toggle = screen.getByRole('button', { name: 'Страница 1' })
+    expect(toggle.getAttribute('aria-expanded')).toBe('false')
+    await act(async () => {
+      toggle.click()
+    })
+
+    expect(screen.getByText('1. Имя')).toBeTruthy()
+    expect(screen.getByText('2. Почта')).toBeTruthy()
+    expect(screen.getByRole('button', { name: 'Страница 1' }).getAttribute('aria-expanded')).toBe(
+      'true',
+    )
+  })
+
+  it('строку без детей и без действия кнопкой не делает', () => {
+    render(
+      <BarRows
+        columns={{ label: 'Шаг', value: 'Дошли' }}
+        rows={[{ key: 'a', label: 'Открыли форму', value: '100', share: 1 }]}
+      />,
+    )
+    expect(screen.queryByRole('button')).toBeNull()
+  })
+
+  // МИНА: цель щелчка — вся строка (обработчик на tr), а имя и клавиатура — у
+  // настоящей кнопки внутри неё. Без stopPropagation нажатие на кнопку всплывало бы
+  // до строки, и одно нажатие применяло бы условие дважды — то есть применяло и
+  // тут же снимало.
+  it('щелчок по строке с действием срабатывает ровно раз', async () => {
+    const calls: string[] = []
+    render(
+      <BarRows
+        columns={{ label: 'Вариант', value: 'Ответы' }}
+        rows={[
+          {
+            key: 'msk',
+            label: 'Москва',
+            value: '31 · 31 %',
+            share: 0.31,
+            onSelect: () => calls.push('msk'),
+            actionLabel: 'Оставить только «Москва»',
+          },
+        ]}
+      />,
+    )
+    await act(async () => {
+      screen.getByRole('button', { name: 'Оставить только «Москва»' }).click()
+    })
+    expect(calls).toEqual(['msk'])
   })
 })

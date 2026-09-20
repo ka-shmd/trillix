@@ -1,107 +1,460 @@
-import { SlidersHorizontal } from 'lucide-react'
+import { useQuery } from '@tanstack/react-query'
+import { ChevronLeft, Plus, SlidersHorizontal, X } from 'lucide-react'
 import { useState } from 'react'
 
-import { AnswerFilterBar } from './AnswerFilterBar'
-import { SegmentPicker } from './SegmentPicker'
+import { versionStatsQueryOptions, visitsBreakdownQueryOptions } from './queries'
+import { segmentOptions, segmentValueLabel, type SegmentOption } from './segment'
 import { type BlockSummary } from '../../entities/summary'
-import { decodeFilter, type FilterCondition } from '../../shared/answerFilter'
+import { type LogicOperator } from '@entities/formSchema'
+import { operatorsFor } from '@fields/logic'
+import {
+  decodeFilter,
+  equalsOp,
+  MAX_FILTER_CONDITIONS,
+  needsValue,
+  type FilterCondition,
+} from '../../shared/answerFilter'
+import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
+import { operatorLabel } from '../../shared/logicLabels'
 import { type Period } from '../../shared/period'
-import { segmentDimLabels, splitSegment } from '../../shared/segment'
-import { Badge } from '@/components/ui/badge'
+import { segmentDimLabels, splitSegment, type SegmentDim } from '../../shared/segment'
 import { Button } from '@/components/ui/button'
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command'
+import { Input } from '@/components/ui/input'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
 
-// Выборка сводки: сегмент по визиту и условия по ответам — ОДНОЙ кнопкой (решение
-// владельца 2026-09-19: «много неудобных контролов»).
+// Выборка экрана аналитики: кого считать. Один контрол на «Обзоре» и «Ответах»
+// (решение владельца 2026-09-20: «контролы неудобные и неинтуитивные — и в логике
+// тоже»).
 //
-// Раньше над списком вопросов стояли два ряда органов управления: выпадающий список
-// измерения, выпадающий список значения, кнопка сброса и рядом панель условий. Они
-// занимали столько же места, сколько первый вопрос, и стояли там всегда — включая
-// те девять случаев из десяти, когда никакой выборки не настраивают.
+// Устройство контрола держат три правила.
 //
-// Теперь на экране видно ПРИМЕНЁННОЕ, а не средства его применить: пока выборка
-// пуста, это одна кнопка. Настроенная выборка показывается бейджами рядом с ней —
-// иначе числа под ней врали бы молча.
+// ПЕРВОЕ: НА ЭКРАНЕ ВИДНО ПРИМЕНЁННОЕ, А НЕ СРЕДСТВА ЕГО ПРИМЕНИТЬ. Применённое —
+// чипсы, каждый со своим крестиком; добавление — одна кнопка. Пока выборка пуста,
+// от контрола на экране одна строка.
+//
+// ВТОРОЕ: ОДИН СПИСОК ПОЛЕЙ, А НЕ ДВА КОНТРОЛА. «Кто пришёл» (свойство визита) и
+// «Что ответил» (ответ на вопрос) — разные множества (docs/ANALYTICS.md §1) и едут
+// в запросе разными параметрами (`segment` и `where`), но человек выбирает одно и
+// то же: по какому признаку сузить. Разные параметры — забота этого файла, а не
+// повод показывать два органа управления.
+//
+// ТРЕТЬЕ: ШАГИ ИДУТ ОДИН ЗА ДРУГИМ В ОДНОМ ОКНЕ. Поле → значение, и для закрытого
+// вопроса и визитного измерения это ВСЁ: оператор там подразумевается равенством.
+// Окна в окне не бывает: поповер выборки, открывающий второй поповер с тремя
+// выпадающими списками подряд (вопрос, оператор, значение), делает простейший
+// разрез «телефоны» в пять нажатий.
+//
+// В списке значений стоят ЧИСЛА: разрез выбирают по величине, и «Телефон 2751»
+// отвечает на вопрос «а есть ли там кто-нибудь» до применения, а не после.
 export function ScopeBar({
   formId,
   period,
   segment,
   where,
-  blocks,
+  blocks = [],
   onSegment,
   onWhere,
 }: {
   formId: string
   period: Period
   segment: string | undefined
-  where: string | undefined
-  // Вопросы для панели условий — из сводки БЕЗ выборки: при пустом результате или
-  // закрытом тарифе отфильтрованной сводки нет, а менять условия всё равно нужно.
-  blocks: BlockSummary[]
+  where?: string
+  // Вопросы для условий по ответам — из сводки БЕЗ выборки: при пустом результате
+  // или закрытом тарифе отфильтрованной сводки нет, а менять условия всё равно
+  // нужно. Пусто (и нет onWhere) — экран условий по ответам не принимает: воронку
+  // «Обзора» сервер по ответам не режет.
+  blocks?: BlockSummary[]
   onSegment: (next: string | undefined) => void
-  onWhere: (next: FilterCondition[]) => void
+  onWhere?: (next: FilterCondition[]) => void
 }) {
-  const [open, setOpen] = useState(false)
-  const conditions = decodeFilter(where)
+  const conditions = onWhere ? decodeFilter(where) : []
   const seg = splitSegment(segment)
   const applied = (seg ? 1 : 0) + conditions.length
+  const byId = new Map(blocks.map((b) => [b.blockId, b]))
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      <Popover open={open} onOpenChange={setOpen}>
-        <PopoverTrigger asChild>
-          <Button variant="outline" size="sm">
-            <SlidersHorizontal className="size-4" />
-            Выборка
-            {applied > 0 && (
-              <Badge variant="secondary" className="ml-1 tabular-nums">
-                {applied}
-              </Badge>
-            )}
-          </Button>
-        </PopoverTrigger>
-        {/* Ширина по содержимому панели условий, а не по кнопке: внутри два
-            выпадающих списка в ряд. */}
-        <PopoverContent align="start" className="flex w-96 flex-col gap-4">
-          <div className="flex flex-col gap-2">
-            <p className="text-sm font-semibold">Кто отвечал</p>
-            <SegmentPicker formId={formId} period={period} segment={segment} onChange={onSegment} />
-          </div>
-          <div className="flex flex-col gap-2">
-            <p className="text-sm font-semibold">Что ответил</p>
-            {blocks.length > 0 ? (
-              <AnswerFilterBar blocks={blocks} conditions={conditions} onChange={onWhere} />
-            ) : (
-              <p className="text-sm text-muted-foreground">Вопросов пока нет.</p>
-            )}
-          </div>
-        </PopoverContent>
-      </Popover>
-
-      {/* Применённое — рядом с кнопкой, а не только внутри окна: закрыв окно,
-          человек обязан видеть, по какой совокупности считаются числа. */}
       {seg && (
-        <Badge variant="secondary" className="font-normal">
-          {segmentDimLabels[seg.dim]}: {seg.value}
-        </Badge>
+        <Chip
+          text={`${segmentDimLabels[seg.dim]}: ${segmentValueLabel(seg.dim, seg.value)}`}
+          onRemove={() => onSegment(undefined)}
+        />
       )}
-      {conditions.length > 0 && (
-        <Badge variant="secondary" className="font-normal">
-          условий по ответам: {conditions.length}
-        </Badge>
-      )}
-      {applied > 0 && (
+      {conditions.map((c, i) => (
+        <Chip
+          key={`${c.blockId}-${i}`}
+          text={conditionText(c, byId.get(c.blockId))}
+          onRemove={() => onWhere?.(conditions.filter((_, j) => j !== i))}
+        />
+      ))}
+
+      <ScopePicker
+        formId={formId}
+        period={period}
+        empty={applied === 0}
+        // Условий по ответам не больше, чем принимает сервер
+        // (domain.MaxFilterConditions); достигли потолка — вопросов в списке полей
+        // нет, а измерения визита остаются.
+        blocks={conditions.length < MAX_FILTER_CONDITIONS && onWhere ? blocks : []}
+        onSegment={onSegment}
+        onCondition={(c) => onWhere?.([...conditions, c])}
+      />
+
+      {/* Сброс — только когда сбрасывать есть что И крестиков больше одного:
+          у единственного чипса его собственный крестик делает ровно то же. */}
+      {applied > 1 && (
         <Button
           variant="ghost"
           size="sm"
           onClick={() => {
             onSegment(undefined)
-            onWhere([])
+            onWhere?.([])
           }}
         >
-          Сбросить
+          Сбросить всё
         </Button>
       )}
     </div>
   )
+}
+
+function Chip({ text, onRemove }: { text: string; onRemove: () => void }) {
+  return (
+    <span className="inline-flex max-w-full items-center gap-1 rounded-md bg-muted py-1 pr-1 pl-2.5 text-sm">
+      <span className="min-w-0 truncate">{text}</span>
+      <Button
+        variant="ghost"
+        size="icon"
+        className="size-6"
+        aria-label={`Убрать «${text}»`}
+        onClick={onRemove}
+      >
+        <X className="size-3.5" />
+      </Button>
+    </span>
+  )
+}
+
+function conditionText(c: FilterCondition, block: BlockSummary | undefined): string {
+  if (!block) return 'Вопрос удалён'
+  const op = operatorLabel(c.op, block.type)
+  if (!needsValue(c.op) || c.value === undefined) return `${block.label} — ${op}`
+  const option = block.buckets.find((b) => b.key === c.value)
+  return `${block.label} — ${op} «${option?.label ?? c.value}»`
+}
+
+// Шаги окна. Значение и оператор — разные шаги, а не разные контролы на одном
+// экране: у закрытого вопроса шага «оператор» не бывает вовсе.
+type Stage = 'field' | 'value' | 'op' | 'text'
+
+type Field = { kind: 'visit'; dim: SegmentDim } | { kind: 'answer'; block: BlockSummary }
+
+function ScopePicker({
+  formId,
+  period,
+  empty,
+  blocks,
+  onSegment,
+  onCondition,
+}: {
+  formId: string
+  period: Period
+  empty: boolean
+  blocks: BlockSummary[]
+  onSegment: (next: string) => void
+  onCondition: (c: FilterCondition) => void
+}) {
+  const [open, setOpen] = useState(false)
+  const [stage, setStage] = useState<Stage>('field')
+  const [field, setField] = useState<Field | null>(null)
+  const [op, setOp] = useState<LogicOperator | null>(null)
+  const [text, setText] = useState('')
+  // Поиск управляемый, потому что его надо ГАСИТЬ на каждом шаге: cmdk держит
+  // строку в своём состоянии, и набранное на шаге поля осталось бы фильтровать
+  // список значений — «Устр» не встречается ни в одном устройстве, и шаг второй
+  // открывался бы словами «Ничего не найдено».
+  const [query, setQuery] = useState('')
+
+  // Разбивка нужна ДО выбора измерения: по ней список полей знает, у каких
+  // измерений за это окно вообще есть значения. Измерение без значений — тупик:
+  // выбрал «Страну», а выбирать не из чего. Запрос тот же, что у вкладки «Визиты»,
+  // и в пределах минуты берётся из кеша.
+  const breakdown = useQuery({ ...visitsBreakdownQueryOptions(formId, period), enabled: open })
+  const versions = useQuery({ ...versionStatsQueryOptions(formId, period), enabled: open })
+
+  const reset = () => {
+    setStage('field')
+    setField(null)
+    setOp(null)
+    setText('')
+    setQuery('')
+  }
+  const close = () => {
+    setOpen(false)
+    reset()
+  }
+
+  const pickField = (next: Field) => {
+    setField(next)
+    setQuery('')
+    if (next.kind === 'visit') {
+      setStage('value')
+      return
+    }
+    // Закрытый вопрос выбирается значением: «равен» у него единственный
+    // осмысленный оператор, и спрашивать о нём значит спрашивать ни о чём.
+    setStage(next.block.kind === 'distribution' && next.block.buckets.length > 0 ? 'value' : 'op')
+  }
+
+  const pickOp = (next: LogicOperator) => {
+    setOp(next)
+    setQuery('')
+    if (needsValue(next)) {
+      setStage('text')
+      return
+    }
+    if (field?.kind === 'answer') {
+      onCondition({ blockId: field.block.blockId, op: next })
+      close()
+    }
+  }
+
+  const options: SegmentOption[] =
+    field?.kind === 'visit' ? segmentOptions(field.dim, breakdown.data, versions.data) : []
+  const loading = breakdown.isPending || versions.isPending
+
+  return (
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        setOpen(next)
+        if (!next) reset()
+      }}
+    >
+      <PopoverTrigger asChild>
+        {/* Подпись пустого состояния называет ЗАДАЧУ, а не орган управления:
+            «Выборка» на кнопке одинаково читается и как «здесь настраивают», и как
+            «здесь показано». Когда чипсы уже стоят, задача очевидна из них, и
+            кнопка сжимается до добавления. */}
+        <Button variant={empty ? 'outline' : 'ghost'} size="sm">
+          {empty ? <SlidersHorizontal className="size-4" /> : <Plus className="size-4" />}
+          {empty ? 'Выбрать, кого показать' : 'Ещё условие'}
+        </Button>
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-80 p-0">
+        {field && (
+          // Возврат — первой строкой окна: шаг второй показывает значения одного
+          // поля, и без пути назад ошибка в поле стоила бы закрытия окна.
+          <div className="flex items-center gap-1 border-b p-1">
+            <Button variant="ghost" size="icon" className="size-7" aria-label="Назад" onClick={reset}>
+              <ChevronLeft className="size-4" />
+            </Button>
+            <span className="min-w-0 truncate text-sm font-medium">{fieldLabel(field)}</span>
+          </div>
+        )}
+
+        {stage === 'text' && field?.kind === 'answer' && op !== null ? (
+          <ValueInput
+            block={field.block}
+            op={op}
+            value={text}
+            onChange={setText}
+            onSubmit={() => {
+              const trimmed = text.trim()
+              if (trimmed === '') return
+              onCondition({ blockId: field.block.blockId, op, value: trimmed })
+              close()
+            }}
+          />
+        ) : (
+          <Command>
+            <CommandInput
+              placeholder={stage === 'field' ? 'Поиск поля' : 'Поиск'}
+              value={query}
+              onValueChange={setQuery}
+            />
+            <CommandList className="max-h-72">
+              <CommandEmpty>Ничего не найдено</CommandEmpty>
+
+              {stage === 'field' && (
+                <>
+                  <CommandGroup heading="Кто пришёл">
+                    {(Object.keys(segmentDimLabels) as SegmentDim[])
+                      // Измерение без значений за окно в списке не стоит: оно ведёт
+                      // в пустой список и выглядит поломкой справочника.
+                      .filter(
+                        (dim) =>
+                          loading || segmentOptions(dim, breakdown.data, versions.data).length > 0,
+                      )
+                      .map((dim) => (
+                        <CommandItem key={dim} onSelect={() => pickField({ kind: 'visit', dim })}>
+                          {segmentDimLabels[dim]}
+                        </CommandItem>
+                      ))}
+                  </CommandGroup>
+                  {blocks.length > 0 && (
+                    <CommandGroup heading="Что ответил">
+                      {blocks
+                        .filter((b) => operatorsFor(b.type).length > 0)
+                        .map((b) => (
+                          <CommandItem
+                            key={b.blockId}
+                            value={b.label}
+                            onSelect={() => pickField({ kind: 'answer', block: b })}
+                          >
+                            <BlockTypeIcon type={b.type} className="text-muted-foreground" />
+                            <span className="min-w-0 truncate">{b.label}</span>
+                          </CommandItem>
+                        ))}
+                    </CommandGroup>
+                  )}
+                </>
+              )}
+
+              {stage === 'value' && field?.kind === 'visit' && (
+                <CommandGroup>
+                  {loading && <CommandItem disabled>Загрузка…</CommandItem>}
+                  {options.map((o) => (
+                    <Choice
+                      key={o.value}
+                      // Значение города — внутренний ключ «КОД:Имя»; искать по нему
+                      // человек не станет, поэтому в фильтр cmdk едет подпись.
+                      search={o.label}
+                      label={o.label}
+                      count={o.count}
+                      onSelect={() => {
+                        onSegment(`${field.dim}:${o.value}`)
+                        close()
+                      }}
+                    />
+                  ))}
+                </CommandGroup>
+              )}
+
+              {stage === 'value' && field?.kind === 'answer' && (
+                <>
+                  <CommandGroup>
+                    {field.block.buckets.map((b) => (
+                      <Choice
+                        key={b.key}
+                        search={b.label}
+                        label={b.label}
+                        count={b.count}
+                        onSelect={() => {
+                          onCondition({
+                            blockId: field.block.blockId,
+                            op: equalsOp(field.block.type),
+                            value: b.key,
+                          })
+                          close()
+                        }}
+                      />
+                    ))}
+                  </CommandGroup>
+                  {/* Сравнения («оценка больше 8», «не отвечен») не пропадают из-за
+                      того, что у закрытого вопроса короткий путь — они за одной
+                      строкой, а не на месте короткого пути. */}
+                  <CommandGroup>
+                    <CommandItem
+                      onSelect={() => {
+                        setStage('op')
+                        setQuery('')
+                      }}
+                    >
+                      Другое условие…
+                    </CommandItem>
+                  </CommandGroup>
+                </>
+              )}
+
+              {stage === 'op' && field?.kind === 'answer' && (
+                <CommandGroup>
+                  {operatorsFor(field.block.type).map((o) => (
+                    <CommandItem
+                      key={o}
+                      value={operatorLabel(o, field.block.type)}
+                      onSelect={() => pickOp(o)}
+                    >
+                      {operatorLabel(o, field.block.type)}
+                    </CommandItem>
+                  ))}
+                </CommandGroup>
+              )}
+            </CommandList>
+          </Command>
+        )}
+      </PopoverContent>
+    </Popover>
+  )
+}
+
+// Строка выбора со своей величиной. Число прижато к правому краю и серое: это
+// справка о размере, а не то, что выбирают.
+function Choice({
+  search,
+  label,
+  count,
+  onSelect,
+}: {
+  search: string
+  label: string
+  count?: number
+  onSelect: () => void
+}) {
+  return (
+    <CommandItem value={search} onSelect={onSelect}>
+      <span className="min-w-0 flex-1 truncate">{label}</span>
+      {count !== undefined && (
+        <span className="shrink-0 text-xs tabular-nums text-muted-foreground">{count}</span>
+      )}
+    </CommandItem>
+  )
+}
+
+function ValueInput({
+  block,
+  op,
+  value,
+  onChange,
+  onSubmit,
+}: {
+  block: BlockSummary
+  op: LogicOperator
+  value: string
+  onChange: (next: string) => void
+  onSubmit: () => void
+}) {
+  return (
+    <form
+      className="flex flex-col gap-3 p-3"
+      onSubmit={(e) => {
+        e.preventDefault()
+        onSubmit()
+      }}
+    >
+      <p className="text-sm text-muted-foreground">{operatorLabel(op, block.type)}</p>
+      <Input
+        autoFocus
+        aria-label="Значение"
+        type={block.type === 'number' ? 'number' : block.type === 'date' ? 'date' : 'text'}
+        value={value}
+        onChange={(e) => onChange(e.target.value)}
+      />
+      <Button type="submit" size="sm" disabled={value.trim() === ''}>
+        Добавить
+      </Button>
+    </form>
+  )
+}
+
+function fieldLabel(field: Field): string {
+  return field.kind === 'visit' ? segmentDimLabels[field.dim] : field.block.label
 }

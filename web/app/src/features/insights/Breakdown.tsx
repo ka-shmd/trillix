@@ -1,4 +1,5 @@
-import { useState } from 'react'
+import { ChevronRight } from 'lucide-react'
+import { Fragment, useState } from 'react'
 
 import { conversionText, percentText } from './metrics'
 import { Button } from '@/components/ui/button'
@@ -44,9 +45,19 @@ export type BarRow = {
   // Пусто в клетке — прочерк, а не пустота: пустая ячейка читается как «не
   // догрузилось».
   extras?: React.ReactNode[]
-  // Подложка строки: худший шаг воронки. Не цвет состояния — это место на графике,
-  // а не отказ системы (docs/DESIGN-SYSTEM.md, роли цвета).
+  // Подложка строки: та, о которой сейчас речь, — худший шаг воронки, применённое
+  // условие выборки. Не цвет состояния: это место на графике, а не отказ системы
+  // (docs/DESIGN-SYSTEM.md, роли цвета).
   highlight?: boolean
+  // Вложенные строки: вопросы страницы внутри шага воронки. Строка с детьми
+  // раскрывается щелчком по себе — раздела со своим выпадающим списком под таблицей
+  // для этого не нужно.
+  children?: BarRow[]
+  // Щелчок по строке применяет её к выборке экрана («оставить только этих»).
+  // actionLabel — имя этого действия для скринридера: видимая подпись строки
+  // называет значение, а не то, что с ним произойдёт.
+  onSelect?: () => void
+  actionLabel?: string
 }
 
 // Шапки колонок. value обязателен: без имени главное число строки остаётся
@@ -63,6 +74,7 @@ export function BarRows({
   className?: string
 }) {
   const extras = columns.extras ?? []
+  const [open, setOpen] = useState<ReadonlySet<string>>(new Set())
   return (
     <table className={cn('w-full text-sm', className)}>
       <thead>
@@ -83,9 +95,29 @@ export function BarRows({
         </tr>
       </thead>
       <tbody>
-        {rows.map((row) => (
-          <Row key={row.key} row={row} extras={extras.length} />
-        ))}
+        {rows.map((row) => {
+          const expanded = open.has(row.key)
+          return (
+            <Fragment key={row.key}>
+              <Row
+                row={row}
+                extras={extras.length}
+                expanded={row.children && row.children.length > 0 ? expanded : undefined}
+                onToggle={() =>
+                  setOpen((prev) => {
+                    const next = new Set(prev)
+                    if (!next.delete(row.key)) next.add(row.key)
+                    return next
+                  })
+                }
+              />
+              {expanded &&
+                row.children?.map((child) => (
+                  <Row key={child.key} row={child} extras={extras.length} nested />
+                ))}
+            </Fragment>
+          )
+        })}
       </tbody>
     </table>
   )
@@ -104,12 +136,72 @@ function Th({ children, className }: { children?: React.ReactNode; className?: s
   )
 }
 
-function Row({ row, extras }: { row: BarRow; extras: number }) {
+function Row({
+  row,
+  extras,
+  expanded,
+  onToggle,
+  nested,
+}: {
+  row: BarRow
+  extras: number
+  // undefined — строка не раскрывается (детей нет).
+  expanded?: boolean
+  onToggle?: () => void
+  nested?: boolean
+}) {
   const lost = Math.min(row.lost ?? 0, row.share)
   const values = row.extras ?? []
+  // Раскрытие старше применения: строка с детьми раскрывается, а не фильтрует.
+  const act = expanded === undefined ? row.onSelect : onToggle
+
   return (
-    <tr className={cn('border-b border-border/60 last:border-0', row.highlight && 'bg-muted')}>
-      <td className="py-2.5 pr-6 align-middle">{row.label}</td>
+    <tr
+      className={cn(
+        'border-b border-border/60 last:border-0',
+        row.highlight && 'bg-muted',
+        // Цель щелчка — вся строка, а не подпись в первой колонке: числа справа
+        // такая же часть строки, и промах по ним выглядел бы поломкой. Настоящая
+        // кнопка при этом стоит в подписи (ниже) — она держит клавиатуру и имя для
+        // скринридера, а обработчик на tr только расширяет цель мыши.
+        act && 'cursor-pointer hover:bg-muted/60',
+      )}
+      onClick={act}
+    >
+      <td className={cn('py-2.5 pr-6 align-middle', nested && 'py-2')}>
+        {/* Вложенная строка — с рельсом слева: без него вопросы страницы читаются
+            как продолжение списка страниц. */}
+        <div className={cn(nested && 'ml-1.5 border-l pl-4 text-muted-foreground')}>
+          {act ? (
+            <button
+              type="button"
+              className="flex w-full items-center gap-1.5 text-left"
+              aria-expanded={expanded}
+              aria-label={row.actionLabel}
+              // Та же фраза подсказкой: щелчок по строке иначе виден только курсором.
+              title={row.actionLabel}
+              onClick={(e) => {
+                // Иначе щелчок по кнопке сработал бы дважды: на ней и на строке.
+                e.stopPropagation()
+                act()
+              }}
+            >
+              {expanded !== undefined && (
+                <ChevronRight
+                  className={cn(
+                    'size-4 shrink-0 text-muted-foreground transition-transform',
+                    expanded && 'rotate-90',
+                  )}
+                  aria-hidden
+                />
+              )}
+              <span className="min-w-0">{row.label}</span>
+            </button>
+          ) : (
+            row.label
+          )}
+        </div>
+      </td>
       {/* Полоска скрыта на узком экране: на 375 px ей остаётся полсантиметра, и
           вместо величины выходит точка. Числа при этом на месте — они и есть
           содержание, а полоска их только сравнивает. */}

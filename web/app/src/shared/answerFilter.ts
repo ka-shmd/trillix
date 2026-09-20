@@ -1,6 +1,7 @@
 import { z } from 'zod'
 
-import { logicOperatorSchema, type LogicOperator } from '@entities/formSchema'
+import { logicOperatorSchema, type BlockType, type LogicOperator } from '@entities/formSchema'
+import { operatorsFor } from '@fields/logic'
 
 // Фильтр ответов аналитики (спека design/analytics-v2.md §6.2): условия через «И»,
 // условие — лист условия логики формы. В адресе и в запросе — параметр `where`:
@@ -53,6 +54,18 @@ export function filterFromSearch(raw: unknown): string | undefined {
 
 export function needsValue(op: LogicOperator): boolean {
   return op !== 'answered' && op !== 'empty'
+}
+
+// Оператор равенства для типа вопроса: у множественного выбора «равен» значит «в
+// ответе есть этот вариант» (`includes`), у остальных — `is`. Нужен там, где
+// оператор не выбирают, а подразумевают: выбор варианта в списке выборки и щелчок
+// по строке распределения.
+//
+// Спрашивает operatorsFor (@fields/logic), а не повторяет его правило: вторая копия
+// «кому что предлагается» разъехалась бы с редактором логики и давала бы условия,
+// которые сервер отвергает.
+export function equalsOp(type: BlockType): LogicOperator {
+  return operatorsFor(type).includes('is') ? 'is' : 'includes'
 }
 
 // Чем сужена пустая выборка. Сервер отдаёт `unfiltered` при ЛЮБОЙ непустой выборке

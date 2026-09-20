@@ -1,5 +1,5 @@
 import { BarRows, type BarRow } from './Breakdown'
-import { dropPercent, droppedPhraseShort, stepTime, type FunnelRow } from './metrics'
+import { dropPercent, droppedPhraseShort, stepTime, worstStep, type FunnelRow } from './metrics'
 
 // Воронка формы: «Открыли форму» → шаги → «Отправили форму» (спека
 // design/analytics-v3.md §4.1).
@@ -21,6 +21,11 @@ import { dropPercent, droppedPhraseShort, stepTime, type FunnelRow } from './met
 // своя колонка и светлый хвост заливки, худший шаг — подложка строки. Заодно
 // «Обзор» перестал тянуть recharts вовсе: на первой вкладке аналитики графика
 // больше нет, а библиотека тяжёлая (features/insights/lazyCharts.tsx).
+//
+// СТРАНИЦА РАСКРЫВАЕТСЯ В СВОИ ВОПРОСЫ щелчком по строке (решение владельца
+// 2026-09-20). Разбор страницы стоял отдельным разделом с выпадающим списком
+// страниц — то есть выбирать страницу приходилось второй раз, списком, в котором
+// не видно ни одного числа, хотя строка этой страницы стоит прямо выше.
 export function Funnel({
   rows,
   base,
@@ -46,8 +51,8 @@ export function Funnel({
   )
 }
 
-// base — сотня процентов: визиты формы. У вопросов одной страницы база та же, чтобы
-// полоски двух воронок экрана были соизмеримы.
+// base — сотня процентов: визиты формы. У вопросов страницы база та же, чтобы
+// полоски внутри раскрытого шага были соизмеримы с самими шагами.
 function barRow(row: FunnelRow, base: number, highlight: boolean, timed: boolean): BarRow {
   const share = base > 0 ? row.reached / base : 0
   const pct = dropPercent(row)
@@ -55,6 +60,10 @@ function barRow(row: FunnelRow, base: number, highlight: boolean, timed: boolean
     row.dropped > 0 ? droppedPhraseShort(row.dropped, pct) : undefined,
   ]
   if (timed) extras.push(stepTime(row))
+  // Худший вопрос считается ВНУТРИ страницы, по тому же правилу, что худший шаг
+  // воронки: подложка внутри раскрытой страницы отвечает на «где именно здесь», а
+  // не соперничает с подложкой самого шага.
+  const worstChild = row.children ? worstStep(row.children)?.key : undefined
   return {
     key: row.key,
     label: row.label,
@@ -64,5 +73,9 @@ function barRow(row: FunnelRow, base: number, highlight: boolean, timed: boolean
     lost: base > 0 ? row.dropped / base : 0,
     highlight,
     extras,
+    ...(row.children &&
+      row.children.length > 0 && {
+        children: row.children.map((c) => barRow(c, base, c.key === worstChild, timed)),
+      }),
   }
 }

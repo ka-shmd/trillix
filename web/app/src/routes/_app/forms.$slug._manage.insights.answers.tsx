@@ -16,9 +16,12 @@ import { submissionsSummaryQueryOptions } from '../../features/submissions/queri
 import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
 import { formatDate, LOCALE, pluralAnswers } from '../../shared/format'
 import {
+  decodeFilter,
   emptyScopeHint,
   encodeFilter,
+  equalsOp,
   filterFromSearch,
+  MAX_FILTER_CONDITIONS,
   type FilterCondition,
 } from '../../shared/answerFilter'
 import { ApiError } from '../../shared/api/errors'
@@ -77,6 +80,29 @@ function AnswersPage() {
   const setSegment = (next: string | undefined) =>
     void navigate({ search: (prev) => ({ ...prev, segment: next }), replace: true })
 
+  // ЩЕЛЧОК ПО ВАРИАНТУ — тот же фильтр, что в окне выборки (решение владельца
+  // 2026-09-20). Собирать условие «Город равен Москва» из списков, стоя перед
+  // строкой «Москва», — работа, которую человек уже сделал глазами.
+  //
+  // Условие на ОДИН вопрос ровно одно: «A равен Москве И A равен Питеру» не даёт
+  // ничего, кроме пустого экрана, поэтому второй щелчок по соседней строке
+  // заменяет условие, а повторный по той же — снимает.
+  const conditions = decodeFilter(where)
+  const toggleCondition = (next: FilterCondition) => {
+    const applied = conditions.some(
+      (c) => c.blockId === next.blockId && c.op === next.op && c.value === next.value,
+    )
+    const rest = conditions.filter((c) => c.blockId !== next.blockId)
+    if (applied) {
+      setWhere(rest)
+      return
+    }
+    // Потолок условий держит сервер (domain.MaxFilterConditions); строка, которая
+    // его переполнит, просто не применяется.
+    if (rest.length >= MAX_FILTER_CONDITIONS) return
+    setWhere([...rest, next])
+  }
+
   const total = summary.data?.total ?? 0
   const unfiltered = summary.data?.unfiltered
   const planRequired =
@@ -84,11 +110,27 @@ function AnswersPage() {
 
   return (
     <div className="flex flex-col gap-12">
-      {/* Полоса считает ту же совокупность, что список под ней: сегмент режет и её.
-          Числа ответов на полосе нет — оно в пояснении раздела: полоса говорит о
-          визитах, и submissions рядом с «Отправили» читались бы как расхождение
-          (спека design/analytics-v3.md §3). */}
-      <InsightCards slug={slug} period={period} segment={segment} />
+      {/* Выборка стоит НАД полосой карточек, а не в шапке раздела под ней: она
+          режет и карточки тоже, а контрол под своим результатом читается как
+          относящийся к одному списку вопросов. */}
+      <div className="flex flex-col gap-4">
+        {formId && (
+          <ScopeBar
+            formId={formId}
+            period={period}
+            segment={segment}
+            where={where}
+            blocks={questions.data?.blocks ?? []}
+            onSegment={setSegment}
+            onWhere={setWhere}
+          />
+        )}
+        {/* Полоса считает ту же совокупность, что список под ней: выборка режет и
+            её. Числа ответов на полосе нет — оно в пояснении раздела: полоса
+            говорит о визитах, и submissions рядом с «Отправили» читались бы как
+            расхождение (спека design/analytics-v3.md §3). */}
+        <InsightCards slug={slug} period={period} segment={segment} />
+      </div>
 
       <Section
         title="Ответы по вопросам"
@@ -98,19 +140,6 @@ function AnswersPage() {
             : summary.isSuccess && total > 0
               ? `${total} ${pluralAnswers(total)} за выбранный период`
               : undefined
-        }
-        action={
-          formId && (
-            <ScopeBar
-              formId={formId}
-              period={period}
-              segment={segment}
-              where={where}
-              blocks={questions.data?.blocks ?? []}
-              onSegment={setSegment}
-              onWhere={setWhere}
-            />
-          )
         }
       >
         {summary.isPending ? (
@@ -169,6 +198,8 @@ function AnswersPage() {
                 where={where}
                 segment={segment}
                 closed={summary.data.blocks.filter((o) => o.kind === 'distribution')}
+                conditions={conditions}
+                onToggleCondition={toggleCondition}
               />
             ))}
           </ul>
@@ -216,6 +247,8 @@ function QuestionRow({
   where,
   segment,
   closed,
+  conditions,
+  onToggleCondition,
 }: {
   block: BlockSummary
   total: number
@@ -225,6 +258,8 @@ function QuestionRow({
   segment: string | undefined
   // Закрытые вопросы сводки — с ними этот можно сравнить таблицей.
   closed: BlockSummary[]
+  conditions: FilterCondition[]
+  onToggleCondition: (c: FilterCondition) => void
 }) {
   const [open, setOpen] = useState(false)
 
@@ -259,6 +294,8 @@ function QuestionRow({
           where={where}
           segment={segment}
           closed={closed}
+          conditions={conditions}
+          onToggleCondition={onToggleCondition}
         />
       )}
     </li>
@@ -273,6 +310,8 @@ function QuestionBody({
   where,
   segment,
   closed,
+  conditions,
+  onToggleCondition,
 }: {
   block: BlockSummary
   total: number
@@ -281,6 +320,8 @@ function QuestionBody({
   where: string | undefined
   segment: string | undefined
   closed: BlockSummary[]
+  conditions: FilterCondition[]
+  onToggleCondition: (c: FilterCondition) => void
 }) {
   const [allOpen, setAllOpen] = useState(false)
   const [compareOpen, setCompareOpen] = useState(false)
@@ -305,7 +346,7 @@ function QuestionBody({
 
       {block.scale && <ScaleSummary block={block} scale={block.scale} />}
       {block.kind === 'distribution' ? (
-        <Distribution block={block} />
+        <Distribution block={block} conditions={conditions} onToggle={onToggleCondition} />
       ) : block.kind === 'number' ? (
         <NumberStats block={block} />
       ) : (
@@ -361,7 +402,15 @@ function QuestionBody({
   )
 }
 
-function Distribution({ block }: { block: BlockSummary }) {
+function Distribution({
+  block,
+  conditions,
+  onToggle,
+}: {
+  block: BlockSummary
+  conditions: FilterCondition[]
+  onToggle: (c: FilterCondition) => void
+}) {
   if (block.buckets.length === 0) {
     return <p className="text-sm text-muted-foreground">В этом вопросе нет вариантов.</p>
   }
@@ -374,14 +423,25 @@ function Distribution({ block }: { block: BlockSummary }) {
   // из-за чего ранг приходилось искать глазами. У шкалы порядок несущий: «1, 2,
   // 3…» это и есть форма распределения, и сортировка по убыванию её уничтожает.
   const ordered = block.scale ? block.buckets : [...block.buckets].sort((a, b) => b.count - a.count)
-  const rows: BarRow[] = ordered.map((b) => ({
-    key: b.key,
-    label: b.label,
-    value: `${b.count} · ${percentText(b.count, base)}`,
-    // Ширина полоски и названный процент — от ОДНОЙ базы: у распределения доля
-    // осмысленна сама по себе («52 % выбрали Рекламу»).
-    share: base > 0 ? b.count / base : 0,
-  }))
+  // Щелчок по строке оставляет только эти ответы. Оператор подразумевается
+  // равенством — тем же, что подставляет окно выборки (shared/answerFilter.ts).
+  const op = equalsOp(block.type)
+  const rows: BarRow[] = ordered.map((b) => {
+    const active = conditions.some(
+      (c) => c.blockId === block.blockId && c.op === op && c.value === b.key,
+    )
+    return {
+      key: b.key,
+      label: b.label,
+      value: `${b.count} · ${percentText(b.count, base)}`,
+      // Ширина полоски и названный процент — от ОДНОЙ базы: у распределения доля
+      // осмысленна сама по себе («52 % выбрали Рекламу»).
+      share: base > 0 ? b.count / base : 0,
+      onSelect: () => onToggle({ blockId: block.blockId, op, value: b.key }),
+      actionLabel: active ? `Убрать условие «${b.label}»` : `Оставить только «${b.label}»`,
+      highlight: active,
+    }
+  })
   return <BarRows columns={{ label: 'Вариант', value: 'Ответы' }} rows={rows} />
 }
 

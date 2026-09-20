@@ -1,13 +1,8 @@
 import { createFileRoute, Link, Outlet, useNavigate } from '@tanstack/react-router'
 
-import { periodLabels, periodSchema, type Period } from '../../shared/period'
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from '@/components/ui/select'
+import { periodLabels, PERIODS, periodSchema, type Period } from '../../shared/period'
+import { Button } from '@/components/ui/button'
+import { cn } from '@/lib/utils'
 
 // Раздел «Аналитика» (/forms/$slug/insights): оболочка вкладок «Обзор», «Визиты» и
 // «Ответы» (спека design/analytics-v3.md §2). Держит одно общее — окно
@@ -33,7 +28,7 @@ function InsightsLayout() {
     <>
       <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
         <InsightsTabs slug={slug} period={period} />
-        <PeriodSelect />
+        <PeriodPicker />
       </div>
       <Outlet />
     </>
@@ -108,7 +103,7 @@ function InsightsTabs({ slug, period }: { slug: string; period: Period }) {
   )
 }
 
-function PeriodSelect() {
+function PeriodPicker() {
   // navigate РОУТЕРА, а не маршрута (Route.useNavigate). Разница несущая: у
   // маршрутного navigate базой служит сам маршрут, то есть оболочка раздела, и
   // переход без `to` уходил бы на /forms/{slug}/insights — то есть на «Обзор».
@@ -118,26 +113,33 @@ function PeriodSelect() {
   const navigate = useNavigate()
   const { period } = Route.useSearch()
 
+  // РЯД, А НЕ ВЫПАДАЮЩИЙ СПИСОК. Окон всего четыре, они взаимоисключающие и
+  // подписаны двумя словами: список прятал набор целиком и требовал двух нажатий
+  // там, где хватает одного. Правило системы «выбор из списка — Select» стоит для
+  // выбора из НЕИЗВЕСТНОГО заранее числа значений; фиксированный набор из четырёх —
+  // переключатель.
+  //
+  // Кнопки с aria-pressed, а не ссылки роутера с activeProps: активность здесь
+  // определяется search-параметром, а не адресом маршрута, и «нажатое состояние» —
+  // это ровно то, что нужно объявить скринридеру.
   return (
-    <Select
-      value={period}
-      onValueChange={(value) =>
-        void navigate({
-          to: '.',
-          search: (prev) => ({ ...prev, period: periodSchema.parse(value) }),
-        })
-      }
-    >
-      <SelectTrigger className="w-[140px]" aria-label="Период">
-        <SelectValue />
-      </SelectTrigger>
-      <SelectContent>
-        {Object.entries(periodLabels).map(([value, label]) => (
-          <SelectItem key={value} value={value}>
-            {label}
-          </SelectItem>
-        ))}
-      </SelectContent>
-    </Select>
+    <div className="inline-flex flex-wrap items-center gap-0.5" role="group" aria-label="Период">
+      {PERIODS.map((value) => (
+        <Button
+          key={value}
+          variant="ghost"
+          size="sm"
+          aria-pressed={value === period}
+          className={cn(
+            value === period ? 'bg-muted font-semibold text-foreground' : 'text-muted-foreground',
+          )}
+          onClick={() =>
+            void navigate({ to: '.', search: (prev) => ({ ...prev, period: value }) })
+          }
+        >
+          {periodLabels[value]}
+        </Button>
+      ))}
+    </div>
   )
 }

@@ -35,6 +35,11 @@ export type FunnelRow = {
   // ним есть данные.
   timeSec?: number
   leftTimeSec?: number
+  // Вопросы страницы — вложенными строками её шага: страница раскрывается щелчком.
+  // Отдельного раздела с выбором страницы нет (решение владельца 2026-09-20):
+  // выпадающий список выбирал то, что и так стоит строкой в таблице выше, а раздел
+  // повторял её вопросы ещё раз.
+  children?: FunnelRow[]
 }
 
 // Ключи двух ступеней воронки — не шагов формы, а её краёв. Названы константами
@@ -55,6 +60,7 @@ export function funnelSteps(funnel: FormFunnel): FunnelRow[] {
       dropped: p.droppedHere,
       ...(p.timeSamples > 0 && { timeSec: p.timeSec }),
       ...(p.leftSamples > 0 && { leftTimeSec: p.leftTimeSec }),
+      children: pageQuestionRows(funnel, p.key),
     }))
   }
   return funnel.steps.map((s, i) => questionRow(s, i))
