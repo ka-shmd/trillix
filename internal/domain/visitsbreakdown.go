@@ -18,13 +18,19 @@ import (
 type BucketStep string
 
 const (
-	StepHour BucketStep = "hour"
-	StepDay  BucketStep = "day"
+	StepHour  BucketStep = "hour"
+	StepDay   BucketStep = "day"
+	StepWeek  BucketStep = "week"
+	StepMonth BucketStep = "month"
 )
 
-// StepFor выбирает шаг по окну наблюдения: до двух суток — часы, дальше — сутки.
-// Правило живёт на сервере, а не на экране: шаг определяет и запрос, и подписи оси,
-// а две копии этого выбора разъезжаются молча.
+// StepFor выбирает шаг ЗАПРОСА по окну наблюдения: до двух суток — часы, дальше —
+// сутки. Правило живёт на сервере, а не на экране: шаг определяет и запрос, и
+// подписи оси, а две копии этого выбора разъезжаются молча.
+//
+// Недели и месяцы сюда не попадают намеренно: по окну их не выбрать. «Всё время» —
+// это и три дня у новой формы, и три года у старой, а сколько данных на самом деле,
+// до запроса не знает никто. Укрупняет ряд CoarsenBuckets — уже по факту.
 func StepFor(p Period) BucketStep {
 	if p.From.IsZero() {
 		return StepDay // «всё время»: часами это тысячи точек
@@ -37,6 +43,63 @@ func StepFor(p Period) BucketStep {
 		return StepHour
 	}
 	return StepDay
+}
+
+// MaxBuckets — сколько точек ряда имеет смысл рисовать. Дальше столбик уже уже
+// промежутка между столбиками, и график перестаёт быть графиком: за «всё время»
+// у формы с четырьмя месяцами жизни он превращался в частокол из 130 полосок
+// шириной в пиксель, где доля отправивших не различима вовсе.
+//
+// Число — не вкус: при ширине колонки кабинета около 900 px на точку остаётся
+// порядка 10 px, то есть столбик в 6 px с зазором. Меньше — сливается.
+const MaxBuckets = 92
+
+// CoarsenBuckets укрупняет ряд, пока точек больше MaxBuckets: сутки → недели →
+// месяцы. Возвращает ряд и ФАКТИЧЕСКИЙ шаг — по нему экран подписывает ось.
+//
+// Укрупняется уже заполненный ряд (после FillBuckets), поэтому пустые промежутки
+// внутри окна не теряются: неделя без визитов остаётся нулевой точкой, а не
+// пропадает, склеив соседние.
+//
+// Часы не укрупняются: окно с часовым шагом не бывает длиннее двух суток, то есть
+// 48 точек, и порога не достигает никогда.
+func CoarsenBuckets(rows []TimeBucket, step BucketStep) ([]TimeBucket, BucketStep) {
+	for len(rows) > MaxBuckets {
+		next, ok := coarser(step)
+		if !ok {
+			return rows, step
+		}
+		rows, step = foldBuckets(rows, next), next
+	}
+	return rows, step
+}
+
+func coarser(step BucketStep) (BucketStep, bool) {
+	switch step {
+	case StepDay:
+		return StepWeek, true
+	case StepWeek:
+		return StepMonth, true
+	default:
+		return step, false
+	}
+}
+
+// foldBuckets складывает точки в корзины более крупного шага. Счётчики
+// СКЛАДЫВАЮТСЯ — это количества, а не уровни: у средней шкалы такое сложение было
+// бы неверно, и у неё свой путь (summary.go).
+func foldBuckets(rows []TimeBucket, step BucketStep) []TimeBucket {
+	out := make([]TimeBucket, 0, len(rows))
+	for _, r := range rows {
+		at := truncateTo(r.At, step)
+		if n := len(out); n > 0 && out[n-1].At.Equal(at) {
+			out[n-1].Visits += r.Visits
+			out[n-1].Submitted += r.Submitted
+			continue
+		}
+		out = append(out, TimeBucket{At: at, Visits: r.Visits, Submitted: r.Submitted})
+	}
+	return out
 }
 
 // TimeBucket — точка ряда: сколько визитов и сколько из них закончились ответом.
@@ -253,20 +316,35 @@ func FillBuckets(rows []TimeBucket, step BucketStep, from, to time.Time) []TimeB
 
 func truncateTo(t time.Time, step BucketStep) time.Time {
 	t = t.UTC()
-	if step == StepHour {
+	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	switch step {
+	case StepHour:
 		return t.Truncate(time.Hour)
+	case StepWeek:
+		// Неделя с понедельника — как в календаре кабинета. У Go воскресенье это
+		// ноль, отсюда +6 перед остатком.
+		return day.AddDate(0, 0, -((int(day.Weekday()) + 6) % 7))
+	case StepMonth:
+		return time.Date(t.Year(), t.Month(), 1, 0, 0, 0, 0, time.UTC)
+	default:
+		return day
 	}
-	return time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
 }
 
 // nextBucket шагает по календарю, а не прибавлением 24 часов: сутки бывают длиннее
 // и короче суток (переход времени), и арифметика на длительностях однажды даёт
 // сдвинутую или задвоенную корзину.
 func nextBucket(t time.Time, step BucketStep) time.Time {
-	if step == StepHour {
+	switch step {
+	case StepHour:
 		return t.Add(time.Hour)
+	case StepWeek:
+		return t.AddDate(0, 0, 7)
+	case StepMonth:
+		return t.AddDate(0, 1, 0)
+	default:
+		return t.AddDate(0, 0, 1)
 	}
-	return t.AddDate(0, 0, 1)
 }
 
 // VisitsBreakdown — весь экран «Визиты» одним ответом.
@@ -306,4 +384,45 @@ func CountKnownSources(rows []SourceRow) int {
 		}
 	}
 	return n
+}
+
+// CoarsenScalePoints — то же укрупнение, что у ряда визитов, но для УРОВНЯ, а не
+// количества: средние по корзинам складывать нельзя, их надо взвешивать числом
+// ответов. Пустая корзина остаётся пустой — это разрыв линии, а не ноль.
+//
+// Нужно ровно по той же причине: ряд средней шкалы за «всё время» превращался в
+// частокол из сотни дневных точек, скачущих вокруг одного уровня, — кардиограмму,
+// из которой не следует ничего.
+func CoarsenScalePoints(points []ScalePoint, step BucketStep) ([]ScalePoint, BucketStep) {
+	for len(points) > MaxBuckets {
+		next, ok := coarser(step)
+		if !ok {
+			return points, step
+		}
+		points, step = foldScalePoints(points, next), next
+	}
+	return points, step
+}
+
+func foldScalePoints(points []ScalePoint, step BucketStep) []ScalePoint {
+	out := make([]ScalePoint, 0, len(points))
+	// sums идёт рядом с out: в самой точке лежит уже средняя, а для взвешивания
+	// нужна сумма. Держать её в ScalePoint значило бы вынести наружу черновик.
+	sums := make([]float64, 0, len(points))
+	for _, p := range points {
+		at := truncateTo(p.At, step)
+		if n := len(out); n > 0 && out[n-1].At.Equal(at) {
+			sums[n-1] += p.Avg * float64(p.N)
+			out[n-1].N += p.N
+			continue
+		}
+		out = append(out, ScalePoint{At: at, N: p.N})
+		sums = append(sums, p.Avg*float64(p.N))
+	}
+	for i := range out {
+		if out[i].N > 0 {
+			out[i].Avg = sums[i] / float64(out[i].N)
+		}
+	}
+	return out
 }

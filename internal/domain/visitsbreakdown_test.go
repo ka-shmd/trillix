@@ -181,3 +181,71 @@ func TestFoldUserAgents_SumsSubmitted(t *testing.T) {
 		t.Fatalf("устройства: %+v", devices)
 	}
 }
+
+func TestCoarsenBuckets(t *testing.T) {
+	day := func(n int) time.Time {
+		return time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC).AddDate(0, 0, n)
+	}
+	series := func(n int) []TimeBucket {
+		out := make([]TimeBucket, 0, n)
+		for i := range n {
+			out = append(out, TimeBucket{At: day(i), Visits: 1, Submitted: 1})
+		}
+		return out
+	}
+
+	t.Run("короткий ряд не трогает", func(t *testing.T) {
+		in := series(MaxBuckets)
+		got, step := CoarsenBuckets(in, StepDay)
+		if step != StepDay || len(got) != MaxBuckets {
+			t.Fatalf("шаг %q, точек %d; хочу day и %d", step, len(got), MaxBuckets)
+		}
+	})
+
+	// 130 суток — ровно тот случай, из-за которого график превращался в частокол.
+	t.Run("сутки длиннее порога складывает в недели", func(t *testing.T) {
+		got, step := CoarsenBuckets(series(130), StepDay)
+		if step != StepWeek {
+			t.Fatalf("шаг %q, хочу week", step)
+		}
+		if len(got) > MaxBuckets {
+			t.Fatalf("точек %d, хочу не больше %d", len(got), MaxBuckets)
+		}
+		// Ничего не потеряно: сумма корзин равна сумме исходного ряда.
+		total := 0
+		for _, b := range got {
+			total += b.Visits
+		}
+		if total != 130 {
+			t.Fatalf("визитов после свёртки %d, хочу 130", total)
+		}
+		// 1 января 2026 — четверг; неделя начинается с понедельника 29 декабря.
+		if want := time.Date(2025, 12, 29, 0, 0, 0, 0, time.UTC); !got[0].At.Equal(want) {
+			t.Fatalf("первая корзина %v, хочу %v", got[0].At, want)
+		}
+	})
+
+	t.Run("длинный ряд доходит до месяцев", func(t *testing.T) {
+		got, step := CoarsenBuckets(series(365*3), StepDay)
+		if step != StepMonth {
+			t.Fatalf("шаг %q, хочу month", step)
+		}
+		if len(got) > MaxBuckets {
+			t.Fatalf("точек %d, хочу не больше %d", len(got), MaxBuckets)
+		}
+	})
+
+	// Часовой ряд не бывает длиннее двух суток, но правило не должно зависеть от
+	// этого совпадения: укрупнять часы нам нечем, и функция обязана вернуть их как
+	// есть, а не зациклиться.
+	t.Run("часы возвращает как есть", func(t *testing.T) {
+		in := make([]TimeBucket, 0, MaxBuckets+5)
+		for i := range MaxBuckets + 5 {
+			in = append(in, TimeBucket{At: day(0).Add(time.Duration(i) * time.Hour), Visits: 1})
+		}
+		got, step := CoarsenBuckets(in, StepHour)
+		if step != StepHour || len(got) != MaxBuckets+5 {
+			t.Fatalf("шаг %q, точек %d", step, len(got))
+		}
+	})
+}

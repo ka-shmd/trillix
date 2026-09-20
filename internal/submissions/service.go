@@ -1548,8 +1548,14 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	// с разной сеткой времени читались бы как расхождение данных.
 	builder.Trend(domain.StepFor(period), period.From, period.To)
 	unfiltered := 0
+	// linked — сколько ответов окна вообще знают свой визит. Нужен ровно для одного
+	// ответа экрану: «выборка по визиту дала ноль, потому что сопоставлять не с чем».
+	linked := 0
 	if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
 		unfiltered++
+		if sub.Visit != nil {
+			linked++
+		}
 		if !match(sub, answers) {
 			return nil
 		}
@@ -1558,13 +1564,19 @@ func (s *Service) Summary(ctx context.Context, userID, formID uuid.UUID, period 
 	}); err != nil {
 		return domain.Summary{}, err
 	}
+	noVisitLink := scope.Segments.VisitSegment() && unfiltered > 0 && linked == 0
 	sum := builder.Result()
-	sum.TrendStep = domain.StepFor(period)
+	sum.NoVisitLink = noVisitLink
 	if !scope.IsZero() {
 		sum.Unfiltered = &unfiltered
 	}
 	if scope.Withheld(sum.Total) {
-		return domain.Summary{TrendStep: sum.TrendStep, Unfiltered: &unfiltered, Blocks: []domain.BlockSummary{}, Withheld: true}, nil
+		return domain.Summary{
+			Unfiltered:  &unfiltered,
+			Blocks:      []domain.BlockSummary{},
+			Withheld:    true,
+			NoVisitLink: noVisitLink,
+		}, nil
 	}
 	return sum, nil
 }
@@ -1581,7 +1593,7 @@ func (s *Service) Crosstab(ctx context.Context, userID, formID uuid.UUID, period
 	// сегмента по источнику) проверит answerMatcher ниже, а без выборки спросить
 	// больше некому — сопряжённость закрыта тарифом и сама по себе.
 	if scope.IsZero() {
-		if err := s.checkSegments(ctx, workspaceID, domain.Segment{}); err != nil {
+		if err := s.checkSegments(ctx, workspaceID, nil); err != nil {
 			return domain.Crosstab{}, err
 		}
 	}
@@ -1616,10 +1628,13 @@ func (s *Service) Crosstab(ctx context.Context, userID, formID uuid.UUID, period
 // Пространство приходит аргументом, а не добывается здесь: чтение формы делает
 // scopeSchemas один раз на запрос, и повторный forms.Get был бы вторым походом за
 // тем же полем (авторизацию он тоже уже сделал).
-func (s *Service) checkSegments(ctx context.Context, workspaceID uuid.UUID, seg domain.Segment) error {
+func (s *Service) checkSegments(ctx context.Context, workspaceID uuid.UUID, segs domain.Segments) error {
 	keys := []entitlements.Key{entitlements.AnalyticsSegments}
-	if seg.Dim == domain.SegSource {
-		keys = append(keys, entitlements.AnalyticsSources)
+	for _, seg := range segs {
+		if seg.Dim == domain.SegSource {
+			keys = append(keys, entitlements.AnalyticsSources)
+			break
+		}
 	}
 	for _, key := range keys {
 		d, err := s.plans.CheckWorkspace(ctx, workspaceID, key)
@@ -1641,7 +1656,7 @@ func (s *Service) answerMatcher(ctx context.Context, workspaceID uuid.UUID, vs [
 	if scope.IsZero() {
 		return func(Submission, map[string]json.RawMessage) bool { return true }, nil
 	}
-	if err := s.checkSegments(ctx, workspaceID, scope.Segment); err != nil {
+	if err := s.checkSegments(ctx, workspaceID, scope.Segments); err != nil {
 		return nil, err
 	}
 	if err := scope.Filter.Check(domain.QuestionOrder(vs)); err != nil {
@@ -1653,7 +1668,7 @@ func (s *Service) answerMatcher(ctx context.Context, workspaceID uuid.UUID, vs [
 	}
 	return func(sub Submission, answers map[string]json.RawMessage) bool {
 		version := int(sub.FormVersion)
-		return domain.MatchesSegment(scope.Segment, sub.Visit, version) &&
+		return scope.Segments.Matches(sub.Visit, version) &&
 			scope.Filter.Match(blocks[version], answers)
 	}, nil
 }
@@ -1698,7 +1713,7 @@ func (s *Service) BlockAnswers(ctx context.Context, userID, formID uuid.UUID, bl
 	if err != nil {
 		return AnswerPage{}, err
 	}
-	if scope.Segment.VisitSegment() {
+	if scope.Segments.VisitSegment() {
 		matched := 0
 		if err := s.eachSubmission(ctx, formID, period, func(sub Submission, answers map[string]json.RawMessage) error {
 			if match(sub, answers) {

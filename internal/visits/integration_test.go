@@ -431,7 +431,7 @@ func TestFunnel_ClosedByPlan_StillCollectsVisits(t *testing.T) {
 		beacon(t, srv, slug, domain.NewID().String(), 0, "")
 	}
 
-	_, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, domain.Segment{})
+	_, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, nil)
 	if !errors.Is(err, domain.ErrPlanRequired) {
 		t.Fatalf("ошибка = %v, ждали domain.ErrPlanRequired", err)
 	}
@@ -447,7 +447,7 @@ func TestFunnel_ClosedByPlan_StillCollectsVisits(t *testing.T) {
 
 	// Открыли тариф — те же данные показываются, ничего не потеряно.
 	setFunnelGate(t, slug, true)
-	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, domain.Segment{})
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Funnel после открытия тарифа: %v", err)
 	}
@@ -482,7 +482,7 @@ func TestFunnel_EndToEnd(t *testing.T) {
 		t.Fatalf("приём ответа: статус %d, ждали 201", code)
 	}
 
-	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, domain.Segment{})
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -528,7 +528,7 @@ func TestFunnel_Pages(t *testing.T) {
 		beacon(t, srv, slug, id, 1, "b2")
 	}
 
-	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, domain.Segment{})
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -626,7 +626,7 @@ func TestFunnel_PathAndPageTimes(t *testing.T) {
 		t.Fatalf("shift visit: %v", err)
 	}
 
-	f, err := funnelService().Funnel(ctx, userID, formID, domain.Period{}, domain.Segment{})
+	f, err := funnelService().Funnel(ctx, userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -698,8 +698,8 @@ func TestSegment_EndToEnd(t *testing.T) {
 	}
 
 	svc := funnelService()
-	seg := func(raw string) domain.Segment {
-		s, err := domain.ParseSegment(raw)
+	seg := func(raw ...string) domain.Segments {
+		s, err := domain.ParseSegments(raw)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -732,7 +732,28 @@ func TestSegment_EndToEnd(t *testing.T) {
 		}
 	}
 
-	vs, err := svc.Versions(ctx, userID, formID, domain.Period{}, domain.Segment{})
+	// НЕСКОЛЬКО УСЛОВИЙ — через «И» (спека analytics-v3.md §11.6).
+	//
+	// Пара «Компьютер + Safari» — сторож раскладки по слотам: оба условия читают
+	// user-agent, и если их списки значений слить в один массив, «И» превратится в
+	// «ИЛИ» и здесь встанет 3 вместо нуля.
+	for _, tc := range []struct {
+		raws []string
+		want int
+	}{
+		{[]string{"device:Телефон", "city:RU:Москва"}, 1},
+		{[]string{"device:Телефон", "source:vk.com"}, 0},
+		{[]string{"device:Телефон", "browser:Safari"}, 2},
+		{[]string{"device:Компьютер", "browser:Safari"}, 0},
+		{[]string{"device:Телефон", "version:1", "country:RU"}, 1},
+	} {
+		f, err := svc.Funnel(ctx, userID, formID, domain.Period{}, seg(tc.raws...))
+		if err != nil || f.Visits != tc.want {
+			t.Errorf("%v: визитов %d, ошибка %v; ждали %d", tc.raws, f.Visits, err, tc.want)
+		}
+	}
+
+	vs, err := svc.Versions(ctx, userID, formID, domain.Period{}, nil)
 	if err != nil || len(vs) != 1 || vs[0].Number != 1 || vs[0].Visits != 3 || vs[0].Submitted != 1 {
 		t.Errorf("версии: %+v, %v", vs, err)
 	}
@@ -759,14 +780,14 @@ func TestInsights_PreviousWindowSQL(t *testing.T) {
 	}
 
 	day := domain.Period{From: time.Now().Add(-24 * time.Hour)}
-	in, err := funnelService().Insights(ctx, userID, formID, day, domain.Segment{})
+	in, err := funnelService().Insights(ctx, userID, formID, day, nil)
 	if err != nil {
 		t.Fatalf("Insights: %v", err)
 	}
 	if in.Visits != 1 || in.Started != 1 || in.Previous == nil || in.Previous.Visits != 2 || in.Previous.Started != 0 {
 		t.Errorf("сутки: %+v, прошлые: %+v", in, in.Previous)
 	}
-	all, err := funnelService().Insights(ctx, userID, formID, domain.Period{}, domain.Segment{})
+	all, err := funnelService().Insights(ctx, userID, formID, domain.Period{}, nil)
 	if err != nil || all.Visits != 3 || all.Previous != nil {
 		t.Errorf("всё время: %+v, %v", all, err)
 	}
@@ -783,7 +804,7 @@ func TestFunnel_ForeignFormIsNotFound(t *testing.T) {
 	// Владелец другой формы — посторонний для этой.
 	_, strangerID := formOwner(t, publishedForm(t))
 
-	if _, err := funnelService().Funnel(context.Background(), strangerID, formID, domain.Period{}, domain.Segment{}); !errors.Is(err, domain.ErrNotFound) {
+	if _, err := funnelService().Funnel(context.Background(), strangerID, formID, domain.Period{}, nil); !errors.Is(err, domain.ErrNotFound) {
 		t.Fatalf("ошибка = %v, ждали ErrNotFound", err)
 	}
 }
@@ -795,7 +816,7 @@ func TestFunnel_NoVisits(t *testing.T) {
 	slug := publishedForm(t)
 	formID, userID := formOwner(t, slug)
 
-	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, domain.Segment{})
+	f, err := funnelService().Funnel(context.Background(), userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Funnel: %v", err)
 	}
@@ -845,7 +866,7 @@ func TestInsights_PeriodCutsOldVisits(t *testing.T) {
 	svc := funnelService()
 	ctx := context.Background()
 
-	all, err := svc.Insights(ctx, userID, formID, domain.Period{}, domain.Segment{})
+	all, err := svc.Insights(ctx, userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Insights (всё время): %v", err)
 	}
@@ -854,7 +875,7 @@ func TestInsights_PeriodCutsOldVisits(t *testing.T) {
 	}
 
 	window := domain.Period{From: time.Now().Add(-48 * time.Hour)}
-	recent, err := svc.Insights(ctx, userID, formID, window, domain.Segment{})
+	recent, err := svc.Insights(ctx, userID, formID, window, nil)
 	if err != nil {
 		t.Fatalf("Insights (48 часов): %v", err)
 	}
@@ -862,7 +883,7 @@ func TestInsights_PeriodCutsOldVisits(t *testing.T) {
 		t.Errorf("визитов за 48 часов = %d, ждали 1: старый визит должен выпасть", recent.Visits)
 	}
 
-	f, err := svc.Funnel(ctx, userID, formID, window, domain.Segment{})
+	f, err := svc.Funnel(ctx, userID, formID, window, nil)
 	if err != nil {
 		t.Fatalf("Funnel (48 часов): %v", err)
 	}
@@ -892,7 +913,7 @@ func TestInsights_DurationCountsOnlyVisitsWithTwoBeacons(t *testing.T) {
 		t.Fatalf("set duration: %v", err)
 	}
 
-	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{}, domain.Segment{})
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Insights: %v", err)
 	}
@@ -915,7 +936,7 @@ func TestInsights_EmptyFormIsZeroWithoutData(t *testing.T) {
 	slug := publishedForm(t)
 	formID, userID := formOwner(t, slug)
 
-	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{}, domain.Segment{})
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Insights: %v", err)
 	}
@@ -1177,7 +1198,7 @@ func TestUniqueVisitors_EndToEnd(t *testing.T) {
 	// Второй человек.
 	beaconFromIP(t, srv, slug, domain.NewID().String(), "8.8.8.8")
 
-	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{}, domain.Segment{})
+	in, err := funnelService().Insights(context.Background(), userID, formID, domain.Period{}, nil)
 	if err != nil {
 		t.Fatalf("Insights: %v", err)
 	}

@@ -1,4 +1,5 @@
 import { type FormFunnel, type FunnelStep } from '../../entities/funnel'
+import { formatDuration } from '../../shared/format'
 
 // Числа и фразы аналитики, не привязанные к разметке. Отдельно от компонентов,
 // чтобы их можно было проверять юнитом, не поднимая DOM.
@@ -7,6 +8,15 @@ import { type FormFunnel, type FunnelStep } from '../../entities/funnel'
 // видел, дал бы NaN в ширине полоски и сломал вёрстку молча.
 export function percentOf(count: number, base: number): number {
   return base > 0 ? Math.round((count / base) * 100) : 0
+}
+
+// Доля строкой. Отличается от percentOf одним случаем, зато важным: значение есть,
+// а округление даёт ноль. «10 · 0 %» владелец читает как поломку — это не ноль, это
+// меньше половины процента.
+export function percentText(count: number, base: number): string {
+  const pct = percentOf(count, base)
+  if (pct === 0 && count > 0 && base > 0) return '<1 %'
+  return `${pct} %`
 }
 
 // Порог малых выборок (ADR §10, спека design/analytics-v2.md §7): при знаменателе
@@ -25,7 +35,18 @@ export type FunnelRow = {
   // ним есть данные.
   timeSec?: number
   leftTimeSec?: number
+  // Вопросы страницы — вложенными строками её шага: страница раскрывается щелчком.
+  // Отдельного раздела с выбором страницы нет (решение владельца 2026-09-20):
+  // выпадающий список выбирал то, что и так стоит строкой в таблице выше, а раздел
+  // повторял её вопросы ещё раз.
+  children?: FunnelRow[]
 }
+
+// Ключи двух ступеней воронки — не шагов формы, а её краёв. Названы константами
+// потому, что по ним различается формулировка потери: на первой ступени уходят «не
+// тронув ни одного вопроса», а не «остановившись здесь».
+export const OPENED_KEY = 'opened'
+export const SUBMITTED_KEY = 'submitted'
 
 // Шаги воронки: страницы у многостраничной формы, вопросы — у одностраничной. Номер
 // у вопроса — позиция во всей форме; у страницы номер уже в подписи («Страница 3»)
@@ -39,17 +60,23 @@ export function funnelSteps(funnel: FormFunnel): FunnelRow[] {
       dropped: p.droppedHere,
       ...(p.timeSamples > 0 && { timeSec: p.timeSec }),
       ...(p.leftSamples > 0 && { leftTimeSec: p.leftTimeSec }),
+      children: pageQuestionRows(funnel, p.key),
     }))
   }
   return funnel.steps.map((s, i) => questionRow(s, i))
 }
 
 // Воронка целиком: ступень «Открыли форму», шаги, ступень «Отправили форму».
+//
+// Отдельной ступени «Начали отвечать» здесь НЕТ, хотя такое число есть на карточках.
+// У многостраничной формы оно совпало бы с «дошли» первой страницы — её видели все,
+// кто тронул хоть один вопрос, — и воронка открывалась бы двумя строками с одним и
+// тем же числом. Не начавшие показаны там, где им место: потерей первой ступени.
 export function funnelRows(funnel: FormFunnel): FunnelRow[] {
   return [
-    { key: 'opened', label: 'Открыли форму', reached: funnel.visits, dropped: funnel.leftBeforeFirst },
+    { key: OPENED_KEY, label: 'Открыли форму', reached: funnel.visits, dropped: funnel.leftBeforeFirst },
     ...funnelSteps(funnel),
-    { key: 'submitted', label: 'Отправили форму', reached: funnel.submitted, dropped: 0 },
+    { key: SUBMITTED_KEY, label: 'Отправили форму', reached: funnel.submitted, dropped: 0 },
   ]
 }
 
@@ -100,15 +127,28 @@ export function dropPercent(row: FunnelRow): number | null {
   return row.reached >= MIN_BASE ? percentOf(row.dropped, row.reached) : null
 }
 
-// Фраза целиком, а не склонение одного слова: в ней согласуются ДВА глагола
-// («остановился … не пошёл» против «остановились … не пошли»), и склонять их по
-// отдельности значит рано или поздно получить «1 остановился и дальше не пошли».
-export function droppedPhrase(n: number): string {
-  // 1, 21, 31… — единственное число; 11 — исключение (одиннадцать остановились).
-  const singular = n % 10 === 1 && n % 100 !== 11
-  return singular
-    ? `${n} остановился здесь и дальше не пошёл`
-    : `${n} остановились здесь и дальше не пошли`
+// Клетка «Ушли здесь»: число и доля от дошедших. Доля называется только над
+// порогом малых выборок (dropPercent) — «ушли 2 из 2» это не сто процентов, а два
+// человека.
+//
+// Коротко и числами, потому что это ЯЧЕЙКА ТАБЛИЦЫ, а не предложение. Пока потеря
+// жила припиской под строкой, она была фразой («188 остановились здесь и дальше не
+// пошли»); в колонке фраза повторялась бы столько раз, сколько в форме шагов.
+export function droppedPhraseShort(dropped: number, percent: number | null): string {
+  return percent === null ? `${dropped}` : `${dropped} · ${percent} %`
+}
+
+// Клетка «На странице»: сколько на ней обычно проводят и сколько — те, кто ушёл.
+// Два времени в одной клетке, а не в двух колонках: у них общий предмет, и вторая
+// колонка ради второго числа раздула бы таблицу на всех формах ради многостраничных.
+export function stepTime(row: FunnelRow): string | undefined {
+  const parts: string[] = []
+  if (row.timeSec !== undefined) parts.push(formatDuration(row.timeSec))
+  // «Ушедшие» — с подписью, потому что рядом стоит время тех, кто пошёл дальше, и
+  // два голых значения в одной клетке не различить. Прочерка перед ним нет: клетка
+  // с одним известным числом не обязана сообщать, что второго не знает.
+  if (row.leftTimeSec !== undefined) parts.push(`ушедшие ${formatDuration(row.leftTimeSec)}`)
+  return parts.length > 0 ? parts.join(' · ') : undefined
 }
 
 // Изменение к прошлому окну (спека design/analytics-v2.md §8). null — строки нет:

@@ -6,7 +6,8 @@ import {
   dropPercent,
   durationDelta,
   rateDelta,
-  droppedPhrase,
+  droppedPhraseShort,
+  stepTime,
   funnelRows,
   type FunnelRow,
   funnelSteps,
@@ -143,16 +144,20 @@ describe('dropPercent', () => {
   })
 })
 
-describe('droppedPhrase', () => {
-  it('согласует оба глагола по числу', () => {
-    expect(droppedPhrase(1)).toBe('1 остановился здесь и дальше не пошёл')
-    expect(droppedPhrase(21)).toBe('21 остановился здесь и дальше не пошёл')
-    expect(droppedPhrase(5)).toBe('5 остановились здесь и дальше не пошли')
+describe('клетки воронки', () => {
+  it('«ушли здесь» — число, а над порогом ещё и доля', () => {
+    expect(droppedPhraseShort(188, 27)).toBe('188 · 27 %')
+    // Ниже порога малых выборок доли нет: «2 из 2» это не сто процентов, а два
+    // человека.
+    expect(droppedPhraseShort(2, null)).toBe('2')
   })
 
-  // 11 — исключение из правила «оканчивается на 1»: одиннадцать остановились.
-  it('одиннадцать во множественном числе', () => {
-    expect(droppedPhrase(11)).toBe('11 остановились здесь и дальше не пошли')
+  it('время на странице — медиана и, отдельно, время ушедших', () => {
+    const row = { key: 'p', label: 'Страница 1', reached: 100, dropped: 10 }
+    expect(stepTime(row)).toBeUndefined()
+    expect(stepTime({ ...row, timeSec: 80 })).toBe('1 мин 20 с')
+    expect(stepTime({ ...row, leftTimeSec: 47 })).toBe('ушедшие 47 с')
+    expect(stepTime({ ...row, timeSec: 80, leftTimeSec: 47 })).toBe('1 мин 20 с · ушедшие 47 с')
   })
 })
 

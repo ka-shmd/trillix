@@ -72,11 +72,11 @@ type Store interface {
 	UpsertVisit(ctx context.Context, db postgres.DBTX, id, formID, versionID uuid.UUID, lastBlockID *string, seq int16, meta json.RawMessage, place geo.Place, visitorKey []byte) error
 	MarkSubmitted(ctx context.Context, db postgres.DBTX, id, formID uuid.UUID) (int64, error)
 	InsertPage(ctx context.Context, db postgres.DBTX, visitID, formID uuid.UUID, blockID string) error
-	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.LastBlockCount, error)
-	CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PathCount, error)
-	PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PageSpan, error)
-	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period, f domain.VisitFilter) (domain.VisitInsights, error)
-	VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error)
+	CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f []domain.VisitFilter) ([]domain.LastBlockCount, error)
+	CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f []domain.VisitFilter) ([]domain.PathCount, error)
+	PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f []domain.VisitFilter) ([]domain.PageSpan, error)
+	Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period, f []domain.VisitFilter) (domain.VisitInsights, error)
+	VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f []domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error)
 	ConversionWindows(ctx context.Context, db postgres.DBTX, baseFrom, recentFrom time.Time) ([]FormConversion, error)
 	Timeseries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, step domain.BucketStep) ([]domain.TimeBucket, error)
 	Countries(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period) ([]domain.PlaceCount, error)
@@ -287,7 +287,7 @@ func (s *Service) MarkSubmitted(ctx context.Context, formID, visitID uuid.UUID) 
 //
 // Модель вопросов — общая с выгрузкой и сводкой (domain.QuestionOrder): три экрана
 // обязаны показывать один и тот же список вопросов.
-func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) (domain.Funnel, error) {
+func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period, segs domain.Segments) (domain.Funnel, error) {
 	// Порядок обязателен: сначала АВТОРИЗАЦИЯ (чужая форма → 404, приватное не
 	// раскрывается), только потом тариф (→ 402). Наоборот — и посторонний узнавал
 	// бы по коду ответа, существует ли форма и какой у чужого воркспейса план.
@@ -327,7 +327,7 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period d
 	// Верх воронки (визиты и конверсия) выводится из той же разбивки, что и шаги, —
 	// см. BuildFunnel. Путь и время на страницах читаются только у многостраничной
 	// формы: у одностраничной строк пути нет, и два запроса были бы вхолостую.
-	filter, err := s.segmentFilter(ctx, userID, form.WorkspaceID, formID, period, seg, versions)
+	filter, err := s.segmentFilters(ctx, userID, form.WorkspaceID, formID, period, segs, versions)
 	if err != nil {
 		return domain.Funnel{}, err
 	}
@@ -354,7 +354,7 @@ func (s *Service) Funnel(ctx context.Context, userID, formID uuid.UUID, period d
 // Платным остаётся разбор (воронка, источники), а не сам факт «сколько людей».
 //
 // С сегментом (карточки «Отвалов») — гейт analytics_segments, как у сегмента воронки.
-func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) (domain.VisitInsights, error) {
+func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period, segs domain.Segments) (domain.VisitInsights, error) {
 	// Авторизация — тем же способом, что у воронки: чужая или несуществующая форма
 	// даёт 404 (инвариант 1, id из URL правом доступа не является).
 	form, err := s.forms.Get(ctx, userID, formID)
@@ -377,7 +377,7 @@ func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period
 	if prev != nil {
 		keyPeriod.From = prev.From
 	}
-	filter, err := s.segmentFilter(ctx, userID, form.WorkspaceID, formID, keyPeriod, seg, nil)
+	filter, err := s.segmentFilters(ctx, userID, form.WorkspaceID, formID, keyPeriod, segs, nil)
 	if err != nil {
 		return domain.VisitInsights{}, err
 	}
@@ -388,7 +388,7 @@ func (s *Service) Insights(ctx context.Context, userID, formID uuid.UUID, period
 // каждой опубликованной версии, свежие сверху. Версии без визитов в окне не
 // показываются. Гейта нет (спека design/analytics-v2.md §13); с сегментом —
 // analytics_segments.
-func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) ([]domain.VersionStat, error) {
+func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID, period domain.Period, segs domain.Segments) ([]domain.VersionStat, error) {
 	form, err := s.forms.Get(ctx, userID, formID)
 	if err != nil {
 		return nil, err
@@ -397,7 +397,7 @@ func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID, period
 	if err != nil {
 		return nil, err
 	}
-	filter, err := s.segmentFilter(ctx, userID, form.WorkspaceID, formID, period, seg, versions)
+	filter, err := s.segmentFilters(ctx, userID, form.WorkspaceID, formID, period, segs, versions)
 	if err != nil {
 		return nil, err
 	}
@@ -418,60 +418,84 @@ func (s *Service) Versions(ctx context.Context, userID, formID uuid.UUID, period
 	return out, nil
 }
 
-// segmentFilter сводит сегмент к фильтру по сырым значениям визита (domain.VisitFilter).
-// Тариф спрашивается здесь же и ПОСЛЕ авторизации, которую вызывающий уже сделал:
-// сегмент — ключ analytics_segments, сегмент по источнику — ещё и analytics_sources
-// (иначе закрытая разбивка источников читалась бы сегментами по одному).
+// segmentFilters сводит условия разреза к фильтрам по сырым значениям визита
+// (domain.VisitFilter, по одному на условие). Тариф спрашивается здесь же и ПОСЛЕ
+// авторизации, которую вызывающий уже сделал: разрез — ключ analytics_segments,
+// разрез по источнику — ещё и analytics_sources (иначе закрытая разбивка источников
+// читалась бы разрезами по одному).
 //
-// versions нужны только сегменту по версии; nil — загрузить при надобности.
-func (s *Service) segmentFilter(ctx context.Context, userID, workspaceID, formID uuid.UUID, period domain.Period, seg domain.Segment, versions []forms.Version) (domain.VisitFilter, error) {
-	if seg.IsZero() {
-		return domain.VisitFilter{}, nil
+// Сырьё грузится ОДИН РАЗ на запрос, даже когда условий по нему несколько:
+// «устройство И браузер» читают один и тот же список user-agent'ов периода, и
+// второй его проход был бы вторым полным сканом визитов.
+//
+// versions нужны только разрезу по версии; nil — загрузить при надобности.
+func (s *Service) segmentFilters(ctx context.Context, userID, workspaceID, formID uuid.UUID, period domain.Period, segs domain.Segments, versions []forms.Version) ([]domain.VisitFilter, error) {
+	if segs.IsZero() {
+		return nil, nil
 	}
 	keys := []entitlements.Key{entitlements.AnalyticsSegments}
-	if seg.Dim == domain.SegSource {
-		keys = append(keys, entitlements.AnalyticsSources)
+	for _, seg := range segs {
+		if seg.Dim == domain.SegSource {
+			keys = append(keys, entitlements.AnalyticsSources)
+			break
+		}
 	}
 	for _, key := range keys {
 		d, err := s.plans.CheckWorkspace(ctx, workspaceID, key)
 		if err != nil {
-			return domain.VisitFilter{}, err
+			return nil, err
 		}
 		if !d.Allowed {
-			return domain.VisitFilter{}, domain.ErrPlanRequired
+			return nil, domain.ErrPlanRequired
 		}
 	}
 
-	switch seg.Dim {
-	case domain.SegDevice, domain.SegBrowser, domain.SegOS:
-		rows, err := s.repo.UserAgents(ctx, s.db, formID, period)
-		if err != nil {
-			return domain.VisitFilter{}, err
-		}
-		return domain.UserAgentFilter(seg, rows), nil
-	case domain.SegSource:
-		rows, err := s.repo.Sources(ctx, s.db, formID, period)
-		if err != nil {
-			return domain.VisitFilter{}, err
-		}
-		return domain.SourceFilter(seg, rows), nil
-	case domain.SegVersion:
-		if versions == nil {
-			var err error
-			if versions, err = s.forms.Versions(ctx, userID, formID); err != nil {
-				return domain.VisitFilter{}, err
+	var (
+		uaRows    []domain.UserAgentRow
+		uaLoaded  bool
+		srcRows   []domain.SourceRow
+		srcLoaded bool
+	)
+	out := make([]domain.VisitFilter, 0, len(segs))
+	for _, seg := range segs {
+		switch seg.Dim {
+		case domain.SegDevice, domain.SegBrowser, domain.SegOS:
+			if !uaLoaded {
+				var err error
+				if uaRows, err = s.repo.UserAgents(ctx, s.db, formID, period); err != nil {
+					return nil, err
+				}
+				uaLoaded = true
 			}
-		}
-		f := domain.VisitFilter{Kind: domain.FilterVersion, Keys: []string{}}
-		for _, v := range versions {
-			if strconv.Itoa(int(v.Number)) == seg.Value {
-				f.Keys = append(f.Keys, v.ID.String())
+			out = append(out, domain.UserAgentFilter(seg, uaRows))
+		case domain.SegSource:
+			if !srcLoaded {
+				var err error
+				if srcRows, err = s.repo.Sources(ctx, s.db, formID, period); err != nil {
+					return nil, err
+				}
+				srcLoaded = true
 			}
+			out = append(out, domain.SourceFilter(seg, srcRows))
+		case domain.SegVersion:
+			if versions == nil {
+				var err error
+				if versions, err = s.forms.Versions(ctx, userID, formID); err != nil {
+					return nil, err
+				}
+			}
+			f := domain.VisitFilter{Kind: domain.FilterVersion, Keys: []string{}}
+			for _, v := range versions {
+				if strconv.Itoa(int(v.Number)) == seg.Value {
+					f.Keys = append(f.Keys, v.ID.String())
+				}
+			}
+			out = append(out, f)
+		default:
+			out = append(out, domain.PlaceFilter(seg))
 		}
-		return f, nil
-	default:
-		return domain.PlaceFilter(seg), nil
 	}
+	return out, nil
 }
 
 // Breakdown — вкладка «Визиты» целиком: ряд по времени, источники, устройства,
@@ -527,9 +551,15 @@ func (s *Service) Breakdown(ctx context.Context, userID, formID uuid.UUID, perio
 	for _, c := range countries {
 		withPlace += c.Visits
 	}
+	// Укрупнение — ПОСЛЕ заполнения пустых корзин и по факту, а не по окну: «всё
+	// время» у новой формы это три дня, у старой — три года, и до запроса длину
+	// ряда не знает никто (domain.CoarsenBuckets).
+	series, seriesStep := domain.CoarsenBuckets(
+		domain.FillBuckets(buckets, step, period.From, period.To), step)
+
 	out := domain.VisitsBreakdown{
-		Step:          step,
-		Timeseries:    domain.FillBuckets(buckets, step, period.From, period.To),
+		Step:          seriesStep,
+		Timeseries:    series,
 		SourcesLocked: !d.Allowed,
 		KnownSources:  domain.CountKnownSources(sources),
 		Devices:       devices,

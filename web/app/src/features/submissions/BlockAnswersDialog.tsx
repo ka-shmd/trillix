@@ -54,7 +54,7 @@ export function BlockAnswersDialog({
   answered,
   period,
   where,
-  segment,
+  segments,
 }: {
   open: boolean
   onOpenChange: (open: boolean) => void
@@ -65,10 +65,10 @@ export function BlockAnswersDialog({
   period: Period
   // Выборка сводки над окном (фильтр и сегмент): окно показывает те же ответы.
   where?: string
-  segment?: string
+  segments?: string[]
 }) {
   const answers = useInfiniteQuery({
-    ...blockAnswersQueryOptions(formId, blockId, period, where, segment),
+    ...blockAnswersQueryOptions(formId, blockId, period, where, segments),
     // Запрос уходит только при открытом окне: иначе каждый вопрос сводки тянул бы
     // свою первую страницу заранее — у формы на двадцать вопросов это двадцать
     // запросов за данными, которых никто не просил.

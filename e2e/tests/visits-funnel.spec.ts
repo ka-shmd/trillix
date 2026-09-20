@@ -102,12 +102,17 @@ test('визит считается под прод-CSP, конверсия и �
   // 5. Воронка. Респондент коснулся только q1 и отправил форму, поэтому:
   //   q1 — дошёл 1, отвала НЕТ (отправивший не отвал — ядро шага 6б);
   //   q2 — до него не дошли.
+  //
+  // Воронка — ТАБЛИЦА (фаза 30, редизайн): шаг это строка, «ушли здесь» — её
+  // колонка. Пустая клетка колонки — прочерк: у одностраничной формы колонок
+  // четыре (шаг, полоска, «Дошли», «Ушли здесь»), поэтому потеря шага — последняя.
   await page.goto(`/forms/${form.slug}/funnel`)
-  await expect(page.getByRole('heading', { name: 'Открыли форму' })).toBeVisible()
-  await expect(page.getByRole('heading', { name: 'Отправили форму' })).toBeVisible()
+  await expect(page.getByRole('row').filter({ hasText: 'Открыли форму' })).toBeVisible()
+  await expect(page.getByRole('row').filter({ hasText: 'Отправили форму' })).toBeVisible()
 
-  const firstStep = page.getByRole('listitem').filter({ hasText: QUESTION })
-  await expect(firstStep).toContainText('Здесь никто не остановился.')
+  const firstStep = page.getByRole('row').filter({ hasText: QUESTION })
+  await expect(firstStep).toContainText('1 · 100 %')
+  await expect(firstStep.getByRole('cell').last()).toHaveText('—')
 
   // 6. Закрытая форма визитов не набирает (410) — часть контракта шага 6: ответом
   // такой визит закончиться не мог, и пускать его значило бы дать способ портить

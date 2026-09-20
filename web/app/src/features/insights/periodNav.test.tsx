@@ -21,14 +21,16 @@ afterEach(cleanup)
 
 // РЕГРЕССИЯ. Селектор периода живёт на ОБОЛОЧКЕ раздела «Аналитика», а вкладки —
 // её дети. Переход, сделанный маршрутным navigate (Route.useNavigate) без `to`,
-// базой берёт САМ МАРШРУТ, то есть оболочку: адрес уходил на /insights, его index
-// редиректил на «Сводку», и смена периода на вкладке «Визиты» выбрасывала человека
-// на другую вкладку.
+// базой берёт САМ МАРШРУТ, то есть оболочку: адрес уходил на /insights, и смена
+// периода на вкладке «Визиты» выбрасывала человека на другую вкладку.
+//
+// Симптом с фазы 30 стал хуже, а не лучше: раньше index раздела редиректил на
+// «Сводку», теперь на /insights стоит собственный экран «Обзор» — уехать туда с
+// «Визитов» по-прежнему неверно.
 //
 // Здесь собран тот же скелет маршрутов в памяти: оболочка с периодом и две вкладки.
-// Индекса с редиректом в скелете нет — он лишь усугублял симптом (выбрасывал на
-// «Сводку»); сам дефект в том, что адрес уходил с вкладки на оболочку, и это тест и
-// ловит.
+// Индекса в скелете нет — он лишь усугубляет симптом; сам дефект в том, что адрес
+// уходил с вкладки на оболочку, и это тест и ловит.
 function renderInsights(initial: string) {
   const rootRoute = createRootRoute()
 
@@ -268,5 +270,93 @@ describe('подсветка раздела «Аналитика»', () => {
     renderSections('/forms/abc/insights/answers?period=30d', 'pinned')
     await act(async () => {})
     expect(screen.getByText('Аналитика').getAttribute('data-on')).toBe(null)
+  })
+})
+
+// Вкладка «Обзор» стоит на INDEX-маршруте раздела (фаза 30, редизайн), поэтому её
+// адрес — префикс адресов «Визитов» и «Ответов». Роутер по умолчанию считает ссылку
+// активной и на потомках (`activeOptions.exact` по умолчанию false), и без явного
+// exact подсвеченными оказывались бы ДВЕ вкладки сразу — «Обзор» и та, что открыта.
+//
+// Дефект молчаливый: классы на ссылке есть, маршрут верный, экран верный, просто
+// сегментированный переключатель показывает два выбранных сегмента. Поэтому тест
+// проверяет обе стороны: «Обзор» гаснет на соседе и горит у себя.
+// Ряд вкладок раздела: те же две ссылки, что рисует InsightsTabs, и то же
+// единственное свойство, из-за которого дефект возможен, — activeOptions у «Обзора».
+function OverviewTabs() {
+  const { slug } = useParams({ strict: false })
+
+  return (
+    <>
+      <Link
+        to="/forms/$slug/insights"
+        params={{ slug: slug ?? '' }}
+        search={(prev) => ({ ...prev, period: periodSchema.parse(prev.period) })}
+        activeOptions={{ exact: true }}
+        activeProps={{ 'data-on': 'yes' }}
+      >
+        Обзор
+      </Link>
+      <Link
+        to="/forms/$slug/insights/visits"
+        params={{ slug: slug ?? '' }}
+        search={(prev) => ({ ...prev, period: periodSchema.parse(prev.period) })}
+        activeProps={{ 'data-on': 'yes' }}
+      >
+        Визиты
+      </Link>
+      <Outlet />
+    </>
+  )
+}
+
+function renderOverviewTabs(initial: string) {
+  const rootRoute = createRootRoute()
+
+  const insights = createRoute({
+    getParentRoute: () => rootRoute,
+    path: '/forms/$slug/insights',
+    validateSearch: (search: Record<string, unknown>) => ({
+      period: periodSchema.parse(search.period),
+    }),
+    component: OverviewTabs,
+  })
+
+  const overview = createRoute({
+    getParentRoute: () => insights,
+    path: '/',
+    component: () => <span data-testid="tab">overview</span>,
+  })
+
+  const visits = createRoute({
+    getParentRoute: () => insights,
+    path: '/visits',
+    component: () => <span data-testid="tab">visits</span>,
+  })
+
+  const router = createRouter({
+    routeTree: rootRoute.addChildren([insights.addChildren([overview, visits])]),
+    history: createMemoryHistory({ initialEntries: [initial] }),
+  })
+
+  render(<RouterProvider router={router as never} />)
+  return router
+}
+
+describe('вкладка «Обзор» на index раздела', () => {
+  it('горит на своём адресе', async () => {
+    renderOverviewTabs('/forms/abc/insights?period=7d')
+    await act(async () => {})
+    expect(screen.getByText('Обзор').getAttribute('data-on')).toBe('yes')
+    expect(screen.getByText('Визиты').getAttribute('data-on')).toBe(null)
+  })
+
+  it('гаснет на соседней вкладке, хотя её адрес — префикс', async () => {
+    renderOverviewTabs('/forms/abc/insights/visits?period=7d')
+    await act(async () => {})
+    // Без activeOptions.exact здесь было бы 'yes' — и оба сегмента выглядели бы
+    // выбранными.
+    expect(screen.getByText('Обзор').getAttribute('data-on')).toBe(null)
+    expect(screen.getByText('Визиты').getAttribute('data-on')).toBe('yes')
   })
 })

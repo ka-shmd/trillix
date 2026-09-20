@@ -62,12 +62,12 @@ export function submissionsSummaryQueryOptions(
   formId: string,
   period: Period,
   where?: string,
-  segment?: string,
+  segments?: string[],
 ) {
   return queryOptions({
     ...analyticsFreshness,
-    queryKey: submissionKeys.summary(formId, period, where, segment),
-    queryFn: () => getSummary(formId, period, where, segment),
+    queryKey: submissionKeys.summary(formId, period, where, segments),
+    queryFn: () => getSummary(formId, period, where, segments),
     retry: (count: number, error: Error) =>
       !(error instanceof ApiError && error.code === 'plan_required') && count < 3,
   })
@@ -81,12 +81,12 @@ export function blockAnswersQueryOptions(
   blockId: string,
   period: Period,
   where?: string,
-  segment?: string,
+  segments?: string[],
 ) {
   return infiniteQueryOptions({
     ...analyticsFreshness,
-    queryKey: submissionKeys.blockAnswers(formId, period, blockId, where, segment),
-    queryFn: ({ pageParam }) => listBlockAnswers(formId, blockId, period, pageParam, where, segment),
+    queryKey: submissionKeys.blockAnswers(formId, period, blockId, where, segments),
+    queryFn: ({ pageParam }) => listBlockAnswers(formId, blockId, period, pageParam, where, segments),
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (lastPage) => lastPage.nextCursor ?? undefined,
   })

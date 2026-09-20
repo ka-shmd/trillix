@@ -7,9 +7,15 @@ import (
 	"unicode/utf8"
 )
 
-// Сегмент визитов (спека design/analytics-v2.md §5.4): одно значение одного измерения —
-// «только телефоны», «только из vk.com», «только версия 3». Набор измерений закрытый
-// (ADR §10: разрезы — фиксированный набор), свободного конструктора нет.
+// Сегмент визитов (спека design/analytics-v2.md §5.4, analytics-v3.md §11.6): одно
+// значение одного измерения — «только телефоны», «только из vk.com», «только версия 3».
+// Набор измерений закрытый (ADR §10: разрезы — фиксированный набор), свободного
+// конструктора нет.
+//
+// Условий бывает НЕСКОЛЬКО, и они складываются через «И» (Segments): «телефоны из
+// vk.com». Это не конструктор «любое × любое» — измерения остаются теми же семью, а
+// куба по ним не строится: каждое условие сводится к своему списку сырых значений, и
+// SQL проверяет их все одним проходом по тем же визитам.
 //
 // Устройство, браузер, систему и источник база не хранит: их выводит Go из сырых
 // user_agent и меток на чтении, чтобы улучшенное правило разбора чинило прошлое.
@@ -40,6 +46,40 @@ type Segment struct {
 }
 
 func (s Segment) IsZero() bool { return s.Dim == "" }
+
+// Segments — условия разреза, соединённые «И». Пустой срез — все визиты.
+type Segments []Segment
+
+func (ss Segments) IsZero() bool { return len(ss) == 0 }
+
+// MaxSegments — потолок условий в запросе. Измерений семь, и больше семи условий
+// не бывает осмысленных; потолок стоит не ради смысла, а ради размера запроса:
+// каждое условие — свой список сырых значений в массиве параметра.
+const MaxSegments = 7
+
+// ParseSegments разбирает повторяющийся параметр `segment`. Пустые значения
+// пропускаются: ссылка с «?segment=» — это отсутствие разреза, а не ошибка.
+//
+// Повторы измерения не отвергаются: «устройство=Телефон И устройство=Планшет» даёт
+// пустую выборку, но это правдивый ответ, а не повод показать экран ошибки на
+// присланную ссылку. Экран такую пару не строит (одно условие на измерение).
+func ParseSegments(raw []string) (Segments, error) {
+	out := make(Segments, 0, len(raw))
+	for _, r := range raw {
+		seg, err := ParseSegment(r)
+		if err != nil {
+			return nil, err
+		}
+		if seg.IsZero() {
+			continue
+		}
+		out = append(out, seg)
+	}
+	if len(out) > MaxSegments {
+		return nil, fmt.Errorf("%w: слишком много условий разреза", ErrValidation)
+	}
+	return out, nil
+}
 
 // maxSegmentValueLen — потолок значения: подпись источника приходит из меток визита,
 // а те обрезаются до 512 символов на приёме.
@@ -104,6 +144,11 @@ func (f VisitFilter) IsZero() bool { return f.Kind == "" }
 // Управляющий символ: в метках и названиях его не бывает.
 const keySep = "\x1f"
 
+// slotSep — разделитель «номер условия — ключ» в массиве seg_keys. Зеркалит chr(30)
+// в internal/visits/queries.sql; отличен от keySep, потому что сам ключ бывает
+// составным и keySep внутри себя уже содержит.
+const slotSep = "\x1e"
+
 // SourceKey — ключ тройки меток источника, как его собирает SQL.
 func SourceKey(r SourceRow) string {
 	return r.Referer + keySep + r.UTMSource + keySep + r.UTMMedium
@@ -146,6 +191,33 @@ func SourceFilter(seg Segment, rows []SourceRow) VisitFilter {
 	return f
 }
 
+// PackFilters — условия разреза в два параметра запроса: вид сырого значения у
+// каждого условия (seg_kinds) и подходящие значения ВСЕХ условий одним массивом
+// (seg_keys), где у каждого ключа спереди номер своего условия.
+//
+// НОМЕР, А НЕ ВИД: «устройство» и «браузер» оба читают user-agent, и по общему виду
+// их списки слились бы в один — «И» между условиями стало бы «ИЛИ».
+//
+// Условие, которому в периоде не подошло ни одного значения, не даёт в массив ни
+// одного ключа: его номер не встретится, и подходящих визитов не будет. Сам массив
+// при этом НЕ nil — nil уезжает в SQL как NULL, сравнение с NULL даёт NULL, и
+// «ноль визитов» превратилось бы в «фильтра нет».
+func PackFilters(fs []VisitFilter) (kinds, keys []string) {
+	if len(fs) == 0 {
+		return nil, nil
+	}
+	kinds = make([]string, 0, len(fs))
+	keys = []string{}
+	for i, f := range fs {
+		kinds = append(kinds, string(f.Kind))
+		prefix := strconv.Itoa(i+1) + slotSep
+		for _, k := range f.Keys {
+			keys = append(keys, prefix+k)
+		}
+	}
+	return kinds, keys
+}
+
 // PlaceFilter — сегмент по стране или городу: ключ строится из самого значения.
 func PlaceFilter(seg Segment) VisitFilter {
 	if seg.Dim == SegCity {
@@ -173,6 +245,16 @@ func (m VisitMeta) Source() string {
 
 // Device — класс устройства подписью разбивки («Компьютер», «Телефон»).
 func (m VisitMeta) Device() string { return DeviceLabel(ParseUserAgent(m.UserAgent).Device) }
+
+// Matches — подходит ли ответ ВСЕМ условиям разреза.
+func (ss Segments) Matches(visit *VisitMeta, version int) bool {
+	for _, seg := range ss {
+		if !MatchesSegment(seg, visit, version) {
+			return false
+		}
+	}
+	return true
+}
 
 // MatchesSegment — подходит ли ответ сегменту. visit nil — ответ без визита: в
 // визитный сегмент он не попадает. Версия — своя у ответа (номер версии, по которой он
@@ -214,3 +296,14 @@ const SegmentK = 5
 
 // VisitSegment — сегмент, раскрытие которого ограничено SegmentK.
 func (s Segment) VisitSegment() bool { return !s.IsZero() && s.Dim != SegVersion }
+
+// VisitSegment — хотя бы одно условие визитное: порог SegmentK ставит любое из них,
+// а не только одиночное.
+func (ss Segments) VisitSegment() bool {
+	for _, seg := range ss {
+		if seg.VisitSegment() {
+			return true
+		}
+	}
+	return false
+}

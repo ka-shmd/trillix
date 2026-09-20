@@ -422,9 +422,10 @@ type summaryBucketResponse struct {
 }
 
 type numberStatsResponse struct {
-	Avg float64 `json:"avg"`
-	Min float64 `json:"min"`
-	Max float64 `json:"max"`
+	Avg    float64 `json:"avg"`
+	Median float64 `json:"median"`
+	Min    float64 `json:"min"`
+	Max    float64 `json:"max"`
 }
 
 // answerSampleResponse — одно показанное значение ответа. Наружу уходит текст, уже
@@ -459,35 +460,42 @@ type scalePointResponse struct {
 }
 
 type scaleStatsResponse struct {
-	Avg   float64              `json:"avg"`
-	NPS   *int                 `json:"nps,omitempty"`
+	Avg float64 `json:"avg"`
+	NPS *int    `json:"nps,omitempty"`
+	// step — фактический шаг ряда: hour | day | week | month. У КАЖДОЙ шкалы свой,
+	// потому что ряд укрупняется по своей длине, а у «всего времени» длина берётся
+	// из данных вопроса (domain.CoarsenScalePoints).
+	Step  string               `json:"step"`
 	Trend []scalePointResponse `json:"trend"`
 }
 
 type summaryResponse struct {
 	Total  int                    `json:"total"`
 	Blocks []blockSummaryResponse `json:"blocks"`
-	// trendStep — шаг рядов шкал: hour | day, выбирает сервер по окну.
-	TrendStep string `json:"trendStep"`
 	// unfiltered — сколько ответов в окне без выборки; только при выборке.
 	Unfiltered *int `json:"unfiltered,omitempty"`
 	// withheld — визитная выборка меньше порога: вопросов и чисел нет.
 	Withheld bool `json:"withheld,omitempty"`
+	// noVisitLink — выборка по визиту стоит, но ответы окна визита не знают
+	// (собраны до миграции 0076). Экран обязан сказать это прямо, а не звать
+	// расширить период.
+	NoVisitLink bool `json:"noVisitLink,omitempty"`
 }
 
-// scopeFromRequest — выборка аналитики ответов: `?where` (фильтр по ответам) и
-// `?segment` (сегмент по визиту, тот же, что у «Отвалов»).
+// scopeFromRequest — выборка аналитики ответов: `?where` (условия по ответам) и
+// `?segment` (условия по визиту, те же, что у воронки; параметр повторяется —
+// условия складываются через «И»).
 func scopeFromRequest(r *http.Request) (domain.AnswerScope, error) {
 	q := r.URL.Query()
 	filter, err := domain.ParseAnswerFilter(q.Get("where"))
 	if err != nil {
 		return domain.AnswerScope{}, err
 	}
-	seg, err := domain.ParseSegment(q.Get("segment"))
+	segs, err := domain.ParseSegments(q["segment"])
 	if err != nil {
 		return domain.AnswerScope{}, err
 	}
-	return domain.AnswerScope{Filter: filter, Segment: seg}, nil
+	return domain.AnswerScope{Filter: filter, Segments: segs}, nil
 }
 
 // summary отдаёт агрегат по ответам формы: наружу уходят только счётчики, сырые
@@ -549,14 +557,24 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 		if b.Number != nil {
-			item.Number = &numberStatsResponse{Avg: b.Number.Avg, Min: b.Number.Min, Max: b.Number.Max}
+			item.Number = &numberStatsResponse{
+				Avg:    b.Number.Avg,
+				Median: b.Number.Median,
+				Min:    b.Number.Min,
+				Max:    b.Number.Max,
+			}
 		}
 		if b.Scale != nil {
 			trend := make([]scalePointResponse, len(b.Scale.Trend))
 			for j, p := range b.Scale.Trend {
 				trend[j] = scalePointResponse{At: p.At.UTC().Format(time.RFC3339), N: p.N, Avg: p.Avg}
 			}
-			item.Scale = &scaleStatsResponse{Avg: b.Scale.Avg, NPS: b.Scale.NPS, Trend: trend}
+			item.Scale = &scaleStatsResponse{
+				Avg:   b.Scale.Avg,
+				NPS:   b.Scale.NPS,
+				Step:  string(b.Scale.Step),
+				Trend: trend,
+			}
 		}
 		if len(b.Samples) > 0 {
 			item.Samples = make([]answerSampleResponse, len(b.Samples))
@@ -569,7 +587,7 @@ func (h *Handler) summary(w http.ResponseWriter, r *http.Request) {
 		}
 		blocks[i] = item
 	}
-	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, TrendStep: string(sum.TrendStep), Unfiltered: sum.Unfiltered, Withheld: sum.Withheld})
+	httpserver.WriteJSON(w, r, http.StatusOK, summaryResponse{Total: sum.Total, Blocks: blocks, Unfiltered: sum.Unfiltered, Withheld: sum.Withheld, NoVisitLink: sum.NoVisitLink})
 }
 
 type answerResponse struct {

@@ -62,10 +62,17 @@ type SummaryBucket struct {
 }
 
 // NumberStats — статистика числового вопроса по ответившим (не по всем визитам).
+//
+// Median стоит рядом со средней не для полноты: у денежных и возрастных вопросов
+// средняя живёт под выбросами. На демо-форме «сколько готовы тратить в месяц»
+// средняя давала 19 934 ₽ при максимуме 148 200 — число, из которого не следует
+// ничего. Медиана отвечает на тот же вопрос устойчиво, поэтому на экране главная
+// именно она, а средняя стоит рядом.
 type NumberStats struct {
-	Avg float64
-	Min float64
-	Max float64
+	Avg    float64
+	Median float64
+	Min    float64
+	Max    float64
 }
 
 // ScaleStats — средняя и NPS шкалы или звёзд (спека design/analytics-v2.md §6.1).
@@ -76,6 +83,10 @@ type NumberStats struct {
 type ScaleStats struct {
 	// Avg — средняя по ответившим, в делениях шкалы (у звёзд — в звёздах).
 	Avg float64
+	// Step — фактический шаг ряда. Живёт у ШКАЛЫ, а не у сводки целиком: ряд
+	// укрупняется по своей длине, а у «всего времени» длина берётся из данных, и у
+	// вопроса из поздней версии она короче, чем у вопроса из первой.
+	Step BucketStep
 	// NPS — индекс от −100 до 100: доля 9–10 минус доля 0–6. nil, если шкала свежей
 	// версии не 0–10: у шкалы 1–5 «промоутеров» нет.
 	NPS *int
@@ -129,13 +140,17 @@ type AnswerSample struct {
 type Summary struct {
 	Total  int
 	Blocks []BlockSummary
-	// TrendStep — шаг рядов шкал (ScaleStats.Trend): от него зависят подписи оси.
-	TrendStep BucketStep
 	// Unfiltered — сколько ответов в окне без выборки («в выборке 124 из 890»);
 	// nil, если выборки нет.
 	Unfiltered *int
 	// Withheld — визитная выборка меньше SegmentK: вопросов и чисел нет.
 	Withheld bool
+	// NoVisitLink — выборка по визиту стоит, но НИ ОДИН ответ окна визита не знает.
+	// Это не «никто не подошёл», а «сопоставлять не с чем»: связь ответа с визитом
+	// появилась миграцией 0076, и у ответов, собранных раньше, её нет и не будет
+	// (ANALYTICS.md §11). Без этого флага экран винил бы окно наблюдения и звал
+	// «расширить период» — то есть уводил ровно в ту сторону, где ответов ещё меньше.
+	NoVisitLink bool
 }
 
 // SummaryBuilder копит счётчики. Создаётся один раз на запрос, затем Add вызывается
@@ -180,6 +195,11 @@ type summaryAcc struct {
 	// Числа: сумма и границы по ответившим.
 	sum, min, max float64
 	numCount      int
+	// nums — все значения числового вопроса: медиану потоком не посчитать. Память
+	// линейна по числу ответов (8 байт на значение), и это осознанная цена: на
+	// замере фазы 30 (20 000 ответов) она составила 160 КиБ на вопрос. Станет
+	// дорого — считать придётся гистограммой, как время на странице в воронке.
+	nums []float64
 	// Шкалы и звёзды: сумма делений, промоутеры (9–10) и критики (0–6) для NPS, ряд.
 	// Копятся только по ответам действующего диапазона, поэтому scaleN не равен
 	// answered у вопроса, которому меняли шкалу.
@@ -195,6 +215,20 @@ type summaryAcc struct {
 	// что потребителя два: сводка берёт по десять последних на каждый вопрос, а
 	// окно «все ответы» листает один вопрос страницами (см. AnswerLog).
 	sampleLimit int
+}
+
+// median — медиана выборки; при чётном числе значений это среднее двух
+// центральных. Сортирует НА МЕСТЕ: срез после Build больше никому не нужен.
+func median(xs []float64) float64 {
+	if len(xs) == 0 {
+		return 0
+	}
+	sort.Float64s(xs)
+	mid := len(xs) / 2
+	if len(xs)%2 == 1 {
+		return xs[mid]
+	}
+	return (xs[mid-1] + xs[mid]) / 2
 }
 
 // AnswerLog переводит builder в режим ОДНОГО вопроса: у названного потолок
@@ -403,6 +437,7 @@ func (a *summaryAcc) add(typ BlockType, raw json.RawMessage) {
 		}
 		a.sum += f
 		a.numCount++
+		a.nums = append(a.nums, f)
 	default:
 		// Свободный текст, телефон, email, дата: считаем только факт заполнения.
 		// Пробельный ответ — не ответ (в отличие от ValidateAnswers, которому
@@ -447,7 +482,12 @@ func (b *SummaryBuilder) Result() Summary {
 			s.Buckets = a.buckets()
 		case SummaryNumber:
 			if a.numCount > 0 {
-				s.Number = &NumberStats{Avg: a.sum / float64(a.numCount), Min: a.min, Max: a.max}
+				s.Number = &NumberStats{
+					Avg:    a.sum / float64(a.numCount),
+					Median: median(a.nums),
+					Min:    a.min,
+					Max:    a.max,
+				}
 			}
 		case SummaryFill:
 			// Доля считается на фронте из Answered/Asked — числа уже есть.
@@ -636,5 +676,8 @@ func (a *summaryAcc) scaleStats(step BucketStep, from, to time.Time) *ScaleStats
 		}
 		st.Trend = append(st.Trend, p)
 	}
+	// Укрупнение — как у ряда визитов и по той же причине: сотня дневных точек
+	// вокруг одного уровня это кардиограмма, а не тренд.
+	st.Trend, st.Step = CoarsenScalePoints(st.Trend, step)
 	return st
 }

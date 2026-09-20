@@ -8,11 +8,17 @@ import { type Period } from '../../shared/period'
 export const insightsKeys = {
   all: () => ['insights'] as const,
   // Сегмент — тоже часть ключа; '' — «все визиты».
-  visits: (formId: string, period: Period, segment = '') =>
-    ['insights', 'visits', formId, period, segment] as const,
-  versions: (formId: string, period: Period, segment = '') =>
-    ['insights', 'versions', formId, period, segment] as const,
+  visits: (formId: string, period: Period, segments: string[] = []) =>
+    ['insights', 'visits', formId, period, segments] as const,
+  versions: (formId: string, period: Period, segments: string[] = []) =>
+    ['insights', 'versions', formId, period, segments] as const,
   breakdown: (formId: string, period: Period) => ['insights', 'breakdown', formId, period] as const,
-  crosstab: (formId: string, period: Period, rows: string, cols: string, where = '', segment = '') =>
-    ['insights', 'crosstab', formId, period, rows, cols, where, segment] as const,
+  crosstab: (
+    formId: string,
+    period: Period,
+    rows: string,
+    cols: string,
+    where = '',
+    segments: string[] = [],
+  ) => ['insights', 'crosstab', formId, period, rows, cols, where, segments] as const,
 }

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
 import { type VisitsBreakdown } from '../../entities/visitsBreakdown'
-import { segmentOptions, withSelected } from './segment'
+import { segmentOptions, segmentValueLabel } from './segment'
 
 const breakdown: VisitsBreakdown = {
   step: 'day',
@@ -27,28 +27,34 @@ const breakdown: VisitsBreakdown = {
 }
 
 describe('segmentOptions', () => {
-  it('источник — без канала, по одному на имя', () => {
-    expect(segmentOptions('source', breakdown, undefined).map((o) => o.value)).toEqual([
-      'vk.com',
-      'Прямые заходы',
+  // Визиты каналов складываются: сегмент «vk.com» возьмёт и social, и прямой, и
+  // число в списке выбора обязано обещать столько же, сколько он покажет.
+  it('источник — без канала, по одному на имя, визиты каналов сложены', () => {
+    expect(segmentOptions('source', breakdown, undefined)).toEqual([
+      { value: 'vk.com', label: 'vk.com', count: 5 },
+      { value: 'Прямые заходы', label: 'Прямые заходы', count: 5 },
     ])
   })
 
   // Сервер разбирает «город» как «код:имя»: одноимённые города разных стран — разные.
   it('город — с кодом страны в значении и в подписи только у тёзок', () => {
     expect(segmentOptions('city', breakdown, undefined)).toEqual([
-      { value: 'RU:Москва', label: 'Москва' },
-      { value: 'BY:Минск', label: 'Минск (BY)' },
-      { value: 'RU:Минск', label: 'Минск (RU)' },
+      { value: 'RU:Москва', label: 'Москва', count: 3 },
+      { value: 'BY:Минск', label: 'Минск (BY)', count: 1 },
+      { value: 'RU:Минск', label: 'Минск (RU)', count: 1 },
     ])
   })
 
   it('страна — код в значении, имя в подписи; версия — номер', () => {
-    expect(segmentOptions('country', breakdown, undefined)).toEqual([{ value: 'RU', label: 'Россия' }])
+    expect(segmentOptions('country', breakdown, undefined)).toEqual([
+      { value: 'RU', label: 'Россия', count: 4 },
+    ])
     const versions = [
       { number: 3, publishedAt: '', visits: 1, submitted: 0, timedCompletions: 0, completionDurationSec: 0 },
     ]
-    expect(segmentOptions('version', undefined, versions)).toEqual([{ value: '3', label: 'Версия 3' }])
+    expect(segmentOptions('version', undefined, versions)).toEqual([
+      { value: '3', label: 'Версия 3', count: 1 },
+    ])
   })
 
   it('пока разбивка не приехала — вариантов нет', () => {
@@ -56,26 +62,16 @@ describe('segmentOptions', () => {
   })
 })
 
-// Выбранный сегмент переживает смену окна: значение, которого в новом окне нет, всё
-// равно обязано стоять в списке — иначе триггер пустеет, а фильтр работает.
-describe('withSelected', () => {
-  const devices = [{ value: 'Телефон', label: 'Телефон' }]
-
-  it('значение из списка не дублируется', () => {
-    expect(withSelected(devices, 'device', 'Телефон')).toEqual(devices)
+// Подпись применённого разреза считается из самого значения: чипс рисуется до
+// любых запросов, и разбивки за это окно под рукой может не быть вовсе.
+describe('segmentValueLabel', () => {
+  it('город — имя без внутреннего ключа, с кодом страны', () => {
+    expect(segmentValueLabel('city', 'BY:Минск')).toBe('Минск (BY)')
   })
 
-  it('без выбранного список не меняется', () => {
-    expect(withSelected(devices, 'device', undefined)).toEqual(devices)
-  })
-
-  it('пропавшее из окна значение добавляется со своей подписью', () => {
-    expect(withSelected(devices, 'device', 'Планшет')).toEqual([
-      ...devices,
-      { value: 'Планшет', label: 'Планшет' },
-    ])
-    expect(withSelected([], 'city', 'BY:Минск')).toEqual([{ value: 'BY:Минск', label: 'Минск (BY)' }])
-    expect(withSelected([], 'version', '2')).toEqual([{ value: '2', label: 'Версия 2' }])
-    expect(withSelected([], 'country', 'BY')).toEqual([{ value: 'BY', label: 'BY' }])
+  it('версия — словом, остальное — как есть', () => {
+    expect(segmentValueLabel('version', '2')).toBe('Версия 2')
+    expect(segmentValueLabel('device', 'Планшет')).toBe('Планшет')
+    expect(segmentValueLabel('country', 'BY')).toBe('BY')
   })
 })

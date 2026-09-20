@@ -75,9 +75,13 @@ describe('контракт вкладки «Визиты»', () => {
     expect(locked.knownSources).toBe(5)
   })
 
-  it('не пропускает ответ с неизвестным шагом', () => {
-    // Шаг выбирает сервер, и новый шаг (неделя, месяц) обязан приехать вместе с
-    // подписями оси — молча отрисовать его как сутки было бы враньём на графике.
-    expect(() => visitsBreakdownSchema.parse({ ...realResponse, step: 'week' })).toThrow()
+  it('принимает укрупнённые шаги и не пропускает неизвестный', () => {
+    // Недели и месяцы приезжают с фазы 30: слишком длинный ряд сервер складывает
+    // (domain.CoarsenBuckets). Каждый шаг обязан приехать вместе с подписями оси —
+    // молча отрисовать неизвестный как сутки было бы враньём на графике, поэтому
+    // схема остаётся закрытым перечнем.
+    expect(visitsBreakdownSchema.parse({ ...realResponse, step: 'week' }).step).toBe('week')
+    expect(visitsBreakdownSchema.parse({ ...realResponse, step: 'month' }).step).toBe('month')
+    expect(() => visitsBreakdownSchema.parse({ ...realResponse, step: 'quarter' })).toThrow()
   })
 })
