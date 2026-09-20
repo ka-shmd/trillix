@@ -721,23 +721,25 @@ FROM (
 ) p
 JOIN form_visits v ON v.id = p.visit_id
 WHERE true
-  AND ($4::text IS NULL OR
-       (CASE $4::text
+  AND ($4::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest($4::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
             WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(v.country_code, '')
             WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
             WHEN 'version' THEN v.form_version_id::text
-        END) = ANY($5::text[]))
+        END)) <> ALL($5::text[])))
 GROUP BY v.last_block_id, v.submitted, p.blocks
 `
 
 type CountVisitPathsParams struct {
-	FormID  uuid.UUID
-	FromTs  pgtype.Timestamptz
-	ToTs    pgtype.Timestamptz
-	SegKind pgtype.Text
-	SegKeys []string
+	FormID   uuid.UUID
+	FromTs   pgtype.Timestamptz
+	ToTs     pgtype.Timestamptz
+	SegKinds []string
+	SegKeys  []string
 }
 
 type CountVisitPathsRow struct {
@@ -761,7 +763,7 @@ func (q *Queries) CountVisitPaths(ctx context.Context, arg CountVisitPathsParams
 		arg.FormID,
 		arg.FromTs,
 		arg.ToTs,
-		arg.SegKind,
+		arg.SegKinds,
 		arg.SegKeys,
 	)
 	if err != nil {
@@ -793,23 +795,25 @@ FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
   AND created_at <  $3::timestamptz
-  AND ($4::text IS NULL OR
-       (CASE $4::text
+  AND ($4::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest($4::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
             WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(country_code, '')
             WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
             WHEN 'version' THEN form_version_id::text
-        END) = ANY($5::text[]))
+        END)) <> ALL($5::text[])))
 GROUP BY last_block_id, submitted
 `
 
 type CountVisitsByLastBlockParams struct {
-	FormID  uuid.UUID
-	FromTs  pgtype.Timestamptz
-	ToTs    pgtype.Timestamptz
-	SegKind pgtype.Text
-	SegKeys []string
+	FormID   uuid.UUID
+	FromTs   pgtype.Timestamptz
+	ToTs     pgtype.Timestamptz
+	SegKinds []string
+	SegKeys  []string
 }
 
 type CountVisitsByLastBlockRow struct {
@@ -840,17 +844,28 @@ type CountVisitsByLastBlockRow struct {
 // отсутствующее условие. Одна форма запроса вместо двух означает один план и одну
 // ветку кода; бесконечность индексу не мешает (та же диапазонная проверка).
 //
-// Сегмент (seg_kind/seg_keys, спека design/analytics-v2.md §5.4): визиты режутся по
-// СЫРОМУ значению — строке user-agent, тройке меток, стране, городу или версии, —
-// список подходящих значений собирает Go (domain.VisitFilter). Ключ зеркалит
-// domain.SourceKey и domain.CityKey, разделитель — chr(31). Без сегмента оба
-// параметра NULL, и условие не читает meta: запрос остаётся index-only.
+// Разрез (seg_kinds/seg_keys, спека design/analytics-v2.md §5.4, analytics-v3.md
+// §11.6): визиты режутся по СЫРОМУ значению — строке user-agent, тройке меток,
+// стране, городу или версии, — список подходящих значений собирает Go
+// (domain.VisitFilter). Ключ зеркалит domain.SourceKey и domain.CityKey,
+// разделитель частей ключа — chr(31).
+//
+// УСЛОВИЙ НЕСКОЛЬКО, и они через «И»: seg_kinds — вид сырого значения у каждого
+// условия, seg_keys — подходящие значения ВСЕХ условий одним массивом, где у
+// каждого ключа спереди НОМЕР СВОЕГО УСЛОВИЯ и chr(30). Номер, а не вид: условия
+// «устройство» и «браузер» оба читают user-agent, и по общему виду их списки
+// слились бы в один — «И» превратилось бы в «ИЛИ». NOT EXISTS читается как «ни
+// одно условие не нарушено».
+//
+// Внешнее «seg_kinds IS NULL OR» — не перестраховка: при NULL план сворачивает
+// условие целиком, подзапрос не читает meta, и запрос остаётся index-only. Без
+// него разреза нет, а чтение строки есть.
 func (q *Queries) CountVisitsByLastBlock(ctx context.Context, arg CountVisitsByLastBlockParams) ([]CountVisitsByLastBlockRow, error) {
 	rows, err := q.db.Query(ctx, countVisitsByLastBlock,
 		arg.FormID,
 		arg.FromTs,
 		arg.ToTs,
-		arg.SegKind,
+		arg.SegKinds,
 		arg.SegKeys,
 	)
 	if err != nil {
@@ -9908,14 +9923,16 @@ FROM form_visits
 WHERE form_id = $1
   AND created_at >= $3::timestamptz
   AND created_at <  $4::timestamptz
-  AND ($5::text IS NULL OR
-       (CASE $5::text
+  AND ($5::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest($5::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
             WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(country_code, '')
             WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
             WHEN 'version' THEN form_version_id::text
-        END) = ANY($6::text[]))
+        END)) <> ALL($6::text[])))
 `
 
 type VisitInsightsParams struct {
@@ -9923,7 +9940,7 @@ type VisitInsightsParams struct {
 	FromTs     pgtype.Timestamptz
 	PrevFromTs pgtype.Timestamptz
 	ToTs       pgtype.Timestamptz
-	SegKind    pgtype.Text
+	SegKinds   []string
 	SegKeys    []string
 }
 
@@ -9987,7 +10004,7 @@ func (q *Queries) VisitInsights(ctx context.Context, arg VisitInsightsParams) (V
 		arg.FromTs,
 		arg.PrevFromTs,
 		arg.ToTs,
-		arg.SegKind,
+		arg.SegKinds,
 		arg.SegKeys,
 	)
 	var i VisitInsightsRow
@@ -10025,14 +10042,16 @@ WITH path AS (
     WHERE p.form_id = $1
       AND p.visit_created_at >= $2::timestamptz
       AND p.visit_created_at <  $3::timestamptz
-      AND ($4::text IS NULL OR
-             (CASE $4::text
+      AND ($4::text[] IS NULL OR NOT EXISTS (
+            SELECT 1 FROM unnest($4::text[]) WITH ORDINALITY AS seg(kind, n)
+            WHERE (seg.n::text || chr(30) ||
+             (CASE seg.kind
                   WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
                   WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
                   WHEN 'country' THEN coalesce(v.country_code, '')
                   WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
                   WHEN 'version' THEN v.form_version_id::text
-              END) = ANY($5::text[]))
+              END)) <> ALL($5::text[])))
     WINDOW w AS (PARTITION BY p.visit_id ORDER BY p.reached_at, p.block_id)
 ),
 spans AS (
@@ -10057,14 +10076,16 @@ spans AS (
       AND NOT v.submitted
       AND v.last_block_id IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM form_visit_pages x WHERE x.visit_id = v.id)
-  AND ($4::text IS NULL OR
-         (CASE $4::text
+  AND ($4::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest($4::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
               WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
               WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
               WHEN 'country' THEN coalesce(v.country_code, '')
               WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
               WHEN 'version' THEN v.form_version_id::text
-          END) = ANY($5::text[]))
+          END)) <> ALL($5::text[])))
 )
 SELECT page_block::text AS page_block,
        last_block::text AS last_block,
@@ -10077,11 +10098,11 @@ GROUP BY 1, 2, 3, 4
 `
 
 type VisitPageDurationsParams struct {
-	FormID  uuid.UUID
-	FromTs  pgtype.Timestamptz
-	ToTs    pgtype.Timestamptz
-	SegKind pgtype.Text
-	SegKeys []string
+	FormID   uuid.UUID
+	FromTs   pgtype.Timestamptz
+	ToTs     pgtype.Timestamptz
+	SegKinds []string
+	SegKeys  []string
 }
 
 type VisitPageDurationsRow struct {
@@ -10113,7 +10134,7 @@ func (q *Queries) VisitPageDurations(ctx context.Context, arg VisitPageDurations
 		arg.FormID,
 		arg.FromTs,
 		arg.ToTs,
-		arg.SegKind,
+		arg.SegKinds,
 		arg.SegKeys,
 	)
 	if err != nil {
@@ -10322,23 +10343,25 @@ FROM form_visits
 WHERE form_id = $1
   AND created_at >= $2::timestamptz
   AND created_at <  $3::timestamptz
-  AND ($4::text IS NULL OR
-       (CASE $4::text
+  AND ($4::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest($4::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
             WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(country_code, '')
             WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
             WHEN 'version' THEN form_version_id::text
-        END) = ANY($5::text[]))
+        END)) <> ALL($5::text[])))
 GROUP BY form_version_id
 `
 
 type VisitVersionStatsParams struct {
-	FormID  uuid.UUID
-	FromTs  pgtype.Timestamptz
-	ToTs    pgtype.Timestamptz
-	SegKind pgtype.Text
-	SegKeys []string
+	FormID   uuid.UUID
+	FromTs   pgtype.Timestamptz
+	ToTs     pgtype.Timestamptz
+	SegKinds []string
+	SegKeys  []string
 }
 
 type VisitVersionStatsRow struct {
@@ -10358,7 +10381,7 @@ func (q *Queries) VisitVersionStats(ctx context.Context, arg VisitVersionStatsPa
 		arg.FormID,
 		arg.FromTs,
 		arg.ToTs,
-		arg.SegKind,
+		arg.SegKinds,
 		arg.SegKeys,
 	)
 	if err != nil {

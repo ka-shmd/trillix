@@ -12,7 +12,7 @@ import { Funnel } from '../../features/insights/Funnel'
 import { funnelRows, funnelSteps, worstStep } from '../../features/insights/metrics'
 import { pluralPeople } from '../../shared/format'
 import { type Period } from '../../shared/period'
-import { segmentFromSearch } from '../../shared/segment'
+import { segmentsFromSearch, segmentsToSearch } from '../../shared/segment'
 import { ApiError } from '../../shared/api/errors'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
@@ -34,13 +34,15 @@ import { Button } from '@/components/ui/button'
 // отдельно от «Аналитики». Index, редиректящий на вкладку, — это раздел вовсе без
 // собственного экрана.
 //
-// Сегмент (?segment=device:Телефон) — этой вкладки и «Ответов»: воронка, карточки и
-// разрез версий считаются по визитам сегмента (спека design/analytics-v2.md §5.4).
+// Разрез (?segment=device:Телефон) — этой вкладки и «Ответов»: воронка, карточки и
+// таблица версий считаются по визитам разреза (спека design/analytics-v2.md §5.4).
+// Условий бывает несколько, и они складываются через «И»; одно уезжает в адрес
+// строкой, несколько — массивом (shared/segment.ts).
 export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/')({
   // Необязательный ключ, а не «всегда есть, иногда undefined»: иначе каждая ссылка на
   // вкладку обязана была бы его называть.
-  validateSearch: (search): { segment?: string } => {
-    const segment = segmentFromSearch(search.segment)
+  validateSearch: (search): { segment?: string | string[] } => {
+    const segment = segmentsToSearch(segmentsFromSearch(search.segment))
     return segment ? { segment } : {}
   },
   component: OverviewPage,
@@ -51,25 +53,29 @@ function OverviewPage() {
   // страницах ответов и сводки.
   const { slug } = Route.useParams()
   const { period, segment } = Route.useSearch()
+  const segments = segmentsFromSearch(segment)
   const navigate = Route.useNavigate()
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const funnel = useQuery({
-    ...funnelQueryOptions(formId ?? '', period, segment),
+    ...funnelQueryOptions(formId ?? '', period, segments),
     enabled: formId !== undefined,
   })
-  const setSegment = (next: string | undefined) =>
-    void navigate({ search: (prev) => ({ ...prev, segment: next }), replace: true })
+  const setSegments = (next: string[]) =>
+    void navigate({
+      search: (prev) => ({ ...prev, segment: segmentsToSearch(next) }),
+      replace: true,
+    })
   // Выборка «Обзора» — только по визиту: воронку сервер по ответам не режет, и
   // предлагать здесь условия по ответам значило бы обещать несуществующее.
   const picker = formId && (
-    <ScopeBar formId={formId} period={period} segment={segment} onSegment={setSegment} />
+    <ScopeBar formId={formId} period={period} segments={segments} onSegments={setSegments} />
   )
 
   // Полоса та же, что на «Сводке» и «Визитах» (спека design/analytics-v3.md §3):
   // её числа — Визиты → Начали → Отправили → Конверсия — это верх той же воронки,
   // что нарисована ниже, и они обязаны совпадать с ней, а не спорить.
-  const cards = <InsightCards slug={slug} period={period} segment={segment} />
+  const cards = <InsightCards slug={slug} period={period} segments={segments} />
 
   // Воронка закрыта тарифом. Показываем НАСТОЯЩЕЕ число не дошедших — оно уже
   // загружено вместе с формой (визиты собираются для всех планов, гейт стоит на
@@ -83,12 +89,12 @@ function OverviewPage() {
 
   // С сегментом отказ по тарифу — про сегмент: сама воронка без него могла быть
   // открыта, и путь назад к ней — сброс сегмента.
-  if (planRequired && segment) {
+  if (planRequired && segments.length > 0) {
     return (
       <div className="flex flex-col gap-12">
         {picker}
         <EmptyState
-          title="Сегменты закрыты тарифом"
+          title="Разрезы закрыты тарифом"
           description="Разрез воронки по устройству, источнику, месту и версии формы доступен на тарифе с аналитикой."
           action={
             <Button asChild size="sm">
@@ -138,10 +144,10 @@ function OverviewPage() {
           <LoadingRows rows={3} />
         ) : funnel.isError ? (
           <ErrorState title="Не удалось посчитать воронку." onRetry={() => funnel.refetch()} />
-        ) : funnel.data.visits === 0 && segment ? (
+        ) : funnel.data.visits === 0 && segments.length > 0 ? (
           <EmptyState
-            title="В этом сегменте визитов нет"
-            description="За выбранный период никто не пришёл с таким значением. Выберите другое или сбросьте сегмент."
+            title="Под эти условия не подошёл ни один визит"
+            description="За выбранный период никто не пришёл с такими значениями. Уберите условие или выберите другое."
           />
         ) : funnel.data.visits === 0 ? (
           <EmptyState
@@ -166,7 +172,7 @@ function OverviewPage() {
         )}
       </Section>
 
-      {formId && <Versions formId={formId} period={period} segment={segment} />}
+      {formId && <Versions formId={formId} period={period} segments={segments} />}
     </div>
   )
 }
@@ -176,13 +182,13 @@ function OverviewPage() {
 function Versions({
   formId,
   period,
-  segment,
+  segments,
 }: {
   formId: string
   period: Period
-  segment: string | undefined
+  segments: string[]
 }) {
-  const versions = useQuery(versionStatsQueryOptions(formId, period, segment))
+  const versions = useQuery(versionStatsQueryOptions(formId, period, segments))
   if (versions.isPending || versions.isError || versions.data.length < 2) return null
   return (
     <Section

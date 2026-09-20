@@ -235,6 +235,21 @@ func TestSummary_VisitSegment(t *testing.T) {
 		t.Errorf("версия 1 (ответ без визита входит): %+v", version)
 	}
 
+	// Условий разреза бывает несколько, и они складываются через «И» (спека
+	// analytics-v3.md §11.6). У ответов проверка идёт в Go по меткам визита:
+	// «телефоны версии 1» — те же пять, «телефоны версии 2» — ни одного.
+	const segPhone = "device:%D0%A2%D0%B5%D0%BB%D0%B5%D1%84%D0%BE%D0%BD"
+	var phoneV1 summaryResp
+	get("/submissions/summary?", segPhone+"&segment=version:1", &phoneV1)
+	if phoneV1.Withheld || phoneV1.Total != 5 {
+		t.Errorf("телефоны версии 1: %+v", phoneV1)
+	}
+	var phoneV2 summaryResp
+	get("/submissions/summary?", segPhone+"&segment=version:2", &phoneV2)
+	if phoneV2.Total != 0 || len(phoneV2.Blocks) != 0 {
+		t.Errorf("телефоны версии 2 (таких нет): %+v", phoneV2)
+	}
+
 	var page struct {
 		Answers  []any `json:"answers"`
 		Withheld bool  `json:"withheld"`

@@ -12,12 +12,19 @@ import {
   equalsOp,
   MAX_FILTER_CONDITIONS,
   needsValue,
+  withCondition,
   type FilterCondition,
 } from '../../shared/answerFilter'
 import { BlockTypeIcon } from '../../shared/BlockTypeIcon'
 import { operatorLabel } from '../../shared/logicLabels'
 import { type Period } from '../../shared/period'
-import { segmentDimLabels, splitSegment, type SegmentDim } from '../../shared/segment'
+import {
+  MAX_SEGMENTS,
+  segmentDimLabels,
+  splitSegment,
+  withSegment,
+  type SegmentDim,
+} from '../../shared/segment'
 import { Button } from '@/components/ui/button'
 import {
   Command,
@@ -46,6 +53,11 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 // то же: по какому признаку сузить. Разные параметры — забота этого файла, а не
 // повод показывать два органа управления.
 //
+// Условий и с той, и с другой стороны бывает НЕСКОЛЬКО, и складываются они через
+// «И» — «телефоны из vk.com, выбравшие Pro». На измерение и на пару «вопрос +
+// оператор» условие при этом одно: второе значение заменяет первое, потому что
+// «устройство — телефон И устройство — планшет» не сужает выборку, а обнуляет её.
+//
 // ТРЕТЬЕ: ШАГИ ИДУТ ОДИН ЗА ДРУГИМ В ОДНОМ ОКНЕ. Поле → значение, и для закрытого
 // вопроса и визитного измерения это ВСЁ: оператор там подразумевается равенством.
 // Окна в окне не бывает: поповер выборки, открывающий второй поповер с тремя
@@ -57,37 +69,42 @@ import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover
 export function ScopeBar({
   formId,
   period,
-  segment,
+  segments,
   where,
   blocks = [],
-  onSegment,
+  onSegments,
   onWhere,
 }: {
   formId: string
   period: Period
-  segment: string | undefined
+  segments: string[]
   where?: string
   // Вопросы для условий по ответам — из сводки БЕЗ выборки: при пустом результате
   // или закрытом тарифе отфильтрованной сводки нет, а менять условия всё равно
   // нужно. Пусто (и нет onWhere) — экран условий по ответам не принимает: воронку
   // «Обзора» сервер по ответам не режет.
   blocks?: BlockSummary[]
-  onSegment: (next: string | undefined) => void
+  onSegments: (next: string[]) => void
   onWhere?: (next: FilterCondition[]) => void
 }) {
   const conditions = onWhere ? decodeFilter(where) : []
-  const seg = splitSegment(segment)
-  const applied = (seg ? 1 : 0) + conditions.length
+  const applied = segments.length + conditions.length
   const byId = new Map(blocks.map((b) => [b.blockId, b]))
 
   return (
     <div className="flex flex-wrap items-center gap-2">
-      {seg && (
-        <Chip
-          text={`${segmentDimLabels[seg.dim]}: ${segmentValueLabel(seg.dim, seg.value)}`}
-          onRemove={() => onSegment(undefined)}
-        />
-      )}
+      {segments.map((raw) => {
+        const seg = splitSegment(raw)
+        return (
+          seg && (
+            <Chip
+              key={raw}
+              text={`${segmentDimLabels[seg.dim]}: ${segmentValueLabel(seg.dim, seg.value)}`}
+              onRemove={() => onSegments(segments.filter((s) => s !== raw))}
+            />
+          )
+        )
+      })}
       {conditions.map((c, i) => (
         <Chip
           key={`${c.blockId}-${i}`}
@@ -104,8 +121,13 @@ export function ScopeBar({
         // (domain.MaxFilterConditions); достигли потолка — вопросов в списке полей
         // нет, а измерения визита остаются.
         blocks={conditions.length < MAX_FILTER_CONDITIONS && onWhere ? blocks : []}
-        onSegment={onSegment}
-        onCondition={(c) => onWhere?.([...conditions, c])}
+        // Измерение, по которому условие уже стоит, из списка полей не убирается:
+        // выбор другого значения того же измерения — обычное дело («не телефоны, а
+        // планшеты»), и он заменит условие, а не добавит второе. Убирать нечего
+        // только когда условий уже столько, сколько принимает сервер.
+        dims={segments.length >= MAX_SEGMENTS ? appliedDims(segments) : undefined}
+        onSegment={(dim, value) => onSegments(withSegment(segments, dim, value))}
+        onCondition={(c) => onWhere?.(withCondition(conditions, c))}
       />
 
       {/* Сброс — только когда сбрасывать есть что И крестиков больше одного:
@@ -115,7 +137,7 @@ export function ScopeBar({
           variant="ghost"
           size="sm"
           onClick={() => {
-            onSegment(undefined)
+            onSegments([])
             onWhere?.([])
           }}
         >
@@ -157,11 +179,22 @@ type Stage = 'field' | 'value' | 'op' | 'text'
 
 type Field = { kind: 'visit'; dim: SegmentDim } | { kind: 'answer'; block: BlockSummary }
 
+// appliedDims — измерения, по которым условие уже стоит. На потолке условий список
+// полей сжимается до них: новое измерение добавить нельзя, а поменять значение уже
+// выбранного — можно.
+function appliedDims(segments: string[]): SegmentDim[] {
+  return segments.flatMap((raw) => {
+    const seg = splitSegment(raw)
+    return seg ? [seg.dim] : []
+  })
+}
+
 function ScopePicker({
   formId,
   period,
   empty,
   blocks,
+  dims,
   onSegment,
   onCondition,
 }: {
@@ -169,7 +202,9 @@ function ScopePicker({
   period: Period
   empty: boolean
   blocks: BlockSummary[]
-  onSegment: (next: string) => void
+  // Какие измерения показывать; undefined — все.
+  dims?: SegmentDim[]
+  onSegment: (dim: SegmentDim, value: string) => void
   onCondition: (c: FilterCondition) => void
 }) {
   const [open, setOpen] = useState(false)
@@ -287,7 +322,7 @@ function ScopePicker({
               {stage === 'field' && (
                 <>
                   <CommandGroup heading="Кто пришёл">
-                    {(Object.keys(segmentDimLabels) as SegmentDim[])
+                    {(dims ?? (Object.keys(segmentDimLabels) as SegmentDim[]))
                       // Измерение без значений за окно в списке не стоит: оно ведёт
                       // в пустой список и выглядит поломкой справочника.
                       .filter(
@@ -331,7 +366,7 @@ function ScopePicker({
                       label={o.label}
                       count={o.count}
                       onSelect={() => {
-                        onSegment(`${field.dim}:${o.value}`)
+                        onSegment(field.dim, o.value)
                         close()
                       }}
                     />

@@ -27,7 +27,7 @@ export function CrosstabDialog({
   formId,
   period,
   where,
-  segment,
+  segments,
   block,
   others,
 }: {
@@ -36,13 +36,13 @@ export function CrosstabDialog({
   formId: string
   period: Period
   where?: string
-  segment?: string
+  segments?: string[]
   block: BlockSummary
   others: BlockSummary[]
 }) {
   const [colId, setColId] = useState('')
   const table = useQuery({
-    ...crosstabQueryOptions(formId, period, block.blockId, colId, where, segment),
+    ...crosstabQueryOptions(formId, period, block.blockId, colId, where, segments),
     enabled: open && colId !== '',
   })
   const planRequired =

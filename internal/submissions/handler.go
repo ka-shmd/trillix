@@ -482,19 +482,20 @@ type summaryResponse struct {
 	NoVisitLink bool `json:"noVisitLink,omitempty"`
 }
 
-// scopeFromRequest — выборка аналитики ответов: `?where` (фильтр по ответам) и
-// `?segment` (сегмент по визиту, тот же, что у «Отвалов»).
+// scopeFromRequest — выборка аналитики ответов: `?where` (условия по ответам) и
+// `?segment` (условия по визиту, те же, что у воронки; параметр повторяется —
+// условия складываются через «И»).
 func scopeFromRequest(r *http.Request) (domain.AnswerScope, error) {
 	q := r.URL.Query()
 	filter, err := domain.ParseAnswerFilter(q.Get("where"))
 	if err != nil {
 		return domain.AnswerScope{}, err
 	}
-	seg, err := domain.ParseSegment(q.Get("segment"))
+	segs, err := domain.ParseSegments(q["segment"])
 	if err != nil {
 		return domain.AnswerScope{}, err
 	}
-	return domain.AnswerScope{Filter: filter, Segment: seg}, nil
+	return domain.AnswerScope{Filter: filter, Segments: segs}, nil
 }
 
 // summary отдаёт агрегат по ответам формы: наружу уходят только счётчики, сырые

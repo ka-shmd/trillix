@@ -75,10 +75,10 @@ func (Repo) InsertPage(ctx context.Context, db postgres.DBTX, visitID, formID uu
 }
 
 // CountPaths — визиты с путём по дальней точке, исходу и набору открытых страниц.
-func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PathCount, error) {
+func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f []domain.VisitFilter) ([]domain.PathCount, error) {
 	from, to := postgres.PeriodBounds(period)
-	kind, keys := segParams(f)
-	rows, err := postgres.New(postgres.CustomPlans(db)).CountVisitPaths(ctx, postgres.CountVisitPathsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	kinds, keys := segParams(f)
+	rows, err := postgres.New(postgres.CustomPlans(db)).CountVisitPaths(ctx, postgres.CountVisitPathsParams{FormID: formID, FromTs: from, ToTs: to, SegKinds: kinds, SegKeys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("count visit paths: %w", err)
 	}
@@ -95,10 +95,10 @@ func (Repo) CountPaths(ctx context.Context, db postgres.DBTX, formID uuid.UUID, 
 }
 
 // PageSpans — гистограммы времени на страницах (см. VisitPageDurations).
-func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.PageSpan, error) {
+func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f []domain.VisitFilter) ([]domain.PageSpan, error) {
 	from, to := postgres.PeriodBounds(period)
-	kind, keys := segParams(f)
-	rows, err := postgres.New(postgres.CustomPlans(db)).VisitPageDurations(ctx, postgres.VisitPageDurationsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	kinds, keys := segParams(f)
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitPageDurations(ctx, postgres.VisitPageDurationsParams{FormID: formID, FromTs: from, ToTs: to, SegKinds: kinds, SegKeys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("visit page durations: %w", err)
 	}
@@ -117,10 +117,10 @@ func (Repo) PageSpans(ctx context.Context, db postgres.DBTX, formID uuid.UUID, p
 
 // VersionStats — визиты по версиям формы за окно (спека design/analytics-v2.md §5.3).
 // Ключ карты — id версии: номер и дату публикации знает модуль форм.
-func (Repo) VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error) {
+func (Repo) VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f []domain.VisitFilter) (map[uuid.UUID]domain.VersionStat, error) {
 	from, to := postgres.PeriodBounds(period)
-	kind, keys := segParams(f)
-	rows, err := postgres.New(postgres.CustomPlans(db)).VisitVersionStats(ctx, postgres.VisitVersionStatsParams{FormID: formID, FromTs: from, ToTs: to, SegKind: kind, SegKeys: keys})
+	kinds, keys := segParams(f)
+	rows, err := postgres.New(postgres.CustomPlans(db)).VisitVersionStats(ctx, postgres.VisitVersionStatsParams{FormID: formID, FromTs: from, ToTs: to, SegKinds: kinds, SegKeys: keys})
 	if err != nil {
 		return nil, fmt.Errorf("visit version stats: %w", err)
 	}
@@ -136,17 +136,11 @@ func (Repo) VersionStats(ctx context.Context, db postgres.DBTX, formID uuid.UUID
 	return out, nil
 }
 
-// segParams — сегмент в параметры запроса. Нет сегмента — оба NULL, и условие в SQL
-// отключено; сегмент без подходящих значений — пустой массив, и визитов ноль.
-func segParams(f domain.VisitFilter) (pgtype.Text, []string) {
-	if f.IsZero() {
-		return pgtype.Text{}, nil
-	}
-	keys := f.Keys
-	if keys == nil {
-		keys = []string{}
-	}
-	return pgtype.Text{String: string(f.Kind), Valid: true}, keys
+// segParams — условия разреза в параметры запроса. Нет условий — оба NULL, и
+// условие в SQL отключено целиком (запрос остаётся index-only). Упаковка —
+// domain.PackFilters: она зеркалит форму массивов в queries.sql.
+func segParams(fs []domain.VisitFilter) ([]string, []string) {
+	return domain.PackFilters(fs)
 }
 
 // nullText — пустая строка становится NULL.
@@ -159,15 +153,15 @@ func nullText(s string) pgtype.Text {
 
 // CountByLastBlock — раскладка визитов по самой дальней точке (сырьё воронки).
 // Пустой BlockID — визиты, не тронувшие ни одного вопроса (last_block_id IS NULL).
-func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f domain.VisitFilter) ([]domain.LastBlockCount, error) {
+func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, f []domain.VisitFilter) ([]domain.LastBlockCount, error) {
 	from, to := postgres.PeriodBounds(period)
-	kind, keys := segParams(f)
+	kinds, keys := segParams(f)
 	rows, err := postgres.New(postgres.CustomPlans(db)).CountVisitsByLastBlock(ctx, postgres.CountVisitsByLastBlockParams{
-		FormID:  formID,
-		FromTs:  from,
-		ToTs:    to,
-		SegKind: kind,
-		SegKeys: keys,
+		FormID:   formID,
+		FromTs:   from,
+		ToTs:     to,
+		SegKinds: kinds,
+		SegKeys:  keys,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("count visits by last block: %w", err)
@@ -189,19 +183,19 @@ func (Repo) CountByLastBlock(ctx context.Context, db postgres.DBTX, formID uuid.
 //
 // prev — прошлое окно (domain.PreviousPeriod); nil — сравнения нет. Оба окна —
 // одним сканом (см. VisitInsights в queries.sql).
-func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period, f domain.VisitFilter) (domain.VisitInsights, error) {
+func (Repo) Insights(ctx context.Context, db postgres.DBTX, formID uuid.UUID, period domain.Period, prev *domain.Period, f []domain.VisitFilter) (domain.VisitInsights, error) {
 	from, to := postgres.PeriodBounds(period)
 	prevFrom := from
 	if prev != nil {
 		prevFrom = pgtype.Timestamptz{Time: prev.From, Valid: true}
 	}
-	kind, keys := segParams(f)
+	kinds, keys := segParams(f)
 	row, err := postgres.New(postgres.CustomPlans(db)).VisitInsights(ctx, postgres.VisitInsightsParams{
 		FormID:     formID,
 		FromTs:     from,
 		PrevFromTs: prevFrom,
 		ToTs:       to,
-		SegKind:    kind,
+		SegKinds:   kinds,
 		SegKeys:    keys,
 	})
 	if err != nil {

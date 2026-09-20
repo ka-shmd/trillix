@@ -85,24 +85,37 @@ WHERE id = $1 AND form_id = $2;
 -- отсутствующее условие. Одна форма запроса вместо двух означает один план и одну
 -- ветку кода; бесконечность индексу не мешает (та же диапазонная проверка).
 --
--- Сегмент (seg_kind/seg_keys, спека design/analytics-v2.md §5.4): визиты режутся по
--- СЫРОМУ значению — строке user-agent, тройке меток, стране, городу или версии, —
--- список подходящих значений собирает Go (domain.VisitFilter). Ключ зеркалит
--- domain.SourceKey и domain.CityKey, разделитель — chr(31). Без сегмента оба
--- параметра NULL, и условие не читает meta: запрос остаётся index-only.
+-- Разрез (seg_kinds/seg_keys, спека design/analytics-v2.md §5.4, analytics-v3.md
+-- §11.6): визиты режутся по СЫРОМУ значению — строке user-agent, тройке меток,
+-- стране, городу или версии, — список подходящих значений собирает Go
+-- (domain.VisitFilter). Ключ зеркалит domain.SourceKey и domain.CityKey,
+-- разделитель частей ключа — chr(31).
+--
+-- УСЛОВИЙ НЕСКОЛЬКО, и они через «И»: seg_kinds — вид сырого значения у каждого
+-- условия, seg_keys — подходящие значения ВСЕХ условий одним массивом, где у
+-- каждого ключа спереди НОМЕР СВОЕГО УСЛОВИЯ и chr(30). Номер, а не вид: условия
+-- «устройство» и «браузер» оба читают user-agent, и по общему виду их списки
+-- слились бы в один — «И» превратилось бы в «ИЛИ». NOT EXISTS читается как «ни
+-- одно условие не нарушено».
+--
+-- Внешнее «seg_kinds IS NULL OR» — не перестраховка: при NULL план сворачивает
+-- условие целиком, подзапрос не читает meta, и запрос остаётся index-only. Без
+-- него разреза нет, а чтение строки есть.
 SELECT last_block_id, submitted, count(*) AS visits
 FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz
-  AND (sqlc.narg(seg_kind)::text IS NULL OR
-       (CASE sqlc.narg(seg_kind)::text
+  AND (sqlc.narg(seg_kinds)::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest(sqlc.narg(seg_kinds)::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
             WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(country_code, '')
             WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
             WHEN 'version' THEN form_version_id::text
-        END) = ANY(sqlc.narg(seg_keys)::text[]))
+        END)) <> ALL(sqlc.narg(seg_keys)::text[])))
 GROUP BY last_block_id, submitted;
 
 -- name: CountVisitPaths :many
@@ -126,14 +139,16 @@ FROM (
 ) p
 JOIN form_visits v ON v.id = p.visit_id
 WHERE true
-  AND (sqlc.narg(seg_kind)::text IS NULL OR
-       (CASE sqlc.narg(seg_kind)::text
+  AND (sqlc.narg(seg_kinds)::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest(sqlc.narg(seg_kinds)::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
             WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(v.country_code, '')
             WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
             WHEN 'version' THEN v.form_version_id::text
-        END) = ANY(sqlc.narg(seg_keys)::text[]))
+        END)) <> ALL(sqlc.narg(seg_keys)::text[])))
 GROUP BY v.last_block_id, v.submitted, p.blocks;
 
 -- name: VisitPageDurations :many
@@ -165,14 +180,16 @@ WITH path AS (
     WHERE p.form_id = $1
       AND p.visit_created_at >= sqlc.arg(from_ts)::timestamptz
       AND p.visit_created_at <  sqlc.arg(to_ts)::timestamptz
-      AND (sqlc.narg(seg_kind)::text IS NULL OR
-             (CASE sqlc.narg(seg_kind)::text
+      AND (sqlc.narg(seg_kinds)::text[] IS NULL OR NOT EXISTS (
+            SELECT 1 FROM unnest(sqlc.narg(seg_kinds)::text[]) WITH ORDINALITY AS seg(kind, n)
+            WHERE (seg.n::text || chr(30) ||
+             (CASE seg.kind
                   WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
                   WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
                   WHEN 'country' THEN coalesce(v.country_code, '')
                   WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
                   WHEN 'version' THEN v.form_version_id::text
-              END) = ANY(sqlc.narg(seg_keys)::text[]))
+              END)) <> ALL(sqlc.narg(seg_keys)::text[])))
     WINDOW w AS (PARTITION BY p.visit_id ORDER BY p.reached_at, p.block_id)
 ),
 spans AS (
@@ -197,14 +214,16 @@ spans AS (
       AND NOT v.submitted
       AND v.last_block_id IS NOT NULL
       AND NOT EXISTS (SELECT 1 FROM form_visit_pages x WHERE x.visit_id = v.id)
-  AND (sqlc.narg(seg_kind)::text IS NULL OR
-         (CASE sqlc.narg(seg_kind)::text
+  AND (sqlc.narg(seg_kinds)::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest(sqlc.narg(seg_kinds)::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
               WHEN 'ua'      THEN coalesce(v.meta->>'user_agent', '')
               WHEN 'source'  THEN coalesce(v.meta->>'referer', '') || chr(31) || coalesce(v.meta->>'utm_source', '') || chr(31) || coalesce(v.meta->>'utm_medium', '')
               WHEN 'country' THEN coalesce(v.country_code, '')
               WHEN 'city'    THEN coalesce(v.city, '') || chr(31) || coalesce(v.country_code, '')
               WHEN 'version' THEN v.form_version_id::text
-          END) = ANY(sqlc.narg(seg_keys)::text[]))
+          END)) <> ALL(sqlc.narg(seg_keys)::text[])))
 )
 SELECT page_block::text AS page_block,
        last_block::text AS last_block,
@@ -288,14 +307,16 @@ FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(prev_from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz
-  AND (sqlc.narg(seg_kind)::text IS NULL OR
-       (CASE sqlc.narg(seg_kind)::text
+  AND (sqlc.narg(seg_kinds)::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest(sqlc.narg(seg_kinds)::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
             WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(country_code, '')
             WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
             WHEN 'version' THEN form_version_id::text
-        END) = ANY(sqlc.narg(seg_keys)::text[]));
+        END)) <> ALL(sqlc.narg(seg_keys)::text[])));
 
 -- name: VisitVersionStats :many
 -- Разрез по версиям формы (спека design/analytics-v2.md §5.3): визиты, отправившие
@@ -315,14 +336,16 @@ FROM form_visits
 WHERE form_id = $1
   AND created_at >= sqlc.arg(from_ts)::timestamptz
   AND created_at <  sqlc.arg(to_ts)::timestamptz
-  AND (sqlc.narg(seg_kind)::text IS NULL OR
-       (CASE sqlc.narg(seg_kind)::text
+  AND (sqlc.narg(seg_kinds)::text[] IS NULL OR NOT EXISTS (
+        SELECT 1 FROM unnest(sqlc.narg(seg_kinds)::text[]) WITH ORDINALITY AS seg(kind, n)
+        WHERE (seg.n::text || chr(30) ||
+         (CASE seg.kind
             WHEN 'ua'      THEN coalesce(meta->>'user_agent', '')
             WHEN 'source'  THEN coalesce(meta->>'referer', '') || chr(31) || coalesce(meta->>'utm_source', '') || chr(31) || coalesce(meta->>'utm_medium', '')
             WHEN 'country' THEN coalesce(country_code, '')
             WHEN 'city'    THEN coalesce(city, '') || chr(31) || coalesce(country_code, '')
             WHEN 'version' THEN form_version_id::text
-        END) = ANY(sqlc.narg(seg_keys)::text[]))
+        END)) <> ALL(sqlc.narg(seg_keys)::text[])))
 GROUP BY form_version_id;
 
 -- name: VisitTimeseries :many

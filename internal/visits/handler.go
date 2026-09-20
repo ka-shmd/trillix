@@ -19,9 +19,9 @@ type Middleware = func(http.Handler) http.Handler
 
 // analyticsService — часть сервиса, нужная приватному транспорту.
 type analyticsService interface {
-	Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) (domain.Funnel, error)
-	Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) (domain.VisitInsights, error)
-	Versions(ctx context.Context, userID, formID uuid.UUID, period domain.Period, seg domain.Segment) ([]domain.VersionStat, error)
+	Funnel(ctx context.Context, userID, formID uuid.UUID, period domain.Period, segs domain.Segments) (domain.Funnel, error)
+	Insights(ctx context.Context, userID, formID uuid.UUID, period domain.Period, segs domain.Segments) (domain.VisitInsights, error)
+	Versions(ctx context.Context, userID, formID uuid.UUID, period domain.Period, segs domain.Segments) ([]domain.VersionStat, error)
 	Breakdown(ctx context.Context, userID, formID uuid.UUID, period domain.Period) (domain.VisitsBreakdown, error)
 }
 
@@ -43,18 +43,23 @@ func (h *Handler) Routes(mux *http.ServeMux) {
 	mux.Handle("GET /api/v1/forms/{id}/insights/versions", h.requireAuth(http.HandlerFunc(h.versions)))
 }
 
-// windowFromRequest — окно наблюдения и сегмент из query-строки (`?from&to&segment`).
-// Сегмент читают воронка, карточки и разрез по версиям — одним разбором.
-func windowFromRequest(r *http.Request) (domain.Period, domain.Segment, error) {
+// windowFromRequest — окно наблюдения и разрез из query-строки (`?from&to&segment`).
+// Разрез читают воронка, карточки и таблица версий — одним разбором.
+//
+// `segment` ПОВТОРЯЕТСЯ: условия складываются через «И» («?segment=device:Телефон&
+// segment=source:vk.com»). Повторяющийся параметр, а не список в одной строке:
+// значения приходят из меток визита и содержат что угодно, включая любой
+// разделитель, который пришлось бы выдумать.
+func windowFromRequest(r *http.Request) (domain.Period, domain.Segments, error) {
 	period, err := httpserver.PeriodFromRequest(r)
 	if err != nil {
-		return domain.Period{}, domain.Segment{}, err
+		return domain.Period{}, nil, err
 	}
-	seg, err := domain.ParseSegment(r.URL.Query().Get("segment"))
+	segs, err := domain.ParseSegments(r.URL.Query()["segment"])
 	if err != nil {
-		return domain.Period{}, domain.Segment{}, err
+		return domain.Period{}, nil, err
 	}
-	return period, seg, nil
+	return period, segs, nil
 }
 
 type funnelStepResponse struct {
@@ -108,14 +113,14 @@ func (h *Handler) funnel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	period, seg, err := windowFromRequest(r)
+	period, segs, err := windowFromRequest(r)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 
 	start := time.Now()
-	f, err := h.svc.Funnel(r.Context(), u.ID, formID, period, seg)
+	f, err := h.svc.Funnel(r.Context(), u.ID, formID, period, segs)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -208,14 +213,14 @@ func (h *Handler) insights(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrNotFound)
 		return
 	}
-	period, seg, err := windowFromRequest(r)
+	period, segs, err := windowFromRequest(r)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 
 	start := time.Now()
-	in, err := h.svc.Insights(r.Context(), u.ID, formID, period, seg)
+	in, err := h.svc.Insights(r.Context(), u.ID, formID, period, segs)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
@@ -386,14 +391,14 @@ func (h *Handler) versions(w http.ResponseWriter, r *http.Request) {
 		httpserver.WriteError(w, r, domain.ErrNotFound)
 		return
 	}
-	period, seg, err := windowFromRequest(r)
+	period, segs, err := windowFromRequest(r)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return
 	}
 
 	start := time.Now()
-	stats, err := h.svc.Versions(r.Context(), u.ID, formID, period, seg)
+	stats, err := h.svc.Versions(r.Context(), u.ID, formID, period, segs)
 	if err != nil {
 		httpserver.WriteError(w, r, err)
 		return

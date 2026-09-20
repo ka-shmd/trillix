@@ -92,22 +92,22 @@ function CompareNote({ label }: { label: string }) {
 
 // InsightCards — полоса всех вкладок аналитики.
 //
-// segment режет полосу так же, как разделы под ней: полоса над сегментированным
+// segments режут полосу так же, как разделы под ней: полоса над разрезанным
 // экраном обязана считать ту же совокупность, иначе она говорит о всём трафике
-// формы, стоя в тридцати пикселях от чисел по сегменту.
+// формы, стоя в тридцати пикселях от чисел по разрезу.
 export function InsightCards({
   slug,
   period,
-  segment,
+  segments,
 }: {
   slug: string
   period: Period
-  segment?: string
+  segments?: string[]
 }) {
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const visits = useQuery({
-    ...visitInsightsQueryOptions(formId ?? '', period, segment),
+    ...visitInsightsQueryOptions(formId ?? '', period, segments),
     enabled: formId !== undefined,
   })
   const v = visits.data

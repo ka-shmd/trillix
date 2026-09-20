@@ -4,16 +4,16 @@ import { visitsBreakdownSchema, type VisitsBreakdown } from '../../entities/visi
 import { crosstabSchema, type Crosstab } from '../../entities/summary'
 import { versionStatsSchema, type VersionStat } from '../../entities/versionStats'
 import { periodRange, type Period } from '../../shared/period'
-import { segmentParams } from '../../shared/segment'
+import { appendSegments } from '../../shared/segment'
 
 // Транспорт карточек аналитики: ответ парсится Zod-схемой на границе —
 // непровалидированный any внутрь приложения не проходит (web/CLAUDE.md).
 export function getVisitInsights(
   formId: string,
   period: Period,
-  segment?: string,
+  segments?: string[],
 ): Promise<VisitInsights> {
-  const query = new URLSearchParams({ ...periodRange(period), ...segmentParams(segment) }).toString()
+  const query = appendSegments(new URLSearchParams(periodRange(period)), segments).toString()
   return apiRequest(`/forms/${formId}/insights${query ? `?${query}` : ''}`, {
     schema: visitInsightsSchema,
   })
@@ -33,9 +33,9 @@ export function getVisitsBreakdown(formId: string, period: Period): Promise<Visi
 export async function getVersionStats(
   formId: string,
   period: Period,
-  segment?: string,
+  segments?: string[],
 ): Promise<VersionStat[]> {
-  const query = new URLSearchParams({ ...periodRange(period), ...segmentParams(segment) }).toString()
+  const query = appendSegments(new URLSearchParams(periodRange(period)), segments).toString()
   const res = await apiRequest(`/forms/${formId}/insights/versions${query ? `?${query}` : ''}`, {
     schema: versionStatsSchema,
   })
@@ -49,14 +49,10 @@ export function getCrosstab(
   rows: string,
   cols: string,
   where?: string,
-  segment?: string,
+  segments?: string[],
 ): Promise<Crosstab> {
-  const query = new URLSearchParams({
-    ...periodRange(period),
-    rows,
-    cols,
-    ...(where ? { where } : {}),
-    ...segmentParams(segment),
-  })
+  const params = new URLSearchParams({ ...periodRange(period), rows, cols })
+  if (where) params.set('where', where)
+  const query = appendSegments(params, segments)
   return apiRequest(`/forms/${formId}/submissions/crosstab?${query.toString()}`, { schema: crosstabSchema })
 }

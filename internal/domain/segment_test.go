@@ -98,3 +98,87 @@ func TestMatchesSegment(t *testing.T) {
 		t.Error("ответ без визита")
 	}
 }
+
+// Условий разреза бывает несколько, и приезжают они повторяющимся параметром.
+func TestParseSegments(t *testing.T) {
+	got, err := ParseSegments([]string{"device:Телефон", "", "source:vk.com"})
+	want := Segments{{Dim: SegDevice, Value: "Телефон"}, {Dim: SegSource, Value: "vk.com"}}
+	if err != nil || !reflect.DeepEqual(got, want) {
+		t.Errorf("ParseSegments = %+v, %v; ждали %+v", got, err, want)
+	}
+	if segs, err := ParseSegments(nil); err != nil || !segs.IsZero() {
+		t.Errorf("без параметра: %+v, %v", segs, err)
+	}
+	// Одно негодное условие отвергает весь запрос: молча выбросить его значило бы
+	// посчитать по более широкой совокупности, чем просили.
+	if _, err := ParseSegments([]string{"device:Телефон", "planet:Марс"}); !errors.Is(err, ErrValidation) {
+		t.Errorf("негодное условие: %v, ждали ErrValidation", err)
+	}
+	over := make([]string, MaxSegments+1)
+	for i := range over {
+		over[i] = "device:Телефон"
+	}
+	if _, err := ParseSegments(over); !errors.Is(err, ErrValidation) {
+		t.Errorf("сверх потолка: %v, ждали ErrValidation", err)
+	}
+}
+
+// Ответ проходит разрез, только если подходит ВСЕМ условиям.
+func TestSegmentsMatches(t *testing.T) {
+	const phone = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1"
+	v := &VisitMeta{UserAgent: phone, Referer: "https://vk.com/x", CountryCode: "RU", City: "Москва"}
+	all := func(raw ...string) bool {
+		segs, err := ParseSegments(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return segs.Matches(v, 2)
+	}
+	if !all("device:Телефон", "source:vk.com") {
+		t.Error("оба условия подходят, а ответ не прошёл")
+	}
+	if all("device:Телефон", "country:BY") {
+		t.Error("одно условие не подошло, а ответ прошёл")
+	}
+	if !all() {
+		t.Error("пустой разрез не пропустил ответ")
+	}
+	// Порог SegmentK ставит любое визитное условие, а не только одиночное.
+	segs, _ := ParseSegments([]string{"version:2", "device:Телефон"})
+	if !segs.VisitSegment() {
+		t.Error("визитное условие в паре с версией не считается визитным")
+	}
+	verOnly, _ := ParseSegments([]string{"version:2"})
+	if verOnly.VisitSegment() {
+		t.Error("разрез по версии визитным не считается")
+	}
+}
+
+// PackFilters — два массива параметра запроса; зеркалит предикат в
+// internal/visits/queries.sql.
+func TestPackFilters(t *testing.T) {
+	kinds, keys := PackFilters([]VisitFilter{
+		{Kind: FilterUserAgent, Keys: []string{"ua-1", "ua-2"}},
+		{Kind: FilterCountry, Keys: []string{"RU"}},
+	})
+	if !reflect.DeepEqual(kinds, []string{"ua", "country"}) {
+		t.Errorf("виды = %v", kinds)
+	}
+	// Номер условия спереди: без него два условия по одному виду слились бы в одно
+	// множество, и «И» стало бы «ИЛИ».
+	want := []string{"1\x1eua-1", "1\x1eua-2", "2\x1eRU"}
+	if !reflect.DeepEqual(keys, want) {
+		t.Errorf("ключи = %q, ждали %q", keys, want)
+	}
+
+	// Условие без подходящих значений не даёт ни одного ключа — визитов будет ноль.
+	// Массив при этом не nil: nil уезжает в SQL как NULL, а это «фильтра нет».
+	kinds, keys = PackFilters([]VisitFilter{{Kind: FilterSource, Keys: []string{}}})
+	if len(kinds) != 1 || keys == nil || len(keys) != 0 {
+		t.Errorf("пустое условие: виды %v, ключи %#v", kinds, keys)
+	}
+
+	if kinds, keys := PackFilters(nil); kinds != nil || keys != nil {
+		t.Errorf("без условий: %v, %v — ждали NULL-параметры", kinds, keys)
+	}
+}

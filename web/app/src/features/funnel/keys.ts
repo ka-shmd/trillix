@@ -7,6 +7,6 @@ export const funnelKeys = {
   all: () => ['funnel'] as const,
   // Период — часть ключа: иначе переключение окна отдаёт кеш предыдущего.
   // Сегмент — тоже: '' — «все визиты».
-  detail: (formId: string, period: Period, segment = '') =>
-    ['funnel', formId, period, segment] as const,
+  detail: (formId: string, period: Period, segments: string[] = []) =>
+    ['funnel', formId, period, segments] as const,
 }

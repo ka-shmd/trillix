@@ -21,12 +21,12 @@ import {
   encodeFilter,
   equalsOp,
   filterFromSearch,
-  MAX_FILTER_CONDITIONS,
+  withCondition,
   type FilterCondition,
 } from '../../shared/answerFilter'
 import { ApiError } from '../../shared/api/errors'
 import { type Period } from '../../shared/period'
-import { SEGMENT_K, segmentFromSearch } from '../../shared/segment'
+import { SEGMENT_K, segmentsFromSearch, segmentsToSearch } from '../../shared/segment'
 import { Section } from '../../shared/page/Section'
 import { EmptyState, ErrorState, LoadingRows } from '../../shared/page/states'
 import { Button } from '@/components/ui/button'
@@ -48,9 +48,9 @@ import { cn } from '@/lib/utils'
 // чтения. Ссылка «посмотри на это» ведёт на вопрос, а не на «вопрос, раскрытый у
 // меня в браузере».
 export const Route = createFileRoute('/_app/forms/$slug/_manage/insights/answers')({
-  validateSearch: (search): { where?: string; segment?: string } => {
+  validateSearch: (search): { where?: string; segment?: string | string[] } => {
     const where = filterFromSearch(search.where)
-    const segment = segmentFromSearch(search.segment)
+    const segment = segmentsToSearch(segmentsFromSearch(search.segment))
     return { ...(where ? { where } : {}), ...(segment ? { segment } : {}) }
   },
   component: AnswersPage,
@@ -61,11 +61,12 @@ function AnswersPage() {
   // как на странице ответов.
   const { slug } = Route.useParams()
   const { period, where, segment } = Route.useSearch()
+  const segments = segmentsFromSearch(segment)
   const navigate = Route.useNavigate()
   const form = useQuery(formDetailQueryOptions(slug))
   const formId = form.data?.id
   const summary = useQuery({
-    ...submissionsSummaryQueryOptions(formId ?? '', period, where, segment),
+    ...submissionsSummaryQueryOptions(formId ?? '', period, where, segments),
     enabled: formId !== undefined,
   })
   // Вопросы для панели выборки — из сводки без неё: при закрытом тарифе или пустом
@@ -77,31 +78,17 @@ function AnswersPage() {
   })
   const setWhere = (next: FilterCondition[]) =>
     void navigate({ search: (prev) => ({ ...prev, where: encodeFilter(next) }), replace: true })
-  const setSegment = (next: string | undefined) =>
-    void navigate({ search: (prev) => ({ ...prev, segment: next }), replace: true })
+  const setSegments = (next: string[]) =>
+    void navigate({
+      search: (prev) => ({ ...prev, segment: segmentsToSearch(next) }),
+      replace: true,
+    })
 
   // ЩЕЛЧОК ПО ВАРИАНТУ — тот же фильтр, что в окне выборки (решение владельца
   // 2026-09-20). Собирать условие «Город равен Москва» из списков, стоя перед
-  // строкой «Москва», — работа, которую человек уже сделал глазами.
-  //
-  // Условие на ОДИН вопрос ровно одно: «A равен Москве И A равен Питеру» не даёт
-  // ничего, кроме пустого экрана, поэтому второй щелчок по соседней строке
-  // заменяет условие, а повторный по той же — снимает.
+  // строкой «Москва», — работа, которую человек уже сделал глазами. Правило
+  // сложения условий общее с окном (shared/answerFilter.ts).
   const conditions = decodeFilter(where)
-  const toggleCondition = (next: FilterCondition) => {
-    const applied = conditions.some(
-      (c) => c.blockId === next.blockId && c.op === next.op && c.value === next.value,
-    )
-    const rest = conditions.filter((c) => c.blockId !== next.blockId)
-    if (applied) {
-      setWhere(rest)
-      return
-    }
-    // Потолок условий держит сервер (domain.MaxFilterConditions); строка, которая
-    // его переполнит, просто не применяется.
-    if (rest.length >= MAX_FILTER_CONDITIONS) return
-    setWhere([...rest, next])
-  }
 
   const total = summary.data?.total ?? 0
   const unfiltered = summary.data?.unfiltered
@@ -118,10 +105,10 @@ function AnswersPage() {
           <ScopeBar
             formId={formId}
             period={period}
-            segment={segment}
+            segments={segments}
             where={where}
             blocks={questions.data?.blocks ?? []}
-            onSegment={setSegment}
+            onSegments={setSegments}
             onWhere={setWhere}
           />
         )}
@@ -129,7 +116,7 @@ function AnswersPage() {
             её. Числа ответов на полосе нет — оно в пояснении раздела: полоса
             говорит о визитах, и submissions рядом с «Отправили» читались бы как
             расхождение (спека design/analytics-v3.md §3). */}
-        <InsightCards slug={slug} period={period} segment={segment} />
+        <InsightCards slug={slug} period={period} segments={segments} />
       </div>
 
       <Section
@@ -172,7 +159,7 @@ function AnswersPage() {
         ) : total === 0 && unfiltered !== undefined ? (
           <EmptyState
             title="Под условия не подошёл ни один ответ"
-            description={emptyScopeHint(where !== undefined, segment !== undefined)}
+            description={emptyScopeHint(where !== undefined, segments.length > 0)}
           />
         ) : total === 0 ? (
           <EmptyState
@@ -196,10 +183,10 @@ function AnswersPage() {
                 formId={formId ?? ''}
                 period={period}
                 where={where}
-                segment={segment}
+                segments={segments}
                 closed={summary.data.blocks.filter((o) => o.kind === 'distribution')}
                 conditions={conditions}
-                onToggleCondition={toggleCondition}
+                onToggleCondition={(c) => setWhere(withCondition(conditions, c))}
               />
             ))}
           </ul>
@@ -245,7 +232,7 @@ function QuestionRow({
   formId,
   period,
   where,
-  segment,
+  segments,
   closed,
   conditions,
   onToggleCondition,
@@ -255,7 +242,7 @@ function QuestionRow({
   formId: string
   period: Period
   where: string | undefined
-  segment: string | undefined
+  segments: string[]
   // Закрытые вопросы сводки — с ними этот можно сравнить таблицей.
   closed: BlockSummary[]
   conditions: FilterCondition[]
@@ -292,7 +279,7 @@ function QuestionRow({
           formId={formId}
           period={period}
           where={where}
-          segment={segment}
+          segments={segments}
           closed={closed}
           conditions={conditions}
           onToggleCondition={onToggleCondition}
@@ -308,7 +295,7 @@ function QuestionBody({
   formId,
   period,
   where,
-  segment,
+  segments,
   closed,
   conditions,
   onToggleCondition,
@@ -318,7 +305,7 @@ function QuestionBody({
   formId: string
   period: Period
   where: string | undefined
-  segment: string | undefined
+  segments: string[]
   closed: BlockSummary[]
   conditions: FilterCondition[]
   onToggleCondition: (c: FilterCondition) => void
@@ -369,7 +356,7 @@ function QuestionBody({
                 formId={formId}
                 period={period}
                 where={where}
-                segment={segment}
+                segments={segments}
                 block={block}
                 others={others}
               />
@@ -392,7 +379,7 @@ function QuestionBody({
                 answered={block.answered}
                 period={period}
                 where={where}
-                segment={segment}
+                segments={segments}
               />
             </>
           )}
